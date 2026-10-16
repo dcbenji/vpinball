@@ -3385,6 +3385,9 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_light.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pbr.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_ao.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
@@ -3430,6 +3433,12 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_nfaa.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_pbr_resolve.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_pbr_ssr.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_prepass_display.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
@@ -3458,6 +3467,9 @@
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/material.sh">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/ssr_common.sh">
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/SMAA.hlsl">
@@ -3491,6 +3503,9 @@
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_light.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_pbr.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_postprocess.sc">
