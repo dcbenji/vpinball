@@ -2855,6 +2855,9 @@ void Renderer::UpdateVirtualShadowMaps()
       case eItemPlunger:
       case eItemTrigger:
       {
+         // Invisible walls never draw in the shadow pass (see Surface::Render): keep their whole-table bounds from marking pages
+         if (part->GetItemType() == eItemSurface && !static_cast<const Surface*>(part)->m_d.m_sideVisible && !static_cast<const Surface*>(part)->m_d.m_topBottomVisible)
+            break;
          Caster c;
          c.part = part;
          c.isStatic = IsStaticShadowCaster(part);
@@ -2963,7 +2966,12 @@ void Renderer::UpdateVirtualShadowMaps()
          lightProj = Matrix3D::MatrixOrthoOffCenterRH(l, r, b, t, zn, zf);
          const Matrix3D& proj = lightProj;
          const float side = std::max(r - l, t - b);
-         const float pageWorld = side * VSM::PAGE_SIZE / (float)m_vsmVirtRes;
+         float pageWorld = side * VSM::PAGE_SIZE / (float)m_vsmVirtRes;
+         // Fair share of the pool: a full virtual resolution ortho map over the table (2000+ pages at 8192) would take every
+         // physical page, leaving the other shadowed lights (GI cube maps) without any and so unshadowed. Coarser pages then.
+         const float orthoPages = (r - l) * (t - b) / (pageWorld * pageWorld), orthoBudget = (float)std::max(16, m_vsmPoolPages / 8);
+         if (orthoPages > orthoBudget)
+            pageWorld *= sqrtf(orthoPages / orthoBudget);
          const int gridW = std::clamp((int)ceilf((r - l) / pageWorld), 1, VSM::MAX_ORTHO_GRID);
          const int gridH = std::clamp((int)ceilf((t - b) / pageWorld), 1, VSM::MAX_ORTHO_GRID);
 
@@ -3069,7 +3077,7 @@ void Renderer::UpdateVirtualShadowMaps()
             if (layer >= 0)
             {
                map.phys[vp] = layer + 1;
-               map.dirty[vp] = 1;
+               map.dirty[vp] = 2; // fresh page: not visible through the page table until rendered (holds another page's depth)
                ptChanged = true;
             }
          }
@@ -3086,7 +3094,7 @@ void Renderer::UpdateVirtualShadowMaps()
       {
          float* const base = m_vsmPageTableData.data() + map.ptBase * 4;
          for (int vp = 0; vp < map.EntryCount(); vp++)
-            base[vp * 4] = (float)map.phys[vp];
+            base[vp * 4] = (map.dirty[vp] & 2) ? 0.f : (float)map.phys[vp];
          m_vsmPageTableDirty = true;
       }
       for (int vp = 0; vp < map.EntryCount(); vp++)
@@ -3158,6 +3166,11 @@ void Renderer::UpdateVirtualShadowMaps()
       for (const Caster& caster : casters)
          RenderItem(caster.part, true);
       m_vsmShadowLight = nullptr;
+      if (job.map->dirty[job.vpage] & 2)
+      {
+         m_vsmPageTableData[(job.map->ptBase + job.vpage) * 4] = (float)(job.layer + 1);
+         m_vsmPageTableDirty = true;
+      }
       job.map->dirty[job.vpage] = 0;
       m_vsmTouchedRTs.push_back(pageRT);
    }
@@ -3270,7 +3283,8 @@ void Renderer::BuildPBRLightList()
       // w packs the shadow mode (bits 0-3), the VSM shadow index + 1 (bits 4-11, 0 = no virtual map),
       // the map layout (bits 12-15, 0 = ortho, 2 = cube) and the quantized penumbra radius in 0.5 VPU units (bits 16+)
       const int shadowIndex = light->m_pbrShadowSlot;
-      const int shadowInfo = static_cast<int>(light->m_d.m_shadows) | ((shadowIndex + 1) << 4) | (light->m_pbrShadowLayout << 12) | (4 << 16);
+      const int shadowInfo = static_cast<int>(light->m_d.m_shadows) | ((shadowIndex + 1) << 4) | (light->m_pbrShadowLayout << 12)
+         | (clamp(static_cast<int>(light->m_d.m_bulbRadius * 2.f + 0.5f), 4, 255) << 16); // bulb radius as the PCSS penumbra (>= 2 VPU, 255 keeps the float exact)
       e.radiance = vec4(tint.x * radiance, tint.y * radiance, tint.z * radiance, (float)shadowInfo);
       e.radius = areaLights ? max(light->m_d.m_bulbRadius, 0.f) : 0.f;
       e.upward = false;
