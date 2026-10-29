@@ -906,7 +906,8 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrFactors, mat.m_fMetallic, mat.m_fOcclusion, mat.m_fRoughness, (m_renderDevice->m_pbrAOEnabled && !pbrMaps->inShaderSpecular) ? 1.f : 0.f);
       const vec4 emission = convertColor(mat.m_cEmission, mat.m_fEmissionIntensity);
       SetVector(ShaderUniform::pbrEmission, &emission);
-      SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, 0.f, 0.f);
+      // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
+      SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), 0.f);
       if (pbrMaps->inShaderSpecular)
          tech = !textured ? ShaderTechnique::pbr_is_notex : (doAlphaTest ? ShaderTechnique::pbr_is_at : ShaderTechnique::pbr_is);
       else if (pbrMaps->transparent)

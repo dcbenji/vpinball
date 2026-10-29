@@ -94,9 +94,10 @@ uniform vec4 pbrFactors;
 #define pbrAOEnabled       (pbrFactors.w)
 
 uniform vec4 pbrEmission; // rgb: emission color, w: emission intensity
-uniform vec4 pbrMapFlags; // x: ORM map bound, y: emission map bound
+uniform vec4 pbrMapFlags; // x: ORM map bound, y: emission map bound, z: thin surface transmission (material wrap lighting)
 #define hasORMMap      (pbrMapFlags.x != 0.0)
 #define hasEmissionMap (pbrMapFlags.y != 0.0)
+#define pbrTransmission (pbrMapFlags.z)
 
 uniform vec4 pbrLightGrid;  // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
 uniform vec4 pbrLightGrid2; // x: cell count y, y: light count
@@ -387,9 +388,12 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
          const float elevation = degrees(asin(clamp(-dl.z * inversesqrt(max(dot(dl, dl), 1e-6)), -1.0, 1.0)));
          lCol *= mix(0.76, 1.0, band) * smoothstep(lIdx.z - 4.0, lIdx.z + 4.0, elevation);
       }
-      const float NdotL = saturate(dot(wN, l));
-      if (NdotL <= 0.0)
+      // Thin surface translucency (printed plastics): a light behind the surface transmits through it, see below
+      const float NdotLraw = dot(wN, l);
+      const float NdotL = saturate(NdotLraw);
+      if (NdotL <= 0.0 && (NdotLraw >= 0.0 || pbrTransmission <= 0.0))
          continue;
+      const float NdotLs = max(abs(NdotLraw), 1e-3); // shadow lookups on the lit side (the far side for transmission)
       // Sphere light specular (Karis 2013, representative point): light from the point of the bulb sphere
       // closest to the reflection ray, the GGX lobe energy renormalized by (a / a')^2, a' = a + radius / (2 dist).
       // a is the specular AA widened alpha so a highlight already spread by the AA is not dimmed twice.
@@ -417,7 +421,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
       // Soft luminance knee on the specular term: a sub-pixel GGX spike can still reach extreme
       // HDR values after specular AA. A continuous compressor (no plateau) preserves ordering
       // inside the clipped region so the bloom blob edge moves smoothly as the view moves
-      vec3 spec = D * F * G * (lCol * (x * x / dist2)) * sNdotL;
+      vec3 spec = D * F * G * (lCol * (x * x / dist2)) * sNdotL * step(0.0, NdotLraw);
       spec /= 1.0 + dot(spec, vec3(0.176204, 0.812985, 0.0108109)) * (1.0 / 1024.0);
 
       // Shadowed light record: w packs mode (bits 0-3), VSM index + 1 (bits 4-11, 0 = no map),
@@ -441,7 +445,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
             const vec4 vsmB = pbrVSMBox[shadowIndex];
             const vec2 grid = vsmP.yz;
             // Slope-scaled depth bias plus a constant term to fight self-shadowing acne
-            const float bias = pbrShadowParams.y * (1.0 - NdotL) / max(NdotL, 0.1) + 0.25 * pbrShadowParams.x;
+            const float bias = pbrShadowParams.y * (1.0 - NdotLs) / max(NdotLs, 0.1) + 0.25 * pbrShadowParams.x;
             const float blocker = pbr_vsm_depth(vsmP.x, grid, suv);
             if (blocker >= 0.0)
             {
@@ -473,7 +477,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
          // silhouette instead of grazing its edge (removes light leaks at caster contact points)
          const vec4 vsmP = pbrVSMParams[shadowIndex];
          const float faceGrid = vsmP.y;
-         const vec3 shadowPos = wPos + wN * (0.5 + 0.04 * sqrt(dist2));
+         const vec3 shadowPos = wPos + (NdotLraw < 0.0 ? -wN : wN) * (0.5 + 0.04 * sqrt(dist2));
          const vec3 sdl = lPos.xyz - shadowPos;
          const float sdist = inversesqrt(dot(sdl, sdl));
          const vec3 ldir = -sdl * sdist; // normalized light -> fragment direction
@@ -490,7 +494,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
             // the face's virtual texel size is 1/(faceGrid * PAGE_SIZE) of a direction unit
             const float invFaceRes = 1.0 / (faceGrid * 128.0);
             const float filterRadius = clamp(lightRadius * worldGap / max(blocker, 1.0) * invFaceRes * 2.0, invFaceRes, 8.0 * invFaceRes);
-            const float bias = min(0.5 + 2.0 * (1.0 - NdotL) / max(NdotL, 0.05), 8.0);
+            const float bias = min(0.5 + 2.0 * (1.0 - NdotLs) / max(NdotLs, 0.05), 8.0);
             const vec3 upRef = abs(ldir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
             const vec3 tX = normalize(cross(upRef, ldir));
             const vec3 tY = cross(ldir, tX);
@@ -511,7 +515,12 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wV, const vec3 wPos, const vec3 
       }
       BRANCH if (shadowMode == 1 || shadowMode >= 3) // RAYTRACED_BALL_SHADOWS or PBR ball shadow tiers
          shadow *= get_light_ball_shadow(lPos.xyz, -dl, sqrt(dist2));
-      acc += shadow * (diffuse * (vec3_splat(1.0) - F) * (1.0 / PI) * (lCol * (x * x / dist2)) * NdotL + spec);
+      // Thin surface translucency: the transmitted fraction (pbrTransmission) of the light arriving on the far side leaves
+      // this side diffusely, filtered by the surface colour (printed ink: dark ink passes little, white flood glows). Light
+      // ink scatters wider: a wrapped lobe lets grazing light through, spreading the glow away from the bulb.
+      const float wrap = 0.4 * dot(diffuse, vec3(0.2126, 0.7152, 0.0722));
+      const float transmitted = NdotLraw < 0.0 ? pbrTransmission * saturate((wrap - NdotLraw) / (1.0 + wrap)) : 0.0;
+      acc += shadow * (diffuse * ((vec3_splat(1.0) - F) * NdotL + transmitted) * (1.0 / PI) * (lCol * (x * x / dist2)) + spec);
    }
    return acc;
 }
