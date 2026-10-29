@@ -363,6 +363,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrFactors, 1), // metallic/occlusion/roughness factors + AO flag
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrEmission, 1), // emission color + intensity
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrMapFlags, 1), // bound map flags (ORM, emission)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrCoat, 1), // x: clear coat strength (0 = off), y: clear coat perceptual roughness
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrLightGrid, 1), // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrLightGrid2, 1), // x: cell count y, y: light count
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrProbes0, 1), // reflection plane of the first bound probe (dot(n,p) + w = 0)
@@ -911,6 +912,9 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), 0.f);
+      // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
+      static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
+      SetVector(ShaderUniform::pbrCoat, coatEnabled ? saturate(mat.m_fClearcoat) : 0.f, clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), 0.f, 0.f);
       if (pbrMaps->inShaderSpecular)
          tech = !textured ? ShaderTechnique::pbr_is_notex : (doAlphaTest ? ShaderTechnique::pbr_is_at : ShaderTechnique::pbr_is);
       else if (pbrMaps->transparent)
