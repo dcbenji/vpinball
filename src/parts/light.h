@@ -74,6 +74,7 @@ public:
    bool m_showBulbMesh;
    bool m_staticBulbMesh;
    float m_meshRadius;
+   float m_bulbRadius = 5.65f; // PBR light source sphere radius (VPU) for area specular, default 0.12" (#44/#555 bulb)
 
    ShadowMode m_shadows = ShadowMode::NONE;
    Fader m_fader = Fader::FADER_LINEAR;
