@@ -377,7 +377,7 @@ vec4 pbr_light_texel(const int idx)
    return texelFetch(tex_pbr_lights, ivec2(idx & 255, idx >> 8), 0);
 }
 
-vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness)
+vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha)
 {
    const vec2 cellf = clamp((wPos.xy - pbrLightGrid.xy) * pbrLightGrid.z, vec2_splat(0.0),
       vec2(pbrLightGrid.w - 1.0, pbrLightGrid2.x - 1.0));
@@ -443,7 +443,18 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wV, const vec3 w
       const float cNdotLraw = dot(wNc, l); // wNc = wN without a coat
       if (NdotL <= 0.0 && cNdotLraw <= 0.0 && (NdotLraw >= 0.0 || pbrTransmission <= 0.0))
          continue;
-      const float NdotLs = max(abs(NdotLraw), 1e-3); // shadow lookups on the lit side (the far side for transmission)
+      // The geometric normal wNg (no normal map) decides the side of the surface a light is on. An opaque surface (alpha 1)
+      // without a transmission gets nothing from a light behind it, however the shading normal leans (faded over ~3 deg so
+      // no terminator seam shows). See-through surfaces (clear plastic ramps, Traced cards) keep the light from behind, as
+      // thin translucency does, with their shadow lookup on the light's side below.
+      const float gNdotLraw = dot(wNg, l);
+      const float gFade = pbrTransmission > 0.0 || alpha < 1.0 ? 1.0 : saturate(gNdotLraw * 20.0);
+      if (gFade <= 0.0)
+         continue;
+      // Shadow lookups on the light's side of the geometric surface (the far side for a light behind it), slope bias from
+      // the geometric normal: a normal mapped clear ramp lit from below otherwise compared against the opaque decal right
+      // under it at grazing incidence, and the result flipped from cube texel to cube texel (stair-step stripes)
+      const float NdotLs = max(abs(gNdotLraw), 1e-3);
       // Sphere light specular (Karis 2013, representative point): light from the point of the bulb sphere
       // closest to the reflection ray, the GGX lobe energy renormalized by (a / a')^2, a' = a + radius / (2 dist).
       // a is the specular AA widened alpha so a highlight already spread by the AA is not dimmed twice.
@@ -555,7 +566,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wV, const vec3 w
          // silhouette instead of grazing its edge (removes light leaks at caster contact points)
          const vec4 vsmP = pbrVSMParams[shadowIndex];
          const float faceGrid = vsmP.y;
-         const vec3 shadowPos = wPos + (NdotLraw < 0.0 ? -wN : wN) * (0.5 + 0.04 * sqrt(dist2));
+         const vec3 shadowPos = wPos + (gNdotLraw < 0.0 ? -wNg : wNg) * (0.5 + 0.04 * sqrt(dist2));
          const vec3 sdl = lPos.xyz - shadowPos;
          const float sdist = inversesqrt(dot(sdl, sdl));
          const vec3 ldir = -sdl * sdist; // normalized light -> fragment direction
@@ -601,7 +612,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wV, const vec3 w
       // ink scatters wider: a wrapped lobe lets grazing light through, spreading the glow away from the bulb.
       const float wrap = 0.4 * dot(diffuse, vec3(0.2126, 0.7152, 0.0722));
       const float transmitted = NdotLraw < 0.0 ? pbrTransmission * saturate((wrap - NdotLraw) / (1.0 + wrap)) : 0.0;
-      acc += shadow * (diffuse * ((vec3_splat(1.0) - F) * (NdotL * coatAtt) + transmitted * coatExit) * (1.0 / PI) * (lCol * (x * x / dist2)) + spec);
+      acc += (gFade * shadow) * (diffuse * ((vec3_splat(1.0) - F) * (NdotL * coatAtt) + transmitted * coatExit) * (1.0 / PI) * (lCol * (x * x / dist2)) + spec);
    }
    return acc;
 }
@@ -669,14 +680,17 @@ void main() {
    vec3 F0 = mix(vec3_splat(0.04), albedo, metallic);
    const vec3 diffuse = albedo * (1.0 - metallic);
 
+   // Geometric normal (no normal map), facing the viewer: it tells which side of the surface a direct light is on
+   vec3 Ng = normalize(v_normal);
+   if (dot(Ng, V) < 0.0)
+      Ng = -Ng;
+
    // Clear coat: the coat follows the geometric normal (a smooth shell over the normal mapped base). The base is seen from
    // inside the coat (its F0 relative to IOR 1.5) and is at least as rough as the coat (Filament)
    vec3 Nc = N;
    BRANCH if (coatStrength > 0.0)
    {
-      Nc = normalize(v_normal);
-      if (dot(Nc, V) < 0.0)
-         Nc = -Nc;
+      Nc = Ng;
       F0 = mix(F0, pbr_f0_under_coat(F0), coatStrength);
       roughness = mix(roughness, max(roughness, coatRoughness), coatStrength);
    }
@@ -757,7 +771,7 @@ void main() {
          const vec3 wN = mul(vec4(N, 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
          const vec3 wV = normalize(cCameraPosWorld - v_tablePos);
          const vec3 wNc = coatStrength > 0.0 ? mul(vec4(Nc, 0.0), mView).xyz : wN;
-         color += pbr_direct_light(wN, wNc, wV, v_tablePos, diffuse, F0, roughness);
+         color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a);
       }
    }
 
