@@ -377,8 +377,11 @@ vec4 pbr_light_texel(const int idx)
    return texelFetch(tex_pbr_lights, ivec2(idx & 255, idx >> 8), 0);
 }
 
-vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha)
+// Returns the diffuse (and transmitted) direct light; the specular reflection is accumulated apart in specOut, since a
+// see-through part reflects it whatever its coverage (it is not modulated by alpha like the diffuse)
+vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha, out vec3 specOut)
 {
+   specOut = vec3_splat(0.0);
    const vec2 cellf = clamp((wPos.xy - pbrLightGrid.xy) * pbrLightGrid.z, vec2_splat(0.0),
       vec2(pbrLightGrid.w - 1.0, pbrLightGrid2.x - 1.0));
    const vec4 cell = pbr_light_texel(512 + int(cellf.y) * int(pbrLightGrid.w) + int(cellf.x));
@@ -612,7 +615,8 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       // ink scatters wider: a wrapped lobe lets grazing light through, spreading the glow away from the bulb.
       const float wrap = 0.4 * dot(diffuse, vec3(0.2126, 0.7152, 0.0722));
       const float transmitted = NdotLraw < 0.0 ? pbrTransmission * saturate((wrap - NdotLraw) / (1.0 + wrap)) : 0.0;
-      acc += (gFade * shadow) * (diffuse * ((vec3_splat(1.0) - F) * (NdotL * coatAtt) + transmitted * coatExit) * (1.0 / PI) * (lCol * (x * x / dist2)) + spec);
+      acc += (gFade * shadow) * (diffuse * ((vec3_splat(1.0) - F) * (NdotL * coatAtt) + transmitted * coatExit) * (1.0 / PI) * (lCol * (x * x / dist2)));
+      specOut += (gFade * shadow) * spec;
    }
    return acc;
 }
@@ -771,7 +775,13 @@ void main() {
          const vec3 wN = mul(vec4(N, 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
          const vec3 wV = normalize(cCameraPosWorld - v_tablePos);
          const vec3 wNc = coatStrength > 0.0 ? mul(vec4(Nc, 0.0), mView).xyz : wN;
-         color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a);
+         vec3 directSpec;
+         color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a, directSpec);
+         #ifdef TRANSPARENT
+            spec += directSpec; // reflects at full strength on a see-through part, like the indirect specular
+         #else
+            color += directSpec;
+         #endif
       }
    }
 
@@ -813,7 +823,10 @@ void main() {
       // Premultiplied output (used with ONE/INVSRC_ALPHA blending): diffuse & emission (or the
       // transmitted term) are modulated by coverage while specular stays unmodulated (reflects
       // even on thin glass)
-      gl_FragData[0] = vec4(color.rgb * alpha + spec, alpha);
+      // What the surface reflects is not transmitted: the coverage of what lies behind grows with the reflectance
+      // (Fresnel), so clear plastic darkens and reads as a sheet at grazing angles instead of vanishing
+      const float cover = alpha + (1.0 - alpha) * saturate(dot(W * coatIBL, vec3(0.2126, 0.7152, 0.0722)));
+      gl_FragData[0] = vec4(color.rgb * alpha + spec, pbrProbeParams.w > 0.0 ? alpha : cover);
    #else
       gl_FragData[0] = vec4(color.rgb + spec, alpha);
    #endif
