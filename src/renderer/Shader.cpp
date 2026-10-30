@@ -152,6 +152,8 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[static_cast<unsigned int>(Shad
    SHADER_TECHNIQUE(pbr_notex),
    SHADER_TECHNIQUE(pbr_t),
    SHADER_TECHNIQUE(pbr_t_notex),
+   SHADER_TECHNIQUE(pbr_ti),
+   SHADER_TECHNIQUE(pbr_ti_notex),
    SHADER_TECHNIQUE(pbr_is),
    SHADER_TECHNIQUE(pbr_is_at),
    SHADER_TECHNIQUE(pbr_is_notex),
@@ -915,16 +917,22 @@ void Shader::SetTechniqueMaterial(
       // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
       static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
       SetVector(ShaderUniform::pbrCoat, coatEnabled ? saturate(mat.m_fClearcoat) : 0.f, clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), 0.f, 0.f);
-      if (pbrMaps->inShaderSpecular)
-         tech = !textured ? ShaderTechnique::pbr_is_notex : (doAlphaTest ? ShaderTechnique::pbr_is_at : ShaderTechnique::pbr_is);
-      else if (pbrMaps->transparent)
+      // VPX_PBR_TI=0: the old routing (transparent parts on the opaque in-shader technique without the prepass), for A/B
+      static const bool transparentInShader = []() { const char* const v = std::getenv("VPX_PBR_TI"); return v == nullptr || v[0] != '0'; }();
+      if (pbrMaps->transparent && (!pbrMaps->inShaderSpecular || (transparentInShader && !(textured && doAlphaTest))))
       {
-         tech = textured ? ShaderTechnique::pbr_t : ShaderTechnique::pbr_t_notex;
+         // See-through parts use the transparent shading (premultiplied: their reflections are not modulated by their
+         // coverage, Fresnel coverage, refraction probe) also when the specular is evaluated in-shader (no depth prepass,
+         // which is the default, or inside a probe render): the 'ti' variants, without the sideband outputs
+         tech = pbrMaps->inShaderSpecular ? (textured ? ShaderTechnique::pbr_ti : ShaderTechnique::pbr_ti_notex)
+                                          : (textured ? ShaderTechnique::pbr_t : ShaderTechnique::pbr_t_notex);
          m_pbrPremultiply = true;
          // The caller may have already enabled blending (SetMaterial before SetTechniqueMaterial call order)
          if (m_renderDevice->GetActiveRenderState().GetRenderState(RenderState::ALPHABLENDENABLE) == RenderState::RS_TRUE)
             m_renderDevice->SetRenderState(RenderState::SRCBLEND, RenderState::ONE);
       }
+      else if (pbrMaps->inShaderSpecular)
+         tech = !textured ? ShaderTechnique::pbr_is_notex : (doAlphaTest ? ShaderTechnique::pbr_is_at : ShaderTechnique::pbr_is);
       else
          tech = !textured ? ShaderTechnique::pbr_notex : (doAlphaTest ? ShaderTechnique::pbr_at : ShaderTechnique::pbr);
    }
@@ -1519,6 +1527,8 @@ void Shader::loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTech
          { ShaderTechnique::pbr_notex,                   { ShaderUniform::tex_pbr_lights } },
          { ShaderTechnique::pbr_t,                       { ShaderUniform::tex_pbr_lights } },
          { ShaderTechnique::pbr_t_notex,                 { ShaderUniform::tex_pbr_lights } },
+         { ShaderTechnique::pbr_ti,                      { ShaderUniform::tex_pbr_lights } },
+         { ShaderTechnique::pbr_ti_notex,                { ShaderUniform::tex_pbr_lights } },
          { ShaderTechnique::pbr_is,                      { ShaderUniform::tex_pbr_lights } },
          { ShaderTechnique::pbr_is_at,                   { ShaderUniform::tex_pbr_lights } },
          { ShaderTechnique::pbr_is_notex,                { ShaderUniform::tex_pbr_lights } },
@@ -1609,6 +1619,8 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_notex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_t_tex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_t_notex),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_ti_tex),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_ti_notex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_tex_noat),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_tex_at),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_notex),
@@ -1777,6 +1789,8 @@ void Shader::Load()
       loadProgram(embeddedShaders, ShaderTechnique::pbr_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_notex_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_t, STEREO(vs_pbr_noclip), STEREO(fs_pbr_t_tex_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_t_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_t_notex_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::pbr_ti, STEREO(vs_pbr_noclip), STEREO(fs_pbr_ti_tex_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::pbr_ti_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_ti_notex_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is, STEREO(vs_pbr_noclip), STEREO(fs_pbr_is_tex_noat_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is_at, STEREO(vs_pbr_noclip), STEREO(fs_pbr_is_tex_at_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_is_notex_noclip));
@@ -1815,6 +1829,8 @@ void Shader::Load()
       loadProgram(embeddedShaders, ShaderTechnique::pbr_notex, STEREO(vs_pbr_clip), STEREO(fs_pbr_notex_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::pbr_t, STEREO(vs_pbr_clip), STEREO(fs_pbr_t_tex_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::pbr_t_notex, STEREO(vs_pbr_clip), STEREO(fs_pbr_t_notex_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::pbr_ti, STEREO(vs_pbr_clip), STEREO(fs_pbr_ti_tex_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::pbr_ti_notex, STEREO(vs_pbr_clip), STEREO(fs_pbr_ti_notex_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is, STEREO(vs_pbr_clip), STEREO(fs_pbr_is_tex_noat_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is_at, STEREO(vs_pbr_clip), STEREO(fs_pbr_is_tex_at_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is_notex, STEREO(vs_pbr_clip), STEREO(fs_pbr_is_notex_clip), true);
