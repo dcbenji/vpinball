@@ -916,11 +916,12 @@ void EditorUI::RenderUI()
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, up);
       }
 
-      // Mouse pan
-      if (ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+      // Mouse pan / orbit. Local Mac patch (B66Ops3 2026-10-10): Option + left drag acts as the middle button (no middle button on a trackpad / Magic Mouse)
+      const ImGuiMouseButton navButton = (io.KeyAlt && ImGui::IsMouseDown(ImGuiMouseButton_Left)) ? ImGuiMouseButton_Left : ImGuiMouseButton_Middle;
+      if (ImGui::IsMouseDown(navButton))
       {
-         ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
-         ImGui::ResetMouseDragDelta(ImGuiMouseButton_Middle);
+         ImVec2 drag = ImGui::GetMouseDragDelta(navButton);
+         ImGui::ResetMouseDragDelta(navButton);
          if (m_camMode != ViewMode::PreviewCam && (drag.x != 0.f || drag.y != 0.f))
          {
             Matrix3D viewInverse(m_camView);
@@ -969,7 +970,7 @@ void EditorUI::RenderUI()
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
       // In drag point edit mode, click selects a drag point of the edited curve (shift toggles), dragging a
       // selected point moves the selected points in the table XY plane, drag box selects points
-      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver())
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver()) // Option+click is orbit (local Mac patch)
       {
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_addPartType != eItemInvalid)
