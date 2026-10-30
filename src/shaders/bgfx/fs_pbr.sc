@@ -388,7 +388,7 @@ float pbr_aa_roughness(const vec3 n, const float roughness)
 
 // Returns the diffuse (and transmitted) direct light; the specular reflection is accumulated apart in specOut, since a
 // see-through part reflects it whatever its coverage (it is not modulated by alpha like the diffuse)
-vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha, out vec3 specOut)
+vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha, const float transmission, out vec3 specOut)
 {
    specOut = vec3_splat(0.0);
    const vec2 cellf = clamp((wPos.xy - pbrLightGrid.xy) * pbrLightGrid.z, vec2_splat(0.0),
@@ -623,7 +623,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       // this side diffusely, filtered by the surface colour (printed ink: dark ink passes little, white flood glows). Light
       // ink scatters wider: a wrapped lobe lets grazing light through, spreading the glow away from the bulb.
       const float wrap = 0.4 * dot(diffuse, vec3(0.2126, 0.7152, 0.0722));
-      const float transmitted = NdotLraw < 0.0 ? pbrTransmission * saturate((wrap - NdotLraw) / (1.0 + wrap)) : 0.0;
+      const float transmitted = NdotLraw < 0.0 ? transmission * saturate((wrap - NdotLraw) / (1.0 + wrap)) : 0.0;
       acc += (gFade * shadow) * (diffuse * ((vec3_splat(1.0) - F) * (NdotL * coatAtt) + transmitted * coatExit) * (1.0 / PI) * (lCol * (x * x / dist2)));
       specOut += (gFade * shadow) * spec;
    }
@@ -666,13 +666,15 @@ void main() {
    #endif
 
    // Occlusion / roughness / metallic
-   vec3 orm = vec3(1.0, 1.0, 1.0);
+   // The ORM map's alpha masks the thin surface transmission (1 = the material's, 0 = none): a printed plastic with a black
+   // backing passes light only through its unbacked windows (glTF KHR_materials_transmission keeps its own mask likewise)
+   vec4 orm = vec4(1.0, 1.0, 1.0, 1.0);
    BRANCH if (hasORMMap)
    {
       if (noMipMaps)
-         orm = texNoLod(tex_pbr_orm, v_texcoord0).xyz;
+         orm = texNoLod(tex_pbr_orm, v_texcoord0);
       else
-         orm = texture2D(tex_pbr_orm, v_texcoord0).xyz;
+         orm = texture2D(tex_pbr_orm, v_texcoord0);
    }
    const float metallic = saturate(orm.z * pbrMetallicFactor);
    float roughness = clamp(orm.y * pbrRoughnessFactor, 0.045, 1.0);
@@ -795,7 +797,7 @@ void main() {
          const vec3 wV = normalize(cCameraPosWorld - v_tablePos);
          const vec3 wNc = coatStrength > 0.0 ? mul(vec4(Nc, 0.0), mView).xyz : wN;
          vec3 directSpec;
-         color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a, directSpec);
+         color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a, pbrTransmission * orm.w, directSpec);
          #ifdef TRANSPARENT
             spec += directSpec; // reflects at full strength on a see-through part, like the indirect specular
          #else
