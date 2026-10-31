@@ -130,6 +130,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 
 #ifdef TRANSPARENT
 uniform vec4 refractionTint_thickness;
+uniform vec4 refractionParams; // x: curvature gain (0 = off)
 #endif
 
 #include "ball_shadows.sh"
@@ -391,6 +392,63 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
    if (texStereo(tex_probe_depth, uvR).x < fragCoord.z)
       uv = texStereo(tex_probe_depth, uvH).x < fragCoord.z ? uv0 : uvH;
    return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, roughness * pbrProbeLods.z).rgb;
+}
+
+// pbr_transmit with the refraction options of refractionParams (curvature). The plain version
+// above stays as it was so a part without them renders bit for bit as before.
+// thickness: the offset length (the part's refraction thickness, scaled by the curvature term), lodBias: extra probe blur (mips),
+#ifdef STEREO
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wI, const float roughness, const vec4 fragCoord, const float thickness, const float lodBias, const float v_eye)
+#else
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wI, const float roughness, const vec4 fragCoord, const float thickness, const float lodBias)
+#endif
+{
+   // wI: the incident direction (-wV); the legacy refraction passes +wV (VPX_REFR_DEBUG 4, refraction bench)
+   const vec3 R = refract(wI, wN, 1.0 / 1.5); // n1 = 1.0 (air), n2 = 1.5 (plastic), eta = n1 / n2
+   const vec3 refracted_pos = wPos + thickness * R; // Shift ray by the thickness of the material
+   const vec4 proj = mul(mRotViewProj, vec4(refracted_pos - cCameraPosWorld, 1.0));
+   #if TEX_V_IS_UP
+   const vec2 uvR = vec2(0.5, 0.5) + proj.xy * (0.5 / proj.w);
+   #else
+   const vec2 uvR = vec2(0.5, 0.5) + vec2(proj.x, -proj.y) * (0.5 / proj.w);
+   #endif
+   // A refracted sample that lands on something nearer than this fragment (a wire or rail in front of the ramp) is not
+   // what lies behind it: fall back toward the unrefracted pixel (as the legacy refraction does), through the half offset
+   // first so the switch does not leave a per-pixel staircase along the occluder
+   const vec2 uv0 = fragCoord.xy * w_h_height.xy;
+   vec2 uv = uvR;
+   const vec2 uvH = 0.5 * (uvR + uv0);
+   if (texStereo(tex_probe_depth, uvR).x < fragCoord.z)
+      uv = texStereo(tex_probe_depth, uvH).x < fragCoord.z ? uv0 : uvH;
+   return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, roughness * pbrProbeLods.z + lodBias).rgb;
+}
+
+// Surface curvature from the screen derivatives of the interpolated vertex normal (the estimate the specular AA uses) over
+// those of the position, so it is a property of the surface, the same at any zoom. The squared curvature along a screen
+// direction d is (d.G.d) / (d.H.d), G and H the 2x2 metrics of the normal and position derivatives: its extremes are the
+// eigenvalues of H^-1.G. Returns the max and min curvature (1/VPU) and, in zw, the screen direction (pixels, unnormalized)
+// of the min curvature: the surface's long axis (along a swept ramp wall or fillet).
+vec4 pbr_curvature(const vec3 Nv, const vec3 P)
+{
+   const vec3 dNx = dFdx(Nv);
+   const vec3 dNy = dFdy(Nv);
+   const vec3 dPx = dFdx(P);
+   const vec3 dPy = dFdy(P);
+   const float gxx = dot(dNx, dNx), gxy = dot(dNx, dNy), gyy = dot(dNy, dNy);
+   const float hxx = dot(dPx, dPx), hxy = dot(dPx, dPy), hyy = dot(dPy, dPy);
+   const float detH = hxx * hyy - hxy * hxy;
+   // A pixel quad across a silhouette (or edge-on) has no usable surface metric
+   const float invDet = detH > 1e-4 * hxx * hyy ? 1.0 / detH : 0.0;
+   const float m00 = (hyy * gxx - hxy * gxy) * invDet;
+   const float m01 = (hyy * gxy - hxy * gyy) * invDet;
+   const float m10 = (hxx * gxy - hxy * gxx) * invDet;
+   const float m11 = (hxx * gyy - hxy * gxy) * invDet;
+   const float h = 0.5 * (m00 + m11);
+   const float disc = sqrt(max(h * h - (m00 * m11 - m01 * m10), 0.0));
+   const float lmin = max(h - disc, 0.0);
+   const vec2 e1 = vec2(m01, lmin - m00);
+   const vec2 e2 = vec2(lmin - m11, m10);
+   return vec4(sqrt(max(h + disc, 0.0)), sqrt(lmin), dot(e1, e1) > dot(e2, e2) ? e1 : e2);
 }
 #endif
 
@@ -888,16 +946,39 @@ void main() {
          // a milky sheet. VPX_REFR_DEBUG 4: the legacy offset direction (refract +V) for the bench.
          const vec3 wI = pbrLightGrid2.w == 4.0 ? wV : -wV;
          const float blur = min(roughness + 0.1 * (1.0 - saturate(dot(N, Ng))), 0.08);
-         #ifdef STEREO
-            const vec3 behind = pbr_transmit(v_tablePos, wN, wI, blur, gl_FragCoord, v_eye) * (staticColor_Alpha.rgb * coatIBL);
-         #else
-            const vec3 behind = pbr_transmit(v_tablePos, wN, wI, blur, gl_FragCoord) * (staticColor_Alpha.rgb * coatIBL);
-         #endif
+         // Curvature-driven refraction (refraction_curvature, 0 = off): a curved region (fillet, bevelled wall top) bends the
+         // view more than the flat runs of the same part. The curvature k (relative to a 10 VPU radius bend, less a 0.3 dead
+         // zone so gentle bends of the run and the averaged vertex normals at the edges of long floor triangles do not count)
+         // scales the offset by 1 + gain.k (at most 4x) and the blur radius by half as much. Flat floor and walls are unchanged.
+         float refrThickness = refractionTint_thickness.w; // also read by the debug views
+         vec3 behind;
+         BRANCH if (refractionParams.x > 0.0)
+         {
+            const vec4 curv = pbr_curvature(Nv, v_tablePos);
+            const float scale = min(1.0 + refractionParams.x * max(10.0 * curv.x - 0.3, 0.0), 4.0);
+            refrThickness *= scale;
+            const float refrLodBias = log2(1.0 + 0.5 * (scale - 1.0));
+            #ifdef STEREO
+               behind = pbr_transmit_ex(v_tablePos, wN, wI, blur, gl_FragCoord, refrThickness, refrLodBias, v_eye) * (staticColor_Alpha.rgb * coatIBL);
+            #else
+               behind = pbr_transmit_ex(v_tablePos, wN, wI, blur, gl_FragCoord, refrThickness, refrLodBias) * (staticColor_Alpha.rgb * coatIBL);
+            #endif
+         }
+         else
+         {
+            #ifdef STEREO
+               behind = pbr_transmit(v_tablePos, wN, wI, blur, gl_FragCoord, v_eye) * (staticColor_Alpha.rgb * coatIBL);
+            #else
+               behind = pbr_transmit(v_tablePos, wN, wI, blur, gl_FragCoord) * (staticColor_Alpha.rgb * coatIBL);
+            #endif
+         }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
          if (pbrLightGrid2.w == 1.0)
             gl_FragData[0] = vec4(texStereoLod(tex_pbr_refr, gl_FragCoord.xy * w_h_height.xy, 0.0).rgb, 1.0);
          else if (pbrLightGrid2.w == 2.0)
             gl_FragData[0] = vec4(behind, 1.0);
+         else if (pbrLightGrid2.w == 6.0) // curvature term: offset scale 1 (black) .. 4 (white)
+            gl_FragData[0] = vec4(vec3_splat((refrThickness / max(refractionTint_thickness.w, 1e-6) - 1.0) / 3.0), 1.0);
          else if (pbrLightGrid2.w == 3.0)
          {
             #ifdef STEREO
