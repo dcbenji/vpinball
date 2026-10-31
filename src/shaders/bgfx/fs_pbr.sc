@@ -21,7 +21,7 @@
 //          INSHADERSPEC (in-shader envmap specular, used in probe contexts and before the resolve pass),
 //          SIDEBAND (write specular sideband attachments), CLIP, STEREO
 
-$input v_worldPos, v_tablePos, v_normal, v_texcoord0
+$input v_worldPos, v_tablePos, v_normal, v_texcoord0, v_refrCurv
 #ifdef STEREO
     $input v_eye
 #endif
@@ -130,7 +130,8 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 
 #ifdef TRANSPARENT
 uniform vec4 refractionTint_thickness;
-uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on)
+uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on),
+                               // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
 #endif
 
 #include "ball_shadows.sh"
@@ -1030,18 +1031,21 @@ void main() {
          const float blur = min(roughness + 0.1 * (1.0 - saturate(dot(N, Ng))), 0.08);
          // Curvature-driven refraction (refraction_curvature, 0 = off): a curved region (fillet, bevelled wall top) bends the
          // view more than the flat runs of the same part. The curvature k (relative to a 10 VPU radius bend, less a 0.3 dead
-         // zone so gentle bends of the run and the averaged vertex normals at the edges of long floor triangles do not count)
-         // scales the offset by 1 + gain.k (at most 4x) and the blur radius by half as much. Flat floor and walls are unchanged.
+         // zone so gentle bends of the run do not count) scales the offset by 1 + gain.k (at most 4x) and the blur radius by
+         // half as much. Flat floor and walls are unchanged. k is the per-vertex curvature interpolated over the face
+         // (v_refrCurv, computed at upload, see Primitive::UploadMeshToVB), so a low-poly fillet reacts smoothly instead of in
+         // per-triangle steps; until the part is reloaded after the option is switched on, the per-triangle estimate stands in.
          float refrThickness = refractionTint_thickness.w; // also read by the debug views
          vec3 refrSmear = vec3_splat(0.0);
          vec3 behind;
          BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0)
          {
             float refrLodBias = 0.0;
-            const vec4 curv = refractionParams.x > 0.0 || refractionParams.y > 0.0 ? pbr_curvature(Nv, v_tablePos) : vec4_splat(0.0);
+            const vec4 curv = refractionParams.y > 0.0 || (refractionParams.x > 0.0 && refractionParams.w == 0.0) ? pbr_curvature(Nv, v_tablePos) : vec4_splat(0.0);
+            const float refrK = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * curv.x; // curvature relative to a 10 VPU radius
             BRANCH if (refractionParams.x > 0.0)
             {
-               const float scale = min(1.0 + refractionParams.x * max(10.0 * curv.x - 0.3, 0.0), 4.0);
+               const float scale = min(1.0 + refractionParams.x * max(refrK - 0.3, 0.0), 4.0);
                refrThickness *= scale;
                refrLodBias = log2(1.0 + 0.5 * (scale - 1.0));
             }
@@ -1065,8 +1069,9 @@ void main() {
                Tu = lu > 1e-8 ? Tu * (1.0 / lu) : vec3_splat(0.0);
                if (dot(Tc, Tu) < 0.0)
                   Tc = -Tc;
-               // Trust the curvature axis where the bend is tight (radius under ~15 VPU) and one-directional (cylinder-like)
-               const float wc = smoothstep(0.6, 1.2, 10.0 * curv.x) * saturate(1.0 - curv.y / max(curv.x, 1e-8));
+               // Trust the curvature axis where the bend is tight (radius under ~15 VPU, from the smooth per-vertex curvature so
+               // the per-triangle noise of the averaged normals on flat faces does not switch it on) and one-directional
+               const float wc = smoothstep(0.6, 1.2, refrK) * saturate(1.0 - curv.y / max(curv.x, 1e-8));
                const vec3 T = mix(Tu, Tc, wc);
                const float lt = length(T);
                refrSmear = lt > 1e-3 ? T * (saturate(2.0 * lt) / lt * refractionParams.y) : vec3_splat(0.0);
