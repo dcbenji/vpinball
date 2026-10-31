@@ -302,6 +302,10 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Refraction Curvature"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionCurvature; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionCurvature = max(v, 0.f); }, PropertyPane::Unit::None, 3, "Curvature-driven refraction strength (0 = off)");
+      props.InputFloat<Primitive>(
+         m_part, "Refraction Anisotropy"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_refractionAnisotropy; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_refractionAnisotropy = clamp(v, 0.f, 1.f); }, PropertyPane::Unit::None, 3);
 
       props.EndSection();
    }
