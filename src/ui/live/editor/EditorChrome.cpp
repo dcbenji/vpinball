@@ -79,6 +79,8 @@ void EditorChrome::RenderMenuBar()
                settings.SetEditor_NavOrbitSelection(editor.m_navOrbitSelection, false);
             if (ImGui::MenuItem("Zoom To Mouse Position", nullptr, &editor.m_navZoomToMouse))
                settings.SetEditor_NavZoomToMouse(editor.m_navZoomToMouse, false);
+            if (ImGui::MenuItem("Auto Depth (Orbit Around Point Under Cursor)", nullptr, &editor.m_navAutoDepth))
+               settings.SetEditor_NavAutoDepth(editor.m_navAutoDepth, false);
             if (ImGui::MenuItem("Invert Zoom", nullptr, &editor.m_navInvertZoom))
                settings.SetEditor_NavInvertZoom(editor.m_navInvertZoom, false);
             if (ImGui::MenuItem("Alt + Drag Acts As Middle Button", nullptr, &editor.m_navAltMiddleButton))
