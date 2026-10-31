@@ -113,6 +113,9 @@ private:
    Texture *m_outlinerImageAnchor = nullptr; // Anchors for shift+click range selection in the outliner
    VPX::Sound *m_outlinerSoundAnchor = nullptr;
    Material *m_outlinerMaterialAnchor = nullptr;
+   bool m_pickListOpen = false; // Ctrl+click list of the parts under the cursor
+   ImVec2 m_pickListPos;
+   vector<std::shared_ptr<EditorUIPart>> m_pickList;
    bool m_boxSelectActive = false;
    ImVec2 m_boxSelectStart;
    bool IsPartSelected(const std::shared_ptr<EditorUIPart> &part) const;
