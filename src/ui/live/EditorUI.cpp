@@ -100,6 +100,7 @@ void EditorUI::LoadNavPreferences()
    m_navInvertZoom = settings.GetEditor_NavInvertZoom();
    m_navOrbitSensitivity = settings.GetEditor_NavOrbitSensitivity();
    m_navAltMiddleButton = settings.GetEditor_NavAltMiddleButton();
+   m_navTrackpad = settings.GetEditor_NavTrackpad();
    m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
    m_navBlenderTransform = settings.GetEditor_NavBlenderTransform();
 }
@@ -999,8 +1000,22 @@ void EditorUI::RenderUI()
       UpdateModalTransform();
    if (!io.WantCaptureMouse && m_fileOp == nullptr && !modalWasActive)
    {
+      // Trackpad: two finger scroll pans the view (Ctrl / Cmd + scroll zooms)
+      if (m_navTrackpad && (io.MouseWheel != 0 || io.MouseWheelH != 0) && !io.KeyCtrl && !io.KeySuper)
+      {
+         if (m_camMode == ViewMode::PreviewCam)
+            m_camMode = ViewMode::EditorCam;
+         Matrix3D view(m_camView);
+         view.Invert();
+         const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
+         const vec3 camTarget = pos - dir * m_camDistance;
+         const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+         const float unitsPerPixel = 2.f * halfH / io.DisplaySize.y;
+         const vec3 offset = (right * -io.MouseWheelH + up * io.MouseWheel) * (20.f * unitsPerPixel);
+         m_camView = Matrix3D::MatrixLookAtRH(pos + offset, camTarget + offset, up);
+      }
       // Zoom in/out with mouse wheel
-      if (io.MouseWheel != 0)
+      else if (io.MouseWheel != 0)
       {
          if (m_camMode == ViewMode::PreviewCam)
             m_camMode = ViewMode::EditorCam;

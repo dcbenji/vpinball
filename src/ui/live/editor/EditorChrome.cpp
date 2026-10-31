@@ -85,6 +85,8 @@ void EditorChrome::RenderMenuBar()
                settings.SetEditor_NavInvertZoom(editor.m_navInvertZoom, false);
             if (ImGui::MenuItem("Alt + Drag Acts As Middle Button", nullptr, &editor.m_navAltMiddleButton))
                settings.SetEditor_NavAltMiddleButton(editor.m_navAltMiddleButton, false);
+            if (ImGui::MenuItem("Trackpad (Scroll Pans, Ctrl/Cmd+Scroll Zooms)", nullptr, &editor.m_navTrackpad))
+               settings.SetEditor_NavTrackpad(editor.m_navTrackpad, false);
             if (ImGui::MenuItem("Emulate Numpad (Top Row Digits)", nullptr, &editor.m_navEmulateNumpad))
                settings.SetEditor_NavEmulateNumpad(editor.m_navEmulateNumpad, false);
             if (ImGui::MenuItem("Blender Transform Keys (G / R / S)", nullptr, &editor.m_navBlenderTransform))
