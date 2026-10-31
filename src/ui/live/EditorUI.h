@@ -324,6 +324,7 @@ private:
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds) const;
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
+   bool IsNumpadPressed(int digit) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
    void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false) const;
 
@@ -336,6 +337,7 @@ private:
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
+   bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
    bool m_fitPlayfieldCamera = false;
