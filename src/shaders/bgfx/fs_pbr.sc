@@ -936,9 +936,9 @@ void main() {
                refrSheet = min(refrGraze, REFR_SHEET_MAX);
             // Anisotropic refraction (refraction_anisotropy 0..1, 0 = off): the view through scuffed plastic streaks along the
             // part's long axis (the sweep of a ramp wall or fillet), not across. The axis is the min curvature direction where the
-            // surface is clearly curved one way (fillet, bevel); elsewhere (flat runs, and where both curvatures are about zero
-            // so the min curvature direction means nothing) it is the texture u direction (UV u along the ramp); without UVs
-            // there is no smear. The streak is subtle on the flat panels, up to 2x longer in the bends (forming lines in the
+            // surface is clearly curved one way (fillet, bevel); elsewhere (where both curvatures are about zero so the min
+            // curvature direction means nothing) it is the horizontal tangent on steep faces (walls) and the texture u direction
+            // on the flatter ones (UV u along the ramp floor); without UVs a floor gets no smear. The streak is subtle on the flat panels, up to 2x longer in the bends (forming lines in the
             // plastic) and up to 5x toward grazing incidence, its length set in pbr_transmit_ex from the distance to what
             // lies behind.
             BRANCH if (refractionParams.y > 0.0)
@@ -955,6 +955,18 @@ void main() {
                const float lc = length(Tc), lu = length(Tu);
                Tc = lc > 1e-8 ? Tc * (1.0 / lc) : vec3_splat(0.0);
                Tu = lu > 1e-8 ? Tu * (1.0 / lu) : vec3_splat(0.0);
+               // Steep faces (walls, a plastic's rim) run horizontally: there the axis is the horizontal tangent. A ramp's UV map
+               // does not follow the walls (PF's centre ramp is a plan-view unwrap that lays them out across, so u runs up them
+               // and the axis flipped in bands from triangle to triangle)
+               const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
+               vec3 Th = vec3(wNg.y, -wNg.x, 0.0); // N x up
+               const float lh = length(Th); // sine of the face's slope
+               Th = lh > 1e-4 ? Th * (1.0 / lh) : vec3_splat(0.0);
+               if (dot(Th, Tu) < 0.0)
+                  Th = -Th;
+               Tu = mix(Tu, Th, smoothstep(0.6, 0.85, lh));
+               const float lu2 = length(Tu);
+               Tu = lu2 > 1e-3 ? Tu * (1.0 / lu2) : Th;
                if (dot(Tc, Tu) < 0.0)
                   Tc = -Tc;
                // Trust the curvature axis where the bend is tight (radius under ~15 VPU, from the smooth per-vertex curvature so
