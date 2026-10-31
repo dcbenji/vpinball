@@ -344,6 +344,10 @@ private:
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
+   bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)
+   bool m_navAltMiddleButton = true;
+   float m_navOrbitSensitivity = 1.f;
+   void LoadNavPreferences();
    bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
    bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
