@@ -344,6 +344,7 @@ private:
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
+   int m_navSelectionDisplay = 0; // 0 = edges only, 1 = edges and tint, 2 = hidden
    float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
    void SetFov(float fovY);
    bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)

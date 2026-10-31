@@ -96,6 +96,7 @@ void EditorUI::LoadNavPreferences()
    m_navInvertZoom = settings.GetEditor_NavInvertZoom();
    m_navOrbitSensitivity = settings.GetEditor_NavOrbitSensitivity();
    m_navFovY = settings.GetEditor_NavFovY();
+   m_navSelectionDisplay = settings.GetEditor_NavSelectionDisplay();
    m_navAltMiddleButton = settings.GetEditor_NavAltMiddleButton();
    m_navTrackpad = settings.GetEditor_NavTrackpad();
    m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
@@ -844,7 +845,8 @@ void EditorUI::RenderUI()
    // Selection and physic colliders overlay
    {
       LiveRenderContext ctx(m_player, overlayDrawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
-      if (!m_multiSel.empty())
+      ctx.m_selectionDisplay = m_navSelectionDisplay;
+      if (!m_multiSel.empty() && m_selectionOverlay)
       {
          if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
             m_renderer->m_renderDevice->Clear(clearType::ZBUFFER, 0);
@@ -1434,6 +1436,8 @@ void EditorUI::RenderUI()
                   RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
             }
          }
+         else if (io.KeyAlt && !io.KeyShift)
+            m_selectionOverlay = !m_selectionOverlay; // Alt+Z: show / hide the selection overlay
          else if (!io.KeyShift && !io.KeyAlt)
          { // Wireframe shade mode selection
             switch (m_shadeMode)
