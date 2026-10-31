@@ -310,6 +310,7 @@ private:
    void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds) const;
+   bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
    void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false) const;
 
    // Editor camera
@@ -320,6 +321,7 @@ private:
    {
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
+   bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
    bool m_fitPlayfieldCamera = false;
    Matrix3D m_camView, m_camProj;
