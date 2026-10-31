@@ -10,6 +10,7 @@
 #include "ui/EditorClipboard.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "parts/light.h"
 
 namespace VPX::EditorUI
 {
@@ -72,6 +73,39 @@ void EditorChrome::RenderMenuBar()
       {
          if (ImGui::MenuItem("Convert to PBR...", nullptr, false, !editor.m_table->IsLocked()))
             editor.m_pbrConvertModal.Show();
+         if (ImGui::BeginMenu("Light States"))
+         {
+            // The editor does not run the table script (which usually sets the lamp states): set the light state of the table or of a collection here
+            const auto setStates = [&](const vector<IEditable *> &parts, const float state)
+            {
+               for (IEditable *const part : parts)
+                  if (part->GetItemType() == eItemLight)
+                     static_cast<Light *>(part)->put_State(state);
+            };
+            const float states[] = { 0.f, 0.706f, 1.f };
+            const char *stateNames[] = { "Off", "0.706 (lamp top)", "On" };
+            if (ImGui::BeginMenu("All Lights"))
+            {
+               for (int i = 0; i < 3; i++)
+                  if (ImGui::MenuItem(stateNames[i]))
+                     setStates(editor.m_table->GetParts(), states[i]);
+               ImGui::EndMenu();
+            }
+            for (auto *const collection : editor.m_table->GetCollections())
+            {
+               bool hasLight = false;
+               for (const IEditable *const part : collection->GetParts())
+                  hasLight |= part->GetItemType() == eItemLight;
+               if (hasLight && ImGui::BeginMenu(collection->m_name.c_str()))
+               {
+                  for (int i = 0; i < 3; i++)
+                     if (ImGui::MenuItem(stateNames[i]))
+                        setStates(collection->GetParts(), states[i]);
+                  ImGui::EndMenu();
+               }
+            }
+            ImGui::EndMenu();
+         }
          if (ImGui::BeginMenu("Navigation"))
          {
             Settings &settings = g_settingsService.GetAppSettings();
