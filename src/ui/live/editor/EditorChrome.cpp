@@ -74,6 +74,25 @@ void EditorChrome::RenderMenuBar()
             editor.m_pbrConvertModal.Show();
          if (ImGui::MenuItem("Import Unity Prefab...", nullptr, false, !editor.m_table->IsLocked()))
             editor.PickUnityPrefab();
+         if (ImGui::BeginMenu("Navigation"))
+         {
+            Settings &settings = g_settingsService.GetAppSettings();
+            if (ImGui::MenuItem("Orbit Around Selection", nullptr, &editor.m_navOrbitSelection))
+               settings.SetEditor_NavOrbitSelection(editor.m_navOrbitSelection, false);
+            if (ImGui::MenuItem("Zoom To Mouse Position", nullptr, &editor.m_navZoomToMouse))
+               settings.SetEditor_NavZoomToMouse(editor.m_navZoomToMouse, false);
+            if (ImGui::MenuItem("Invert Zoom", nullptr, &editor.m_navInvertZoom))
+               settings.SetEditor_NavInvertZoom(editor.m_navInvertZoom, false);
+            if (ImGui::MenuItem("Alt + Drag Acts As Middle Button", nullptr, &editor.m_navAltMiddleButton))
+               settings.SetEditor_NavAltMiddleButton(editor.m_navAltMiddleButton, false);
+            if (ImGui::MenuItem("Emulate Numpad (Top Row Digits)", nullptr, &editor.m_navEmulateNumpad))
+               settings.SetEditor_NavEmulateNumpad(editor.m_navEmulateNumpad, false);
+            if (ImGui::MenuItem("Blender Transform Keys (G / R / S)", nullptr, &editor.m_navBlenderTransform))
+               settings.SetEditor_NavBlenderTransform(editor.m_navBlenderTransform, false);
+            if (ImGui::SliderFloat("Orbit Sensitivity", &editor.m_navOrbitSensitivity, 0.1f, 5.f, "%.1f"))
+               settings.SetEditor_NavOrbitSensitivity(editor.m_navOrbitSensitivity, false);
+            ImGui::EndMenu();
+         }
          ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("View"))

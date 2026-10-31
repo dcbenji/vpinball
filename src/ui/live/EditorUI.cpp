@@ -81,6 +81,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    m_undo.SetEditorStateCapture([this]() { return std::any(CaptureUndoSelection()); });
 
    ClearSelection();
+   LoadNavPreferences();
 
    // Editor camera position. We use a right handed system for easy ImGuizmo integration while VPX renderer is left handed, so reverse X axis
    m_camDistance = m_table->m_bottom * 0.7f;
@@ -89,6 +90,18 @@ EditorUI::EditorUI(LiveUI &liveUI)
    constexpr vec3 up { 0.f, -1.f, 0.f };
    m_camView = Matrix3D::MatrixLookAtRH(eye, at, up);
    ImGuizmo::AllowAxisFlip(false);
+}
+
+void EditorUI::LoadNavPreferences()
+{
+   const Settings &settings = g_settingsService.GetAppSettings();
+   m_navOrbitSelection = settings.GetEditor_NavOrbitSelection();
+   m_navZoomToMouse = settings.GetEditor_NavZoomToMouse();
+   m_navInvertZoom = settings.GetEditor_NavInvertZoom();
+   m_navOrbitSensitivity = settings.GetEditor_NavOrbitSensitivity();
+   m_navAltMiddleButton = settings.GetEditor_NavAltMiddleButton();
+   m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
+   m_navBlenderTransform = settings.GetEditor_NavBlenderTransform();
 }
 
 EditorUI::~EditorUI()
@@ -995,7 +1008,7 @@ void EditorUI::RenderUI()
          view.Invert();
          const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
          vec3 camTarget = pos - dir * m_camDistance;
-         const float zoomFactor = powf(1.1f, -ImGui::GetIO().MouseWheel);
+         const float zoomFactor = powf(1.1f, (m_navInvertZoom ? 1.f : -1.f) * ImGui::GetIO().MouseWheel);
          if (m_navZoomToMouse && m_camMode != ViewMode::PreviewCam)
          {
             // Zoom toward the point under the cursor: keep the point of the focal plane under the mouse at the same screen position
@@ -1013,8 +1026,8 @@ void EditorUI::RenderUI()
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, up);
       }
 
-      // Mouse pan / orbit. Local Mac patch (B66Ops3 2026-10-10): Option + left drag acts as the middle button (no middle button on a trackpad / Magic Mouse)
-      const ImGuiMouseButton navButton = (io.KeyAlt && ImGui::IsMouseDown(ImGuiMouseButton_Left)) ? ImGuiMouseButton_Left : ImGuiMouseButton_Middle;
+      // Mouse pan / orbit. Optionally (preference), Alt/Option + left drag acts as the middle button (no middle button on a trackpad / Magic Mouse)
+      const ImGuiMouseButton navButton = (m_navAltMiddleButton && io.KeyAlt && ImGui::IsMouseDown(ImGuiMouseButton_Left)) ? ImGuiMouseButton_Left : ImGuiMouseButton_Middle;
       if (ImGui::IsMouseDown(navButton))
       {
          ImVec2 drag = ImGui::GetMouseDragDelta(navButton);
@@ -1044,8 +1057,8 @@ void EditorUI::RenderUI()
             else
             {
                m_predefinedView = PredefinedView::None;
-               const Matrix3D rx = Matrix3D::MatrixRotate(drag.x * 0.01f, up);
-               const Matrix3D ry = Matrix3D::MatrixRotate(drag.y * 0.01f, right);
+               const Matrix3D rx = Matrix3D::MatrixRotate(drag.x * 0.01f * m_navOrbitSensitivity, up);
+               const Matrix3D ry = Matrix3D::MatrixRotate(drag.y * 0.01f * m_navOrbitSensitivity, right);
                const Matrix3D roll = rx * ry;
                dir = roll.MultiplyVectorNoPerspective(dir);
                dir.Normalize();
@@ -1069,7 +1082,7 @@ void EditorUI::RenderUI()
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
       // In drag point edit mode, click selects a drag point of the edited curve (shift toggles), dragging a
       // selected point moves the selected points in the table XY plane, drag box selects points
-      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate()) // Option+click is orbit (local Mac patch)
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate()) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_addPartType != eItemInvalid)
