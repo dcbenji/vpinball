@@ -409,6 +409,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(OSNM), "object_space_normal_map" },
             { FID(OVPH), "overwrite_physics" },
             { FID(PIDB), "depth_bias" },
+            { FID(RCRV), "refraction_curvature" },
             { FID(REEN), "reflection_enabled" },
             { FID(REFL), "reflection_probe" },
             { FID(REFR), "refraction_probe" },

@@ -294,6 +294,10 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Refraction Thickness"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionThickness; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionThickness = v; }, PropertyPane::Unit::None, 3);
+      props.InputFloat<Primitive>(
+         m_part, "Refraction Curvature"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_refractionCurvature; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_refractionCurvature = max(v, 0.f); }, PropertyPane::Unit::None, 3);
 
       props.EndSection();
    }

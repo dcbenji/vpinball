@@ -121,6 +121,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 
 #ifdef TRANSPARENT
 uniform vec4 refractionTint_thickness;
+uniform vec4 refractionParams; // x: curvature gain (0 = off)
 #endif
 
 #include "ball_shadows.sh"
@@ -365,6 +366,60 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wV, const float rou
    if (texStereoNoLod(tex_probe_depth, uv).x < screenCoord.z)
       uv = screenCoord.xy * w_h_height.xy;
    return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, roughness * pbrProbeLods.z).rgb;
+}
+
+// pbr_transmit with the refraction options of refractionParams (curvature). The plain version
+// above stays as it was so a part without them renders bit for bit as before.
+// thickness: the offset length (the part's refraction thickness, scaled by the curvature term), lodBias: extra probe blur (mips),
+#ifdef STEREO
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float thickness, const float lodBias, const float v_eye)
+#else
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float thickness, const float lodBias)
+#endif
+{
+   const vec3 R = refract(-wV, wN, 1.0 / 1.5); // n1 = 1.0 (air), n2 = 1.5 (plastic), eta = n1 / n2
+   const vec3 refracted_pos = wPos + thickness * R; // Shift ray by the thickness of the material
+   const vec4 proj = mul(mRotViewProj, vec4(refracted_pos - cCameraPosWorld, 1.0));
+   #if TEX_V_IS_UP
+   const vec2 uvR = vec2(0.5, 0.5) + proj.xy * (0.5 / proj.w);
+   #else
+   const vec2 uvR = vec2(0.5, 0.5) + vec2(proj.x, -proj.y) * (0.5 / proj.w);
+   #endif
+   // A refracted sample that lands on something nearer than this fragment (a wire or rail in front of the part) is not
+   // what lies behind it: fall back toward the unrefracted pixel
+   const vec2 uv0 = screenCoord.xy * w_h_height.xy;
+   vec2 uv = uvR;
+   if (texStereoNoLod(tex_probe_depth, uvR).x < screenCoord.z)
+      uv = uv0; // as pbr_transmit
+   return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, roughness * pbrProbeLods.z + lodBias).rgb;
+}
+
+// Surface curvature from the screen derivatives of the interpolated vertex normal (the estimate the specular AA uses) over
+// those of the position, so it is a property of the surface, the same at any zoom. The squared curvature along a screen
+// direction d is (d.G.d) / (d.H.d), G and H the 2x2 metrics of the normal and position derivatives: its extremes are the
+// eigenvalues of H^-1.G. Returns the max and min curvature (1/VPU) and, in zw, the screen direction (pixels, unnormalized)
+// of the min curvature: the surface's long axis (along a swept ramp wall or fillet).
+vec4 pbr_curvature(const vec3 Nv, const vec3 P)
+{
+   const vec3 dNx = dFdx(Nv);
+   const vec3 dNy = dFdy(Nv);
+   const vec3 dPx = dFdx(P);
+   const vec3 dPy = dFdy(P);
+   const float gxx = dot(dNx, dNx), gxy = dot(dNx, dNy), gyy = dot(dNy, dNy);
+   const float hxx = dot(dPx, dPx), hxy = dot(dPx, dPy), hyy = dot(dPy, dPy);
+   const float detH = hxx * hyy - hxy * hxy;
+   // A pixel quad across a silhouette (or edge-on) has no usable surface metric
+   const float invDet = detH > 1e-4 * hxx * hyy ? 1.0 / detH : 0.0;
+   const float m00 = (hyy * gxx - hxy * gxy) * invDet;
+   const float m01 = (hyy * gxy - hxy * gyy) * invDet;
+   const float m10 = (hxx * gxy - hxy * gxx) * invDet;
+   const float m11 = (hxx * gyy - hxy * gxy) * invDet;
+   const float h = 0.5 * (m00 + m11);
+   const float disc = sqrt(max(h * h - (m00 * m11 - m01 * m10), 0.0));
+   const float lmin = max(h - disc, 0.0);
+   const vec2 e1 = vec2(m01, lmin - m00);
+   const vec2 e2 = vec2(lmin - m11, m10);
+   return vec4(sqrt(max(h + disc, 0.0)), sqrt(lmin), dot(e1, e1) > dot(e2, e2) ? e1 : e2);
 }
 #endif
 
@@ -729,11 +784,32 @@ void main() {
          // unmodulated specular, written opaque
          const vec3 wN = mul(vec4(N, 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
          const vec3 wV = normalize(cCameraPosWorld - v_tablePos);
-         #ifdef STEREO
-            const vec3 behind = pbr_transmit(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, v_eye) * staticColor_Alpha.rgb;
-         #else
-            const vec3 behind = pbr_transmit(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz) * staticColor_Alpha.rgb;
-         #endif
+         // Curvature-driven refraction (refraction_curvature, 0 = off): a curved region (fillet, bevelled wall top) bends the
+         // view more than the flat runs of the same part. The curvature k (relative to a 10 VPU radius bend, less a 0.3 dead
+         // zone so gentle bends of the run and the averaged vertex normals at the edges of long floor triangles do not count)
+         // scales the offset by 1 + gain.k (at most 4x) and the blur radius by half as much. Flat floor and walls are unchanged.
+         float refrThickness = refractionTint_thickness.w;
+         vec3 behind;
+         BRANCH if (refractionParams.x > 0.0)
+         {
+            const vec4 curv = pbr_curvature(normalize(v_normal), v_tablePos);
+            const float scale = min(1.0 + refractionParams.x * max(10.0 * curv.x - 0.3, 0.0), 4.0);
+            refrThickness *= scale;
+            const float refrLodBias = log2(1.0 + 0.5 * (scale - 1.0));
+            #ifdef STEREO
+               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrThickness, refrLodBias, v_eye) * staticColor_Alpha.rgb;
+            #else
+               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrThickness, refrLodBias) * staticColor_Alpha.rgb;
+            #endif
+         }
+         else
+         {
+            #ifdef STEREO
+               behind = pbr_transmit(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, v_eye) * staticColor_Alpha.rgb;
+            #else
+               behind = pbr_transmit(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz) * staticColor_Alpha.rgb;
+            #endif
+         }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
       }
       else
