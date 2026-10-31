@@ -97,6 +97,17 @@ void EditorChrome::RenderMenuBar()
                editor.SetFov(fov);
                settings.SetEditor_NavFovY(editor.m_navFovY, false);
             }
+            const char *selectionModes[] = { "Selection: Edges", "Selection: Edges + Tint", "Selection: Hidden" };
+            if (ImGui::BeginMenu(selectionModes[editor.m_navSelectionDisplay]))
+            {
+               for (int i = 0; i < 3; i++)
+                  if (ImGui::MenuItem(selectionModes[i] + 11, nullptr, editor.m_navSelectionDisplay == i))
+                  {
+                     editor.m_navSelectionDisplay = i;
+                     settings.SetEditor_NavSelectionDisplay(i, false);
+                  }
+               ImGui::EndMenu();
+            }
             if (ImGui::SliderFloat("Orbit Sensitivity", &editor.m_navOrbitSensitivity, 0.1f, 5.f, "%.1f"))
                settings.SetEditor_NavOrbitSensitivity(editor.m_navOrbitSensitivity, false);
             ImGui::EndMenu();
