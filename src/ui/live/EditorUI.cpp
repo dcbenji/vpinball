@@ -1363,6 +1363,19 @@ void EditorUI::RenderUI()
                DeleteSelection();
          }
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
+      {
+         // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
+         if (!m_pointEditPart && !m_multiSel.empty() && !IsInspectMode() && !m_table->IsLocked())
+         {
+            CopySelection();
+            PasteSelection(ImGui::GetMousePos());
+            if (m_navBlenderTransform)
+               BeginModalTransform(ModalOp::Grab);
+            else
+               SetGizmoOperation(ImGuizmo::TRANSLATE);
+         }
+      }
       else if (ImGui::IsKeyPressed(ImGuiKey_H))
       {
          if (m_table->m_liveBaseTable == nullptr && !io.KeyCtrl) // No UI visibility in inspection mode
