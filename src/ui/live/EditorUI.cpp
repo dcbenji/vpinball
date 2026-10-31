@@ -1440,104 +1440,28 @@ void EditorUI::RenderUI()
          }
       }
       else if (IsNumpadPressed(0))
-      {
-         m_predefinedView = PredefinedView::None;
-         switch (m_camMode)
-         {
-         case ViewMode::PreviewCam:
-            m_camMode = ViewMode::EditorCam;
-            ResetCameraFromPlayer();
-            break;
-         case ViewMode::EditorCam:
-            m_camMode = ViewMode::DesktopBackdrop;
-            SetBackdropCamera();
-            break;
-         case ViewMode::DesktopBackdrop: m_camMode = ViewMode::PreviewCam; break;
-         }
-      }
+         CycleCamera();
       else if (IsNumpadPressed(5))
       {
          m_camMode = ViewMode::EditorCam;
          m_perspectiveCam = !m_perspectiveCam;
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift))
-      {
-         // Editor Camera center on the whole selection, adjusting the zoom so that it fills the view
-         FRect3D bounds;
-         if (GetSelectionBounds(bounds))
-            FrameBounds(bounds);
-      }
+         FrameSelection();
       else if (ImGui::IsKeyPressed(ImGuiKey_Home))
-      {
-         // Frame the whole table
-         FRect3D bounds(0.f, m_table->m_right, 0.f, m_table->m_bottom, 0.f, m_table->m_glassTopHeight);
-         FrameBounds(bounds);
-      }
+         FrameAll();
       else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDivide))
       {
          m_orbitLock = !m_orbitLock;
       }
       else if (IsNumpadPressed(2) || IsNumpadPressed(4) || IsNumpadPressed(6) || IsNumpadPressed(8))
-      {
-         // Step the orbit by 15 degrees (4/6 around the vertical axis, 8/2 around the view's horizontal axis)
-         if (m_camMode == ViewMode::PreviewCam)
-            m_camMode = ViewMode::EditorCam;
-         m_predefinedView = PredefinedView::None;
-         Matrix3D view(m_camView);
-         view.Invert();
-         const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
-         vec3 camTarget = pos - dir * m_camDistance;
-         GetNavPivot(camTarget);
-         const float angle = ANGTORAD(15.f);
-         const bool yaw = IsNumpadPressed(4) || IsNumpadPressed(6);
-         const float sign = (IsNumpadPressed(4) || IsNumpadPressed(8)) ? 1.f : -1.f;
-         const Matrix3D rot = Matrix3D::MatrixRotate(sign * angle, yaw ? vec3(0.f, 0.f, -1.f) : right);
-         const vec3 newDir = rot.MultiplyVectorNoPerspective(dir);
-         const vec3 newUp = rot.MultiplyVectorNoPerspective(up);
-         m_camView = Matrix3D::MatrixLookAtRH(camTarget + newDir * m_camDistance, camTarget, newUp);
-      }
+         OrbitStep(IsNumpadPressed(4) || IsNumpadPressed(6), (IsNumpadPressed(4) || IsNumpadPressed(8)) ? 1.f : -1.f);
       else if (IsNumpadPressed(7))
-      {
-         // Editor Camera to Top / Bottom
-         m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Bottom : PredefinedView::Top;
-         m_camMode = ViewMode::EditorCam;
-         Matrix3D view(m_camView);
-         view.Invert();
-         const vec3 /*up = view.GetOrthoNormalUp(),*/ dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
-         const vec3 camTarget = pos - dir * m_camDistance;
-         constexpr vec3 newUp { 0.f, -1.f, 0.f };
-         const vec3 newDir(0.f, 0.f, ImGui::GetIO().KeyCtrl ? 1.f : -1.f);
-         const vec3 newEye = camTarget + newDir * m_camDistance;
-         m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, newUp);
-      }
+         SetView(io.KeyCtrl ? PredefinedView::Bottom : PredefinedView::Top);
       else if (IsNumpadPressed(1))
-      {
-         // Editor Camera to Front / Back
-         m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Back : PredefinedView::Front;
-         m_camMode = ViewMode::EditorCam;
-         Matrix3D view(m_camView);
-         view.Invert();
-         const vec3 /*up = view.GetOrthoNormalUp(),*/ dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
-         const vec3 camTarget = pos - dir * m_camDistance;
-         constexpr vec3 newUp { 0.f, 0.f, -1.f };
-         const vec3 newDir(0.f, ImGui::GetIO().KeyCtrl ? -1.f : 1.f, 0.f);
-         const vec3 newEye = camTarget + newDir * m_camDistance;
-         m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, newUp);
-      }
+         SetView(io.KeyCtrl ? PredefinedView::Back : PredefinedView::Front);
       else if (IsNumpadPressed(3))
-      {
-         // Editor Camera to Right / Left
-         m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Right : PredefinedView::Left;
-         m_camMode = ViewMode::EditorCam;
-         Matrix3D view(m_camView);
-         view.Invert();
-         const vec3 /*up = view.GetOrthoNormalUp(),*/ dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
-         const vec3 camTarget = pos - dir * m_camDistance;
-         constexpr vec3 newUp { 0.f, 0.f, -1.f };
-         const vec3 newDir(ImGui::GetIO().KeyCtrl ? 1.f : -1.f, 0.f, 0.f);
-         const vec3 newEye = camTarget + newDir * m_camDistance;
-         m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, newUp);
-      }
+         SetView(io.KeyCtrl ? PredefinedView::Right : PredefinedView::Left);
    }
 
    // Selected parts are kept dynamic in the UI quadtree so that they can be edited interactively. The selection also changes outside
@@ -2513,6 +2437,76 @@ void EditorUI::UpdateModalTransform()
    }
    m_modal.hud = text;
    SetSelectionTransform(result);
+}
+
+// Cycle the camera: preview camera, editor camera, desktop backdrop
+void EditorUI::CycleCamera()
+{
+      m_predefinedView = PredefinedView::None;
+      switch (m_camMode)
+      {
+      case ViewMode::PreviewCam:
+         m_camMode = ViewMode::EditorCam;
+         ResetCameraFromPlayer();
+         break;
+      case ViewMode::EditorCam:
+         m_camMode = ViewMode::DesktopBackdrop;
+         SetBackdropCamera();
+         break;
+      case ViewMode::DesktopBackdrop: m_camMode = ViewMode::PreviewCam; break;
+      }
+}
+
+// Editor Camera center on the whole selection, adjusting the zoom so that it fills the view
+void EditorUI::FrameSelection()
+{
+   FRect3D bounds;
+   if (GetSelectionBounds(bounds))
+      FrameBounds(bounds);
+}
+
+void EditorUI::FrameAll()
+{
+   FRect3D bounds(0.f, m_table->m_right, 0.f, m_table->m_bottom, 0.f, m_table->m_glassTopHeight);
+   FrameBounds(bounds);
+}
+
+// Editor Camera to an axis aligned view, keeping the orbit target and distance
+void EditorUI::SetView(const PredefinedView view)
+{
+   m_predefinedView = view;
+   m_camMode = ViewMode::EditorCam;
+   Matrix3D inv(m_camView);
+   inv.Invert();
+   const vec3 camTarget = inv.GetOrthoNormalPos() - inv.GetOrthoNormalDir() * m_camDistance;
+   vec3 newUp { 0.f, 0.f, -1.f }, newDir;
+   switch (view)
+   {
+   case PredefinedView::Top: newUp = vec3(0.f, -1.f, 0.f); newDir = vec3(0.f, 0.f, -1.f); break;
+   case PredefinedView::Bottom: newUp = vec3(0.f, -1.f, 0.f); newDir = vec3(0.f, 0.f, 1.f); break;
+   case PredefinedView::Front: newDir = vec3(0.f, 1.f, 0.f); break;
+   case PredefinedView::Back: newDir = vec3(0.f, -1.f, 0.f); break;
+   case PredefinedView::Left: newDir = vec3(-1.f, 0.f, 0.f); break;
+   case PredefinedView::Right: newDir = vec3(1.f, 0.f, 0.f); break;
+   default: return;
+   }
+   m_camView = Matrix3D::MatrixLookAtRH(camTarget + newDir * m_camDistance, camTarget, newUp);
+}
+
+// Step the orbit by 15 degrees: around the vertical axis (yaw) or the view's horizontal axis
+void EditorUI::OrbitStep(const bool yaw, const float sign)
+{
+   if (m_camMode == ViewMode::PreviewCam)
+      m_camMode = ViewMode::EditorCam;
+   m_predefinedView = PredefinedView::None;
+   Matrix3D view(m_camView);
+   view.Invert();
+   const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
+   vec3 camTarget = pos - dir * m_camDistance;
+   GetNavPivot(camTarget);
+   const Matrix3D rot = Matrix3D::MatrixRotate(sign * ANGTORAD(15.f), yaw ? vec3(0.f, 0.f, -1.f) : right);
+   m_camMode = ViewMode::EditorCam;
+   m_camView = Matrix3D::MatrixLookAtRH(camTarget + rot.MultiplyVectorNoPerspective(dir) * m_camDistance, camTarget, rot.MultiplyVectorNoPerspective(up));
 }
 
 void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
