@@ -2813,6 +2813,24 @@ bool Renderer::IsStaticShadowCaster(const IEditable* const part) const
    }
 }
 
+// Translucent casters (PBR materials with a transmission, or with opacity) tint the light instead of
+// blocking it: they skip the depth pass and draw in the SHADOW_TRANS pass only.
+bool Renderer::IsTranslucentShadowCaster(const Material* const mat) const
+{
+   return m_renderDevice->m_pbrActive && mat != nullptr && mat->m_type == Material::MaterialType::PBR && (mat->m_fWrapLighting > 0.f || mat->m_bOpacityActive);
+}
+
+void Renderer::BindTranslucentShadowCaster(const Material* const mat, Texture* const image, const float partAlpha) const
+{
+   Shader* const shader = m_renderDevice->m_basicShader;
+   shader->SetTechnique(image ? ShaderTechnique::pbr_shadow_trans : ShaderTechnique::pbr_shadow_trans_notex);
+   if (image)
+      shader->SetTexture(ShaderUniform::tex_base_color, image, false);
+   shader->SetMaterial(mat, image != nullptr && !image->IsOpaque());
+   shader->SetVector(ShaderUniform::pbrMapFlags, 0.f, 0.f, saturate(mat->m_fWrapLighting), 0.f);
+   shader->SetVector(ShaderUniform::staticColor_Alpha, 1.f, 1.f, 1.f, partAlpha);
+}
+
 // Marks caster coverage per shadowed light, allocates physical pages for covered virtual pages
 // (LRU-evicting cold pages under pressure), then renders each dirty page into its pool layer with
 // the caster whitelist under a page-zoomed projection. Static-tier lights re-mark but their pages
@@ -3262,8 +3280,14 @@ void Renderer::UpdateVirtualShadowMaps()
          m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::ONE);
          m_render_mask |= SHADOW_TRANS;
          for (const Caster& caster : casters)
-            if (caster.part->GetItemType() == eItemPrimitive)
-               RenderItem(caster.part, true);
+            switch (caster.part->GetItemType())
+            {
+            case eItemPrimitive:
+            case eItemRamp:
+            case eItemRubber:
+            case eItemSurface: RenderItem(caster.part, true); break;
+            default: break;
+            }
       }
       if (job.map->dirty[job.vpage] & 2)
       {
