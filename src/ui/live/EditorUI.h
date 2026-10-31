@@ -358,6 +358,11 @@ private:
    } m_predefinedView = PredefinedView::None;
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
    int m_navSelectionDisplay = 0; // 0 = edges only, 1 = edges and tint, 2 = hidden
+   bool m_navAutoDepth = true; // Navigation preference: with no selection, orbit around the 3D point under the cursor
+   bool m_orbitDragging = false; // Orbit / pan drag in progress
+   bool m_orbitPivotValid = false; // m_orbitPivot (camera space) is the orbit pivot of the current drag
+   vec3 m_orbitPivot;
+   bool PickDepthPoint(const ImVec2 &mousePos, vec3 &point) const;
    float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
    void SetFov(float fovY);
    bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)
