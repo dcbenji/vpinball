@@ -1393,6 +1393,7 @@ PropBool(Editor, NavOrbitSelection, "Orbit Around Selection"s, "Orbit and zoom a
 PropBool(Editor, NavZoomToMouse, "Zoom To Mouse Position"s, "Mouse wheel zooms toward the cursor instead of the view center"s, true);
 PropBool(Editor, NavInvertZoom, "Invert Zoom"s, "Invert the direction of the mouse wheel zoom"s, false);
 PropFloat(Editor, NavOrbitSensitivity, "Orbit Sensitivity"s, "Speed of the camera orbit when dragging"s, 0.1f, 5.f, 1.f);
+PropFloat(Editor, NavFovY, "Field Of View"s, "Vertical field of view of the editor perspective camera, in degrees (39.6 is a 50 mm lens on a 24 mm sensor)"s, 15.f, 100.f, 39.6f);
 PropBool(Editor, NavAltMiddleButton, "Alt Acts As Middle Button"s, "Alt + left drag orbits / pans like the middle button (for trackpads and mice without a middle button)"s, VPX_NAV_ALT_DEFAULT);
 PropBool(Editor, NavTrackpad, "Trackpad Scrolling"s, "Two finger scroll pans the view, Ctrl / Cmd + scroll zooms (instead of scroll zooming)"s, VPX_NAV_ALT_DEFAULT);
 PropBool(Editor, NavEmulateNumpad, "Emulate Numpad"s, "Top row digits act as the numpad view keys (1 front, 3 side, 7 top, 5 perspective/orthographic, 2/4/6/8 orbit step)"s, true);
