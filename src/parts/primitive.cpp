@@ -1476,6 +1476,7 @@ void Primitive::Render(const unsigned int renderMask)
             refraction_probe->ExtendAreaOfInterest(xMin, xMax, yMin, yMax);
             const vec4 colorR = convertColor(mat->m_cRefractionTint, m_d.m_refractionThickness);
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionTint_thickness, &colorR);
+            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams, m_d.m_refractionCurvature, 0.f, 0.f, 0.f);
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, refractions->GetColorSampler());
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_probe_depth, refractions->GetDepthSampler());
             m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
@@ -1698,6 +1699,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(RSTR), m_d.m_reflectionStrength);
    writer.WriteString(FID(REFR), m_d.m_szRefractionProbe);
    writer.WriteFloat(FID(RTHI), m_d.m_refractionThickness);
+   writer.WriteFloat(FID(RCRV), m_d.m_refractionCurvature);
 
    SaveSharedEditableFields(writer);
 
@@ -1929,6 +1931,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RSTR): m_d.m_reflectionStrength = reader.AsFloat(); break;
          case FID(REFR): m_d.m_szRefractionProbe = reader.AsString(); break;
          case FID(RTHI): m_d.m_refractionThickness = reader.AsFloat(); break;
+         case FID(RCRV): m_d.m_refractionCurvature = reader.AsFloat(); break;
 
          default: LoadSharedEditableField(tag, reader); break;
          }

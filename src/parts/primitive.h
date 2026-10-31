@@ -68,6 +68,7 @@ public:
 
    string m_szRefractionProbe;
    float m_refractionThickness = 10.0f;
+   float m_refractionCurvature = 0.0f; // PBR: refraction offset & blur grow with the surface curvature (0 = off)
 
    bool m_toy = false;
    bool m_backfacesEnabled = false;
