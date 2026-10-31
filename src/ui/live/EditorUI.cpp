@@ -1148,6 +1148,13 @@ void EditorUI::RenderUI()
                   }
                   if (hitParts.empty())
                      ClearSelection();
+                  else if (io.KeyCtrl)
+                  {
+                     // Ctrl+click lists all the parts under the cursor to pick from
+                     m_pickList = hitParts;
+                     m_pickListPos = end;
+                     m_pickListOpen = true;
+                  }
                   else
                   {
                      size_t selectionIndex = 0;
@@ -1201,6 +1208,7 @@ void EditorUI::RenderUI()
                   curve->OnPointsModified();
                }
                m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
+               m_renderer->InvalidateShadowContent();
                m_player->m_physics->Update(m_pointEditPart->GetEditable());
             }
             m_pointDragPos = pos;
@@ -1493,6 +1501,28 @@ void EditorUI::RenderUI()
          SetView(io.KeyCtrl ? PredefinedView::Back : PredefinedView::Front);
       else if (IsNumpadPressed(3))
          SetView(io.KeyCtrl ? PredefinedView::Right : PredefinedView::Left);
+   }
+
+   // Parts under the cursor list (Ctrl+click)
+   if (m_pickListOpen)
+   {
+      ImGui::SetNextWindowPos(m_pickListPos, ImGuiCond_Appearing);
+      bool open = true;
+      if (ImGui::Begin("Parts under cursor", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse))
+      {
+         for (const auto &part : m_pickList)
+            if (ImGui::Selectable(part->GetEditable()->GetName().c_str(), IsPartSelected(part)))
+            {
+               SetSelection(Selection(part));
+               m_outlinerAnchor = part;
+               open = false;
+            }
+         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows))
+            open = false;
+      }
+      ImGui::End();
+      if (!open || ImGui::IsKeyPressed(ImGuiKey_Escape))
+         m_pickListOpen = false;
    }
 
    // Selected parts are kept dynamic in the UI quadtree so that they can be edited interactively. The selection also changes outside
@@ -2724,6 +2754,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
       }
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
+      m_renderer->InvalidateShadowContent();
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
       return;
    }
@@ -2779,6 +2810,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          rot.Set(0.f, 0.f, 0.f);
       part->SetTransform(pos, scale, rot);
       m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
+      m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
       m_player->m_physics->Update(part->GetEditable());
    };
 
@@ -2883,6 +2915,7 @@ void EditorUI::EndPointEdit()
    if (DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve())
       curve->OnPointsModified();
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
+   m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
 
@@ -2910,6 +2943,7 @@ void EditorUI::AddPointOnNearestSegment()
    m_pointSel.clear();
    m_pointSel.push_back(point);
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
+   m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
 
