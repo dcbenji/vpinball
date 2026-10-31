@@ -323,6 +323,26 @@ private:
    void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds) const;
+
+   // Blender style modal transform (G / R / S then move the mouse, X / Y / Z to constrain to an axis (Shift for the plane
+   // perpendicular to it), type a number for an exact value, Enter / left click to confirm, Esc / right click to cancel)
+   enum class ModalOp { Grab, Rotate, Scale };
+   struct ModalTransform
+   {
+      bool active = false;
+      ModalOp op = ModalOp::Grab;
+      int axis = -1; // Constraint axis (0..2 for X/Y/Z), -1 for none (view plane / view axis / uniform)
+      bool plane = false; // Constrain to the plane perpendicular to the axis
+      bool hasUndo = false; // An undo record was started when the transform began (canceling reverts it)
+      string typed; // Typed numeric value
+      string hud; // Status text drawn over the render
+      ImVec2 startMouse;
+      float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
+      Matrix3D initial; // Selection transform when the operation began
+   } m_modal;
+   void BeginModalTransform(ModalOp op);
+   void UpdateModalTransform();
+   void EndModalTransform(bool confirm);
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
    bool IsNumpadPressed(int digit) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
@@ -337,6 +357,7 @@ private:
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
+   bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
    bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting

@@ -819,7 +819,7 @@ void EditorUI::RenderUI()
    // Selection manipulator
    Matrix3D transform;
    const bool isSelectionTransformValid = GetSelectionTransform(transform);
-   if (isSelectionTransformValid && !m_table->IsLocked())
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active)
    {
       float camViewLH[16];
       memcpy(camViewLH, &m_camView.m[0][0], sizeof(float) * 4 * 4);
@@ -920,6 +920,9 @@ void EditorUI::RenderUI()
          overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
+      if (m_modal.active)
+         overlayDrawList->AddText(ImVec2(16.f * m_liveUI.GetDPI(), io.DisplaySize.y - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+
       // In desktop backdrop mode, draw the bounds of the backdrop area
       if (m_camMode == ViewMode::DesktopBackdrop)
       {
@@ -977,8 +980,11 @@ void EditorUI::RenderUI()
 
    RenderNavCube();
 
-   // Handle uncaught mouse & keyboard shortcuts
-   if (!io.WantCaptureMouse && m_fileOp == nullptr)
+   // Handle uncaught mouse & keyboard shortcuts (a modal transform in progress owns the mouse and keyboard)
+   const bool modalWasActive = m_modal.active;
+   if (modalWasActive && m_fileOp == nullptr)
+      UpdateModalTransform();
+   if (!io.WantCaptureMouse && m_fileOp == nullptr && !modalWasActive)
    {
       // Zoom in/out with mouse wheel
       if (io.MouseWheel != 0)
@@ -1236,7 +1242,7 @@ void EditorUI::RenderUI()
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
-   if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
+   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape))
       {
@@ -1407,6 +1413,8 @@ void EditorUI::RenderUI()
             if (GetSelectionTransform(tmp))
                SetSelectionTransform(tmp, true, false, false);
          }
+         else if (!io.KeyCtrl && m_navBlenderTransform)
+            BeginModalTransform(ModalOp::Grab);
          else if (!io.KeyCtrl)
             SetGizmoOperation(ImGuizmo::TRANSLATE);
       }
@@ -1424,6 +1432,8 @@ void EditorUI::RenderUI()
                if (GetSelectionTransform(tmp))
                   SetSelectionTransform(tmp, false, true, false);
             }
+            else if (m_navBlenderTransform)
+               BeginModalTransform(ModalOp::Scale);
             else
                SetGizmoOperation(ImGuizmo::SCALE);
          }
@@ -1439,6 +1449,8 @@ void EditorUI::RenderUI()
             if (GetSelectionTransform(tmp))
                SetSelectionTransform(tmp, false, false, true);
          }
+         else if (!io.KeyCtrl && m_navBlenderTransform)
+            BeginModalTransform(ModalOp::Rotate);
          else if (!io.KeyCtrl)
             SetGizmoOperation(ImGuizmo::ROTATE);
       }
@@ -2440,6 +2452,192 @@ bool EditorUI::IsNumpadPressed(int digit) const
    if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit)))
       return true;
    return m_navEmulateNumpad && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit)) && !ImGui::GetIO().KeyAlt;
+}
+
+namespace
+{
+// The editor camera works in a right handed space where Z is the opposite of the table's one
+inline vec3 FlipZ(const vec3 &v) { return vec3(v.x, v.y, -v.z); }
+inline vec3 RotateAround(const vec3 &v, const vec3 &k, const float angle)
+{
+   return v * cosf(angle) + CrossProduct(k, v) * sinf(angle) + k * (k.Dot(v) * (1.f - cosf(angle)));
+}
+}
+
+void EditorUI::BeginModalTransform(ModalOp op)
+{
+   Matrix3D initial;
+   if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
+      return;
+   if (m_camMode == ViewMode::PreviewCam)
+      m_camMode = ViewMode::EditorCam;
+   m_gizmoOperation = ImGuizmo::OPERATION(0);
+   m_modal = ModalTransform();
+   m_modal.active = true;
+   m_modal.op = op;
+   m_modal.initial = initial;
+   m_modal.startMouse = ImGui::GetMousePos();
+   // Same undo record as a gizmo drag: one entry for the whole operation
+   if (m_table->m_liveBaseTable == nullptr)
+   {
+      m_undo.BeginUndo();
+      for (const auto &part : m_multiSel)
+         m_undo.MarkForUndo(part->GetEditable());
+      m_undo.EndUndo();
+      m_modal.hasUndo = true;
+   }
+   m_lastUndoPart = nullptr;
+   m_lastUndoId = 0;
+   UpdateModalTransform(); // Initialize the start angle/distance and the status text
+}
+
+void EditorUI::EndModalTransform(const bool confirm)
+{
+   if (!m_modal.active)
+      return;
+   if (!confirm)
+   {
+      if (m_modal.hasUndo)
+      {
+         const std::any state = m_undo.Undo();
+         if (state.has_value())
+            RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
+      }
+      else
+         SetSelectionTransform(m_modal.initial);
+   }
+   m_modal.active = false;
+   m_lastUndoPart = nullptr;
+   m_lastUndoId = 0;
+}
+
+void EditorUI::UpdateModalTransform()
+{
+   const ImGuiIO &io = ImGui::GetIO();
+   const bool first = m_modal.hud.empty();
+   Matrix3D current;
+   if (!GetSelectionTransform(current) || m_table->IsLocked())
+   {
+      EndModalTransform(false);
+      return;
+   }
+   if (!first)
+   {
+      if (ImGui::IsKeyReleased(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+      {
+         EndModalTransform(false);
+         return;
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+      {
+         EndModalTransform(true);
+         return;
+      }
+      // Axis constraint (pressing the same axis again removes it), Shift constrains to the plane instead
+      const std::pair<ImGuiKey, int> axisKeys[] = { { ImGuiKey_X, 0 }, { ImGuiKey_Y, 1 }, { ImGuiKey_Z, 2 } };
+      for (const auto &[key, axis] : axisKeys)
+         if (ImGui::IsKeyPressed(key, false))
+         {
+            const bool same = m_modal.axis == axis && m_modal.plane == io.KeyShift;
+            m_modal.axis = same ? -1 : axis;
+            m_modal.plane = !same && io.KeyShift;
+         }
+      // Numeric input
+      for (int i = 0; i < io.InputQueueCharacters.Size; i++)
+      {
+         const ImWchar c = io.InputQueueCharacters[i];
+         if ((c >= '0' && c <= '9') || c == '.')
+            m_modal.typed += static_cast<char>(c);
+         else if (c == '-')
+         {
+            if (!m_modal.typed.empty() && m_modal.typed[0] == '-')
+               m_modal.typed.erase(0, 1);
+            else
+               m_modal.typed.insert(0, "-");
+         }
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !m_modal.typed.empty())
+         m_modal.typed.pop_back();
+   }
+   const bool hasValue = !m_modal.typed.empty() && m_modal.typed != "-" && m_modal.typed != ".";
+   const float value = hasValue ? static_cast<float>(atof(m_modal.typed.c_str())) : 0.f;
+
+   // Camera basis & projection (in the camera's space)
+   Matrix3D view(m_camView);
+   view.Invert();
+   const vec3 right = view.GetOrthoNormalRight(), up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), eye = view.GetOrthoNormalPos();
+   const Matrix3D &m0 = m_modal.initial;
+   const vec3 pivot = FlipZ(vec3(m0._41, m0._42, m0._43));
+   const bool perspective = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop;
+   const float depth = max((eye - pivot).Dot(dir), 1e-3f);
+   const float halfH = perspective ? depth * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+   const float aspect = io.DisplaySize.x / io.DisplaySize.y;
+   const ImVec2 screenPivot(0.5f * io.DisplaySize.x * (1.f + (pivot - eye).Dot(right) / (halfH * aspect)), 0.5f * io.DisplaySize.y * (1.f - (pivot - eye).Dot(up) / halfH));
+   const ImVec2 mouse = ImGui::GetMousePos();
+   const float curAngle = atan2f(mouse.y - screenPivot.y, mouse.x - screenPivot.x);
+   const float curDist = hypotf(mouse.x - screenPivot.x, mouse.y - screenPivot.y);
+   if (first)
+   {
+      m_modal.startAngle = curAngle;
+      m_modal.startDist = max(curDist, 8.f);
+   }
+
+   Matrix3D result(m0);
+   const char *axisNames[] = { "X", "Y", "Z" };
+   const vec3 axisWorld[] = { vec3(1.f, 0.f, 0.f), vec3(0.f, 1.f, 0.f), vec3(0.f, 0.f, 1.f) };
+   const string axisText = m_modal.axis < 0 ? "" : string(m_modal.plane ? " -" : " ") + axisNames[m_modal.axis];
+   char text[128];
+   switch (m_modal.op)
+   {
+   case ModalOp::Grab:
+   {
+      const float unitsPerPixel = 2.f * halfH / io.DisplaySize.y;
+      vec3 move = right * ((mouse.x - m_modal.startMouse.x) * unitsPerPixel) - up * ((mouse.y - m_modal.startMouse.y) * unitsPerPixel);
+      if (hasValue)
+         move = FlipZ(axisWorld[m_modal.axis < 0 ? 0 : m_modal.axis]) * value;
+      else if (m_modal.axis >= 0)
+      {
+         const vec3 a = FlipZ(axisWorld[m_modal.axis]);
+         move = m_modal.plane ? move - a * move.Dot(a) : a * move.Dot(a);
+      }
+      const vec3 delta = FlipZ(move);
+      result._41 += delta.x;
+      result._42 += delta.y;
+      result._43 += delta.z;
+      snprintf(text, sizeof(text), "Grab%s  %.2f  %.2f  %.2f%s%s", axisText.c_str(), delta.x, delta.y, delta.z, hasValue ? "   [" : "", hasValue ? (m_modal.typed + "]").c_str() : "");
+      break;
+   }
+   case ModalOp::Rotate:
+   {
+      const vec3 k = m_modal.axis < 0 ? dir : FlipZ(axisWorld[m_modal.axis]);
+      const float facing = k.Dot(dir) >= 0.f ? 1.f : -1.f;
+      const float angle = hasValue ? ANGTORAD(value) : -(curAngle - m_modal.startAngle) * facing;
+      const vec3 rows[3] = { vec3(m0._11, m0._12, m0._13), vec3(m0._21, m0._22, m0._23), vec3(m0._31, m0._32, m0._33) };
+      float *const out[3] = { &result._11, &result._21, &result._31 };
+      for (int i = 0; i < 3; i++)
+      {
+         const vec3 r = FlipZ(RotateAround(FlipZ(rows[i]), k, angle));
+         out[i][0] = r.x;
+         out[i][1] = r.y;
+         out[i][2] = r.z;
+      }
+      snprintf(text, sizeof(text), "Rotate%s  %.1f deg%s", axisText.c_str(), RADTOANG(angle), hasValue ? "   [typed]" : "");
+      break;
+   }
+   case ModalOp::Scale:
+   {
+      const float factor = hasValue ? value : curDist / m_modal.startDist;
+      float *const out[3] = { &result._11, &result._21, &result._31 };
+      for (int i = 0; i < 3; i++)
+         if (m_modal.axis < 0 || (m_modal.plane ? i != m_modal.axis : i == m_modal.axis)) // Axes are the part's local ones
+            for (int j = 0; j < 3; j++)
+               out[i][j] *= factor;
+      snprintf(text, sizeof(text), "Scale%s  %.3f%s", axisText.c_str(), factor, hasValue ? "   [typed]" : "");
+      break;
+   }
+   }
+   m_modal.hud = text;
+   SetSelectionTransform(result);
 }
 
 void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
