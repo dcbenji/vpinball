@@ -1386,7 +1386,7 @@ void EditorUI::RenderUI()
             }
          }
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad0))
+      else if (IsNumpadPressed(0))
       {
          m_predefinedView = PredefinedView::None;
          switch (m_camMode)
@@ -1402,7 +1402,7 @@ void EditorUI::RenderUI()
          case ViewMode::DesktopBackdrop: m_camMode = ViewMode::PreviewCam; break;
          }
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad5))
+      else if (IsNumpadPressed(5))
       {
          m_camMode = ViewMode::EditorCam;
          m_perspectiveCam = !m_perspectiveCam;
@@ -1424,7 +1424,26 @@ void EditorUI::RenderUI()
       {
          m_orbitLock = !m_orbitLock;
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad7))
+      else if (IsNumpadPressed(2) || IsNumpadPressed(4) || IsNumpadPressed(6) || IsNumpadPressed(8))
+      {
+         // Step the orbit by 15 degrees (4/6 around the vertical axis, 8/2 around the view's horizontal axis)
+         if (m_camMode == ViewMode::PreviewCam)
+            m_camMode = ViewMode::EditorCam;
+         m_predefinedView = PredefinedView::None;
+         Matrix3D view(m_camView);
+         view.Invert();
+         const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
+         vec3 camTarget = pos - dir * m_camDistance;
+         GetNavPivot(camTarget);
+         const float angle = ANGTORAD(15.f);
+         const bool yaw = IsNumpadPressed(4) || IsNumpadPressed(6);
+         const float sign = (IsNumpadPressed(4) || IsNumpadPressed(8)) ? 1.f : -1.f;
+         const Matrix3D rot = Matrix3D::MatrixRotate(sign * angle, yaw ? vec3(0.f, 0.f, -1.f) : right);
+         const vec3 newDir = rot.MultiplyVectorNoPerspective(dir);
+         const vec3 newUp = rot.MultiplyVectorNoPerspective(up);
+         m_camView = Matrix3D::MatrixLookAtRH(camTarget + newDir * m_camDistance, camTarget, newUp);
+      }
+      else if (IsNumpadPressed(7))
       {
          // Editor Camera to Top / Bottom
          m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Bottom : PredefinedView::Top;
@@ -1438,7 +1457,7 @@ void EditorUI::RenderUI()
          const vec3 newEye = camTarget + newDir * m_camDistance;
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, newUp);
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad1))
+      else if (IsNumpadPressed(1))
       {
          // Editor Camera to Front / Back
          m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Back : PredefinedView::Front;
@@ -1452,7 +1471,7 @@ void EditorUI::RenderUI()
          const vec3 newEye = camTarget + newDir * m_camDistance;
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, newUp);
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad3))
+      else if (IsNumpadPressed(3))
       {
          // Editor Camera to Right / Left
          m_predefinedView = ImGui::GetIO().KeyCtrl ? PredefinedView::Right : PredefinedView::Left;
@@ -2247,6 +2266,14 @@ void EditorUI::FrameBounds(const FRect3D &bounds)
       m_camDistance = distance * 1.1f; // Small margin so that the selection does not exactly touch the view borders
    const vec3 newEye = newTarget + dir * m_camDistance;
    m_camView = Matrix3D::MatrixLookAtRH(newEye, newTarget, up);
+}
+
+// Numpad key, or the matching top row digit when numpad emulation is enabled (laptops without a numpad)
+bool EditorUI::IsNumpadPressed(int digit) const
+{
+   if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit)))
+      return true;
+   return m_navEmulateNumpad && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit)) && !ImGui::GetIO().KeyAlt;
 }
 
 void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
