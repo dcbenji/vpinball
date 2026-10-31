@@ -365,6 +365,11 @@ private:
    bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
    bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
+   void SetView(PredefinedView view); // Axis aligned view (also reachable from the View menu)
+   void CycleCamera();
+   void FrameSelection();
+   void FrameAll();
+   void OrbitStep(bool yaw, float sign); // 15 degree orbit step
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
    bool m_fitPlayfieldCamera = false;
    Matrix3D m_camView, m_camProj;

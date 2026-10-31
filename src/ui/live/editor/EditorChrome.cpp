@@ -99,6 +99,43 @@ void EditorChrome::RenderMenuBar()
       }
       if (ImGui::BeginMenu("View"))
       {
+         using PV = EditorUI::PredefinedView;
+         const auto viewItem = [&](const char *label, const char *keys, PV view)
+         {
+            if (ImGui::MenuItem(label, keys, editor.m_camMode == ViewMode::EditorCam && editor.m_predefinedView == view))
+               editor.SetView(view);
+         };
+         viewItem("Top", "7", PV::Top);
+         viewItem("Bottom", "Ctrl+7", PV::Bottom);
+         viewItem("Front", "1", PV::Front);
+         viewItem("Back", "Ctrl+1", PV::Back);
+         viewItem("Left", "3", PV::Left);
+         viewItem("Right", "Ctrl+3", PV::Right);
+         ImGui::Separator();
+         if (ImGui::MenuItem("Perspective / Orthographic", "5"))
+         {
+            editor.m_camMode = ViewMode::EditorCam;
+            editor.m_perspectiveCam = !editor.m_perspectiveCam;
+         }
+         if (ImGui::MenuItem("Cycle Camera (Preview / Editor / Backdrop)", "0"))
+            editor.CycleCamera();
+         if (ImGui::MenuItem("Lock Orbit", "Numpad /", editor.m_orbitLock))
+            editor.m_orbitLock = !editor.m_orbitLock;
+         ImGui::Separator();
+         if (ImGui::MenuItem("Orbit Left", "4"))
+            editor.OrbitStep(true, 1.f);
+         if (ImGui::MenuItem("Orbit Right", "6"))
+            editor.OrbitStep(true, -1.f);
+         if (ImGui::MenuItem("Orbit Up", "8"))
+            editor.OrbitStep(false, 1.f);
+         if (ImGui::MenuItem("Orbit Down", "2"))
+            editor.OrbitStep(false, -1.f);
+         ImGui::Separator();
+         if (ImGui::MenuItem("Frame Selected", "F"))
+            editor.FrameSelection();
+         if (ImGui::MenuItem("Frame All", "Home"))
+            editor.FrameAll();
+         ImGui::Separator();
          if (ImGui::MenuItem("Pinned Properties", "P", editor.m_pinned.IsVisible()))
             editor.m_pinned.ToggleVisible();
          if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
