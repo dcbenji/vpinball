@@ -360,7 +360,7 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4, u_basic_shade_mode, 1), // BGFX Only
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionTint_thickness, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, mirrorNormal_factor, 1),
-   SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams, 1), // BGFX PBR only: x: curvature gain
+   SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams, 1), // BGFX PBR only: x: curvature gain, y: anisotropy
    SHADER_UNIFORM(ShaderUniformType::Bool, objectSpaceNormalMap, 1),
    SHADER_SAMPLER(tex_base_color, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // base texture
    SHADER_SAMPLER(tex_base_transmission, 3, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // bulb light/transmission buffer texture
