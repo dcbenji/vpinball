@@ -334,6 +334,7 @@ private:
    {
       None, Front, Back, Right, Left, Top, Bottom
    } m_predefinedView = PredefinedView::None;
+   bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
    bool m_fitPlayfieldCamera = false;

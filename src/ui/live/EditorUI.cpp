@@ -989,8 +989,20 @@ void EditorUI::RenderUI()
          view.Invert();
          const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
          vec3 camTarget = pos - dir * m_camDistance;
-         GetNavPivot(camTarget);
-         m_camDistance *= powf(1.1f, -ImGui::GetIO().MouseWheel);
+         const float zoomFactor = powf(1.1f, -ImGui::GetIO().MouseWheel);
+         if (m_navZoomToMouse && m_camMode != ViewMode::PreviewCam)
+         {
+            // Zoom toward the point under the cursor: keep the point of the focal plane under the mouse at the same screen position
+            const vec3 right = view.GetOrthoNormalRight();
+            const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const float ndcX = 2.f * mouse.x / io.DisplaySize.x - 1.f, ndcY = 1.f - 2.f * mouse.y / io.DisplaySize.y;
+            const vec3 offset = right * (ndcX * halfH * io.DisplaySize.x / io.DisplaySize.y) + up * (ndcY * halfH);
+            camTarget += offset * (1.f - zoomFactor);
+         }
+         else
+            GetNavPivot(camTarget);
+         m_camDistance *= zoomFactor;
          const vec3 newEye = camTarget + dir * m_camDistance;
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, up);
       }
