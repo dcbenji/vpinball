@@ -1465,8 +1465,10 @@ void Primitive::Render(const unsigned int renderMask)
          {
             refraction_probe->ExtendAreaOfInterest(xMin, xMax, yMin, yMax);
             const vec4 colorR = convertColor(mat->m_cRefractionTint, m_d.m_refractionThickness);
+            // Soft in-front rejection fallback in the PBR refraction (on by default, VPX_REFR_SOFT=0 restores the stepped one for A/B)
+            static const float refrSoftFallback = std::getenv("VPX_REFR_SOFT") ? (float)atof(std::getenv("VPX_REFR_SOFT")) : 1.f;
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionTint_thickness, &colorR);
-            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams, m_d.m_refractionCurvature, clamp(m_d.m_refractionAnisotropy, 0.f, 1.f), 0.f, 0.f);
+            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams, m_d.m_refractionCurvature, clamp(m_d.m_refractionAnisotropy, 0.f, 1.f), refrSoftFallback, 0.f);
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, refractions->GetColorSampler());
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_probe_depth, refractions->GetDepthSampler());
             m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);

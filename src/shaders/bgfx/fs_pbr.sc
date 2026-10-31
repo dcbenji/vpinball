@@ -130,7 +130,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 
 #ifdef TRANSPARENT
 uniform vec4 refractionTint_thickness;
-uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off)
+uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on)
 #endif
 
 #include "ball_shadows.sh"
@@ -394,7 +394,7 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
    return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, roughness * pbrProbeLods.z).rgb;
 }
 
-// pbr_transmit with the refraction options of refractionParams (curvature, anisotropy). The plain version
+// pbr_transmit with the refraction options of refractionParams (curvature, anisotropy, soft fallback). The plain version
 // above stays as it was so a part without them renders bit for bit as before.
 // thickness: the offset length (the part's refraction thickness, scaled by the curvature term), lodBias: extra probe blur (mips),
 // smear: long axis of the anisotropic blur (world space, length = anisotropy, 0 = none)
@@ -418,10 +418,48 @@ vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wI, const float 
    // first so the switch does not leave a per-pixel staircase along the occluder
    const vec2 uv0 = fragCoord.xy * w_h_height.xy;
    vec2 uv = uvR;
-   const vec2 uvH = 0.5 * (uvR + uv0);
-   if (texStereo(tex_probe_depth, uvR).x < fragCoord.z)
-      uv = texStereo(tex_probe_depth, uvH).x < fragCoord.z ? uv0 : uvH;
+   float kept = 1.0; // soft fallback: fraction of the offset kept, also the weight of the refracted sample against uv0
+   BRANCH if (refractionParams.z > 0.0)
+   {
+      // Soft fallback: pull the offset back toward the unrefracted pixel only as far as needed. Step it down in thirds to the
+      // first accepted sample, then bisect 4 times between it and the last rejected one: the kept offset ends where the offset
+      // segment meets the occluder, so it shrinks continuously toward the occluder's edge. That sample sits on the occluder's
+      // rim for every pixel of the band, so on its own it stretches the rim into streaks: it is faded into the unrefracted
+      // pixel by the kept fraction, a gradient from the refracted view to the plain one at the occluder (no blocks, no streaks)
+      BRANCH if (texStereoLod(tex_probe_depth, uvR, 0.0).x < fragCoord.z)
+      {
+         float tA = 0.0; // largest accepted fraction of the offset found so far
+         float tR = 1.0; // smallest rejected one
+         if (texStereoLod(tex_probe_depth, mix(uv0, uvR, 2.0 / 3.0), 0.0).x >= fragCoord.z)
+            tA = 2.0 / 3.0;
+         else
+         {
+            tR = 2.0 / 3.0;
+            if (texStereoLod(tex_probe_depth, mix(uv0, uvR, 1.0 / 3.0), 0.0).x >= fragCoord.z)
+               tA = 1.0 / 3.0;
+            else
+               tR = 1.0 / 3.0;
+         }
+         UNROLL for (int i = 0; i < 4; i++)
+         {
+            const float tm = 0.5 * (tA + tR);
+            if (texStereoLod(tex_probe_depth, mix(uv0, uvR, tm), 0.0).x >= fragCoord.z)
+               tA = tm;
+            else
+               tR = tm;
+         }
+         uv = mix(uv0, uvR, tA);
+         kept = tA;
+      }
+   }
+   else
+   {
+      const vec2 uvH = 0.5 * (uvR + uv0);
+      if (texStereo(tex_probe_depth, uvR).x < fragCoord.z)
+         uv = texStereo(tex_probe_depth, uvH).x < fragCoord.z ? uv0 : uvH;
+   }
    const float lod = roughness * pbrProbeLods.z + lodBias;
+   const vec3 plain = kept < 1.0 ? texStereoLod(tex_pbr_refr, uv0, lod).rgb : vec3_splat(0.0);
    BRANCH if (refractionParams.y > 0.0 && dot(smear, smear) > 0.0)
    {
       // Anisotropic blur: taps along the surface's long axis, the isotropic blur radius shrunk by the anisotropy so the streak
@@ -454,7 +492,7 @@ vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wI, const float 
       const float halfPx = length(duv / w_h_height.xy);
       const float lodIso = log2(max(exp2(lod) * (1.0 - refractionParams.y), 1.0));
       if (halfPx < 0.5)
-         return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, lodIso).rgb;
+         return refractionTint_thickness.rgb * mix(plain, texStereoLod(tex_pbr_refr, uv, lodIso).rgb, kept);
       const int n = halfPx < 3.0 ? 4 : 8;
       const float lodTap = max(lodIso, log2(max(4.0 * halfPx / float(n), 1.0)));
       vec3 acc = vec3_splat(0.0);
@@ -470,9 +508,9 @@ vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wI, const float 
             wsum += w;
          }
       }
-      return refractionTint_thickness.rgb * (wsum > 0.0 ? acc * (1.0 / wsum) : texStereoLod(tex_pbr_refr, uv, lodIso).rgb);
+      return refractionTint_thickness.rgb * mix(plain, wsum > 0.0 ? acc * (1.0 / wsum) : texStereoLod(tex_pbr_refr, uv, lodIso).rgb, kept);
    }
-   return refractionTint_thickness.rgb * texStereoLod(tex_pbr_refr, uv, lod).rgb;
+   return refractionTint_thickness.rgb * mix(plain, texStereoLod(tex_pbr_refr, uv, lod).rgb, kept);
 }
 
 // Surface curvature from the screen derivatives of the interpolated vertex normal (the estimate the specular AA uses) over
@@ -1005,7 +1043,7 @@ void main() {
          float refrThickness = refractionTint_thickness.w; // also read by the debug views
          vec3 refrSmear = vec3_splat(0.0);
          vec3 behind;
-         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0)
+         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0)
          {
             float refrLodBias = 0.0;
             const vec4 curv = refractionParams.x > 0.0 || refractionParams.y > 0.0 ? pbr_curvature(Nv, v_tablePos) : vec4_splat(0.0);
