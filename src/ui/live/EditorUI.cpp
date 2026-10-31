@@ -722,6 +722,11 @@ void EditorUI::RenderUI()
       m_renderer->InitLayout();
       m_camView = RH2LH * m_renderer->GetMVP().GetView(0) * YAxis;
       m_camProj = YAxis * m_renderer->GetMVP().GetProj(0);
+      // Keep the orbit distance consistent with the player camera, so that leaving the preview camera orbits around the table (not around a stale point)
+      Matrix3D previewInv(m_camView);
+      previewInv.Invert();
+      const vec3 tableCenter(m_table->m_right * 0.5f, m_table->m_bottom * 0.5f, 0.f);
+      m_camDistance = max((previewInv.GetOrthoNormalPos() - tableCenter).Dot(previewInv.GetOrthoNormalDir()), 100.f);
    }
    else
    {
