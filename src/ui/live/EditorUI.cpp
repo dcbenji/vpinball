@@ -55,7 +55,6 @@ namespace VPX::EditorUI
 {
 
 // Vertical field of view (in degrees) of the perspective editor camera
-constexpr float editorCamFovY = 39.6f;
 
 
 EditorUI::EditorUI(LiveUI &liveUI)
@@ -99,6 +98,7 @@ void EditorUI::LoadNavPreferences()
    m_navZoomToMouse = settings.GetEditor_NavZoomToMouse();
    m_navInvertZoom = settings.GetEditor_NavInvertZoom();
    m_navOrbitSensitivity = settings.GetEditor_NavOrbitSensitivity();
+   m_navFovY = settings.GetEditor_NavFovY();
    m_navAltMiddleButton = settings.GetEditor_NavAltMiddleButton();
    m_navTrackpad = settings.GetEditor_NavTrackpad();
    m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
@@ -818,7 +818,7 @@ void EditorUI::RenderUI()
          // Near plane follows the orbit distance (a fixed 5 left a 10000:1 range, so near-coplanar surfaces z-fought when zoomed out: rails, lockdown bar, VLM lightmaps)
          const float zNear = clamp(m_camDistance * 0.05f, 5.f, 250.f);
          constexpr float zFar = 50000.f;
-         m_camProj = Matrix3D::MatrixPerspectiveFovRH(editorCamFovY, io.DisplaySize.x / io.DisplaySize.y, zNear, zFar);
+         m_camProj = Matrix3D::MatrixPerspectiveFovRH(m_navFovY, io.DisplaySize.x / io.DisplaySize.y, zNear, zFar);
       }
       else
       {
@@ -1009,7 +1009,7 @@ void EditorUI::RenderUI()
          view.Invert();
          const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
          const vec3 camTarget = pos - dir * m_camDistance;
-         const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+         const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_navFovY)) : m_camDistance;
          const float unitsPerPixel = 2.f * halfH / io.DisplaySize.y;
          const vec3 offset = (right * -io.MouseWheelH + up * io.MouseWheel) * (20.f * unitsPerPixel);
          m_camView = Matrix3D::MatrixLookAtRH(pos + offset, camTarget + offset, up);
@@ -1028,7 +1028,7 @@ void EditorUI::RenderUI()
          {
             // Zoom toward the point under the cursor: keep the point of the focal plane under the mouse at the same screen position
             const vec3 right = view.GetOrthoNormalRight();
-            const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+            const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_navFovY)) : m_camDistance;
             const ImVec2 mouse = ImGui::GetMousePos();
             const float ndcX = 2.f * mouse.x / io.DisplaySize.x - 1.f, ndcY = 1.f - 2.f * mouse.y / io.DisplaySize.y;
             const vec3 offset = right * (ndcX * halfH * io.DisplaySize.x / io.DisplaySize.y) + up * (ndcY * halfH);
@@ -2395,7 +2395,7 @@ void EditorUI::FrameBounds(const FRect3D &bounds)
    // and fitting inside the area left visible by the UI (a symmetric margin accounts for the UI drawn over the render)
    const float aspect = io.DisplaySize.x / io.DisplaySize.y;
    const Vertex2D visible = GetUIVisibleFraction();
-   const float tanHalfFovY = tanf(0.5f * ANGTORAD(editorCamFovY));
+   const float tanHalfFovY = tanf(0.5f * ANGTORAD(m_navFovY));
    float distance = 0.f;
    for (int i = 0; i < 8; i++)
    {
@@ -2535,7 +2535,7 @@ void EditorUI::UpdateModalTransform()
    const vec3 pivot = FlipZ(vec3(m0._41, m0._42, m0._43));
    const bool perspective = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop;
    const float depth = max((eye - pivot).Dot(dir), 1e-3f);
-   const float halfH = perspective ? depth * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+   const float halfH = perspective ? depth * tanf(0.5f * ANGTORAD(m_navFovY)) : m_camDistance;
    const float aspect = io.DisplaySize.x / io.DisplaySize.y;
    const ImVec2 screenPivot(0.5f * io.DisplaySize.x * (1.f + (pivot - eye).Dot(right) / (halfH * aspect)), 0.5f * io.DisplaySize.y * (1.f - (pivot - eye).Dot(up) / halfH));
    const ImVec2 mouse = ImGui::GetMousePos();
@@ -2638,6 +2638,22 @@ void EditorUI::FrameAll()
 }
 
 // Editor Camera to an axis aligned view, keeping the orbit target and distance
+// Change the vertical field of view keeping the framing of the orbit target (the distance is adjusted so the view does not jump)
+void EditorUI::SetFov(const float fovY)
+{
+   const float newFov = clamp(fovY, 15.f, 100.f);
+   if (m_perspectiveCam && m_camMode == ViewMode::EditorCam)
+   {
+      Matrix3D inv(m_camView);
+      inv.Invert();
+      const vec3 dir = inv.GetOrthoNormalDir(), up = inv.GetOrthoNormalUp();
+      const vec3 camTarget = inv.GetOrthoNormalPos() - dir * m_camDistance;
+      m_camDistance *= tanf(0.5f * ANGTORAD(m_navFovY)) / tanf(0.5f * ANGTORAD(newFov));
+      m_camView = Matrix3D::MatrixLookAtRH(camTarget + dir * m_camDistance, camTarget, up);
+   }
+   m_navFovY = newFov;
+}
+
 void EditorUI::SetView(const PredefinedView view)
 {
    m_predefinedView = view;

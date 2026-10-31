@@ -91,6 +91,12 @@ void EditorChrome::RenderMenuBar()
                settings.SetEditor_NavEmulateNumpad(editor.m_navEmulateNumpad, false);
             if (ImGui::MenuItem("Blender Transform Keys (G / R / S)", nullptr, &editor.m_navBlenderTransform))
                settings.SetEditor_NavBlenderTransform(editor.m_navBlenderTransform, false);
+            float fov = editor.m_navFovY;
+            if (ImGui::SliderFloat("Field Of View", &fov, 15.f, 100.f, "%.1f deg"))
+            {
+               editor.SetFov(fov);
+               settings.SetEditor_NavFovY(editor.m_navFovY, false);
+            }
             if (ImGui::SliderFloat("Orbit Sensitivity", &editor.m_navOrbitSensitivity, 0.1f, 5.f, "%.1f"))
                settings.SetEditor_NavOrbitSensitivity(editor.m_navOrbitSensitivity, false);
             ImGui::EndMenu();
