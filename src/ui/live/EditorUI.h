@@ -319,6 +319,7 @@ private:
 
    // 3D editor
    ImGuizmo::OPERATION m_gizmoOperation = (ImGuizmo::OPERATION)0;
+   bool m_hadSelectionTransform = false; // Whether the previous frame had a selection to transform
    ImGuizmo::MODE m_gizmoMode = ImGuizmo::WORLD;
    void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
    bool GetSelectionTransform(Matrix3D &transform) const;
@@ -336,6 +337,7 @@ private:
       bool hasUndo = false; // An undo record was started when the transform began (canceling reverts it)
       string typed; // Typed numeric value
       string hud; // Status text drawn over the render
+      ImGuizmo::OPERATION savedGizmo = ImGuizmo::OPERATION(0); // Gizmo tool to restore when the transform ends
       ImVec2 startMouse;
       float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
       Matrix3D initial; // Selection transform when the operation began

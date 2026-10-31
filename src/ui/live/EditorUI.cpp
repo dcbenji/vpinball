@@ -840,6 +840,9 @@ void EditorUI::RenderUI()
    // Selection manipulator
    Matrix3D transform;
    const bool isSelectionTransformValid = GetSelectionTransform(transform);
+   if (isSelectionTransformValid && !m_hadSelectionTransform && m_gizmoOperation == ImGuizmo::OPERATION(0) && !m_modal.active)
+      m_gizmoOperation = ImGuizmo::TRANSLATE; // A new selection shows the move gizmo (Esc hides it)
+   m_hadSelectionTransform = isSelectionTransformValid;
    if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active)
    {
       float camViewLH[16];
@@ -1464,6 +1467,11 @@ void EditorUI::RenderUI()
                m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
       }
+      else if ((ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_E) || ImGui::IsKeyPressed(ImGuiKey_T)) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+      {
+         // Gizmo tools, always available: W move, E rotate, T scale (repeat toggles world / local)
+         SetGizmoOperation(ImGui::IsKeyPressed(ImGuiKey_W) ? ImGuizmo::TRANSLATE : ImGui::IsKeyPressed(ImGuiKey_E) ? ImGuizmo::ROTATE : ImGuizmo::SCALE);
+      }
       else if (ImGui::IsKeyPressed(ImGuiKey_G))
       {
          // Grab (translate)
@@ -1475,7 +1483,7 @@ void EditorUI::RenderUI()
             if (GetSelectionTransform(tmp))
                SetSelectionTransform(tmp, true, false, false);
          }
-         else if (!io.KeyCtrl && m_navBlenderTransform)
+         else if (!io.KeyCtrl && (m_navBlenderTransform != io.KeyShift)) // Shift picks the other scheme
             BeginModalTransform(ModalOp::Grab);
          else if (!io.KeyCtrl)
             SetGizmoOperation(ImGuizmo::TRANSLATE);
@@ -1494,7 +1502,7 @@ void EditorUI::RenderUI()
                if (GetSelectionTransform(tmp))
                   SetSelectionTransform(tmp, false, true, false);
             }
-            else if (m_navBlenderTransform)
+            else if (m_navBlenderTransform != io.KeyShift)
                BeginModalTransform(ModalOp::Scale);
             else
                SetGizmoOperation(ImGuizmo::SCALE);
@@ -1511,7 +1519,7 @@ void EditorUI::RenderUI()
             if (GetSelectionTransform(tmp))
                SetSelectionTransform(tmp, false, false, true);
          }
-         else if (!io.KeyCtrl && m_navBlenderTransform)
+         else if (!io.KeyCtrl && (m_navBlenderTransform != io.KeyShift)) // Shift picks the other scheme
             BeginModalTransform(ModalOp::Rotate);
          else if (!io.KeyCtrl)
             SetGizmoOperation(ImGuizmo::ROTATE);
@@ -2459,8 +2467,10 @@ void EditorUI::BeginModalTransform(ModalOp op)
       return;
    if (m_camMode == ViewMode::PreviewCam)
       m_camMode = ViewMode::EditorCam;
+   const ImGuizmo::OPERATION savedGizmo = m_gizmoOperation;
    m_gizmoOperation = ImGuizmo::OPERATION(0);
    m_modal = ModalTransform();
+   m_modal.savedGizmo = savedGizmo;
    m_modal.active = true;
    m_modal.op = op;
    m_modal.initial = initial;
@@ -2495,6 +2505,7 @@ void EditorUI::EndModalTransform(const bool confirm)
          SetSelectionTransform(m_modal.initial);
    }
    m_modal.active = false;
+   m_gizmoOperation = m_modal.savedGizmo; // The gizmo comes back after the transform
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
 }
