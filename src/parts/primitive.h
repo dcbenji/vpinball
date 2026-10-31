@@ -423,4 +423,6 @@ private:
    std::shared_ptr<MeshBuffer> m_meshBuffer;
    std::shared_ptr<MeshBuffer> m_meshEdgeBuffer;
    bool m_vertexBufferRegenerate = true;
+   bool m_refrCurvatureEncoded = false; // the vertex buffer carries the per-vertex curvature in its normal lengths (PBR refraction options)
+   void UploadMeshToVB(const std::shared_ptr<VertexBuffer>& vb);
 };
