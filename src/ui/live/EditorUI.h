@@ -346,6 +346,7 @@ private:
    bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
    bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)
    bool m_navAltMiddleButton = true;
+   bool m_navTrackpad = true;
    float m_navOrbitSensitivity = 1.f;
    void LoadNavPreferences();
    bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
