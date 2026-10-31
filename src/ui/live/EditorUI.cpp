@@ -988,7 +988,8 @@ void EditorUI::RenderUI()
          Matrix3D view(m_camView);
          view.Invert();
          const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
-         const vec3 camTarget = pos - dir * m_camDistance;
+         vec3 camTarget = pos - dir * m_camDistance;
+         GetNavPivot(camTarget);
          m_camDistance *= powf(1.1f, -ImGui::GetIO().MouseWheel);
          const vec3 newEye = camTarget + dir * m_camDistance;
          m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, up);
@@ -1009,6 +1010,8 @@ void EditorUI::RenderUI()
             const vec3 pos = viewInverse.GetOrthoNormalPos();
             const vec3 right = viewInverse.GetOrthoNormalRight();
             vec3 camTarget = pos - dir * m_camDistance;
+            if (!(io.KeyShift || m_camMode == ViewMode::DesktopBackdrop || m_orbitLock))
+               GetNavPivot(camTarget); // Orbit around the selection
             if (io.KeyShift || m_camMode == ViewMode::DesktopBackdrop || m_orbitLock)
             {
                if (!m_perspectiveCam || m_camMode == ViewMode::DesktopBackdrop)
@@ -2438,6 +2441,16 @@ bool EditorUI::GetSelectionTransform(Matrix3D &transform) const
       return mask != EditorUIPart::TransformMask::TM_None;
    }
    return false;
+}
+
+// Navigation pivot: the center of the selection bounds when 'orbit around selection' is enabled and something is selected (target left unchanged otherwise)
+bool EditorUI::GetNavPivot(vec3 &target) const
+{
+   FRect3D bounds;
+   if (!m_navOrbitSelection || m_camMode == ViewMode::DesktopBackdrop || !GetSelectionBounds(bounds))
+      return false;
+   target = vec3(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
+   return true;
 }
 
 bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
