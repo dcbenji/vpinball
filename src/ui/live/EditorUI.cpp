@@ -946,7 +946,7 @@ void EditorUI::RenderUI()
       }
 
       if (m_modal.active)
-         overlayDrawList->AddText(ImVec2(16.f * m_liveUI.GetDPI(), io.DisplaySize.y - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+         overlayDrawList->AddText(ImVec2((OutlinerPanel::PaneWidth + 16.f) * m_liveUI.GetDPI(), io.DisplaySize.y - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
 
       // In desktop backdrop mode, draw the bounds of the backdrop area
       if (m_camMode == ViewMode::DesktopBackdrop)
@@ -1587,6 +1587,7 @@ void EditorUI::RenderUI()
    if (m_pickListOpen)
    {
       ImGui::SetNextWindowPos(m_pickListPos, ImGuiCond_Appearing);
+      ImGui::SetNextWindowSizeConstraints(ImVec2(220.f * m_liveUI.GetDPI(), 0.f), ImVec2(FLT_MAX, FLT_MAX));
       bool open = true;
       if (ImGui::Begin("Parts under cursor", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse))
       {
