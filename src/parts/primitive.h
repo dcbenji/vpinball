@@ -70,6 +70,7 @@ public:
    float m_refractionThickness = 10.0f;
    float m_refractionCurvature = 0.0f; // PBR: refraction offset & blur grow with the surface curvature (0 = off)
    float m_refractionAnisotropy = 0.0f; // PBR: 0..1, refraction blur streaks along the part's long axis (0 = off)
+   float m_refractionWave = 0.0f; // PBR: forming waves, the view through the part undulates gently (0 = off)
 
    bool m_toy = false;
    bool m_backfacesEnabled = false;
