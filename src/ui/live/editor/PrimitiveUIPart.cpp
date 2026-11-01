@@ -317,7 +317,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.SliderFloat<Primitive>(
          m_part, "Refraction Noise"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionNoise; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_refractionNoise = max(v, 0.f); }, 0.f, 1.f, 2);
+         [](Primitive* primitive, float v) { primitive->m_d.m_refractionNoise = max(v, 0.f); }, 0.f, 10.f, 2); // 1 = ~0.7 deg tilt; range far past "sensible" on purpose (Ben: dial past, then back)
       props.SliderFloat<Primitive>(
          m_part, "Refraction Noise Scale (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionNoiseScale; }, //
