@@ -141,6 +141,8 @@ public:
       , m_fBevelBright(pmat->m_fBevelBright)
       , m_fScatterLocality(pmat->m_fScatterLocality)
       , m_fScatterWidth(pmat->m_fScatterWidth)
+      , m_fAbsorptionLightTint(pmat->m_fAbsorptionLightTint)
+      , m_fScatterSaturation(pmat->m_fScatterSaturation)
    {
    }
 
@@ -232,6 +234,8 @@ public:
    float m_fBevelBright = 1.0f; // scales the light-guide / bevel brightening of transmission and specular (1 = as is, 0 = off)
    float m_fScatterLocality = 0.0f; // 0 = as is; 1 = scatter lit only near the lamps (unwrapped |N.L|, steeper falloff, no ambient share)
    float m_fScatterWidth = 1.0f; // 1 = as is; < 1 chokes the scatter + rim band, thinner where the surface is dimly lit
+   float m_fAbsorptionLightTint = 0.0f; // 0 = as is; 1 = the absorption colour takes the hue of the local lamp light (keeps its own luminance)
+   float m_fScatterSaturation = 1.0f; // saturation of the light colour in the scatter and rim lobes (1 = as is, 0 = grey, 2 = boosted)
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -273,6 +277,8 @@ public:
       writer.WriteFloat(FID(PBVB), m_fBevelBright);
       writer.WriteFloat(FID(PSLC), m_fScatterLocality);
       writer.WriteFloat(FID(PSWD), m_fScatterWidth);
+      writer.WriteFloat(FID(ABLT), m_fAbsorptionLightTint);
+      writer.WriteFloat(FID(PSSA), m_fScatterSaturation);
       writer.EndObject();
    }
 
@@ -319,6 +325,8 @@ public:
             case FID(PBVB): m_fBevelBright = reader.AsFloat(); break;
             case FID(PSLC): m_fScatterLocality = reader.AsFloat(); break;
             case FID(PSWD): m_fScatterWidth = reader.AsFloat(); break;
+            case FID(ABLT): m_fAbsorptionLightTint = reader.AsFloat(); break;
+            case FID(PSSA): m_fScatterSaturation = reader.AsFloat(); break;
             }
             return true;
          },

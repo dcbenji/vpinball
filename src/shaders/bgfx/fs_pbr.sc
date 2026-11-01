@@ -138,6 +138,7 @@ uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..
 uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm, w: wave flow 0..1
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
 uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is), z: scatter locality (0 = as is), w: scatter width (1 = as is)
+uniform vec4 pbrPresence3; // x: absorption light tint (0 = as is), y: scatter saturation (1 = as is)
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -468,6 +469,17 @@ vec4 pbr_noised(const vec3 x)
    const float k0 = a, k1 = b - a, k2 = c - a, k3 = e - a, k4 = a - b - c + d, k5 = a - c - e + h, k6 = a - b - e + g, k7 = -a + b + c - d + e - g - h + k;
    return vec4(k0 + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z,
       du * vec3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z, k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x, k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y));
+}
+
+// Forming-wave noise gradient (two octaves), the field stretched along the fixed unit axis d by 1 / (1 - st) (st = 0: the
+// plain field). d is a constant per call: the warp is linear in the position, so the field stays continuous over the mesh
+// (a per-pixel axis times the absolute position, as the first wave_flow had it, jumps by axis change x |position| at every
+// triangle edge where the axis is per triangle, and shears hard where it turns)
+vec3 pbr_wave_grad(const vec3 p, const vec3 d, const float st)
+{
+   const vec3 pw = p - d * (dot(p, d) * st);
+   const vec3 g = pbr_noised(pw * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(pw * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
+   return g - d * (dot(g, d) * st); // gradient back to table space (the stretch is symmetric)
 }
 
 // pbr_transmit with the refraction options of refractionParams (curvature, anisotropy, soft fallback). The plain version
@@ -1232,11 +1244,13 @@ void main() {
                const float lc = length(Tc), lu = length(Tu);
                Tc = lc > 1e-8 ? Tc * (1.0 / lc) : vec3_splat(0.0);
                Tu = lu > 1e-8 ? Tu * (1.0 / lu) : vec3_splat(0.0);
+               const vec3 Tuv = Tu; // the UV axis before the wall blend (forming waves)
                // Steep faces (walls, a plastic's rim) run horizontally: there the axis is the horizontal tangent. A ramp's UV map
                // does not follow the walls (PF's centre ramp is a plan-view unwrap that lays them out across, so u runs up them
                // and the axis flipped in bands from triangle to triangle)
                vec3 Th = vec3(wNg.y, -wNg.x, 0.0); // N x up
                Th = lh > 1e-4 ? Th * (1.0 / lh) : vec3_splat(0.0);
+               const vec3 Thw = Th; // unsigned (forming waves)
                if (dot(Th, Tu) < 0.0)
                   Th = -Th;
                Tu = mix(Tu, Th, smoothstep(0.6, 0.85, lh));
@@ -1260,26 +1274,54 @@ void main() {
                // through flat floors and walls wavers. Static 3D value noise (two octaves, REFR_WAVE_L1 / L2 VPU) tilts the
                // refraction normal only (not the shading one), mostly along the sweep (across it at 0.3x), by up to a few
                // degrees x the strength: no blur, the art behind undulates.
-               BRANCH if (refractionParams2.x > 0.0 && lt > 1e-3)
+               // The sweep axis of the waves must be continuous over the mesh (Ben 11-01: with wave + flow the outer wall broke
+               // up into per-triangle steps). T above is not: the min-curvature direction and the UV gradient come from screen
+               // derivatives, constant per triangle, and the sign of the wall's horizontal tangent was picked against the UV
+               // gradient. Here the axis is the horizontal tangent N x up of the interpolated vertex normal wherever the face is
+               // not near flat (walls, fillets, bevels: on a swept ramp every cross-section normal lies in the plane normal to
+               // the sweep, so N x up is the sweep there), the UV gradient only on near-flat faces (floor; small per-triangle
+               // changes there, no longer amplified). Blended as axis tensors (T T^t), so no sign choice is involved.
+               BRANCH if (refractionParams2.x > 0.0)
                {
-                  const vec3 Tn = T * (1.0 / lt);
-                  const vec3 Bn = normalize(cross(wN, Tn));
+                  const float wh = smoothstep(0.2, 0.5, lh);
+                  const float wu = 1.0 - wh;
                   // Flow (refraction_wave_flow 0..1, 0 = the plain wave): the pattern is stretched along the sweep (up to 4x at 1)
                   // so it reads as flow lines, and its amplitude (up to 3x) no longer fades out toward grazing, which is how the
-                  // walls are seen from above
+                  // walls are seen from above. The stretch blends 4 fields stretched along fixed horizontal axes (0, 45, 90, 135
+                  // deg), weighted by the sweep axis (cos^8 of the angle, renormalized, the weakest dropped by a continuous
+                  // threshold), variance kept by 1 / sqrt(sum w^2). Each field is continuous, the weights follow the smooth axis.
                   const float flow = refractionParams2.w;
-                  vec3 pw = v_tablePos;
-                  if (flow > 0.0)
-                     pw -= Tn * (dot(pw, Tn) * (1.0 - 1.0 / (1.0 + 3.0 * flow)));
-                  vec3 g = pbr_noised(pw * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(pw * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
-                  if (flow > 0.0) // gradient back to table space (the stretch is symmetric)
-                     g -= Tn * (dot(g, Tn) * (1.0 - 1.0 / (1.0 + 3.0 * flow)));
+                  vec3 g;
+                  const vec4 c = vec4(wu * Tuv.x * Tuv.x + wh * Thw.x * Thw.x,
+                     0.5 * (wu * (Tuv.x + Tuv.y) * (Tuv.x + Tuv.y) + wh * (Thw.x + Thw.y) * (Thw.x + Thw.y)),
+                     wu * Tuv.y * Tuv.y + wh * Thw.y * Thw.y,
+                     0.5 * (wu * (Tuv.x - Tuv.y) * (Tuv.x - Tuv.y) + wh * (Thw.x - Thw.y) * (Thw.x - Thw.y)));
+                  const float cs = c.x + c.y + c.z + c.w; // 2 x the horizontal trace of the axis tensor
+                  BRANCH if (flow > 0.0 && cs > 1e-4)
+                  {
+                     const float st = 1.0 - 1.0 / (1.0 + 3.0 * flow);
+                     vec4 w = c * (2.0 / cs); // cos^2 to each axis
+                     w *= w; w *= w; w *= w;
+                     w *= 1.0 / (w.x + w.y + w.z + w.w);
+                     w = max(w - 0.05, vec4_splat(0.0));
+                     w *= 1.0 / (w.x + w.y + w.z + w.w);
+                     g = vec3_splat(0.0);
+                     BRANCH if (w.x > 0.0) g += w.x * pbr_wave_grad(v_tablePos, vec3(1.0, 0.0, 0.0), st);
+                     BRANCH if (w.y > 0.0) g += w.y * pbr_wave_grad(v_tablePos, vec3(0.70710678, 0.70710678, 0.0), st);
+                     BRANCH if (w.z > 0.0) g += w.z * pbr_wave_grad(v_tablePos, vec3(0.0, 1.0, 0.0), st);
+                     BRANCH if (w.w > 0.0) g += w.w * pbr_wave_grad(v_tablePos, vec3(0.70710678, -0.70710678, 0.0), st);
+                     g *= inversesqrt(dot(w, w));
+                  }
+                  else
+                     g = pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
                   // Faded out toward grazing incidence, where the refraction's sensitivity to the tilt would turn it into ripples
-                  // on water (the light-guide band takes over there)
+                  // on water (the light-guide band takes over there). refrCosI is on the interpolated normal: continuous.
                   float waveFade = smoothstep(0.15, 0.5, refrCosI);
                   if (flow > 0.0)
                      waveFade = mix(waveFade, smoothstep(0.03, 0.15, refrCosI), flow) * (1.0 + 2.0 * flow);
-                  refrWave = (-REFR_WAVE_TILT * refractionParams2.x * waveFade) * (dot(g, Tn) * Tn + 0.3 * dot(g, Bn) * Bn);
+                  // Tilt mostly along the sweep, 0.3x across: 0.7 (T T^t) g + 0.3 (g in the tangent plane)
+                  const vec3 gT = wu * dot(g, Tuv) * Tuv + wh * dot(g, Thw) * Thw;
+                  refrWave = (-REFR_WAVE_TILT * refractionParams2.x * waveFade) * (0.7 * gT + 0.3 * (g - dot(g, wN) * wN));
                }
             }
             // Refraction imperfections (refraction_noise, 0 = off): mould / orange-peel, a tiny tilt of the refraction normal only
@@ -1313,6 +1355,10 @@ void main() {
          {
             const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
             const float pCos = max(abs(dot(Ng, V)), 1e-3);
+            // The local lamp light at the surface (scatter lobe, absorption light tint)
+            vec3 lamps = vec3_splat(0.0);
+            BRANCH if (pbrScatter > 0.0 || (pbrAbsorption.w > 0.0 && pbrPresence3.x > 0.0))
+               lamps = pbr_scatter_light(v_tablePos, wNg, pbrPresence2.z) * (1.0 / PI);
             // Absorption (material absorption colour and strength): Beer-Lambert over the path through the plastic, in
             // thicknesses: 1 / cos of the refracted angle on a flat sheet, the light-guide path toward edge-on (curvature on)
             // and longer through a fillet, so edge-on and fillets read as thick tinted plastic
@@ -1320,7 +1366,17 @@ void main() {
             {
                const float sinR2 = (1.0 - pCos * pCos) * (1.0 / 2.25);
                const float path = max(inversesqrt(max(1.0 - sinR2, 1e-3)), refrGuide) + 0.5 * refrCurvExtra;
-               behind *= pow(max(pbrAbsorption.rgb, vec3_splat(1e-3)), vec3_splat(pbrAbsorption.w * path));
+               vec3 absC = pbrAbsorption.rgb;
+               // Absorption light tint (0..1, 0 = as is): the colour takes the hue of the local lamp light, keeping its own
+               // luminance (chroma from the light: lamps / lum(lamps) x lum(colour), clamped to a transmittance); faded in
+               // with the light so a dark spot keeps the user colour
+               BRANCH if (pbrPresence3.x > 0.0)
+               {
+                  const float lL = dot(lamps, vec3(0.2126, 0.7152, 0.0722));
+                  const vec3 tinted = saturate(lamps * (dot(absC, vec3(0.2126, 0.7152, 0.0722)) / max(lL, 1e-6)));
+                  absC = mix(absC, tinted, pbrPresence3.x * smoothstep(0.0, 0.02, lL));
+               }
+               behind *= pow(max(absC, vec3_splat(1e-3)), vec3_splat(pbrAbsorption.w * path));
             }
             BRANCH if (pbrScatter > 0.0)
             {
@@ -1335,8 +1391,7 @@ void main() {
                const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
                const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
                const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
-               const vec3 lamps = pbr_scatter_light(v_tablePos, wNg, pbrPresence2.z) * (1.0 / PI);
-               const vec3 lit = lamps + ((1.0 - pbrPresence2.z) * pbrPresence.y) * envIrr; // locality fades the ambient share
+               vec3 lit = lamps + ((1.0 - pbrPresence2.z) * pbrPresence.y) * envIrr; // locality fades the ambient share
                // Scatter width: band weight exponent, 1 at width 1; larger (thinner band) at low width, more so where lit is low
                float bandE = 1.0;
                if (pbrPresence2.w < 1.0)
@@ -1345,6 +1400,13 @@ void main() {
                   const float litN = litL / (litL + PRES_LIT_K);
                   const float invW = 1.0 / pbrPresence2.w;
                   bandE = invW * (1.0 + (invW - 1.0) * (1.0 - litN));
+               }
+               // Scatter saturation (0..2, 1 = as is): chroma of the light in the scatter and rim lobes (0 = grey of the same
+               // luminance, 2 = boosted), after the width term (which reads only the luminance)
+               if (pbrPresence3.y != 1.0)
+               {
+                  const float litY = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+                  lit = max(vec3_splat(litY) + (lit - litY) * pbrPresence3.y, vec3_splat(0.0));
                }
                float edgeBend = max(edge, bend);
                if (bandE > 1.0)
