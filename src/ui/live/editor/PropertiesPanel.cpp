@@ -797,6 +797,14 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             [](const Material *material) { return material->m_fRimGain; }, //
             [](Material *material, float v) { material->m_fRimGain = max(v, 0.f); }, 0.f, 8.f, 2);
          props.SliderFloat<Material>(
+            material, "Rim Width"s, //
+            [](const Material *material) { return material->m_fRimWidth; }, //
+            [](Material *material, float v) { material->m_fRimWidth = clamp(v, 0.05f, 1.f); }, 0.2f, 1.f, 2);
+         props.SliderFloat<Material>(
+            material, "Bevel Brightening"s, //
+            [](const Material *material) { return material->m_fBevelBright; }, //
+            [](Material *material, float v) { material->m_fBevelBright = max(v, 0.f); }, 0.f, 2.f, 2);
+         props.SliderFloat<Material>(
             material, "Dense Edge Albedo"s, //
             [](const Material *material) { return material->m_fDenseAlbedo; }, //
             [](Material *material, float v) { material->m_fDenseAlbedo = max(v, 0.f); }, 0.f, 1.f, 3);

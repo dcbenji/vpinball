@@ -137,6 +137,7 @@ uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
 uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm, w: wave flow 0..1
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
+uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is)
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -1280,8 +1281,8 @@ void main() {
             // The light-guide band reads bright: light piped along the sheet, and the reflection rising toward grazing; so do
             // strong bevels and fillets seen at an angle (the bright highlight lines along a new ramp's wall tops)
             const float refrGlow = REFR_GUIDE_GLOW * saturate((refrGuide - 2.0) * (1.0 / 8.0) + refrCurvExtra * (1.0 / 6.0) * saturate(0.5 * refrGraze));
-            behind *= 1.0 + refrGlow;
-            spec *= 1.0 + refrGlow;
+            behind *= 1.0 + refrGlow * pbrPresence2.y;
+            spec *= 1.0 + refrGlow * pbrPresence2.y;
          }
          else
          {
@@ -1327,7 +1328,9 @@ void main() {
                spec += (pbrScatter * wear * (pbrPresence.x + (1.0 - pbrPresence.x) * max(edge, bend))) * lit;
                // Rim: the thin bright line along wall tops and fillets seen at an angle (light piped along the sheet by total
                // internal reflection comes out where the surface bends)
-               spec += (pbrScatter * wear * pbrPresence.z * bend * edge) * lit;
+               // width < 1 chokes the band: the weight bend*edge (0..1) is raised to 1/width, so only the core of the band survives
+               const float rimW = pbrPresence2.x < 1.0 ? pow(bend * edge, 1.0 / pbrPresence2.x) : bend * edge;
+               spec += (pbrScatter * wear * pbrPresence.z * rimW) * lit;
                // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
                // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor
                const vec3 wRg = reflect(-wV, wNg);

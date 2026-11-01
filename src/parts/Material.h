@@ -137,6 +137,8 @@ public:
       , m_fScatterEdgeAngle(pmat->m_fScatterEdgeAngle)
       , m_fRimGain(pmat->m_fRimGain)
       , m_fDenseAlbedo(pmat->m_fDenseAlbedo)
+      , m_fRimWidth(pmat->m_fRimWidth)
+      , m_fBevelBright(pmat->m_fBevelBright)
    {
    }
 
@@ -224,6 +226,8 @@ public:
    float m_fScatterEdgeAngle = kScatterEdgeAngleDefault;
    float m_fRimGain = 2.0f;
    float m_fDenseAlbedo = 0.55f;
+   float m_fRimWidth = 1.0f; // 1 = the rim band as is; < 1 chokes it thinner (rim weight = (bend*edge)^(1/width))
+   float m_fBevelBright = 1.0f; // scales the light-guide / bevel brightening of transmission and specular (1 = as is, 0 = off)
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -261,6 +265,8 @@ public:
       writer.WriteFloat(FID(PSEA), m_fScatterEdgeAngle);
       writer.WriteFloat(FID(PRGN), m_fRimGain);
       writer.WriteFloat(FID(PDAL), m_fDenseAlbedo);
+      writer.WriteFloat(FID(PRWD), m_fRimWidth);
+      writer.WriteFloat(FID(PBVB), m_fBevelBright);
       writer.EndObject();
    }
 
@@ -303,6 +309,8 @@ public:
             case FID(PSEA): m_fScatterEdgeAngle = reader.AsFloat(); break;
             case FID(PRGN): m_fRimGain = reader.AsFloat(); break;
             case FID(PDAL): m_fDenseAlbedo = reader.AsFloat(); break;
+            case FID(PRWD): m_fRimWidth = reader.AsFloat(); break;
+            case FID(PBVB): m_fBevelBright = reader.AsFloat(); break;
             }
             return true;
          },
