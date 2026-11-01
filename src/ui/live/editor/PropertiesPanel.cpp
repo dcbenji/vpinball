@@ -103,6 +103,20 @@ void PropertiesPanel::Render(float topBarHeight)
                case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
                case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
                }
+               // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
+               if (is_live && props.GetModifiedField() > 0)
+               {
+                  if (editor.m_selection.GetType() == Selection::S_MATERIAL)
+                     editor.m_liveEditedMaterials.insert(editor.m_selection.GetMaterial());
+                  else if (editor.m_selection.GetType() == Selection::S_EDITABLE)
+                  {
+                     if (props.IsMultiEdit())
+                        for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
+                           editor.m_liveEditedParts.insert(part->GetEditable());
+                     else
+                        editor.m_liveEditedParts.insert(editor.m_selection.GetPart()->GetEditable());
+                  }
+               }
                ImGui::EndTabItem();
             }
          }
@@ -813,6 +827,10 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             [](const Material *material) { return material->m_fScatterWidth; }, //
             [](Material *material, float v) { material->m_fScatterWidth = clamp(v, 0.05f, 1.f); }, 0.2f, 1.f, 2);
          props.SliderFloat<Material>(
+            material, "Scatter Saturation"s, //
+            [](const Material *material) { return material->m_fScatterSaturation; }, //
+            [](Material *material, float v) { material->m_fScatterSaturation = clamp(v, 0.f, 2.f); }, 0.f, 2.f, 2);
+         props.SliderFloat<Material>(
             material, "Dense Edge Albedo"s, //
             [](const Material *material) { return material->m_fDenseAlbedo; }, //
             [](Material *material, float v) { material->m_fDenseAlbedo = max(v, 0.f); }, 0.f, 1.f, 3);
@@ -824,6 +842,10 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             material, "Absorption"s, //
             [](const Material *material) { return material->m_fAbsorption; }, //
             [](Material *material, float v) { material->m_fAbsorption = max(v, 0.f); }, 0.f, 3.f, 3);
+         props.SliderFloat<Material>(
+            material, "Absorption Light Tint"s, //
+            [](const Material *material) { return material->m_fAbsorptionLightTint; }, //
+            [](Material *material, float v) { material->m_fAbsorptionLightTint = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
       }
       props.EndSection();
    }

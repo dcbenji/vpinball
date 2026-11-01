@@ -18,6 +18,7 @@
 #include "parts/Collection.h"
 #include "parts/PartGroup.h"
 #include "parts/ball.h"
+#include "parts/light.h"
 #include "parts/primitive.h"
 #include "math/dragpoint.h"
 #include "math/matrix.h"
@@ -193,17 +194,61 @@ void EditorUI::PlayTest()
 
 void EditorUI::SaveTable()
 {
-   if (IsInspectMode() || m_table->IsLocked() || m_fileOp != nullptr)
+   if (m_table->IsLocked() || m_fileOp != nullptr)
       return;
-   if (m_table->m_filename.empty())
+   PinTable *saveTable = m_table;
+   if (IsInspectMode())
+   {
+      // Inspection session: write the startup table, after copying back what was edited in the 'Live' tabs
+      saveTable = m_table->m_liveBaseTable;
+      if (saveTable->m_filename.empty())
+      {
+         m_liveUI.PushNotification("Nothing saved: the table has no file yet, use Save As from the editor"s, 8000);
+         return;
+      }
+      int copied = 0, skipped = 0;
+      for (Material *const live : m_liveEditedMaterials)
+         if (Material *const startup = m_table->GetStartupFromLive<Material>(live))
+         {
+            const string name = startup->m_name;
+            *startup = *live;
+            startup->m_name = name;
+            copied++;
+         }
+      for (IEditable *const live : m_liveEditedParts)
+      {
+         IEditable *const startup = m_table->GetStartupFromLive<IEditable>(live);
+         if (startup == nullptr)
+            continue;
+         if (live->GetItemType() == eItemPrimitive && startup->GetItemType() == eItemPrimitive)
+            static_cast<Primitive *>(startup)->m_d = static_cast<Primitive *>(live)->m_d;
+         else if (live->GetItemType() == eItemLight && startup->GetItemType() == eItemLight)
+            static_cast<Light *>(startup)->m_d = static_cast<Light *>(live)->m_d;
+         else
+         {
+            skipped++;
+            continue;
+         }
+         copied++;
+      }
+      m_liveEditedMaterials.clear();
+      m_liveEditedParts.clear();
+      string msg = std::format("Saved the startup table to '{}' ({} live edit(s) copied in", PathToUTF8(saveTable->m_filename), copied);
+      if (skipped > 0)
+         msg += std::format(", {} edited part(s) of other types NOT copied: use the save icon next to their fields", skipped);
+      msg += ")";
+      m_liveUI.PushNotification(msg, 10000);
+   }
+   else if (m_table->m_filename.empty())
    {
       SaveTableAs();
       return;
    }
    auto op = std::make_unique<AsyncFileOp>();
    op->type = AsyncFileOp::Type::Save;
-   op->filename = m_table->m_filename;
-   op->displayPath = PathToUTF8(m_table->m_filename);
+   op->saveTable = saveTable;
+   op->filename = saveTable->m_filename;
+   op->displayPath = PathToUTF8(saveTable->m_filename);
    StartFileOp(std::move(op));
 }
 
@@ -371,9 +416,10 @@ void EditorUI::StartFileOp(std::unique_ptr<AsyncFileOp> op)
    {
    case AsyncFileOp::Type::Save:
    {
-      RestorePartsVisibility(); // Save the authored visibility, not the editor display state
+      if (!IsInspectMode())
+         RestorePartsVisibility(); // Save the authored visibility, not the editor display state
       AsyncFileOp *const fileOp = op.get();
-      PinTable *const table = m_table;
+      PinTable *const table = op->saveTable != nullptr ? op->saveTable : m_table;
       op->worker = std::thread(
          [fileOp, table]()
          {
