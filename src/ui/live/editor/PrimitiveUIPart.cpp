@@ -302,6 +302,10 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Refraction Anisotropy"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionAnisotropy; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionAnisotropy = clamp(v, 0.f, 1.f); }, PropertyPane::Unit::None, 3);
+      props.InputFloat<Primitive>(
+         m_part, "Refraction Wave"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_refractionWave; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_refractionWave = max(v, 0.f); }, PropertyPane::Unit::None, 3);
 
       props.EndSection();
    }

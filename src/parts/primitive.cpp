@@ -869,7 +869,7 @@ void Primitive::RenderSetup(Renderer *renderer)
       // Compute and upload mesh to let a chance for renderdevice to share the buffers with other static objects
       RecalculateMatrices();
       // The PBR refraction options (curvature, anisotropy) read a smooth per-vertex curvature from the normal lengths
-      m_refrCurvatureEncoded = (m_d.m_refractionCurvature > 0.f || m_d.m_refractionAnisotropy > 0.f) && !m_d.m_szRefractionProbe.empty() && m_mesh.m_animationFrames.empty();
+      m_refrCurvatureEncoded = (m_d.m_refractionCurvature > 0.f || m_d.m_refractionAnisotropy > 0.f || m_d.m_refractionWave > 0.f) && !m_d.m_szRefractionProbe.empty() && m_mesh.m_animationFrames.empty();
       UploadMeshToVB(vertexBuffer);
    }
    else
@@ -1571,6 +1571,7 @@ void Primitive::Render(const unsigned int renderMask)
             static const float refrSoftFallback = std::getenv("VPX_REFR_SOFT") ? (float)atof(std::getenv("VPX_REFR_SOFT")) : 1.f;
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionTint_thickness, &colorR);
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams, m_d.m_refractionCurvature, clamp(m_d.m_refractionAnisotropy, 0.f, 1.f), refrSoftFallback, m_refrCurvatureEncoded ? 1.f : 0.f);
+            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams2, max(m_d.m_refractionWave, 0.f), 0.f, 0.f, 0.f);
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, refractions->GetColorSampler());
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_probe_depth, refractions->GetDepthSampler());
             m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
@@ -1795,6 +1796,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(RTHI), m_d.m_refractionThickness);
    writer.WriteFloat(FID(RCRV), m_d.m_refractionCurvature);
    writer.WriteFloat(FID(RANI), m_d.m_refractionAnisotropy);
+   writer.WriteFloat(FID(RWAV), m_d.m_refractionWave);
 
    SaveSharedEditableFields(writer);
 
@@ -2028,6 +2030,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RTHI): m_d.m_refractionThickness = reader.AsFloat(); break;
          case FID(RCRV): m_d.m_refractionCurvature = reader.AsFloat(); break;
          case FID(RANI): m_d.m_refractionAnisotropy = reader.AsFloat(); break;
+         case FID(RWAV): m_d.m_refractionWave = reader.AsFloat(); break;
 
          default: LoadSharedEditableField(tag, reader); break;
          }
