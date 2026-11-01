@@ -137,7 +137,7 @@ uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
 uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm, w: wave flow 0..1
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
-uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is)
+uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is), z: scatter locality (0 = as is), w: scatter width (1 = as is)
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -434,6 +434,15 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 #define PRES_DENSE_C0 0.15
 #define PRES_DENSE_C1 0.05
 #define PRES_DENSE_FULL 0.25
+// Scatter locality / width (round 5). Locality blends each lamp's scatter weight from the wrapped |N.L| with plain inverse-square
+// toward an unwrapped |N.L| (two-sided: light inside the sheet scatters whichever face it enters) with an extra falloff
+// R^2 / (R^2 + d^2) (inverse-square near a bulb, ~1/d^4 beyond R), distance floored at PRES_LOC_DMIN so a bulb touching
+// the plastic does not spike. Width: the scatter/rim band weight is raised to e = (1/width) * (1 + (1/width - 1) * (1 - lit_n)),
+// lit_n = lum(lit) / (lum(lit) + PRES_LIT_K): the band keeps the slider's width where well lit and chokes to (1/width)^2 in the dark.
+// PRES_LIT_K = 1.0: lit is in the linear radiance of a white Lambert sheet, 1.0 = lit to display white before tonemapping.
+#define PRES_LOC_R 60.0
+#define PRES_LOC_DMIN 10.0
+#define PRES_LIT_K 1.0
 
 // Smooth 3D value noise with its analytic gradient (Inigo Quilez's quintic value noise): x = value 0..1, yzw = gradient
 float pbr_hash3(vec3 p)
@@ -909,8 +918,8 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
 #ifdef TRANSPARENT
 // Light arriving at a see-through surface from either side, for its scatter lobe: the clustered lights (GI bulbs, inserts,
 // flasher domes), unshadowed (the light is inside the plastic), wrapped on |N.L| so light from behind the sheet counts as
-// well as from the front
-vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN)
+// well as from the front. loc > 0 (scatter locality) blends toward the tight local response (see PRES_LOC_R)
+vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN, const float loc)
 {
    const vec2 cellf = clamp((wPos.xy - pbrLightGrid.xy) * pbrLightGrid.z, vec2_splat(0.0),
       vec2(pbrLightGrid.w - 1.0, pbrLightGrid2.x - 1.0));
@@ -933,7 +942,14 @@ vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN)
       vec3 lCol = lRad.rgb;
       if (lIdx.z > 0.0) // upward facing emitter (lit insert)
          lCol *= saturate(-dl.z * inversesqrt(max(dot(dl, dl), 1e-6)));
-      acc += lCol * ((x * x / dist2) * (0.5 + 0.5 * abs(dot(wN, dl) * inversesqrt(dist2))));
+      float w = (x * x / dist2) * (0.5 + 0.5 * abs(dot(wN, dl) * inversesqrt(dist2)));
+      if (loc > 0.0)
+      {
+         const float d2l = max(dist2, PRES_LOC_DMIN * PRES_LOC_DMIN);
+         const float wl = (x * x / d2l) * (PRES_LOC_R * PRES_LOC_R / (PRES_LOC_R * PRES_LOC_R + d2l)) * abs(dot(wN, dl) * inversesqrt(dot(dl, dl) + 1e-6));
+         w = mix(w, wl, loc);
+      }
+      acc += lCol * w;
    }
    return acc;
 }
@@ -1319,17 +1335,31 @@ void main() {
                const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
                const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
                const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
-               const vec3 lamps = pbr_scatter_light(v_tablePos, wNg) * (1.0 / PI);
-               const vec3 lit = lamps + pbrPresence.y * envIrr;
+               const vec3 lamps = pbr_scatter_light(v_tablePos, wNg, pbrPresence2.z) * (1.0 / PI);
+               const vec3 lit = lamps + ((1.0 - pbrPresence2.z) * pbrPresence.y) * envIrr; // locality fades the ambient share
+               // Scatter width: band weight exponent, 1 at width 1; larger (thinner band) at low width, more so where lit is low
+               float bandE = 1.0;
+               if (pbrPresence2.w < 1.0)
+               {
+                  const float litL = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+                  const float litN = litL / (litL + PRES_LIT_K);
+                  const float invW = 1.0 / pbrPresence2.w;
+                  bandE = invW * (1.0 + (invW - 1.0) * (1.0 - litN));
+               }
+               float edgeBend = max(edge, bend);
+               if (bandE > 1.0)
+                  edgeBend = pow(edgeBend, bandE);
                // Dense edge: at the edge-on limit the look-through saturates into an opaque scatter surface (rough cut edge,
                // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
                behind = mix(behind, pbrPresence.w * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
-               spec += (pbrScatter * wear * (pbrPresence.x + (1.0 - pbrPresence.x) * max(edge, bend))) * lit;
+               spec += (pbrScatter * wear * (pbrPresence.x + (1.0 - pbrPresence.x) * edgeBend)) * lit;
                // Rim: the thin bright line along wall tops and fillets seen at an angle (light piped along the sheet by total
                // internal reflection comes out where the surface bends)
                // width < 1 chokes the band: the weight bend*edge (0..1) is raised to 1/width, so only the core of the band survives
-               const float rimW = pbrPresence2.x < 1.0 ? pow(bend * edge, 1.0 / pbrPresence2.x) : bend * edge;
+               // the scatter width exponent applies on top, so rim and scatter band choke together
+               const float rimE = (1.0 / pbrPresence2.x) * bandE;
+               const float rimW = rimE > 1.0 ? pow(bend * edge, rimE) : bend * edge;
                spec += (pbrScatter * wear * pbrPresence.z * rimW) * lit;
                // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
                // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor

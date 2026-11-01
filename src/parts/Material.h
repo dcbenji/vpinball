@@ -139,6 +139,8 @@ public:
       , m_fDenseAlbedo(pmat->m_fDenseAlbedo)
       , m_fRimWidth(pmat->m_fRimWidth)
       , m_fBevelBright(pmat->m_fBevelBright)
+      , m_fScatterLocality(pmat->m_fScatterLocality)
+      , m_fScatterWidth(pmat->m_fScatterWidth)
    {
    }
 
@@ -228,6 +230,8 @@ public:
    float m_fDenseAlbedo = 0.55f;
    float m_fRimWidth = 1.0f; // 1 = the rim band as is; < 1 chokes it thinner (rim weight = (bend*edge)^(1/width))
    float m_fBevelBright = 1.0f; // scales the light-guide / bevel brightening of transmission and specular (1 = as is, 0 = off)
+   float m_fScatterLocality = 0.0f; // 0 = as is; 1 = scatter lit only near the lamps (unwrapped |N.L|, steeper falloff, no ambient share)
+   float m_fScatterWidth = 1.0f; // 1 = as is; < 1 chokes the scatter + rim band, thinner where the surface is dimly lit
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -267,6 +271,8 @@ public:
       writer.WriteFloat(FID(PDAL), m_fDenseAlbedo);
       writer.WriteFloat(FID(PRWD), m_fRimWidth);
       writer.WriteFloat(FID(PBVB), m_fBevelBright);
+      writer.WriteFloat(FID(PSLC), m_fScatterLocality);
+      writer.WriteFloat(FID(PSWD), m_fScatterWidth);
       writer.EndObject();
    }
 
@@ -311,6 +317,8 @@ public:
             case FID(PDAL): m_fDenseAlbedo = reader.AsFloat(); break;
             case FID(PRWD): m_fRimWidth = reader.AsFloat(); break;
             case FID(PBVB): m_fBevelBright = reader.AsFloat(); break;
+            case FID(PSLC): m_fScatterLocality = reader.AsFloat(); break;
+            case FID(PSWD): m_fScatterWidth = reader.AsFloat(); break;
             }
             return true;
          },

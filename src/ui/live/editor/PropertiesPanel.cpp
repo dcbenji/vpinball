@@ -805,6 +805,14 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             [](const Material *material) { return material->m_fBevelBright; }, //
             [](Material *material, float v) { material->m_fBevelBright = max(v, 0.f); }, 0.f, 2.f, 2);
          props.SliderFloat<Material>(
+            material, "Scatter Locality"s, //
+            [](const Material *material) { return material->m_fScatterLocality; }, //
+            [](Material *material, float v) { material->m_fScatterLocality = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+         props.SliderFloat<Material>(
+            material, "Scatter Width"s, //
+            [](const Material *material) { return material->m_fScatterWidth; }, //
+            [](Material *material, float v) { material->m_fScatterWidth = clamp(v, 0.05f, 1.f); }, 0.2f, 1.f, 2);
+         props.SliderFloat<Material>(
             material, "Dense Edge Albedo"s, //
             [](const Material *material) { return material->m_fDenseAlbedo; }, //
             [](Material *material, float v) { material->m_fDenseAlbedo = max(v, 0.f); }, 0.f, 1.f, 3);

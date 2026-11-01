@@ -768,6 +768,8 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(PDAL), "dense_albedo" },
          { FID(PRWD), "rim_width" },
          { FID(PBVB), "bevel_bright" },
+         { FID(PSLC), "scatter_locality" },
+         { FID(PSWD), "scatter_width" },
       });
 
       m[JSONSerializer::kRenderProbeNode] = MakeMap({
