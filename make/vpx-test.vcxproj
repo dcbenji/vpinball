@@ -71,6 +71,7 @@
     <ClCompile Include="../../tests/misc/test-plugin-arrays.cpp" />
     <ClCompile Include="../../tests/misc/test-sound.cpp" />
     <ClCompile Include="../../tests/misc/test-table-io.cpp" />
+    <ClCompile Include="../../tests/misc/test-unity-import.cpp" />
     <ClCompile Include="../../tests/parts/test-ball.cpp" />
     <ClCompile Include="../../tests/parts/test-bumper.cpp" />
     <ClCompile Include="../../tests/parts/test-decal.cpp" />
