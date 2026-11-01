@@ -135,6 +135,7 @@ uniform vec4 refractionTint_thickness;
 uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on),
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
 uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off)
+uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
 #include "ball_shadows.sh"
@@ -421,10 +422,11 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 #define REFR_WAVE_TILT 0.06
 #define REFR_WAVE_L1 22.0
 #define REFR_WAVE_L2 9.0
-// SURFACE PRESENCE (material scatter, round 4): the see-through surface itself, lit. Scatter floor (the whole part scatters
-// this much of its scatter where it is neither edge-on nor bent), env/ambient share
+// SURFACE PRESENCE (material scatter / absorption, round 4): the see-through surface itself, lit. Scatter floor (the whole
+// part scatters this much of its scatter where it is neither edge-on nor bent), env/ambient share, rim gain
 #define PRES_SCATTER_FLOOR 0.06
 #define PRES_SCATTER_ENV 0.25
+#define PRES_RIM_GAIN 2.0
 // Dense edge: where a see-through part with scatter turns edge-on (|N.V| below PRES_DENSE_C1, fading in from PRES_DENSE_C0:
 // the thin cut edge faces, a wall-top bevel at grazing) it stops being see-through and reads as dense shiny plastic of this
 // albedo, lit by the local light (dark grey in a dark room, light when lit). Full density from scatter PRES_DENSE_FULL.
@@ -1272,10 +1274,19 @@ void main() {
             #endif
          }
          // Ramp presence (material scatter > 0, see SURFACE PRESENCE below the defines): the see-through surface is drawn too
-         BRANCH if (pbrScatter > 0.0)
+         BRANCH if (pbrScatter > 0.0 || pbrAbsorption.w > 0.0)
          {
             const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
             const float pCos = max(abs(dot(Ng, V)), 1e-3);
+            // Absorption (material absorption colour and strength): Beer-Lambert over the path through the plastic, in
+            // thicknesses: 1 / cos of the refracted angle on a flat sheet, the light-guide path toward edge-on (curvature on)
+            // and longer through a fillet, so edge-on and fillets read as thick tinted plastic
+            BRANCH if (pbrAbsorption.w > 0.0)
+            {
+               const float sinR2 = (1.0 - pCos * pCos) * (1.0 / 2.25);
+               const float path = max(inversesqrt(max(1.0 - sinR2, 1e-3)), refrGuide) + 0.5 * refrCurvExtra;
+               behind *= pow(max(pbrAbsorption.rgb, vec3_splat(1e-3)), vec3_splat(pbrAbsorption.w * path));
+            }
             BRANCH if (pbrScatter > 0.0)
             {
                // Scatter lobe: light inside the plastic scatters toward the eye (white, the plastic's own milkiness), most
@@ -1295,6 +1306,9 @@ void main() {
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
                behind = mix(behind, PRES_DENSE_ALBEDO * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
                spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, 0.6 * bend))) * lit;
+               // Rim: the thin bright line along wall tops and fillets seen at an angle (light piped along the sheet by total
+               // internal reflection comes out where the surface bends)
+               spec += (pbrScatter * wear * PRES_RIM_GAIN * bend * edge) * lit;
                // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
                // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor
                const vec3 wRg = reflect(-wV, wNg);
