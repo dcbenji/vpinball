@@ -1237,10 +1237,9 @@ void main() {
                refrSheet = max(min(refrGraze, REFR_SHEET_MAX), refrGuide);
             }
             // The part's long axis (the sweep of a ramp wall or fillet), for the anisotropic streak and the forming waves. It is
-            // the min curvature direction where the surface is clearly curved one way (fillet, bevel); elsewhere (where both
-            // curvatures are about zero so the min curvature direction means nothing) it is the horizontal tangent on steep
-            // faces (walls) and the texture u direction on the flatter ones (UV u along the ramp floor); without UVs a floor
-            // has no axis.
+            // the horizontal tangent N x up of the interpolated normal on steep faces (walls) and tight bends (fillets,
+            // bevels); on near-flat faces the min curvature direction where the surface is clearly curved one way, else the
+            // texture u direction (UV u along the ramp floor); without UVs a flat floor has no axis.
             BRANCH if (refrAxis)
             {
                const vec3 dPx = dFdx(v_tablePos);
@@ -1261,18 +1260,21 @@ void main() {
                // and the axis flipped in bands from triangle to triangle)
                vec3 Th = vec3(wNg.y, -wNg.x, 0.0); // N x up
                Th = lh > 1e-4 ? Th * (1.0 / lh) : vec3_splat(0.0);
-               const vec3 Thw = Th; // unsigned (forming waves)
-               if (dot(Th, Tu) < 0.0)
-                  Th = -Th;
-               Tu = mix(Tu, Th, smoothstep(0.6, 0.85, lh));
-               const float lu2 = length(Tu);
-               Tu = lu2 > 1e-3 ? Tu * (1.0 / lu2) : Th;
-               if (dot(Tc, Tu) < 0.0)
-                  Tc = -Tc;
+               const vec3 Thw = Th; // forming waves
                // Trust the curvature axis where the bend is tight (radius under ~15 VPU, from the smooth per-vertex curvature so
                // the per-triangle noise of the averaged normals on flat faces does not switch it on) and one-directional
                const float wc = smoothstep(0.6, 1.2, refrK) * saturate(1.0 - curv.y / max(curv.x, 1e-8));
-               const vec3 T = mix(Tu, Tc, wc);
+               // The smear axis must be continuous over the mesh too (Ben 11-01: the outer wall seen at grazing showed one
+               // block per quad, each streaked its own way): the min-curvature direction and the UV gradient are per
+               // triangle (screen derivatives), and the smooth per-vertex curvature of a one-quad-tall wall interpolates the
+               // fillet's and lip's high k across it, which switched the per-triangle curvature axis on there. So, as for the
+               // waves: N x up of the interpolated normal off near-flat faces and on tight bends wherever N x up is defined
+               // (on a swept part it is the min-curvature direction there), the UV / curvature axis only on near-flat faces.
+               // The streak's taps are symmetric, so only the line matters: the flat-face axis takes its sign from N x up.
+               vec3 Tf = mix(Tu, dot(Tc, Tu) < 0.0 ? -Tc : Tc, wc);
+               if (dot(Tf, Th) < 0.0)
+                  Tf = -Tf;
+               const vec3 T = mix(Tf, Th, max(smoothstep(0.2, 0.5, lh), wc * smoothstep(0.03, 0.1, lh)));
                const float lt = length(T);
                // Anisotropic refraction (refraction_anisotropy 0..1, 0 = off): the view through the plastic streaks along the
                // axis, not across: subtle on the flat panels, up to 2x longer in the bends (forming lines in the plastic) and
