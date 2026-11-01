@@ -31,6 +31,13 @@
 //     yzw the table's light at the dome (GI bulbs, inserts: irradiance at the bulb through a soft knee, linear), which the
 //     plastic scatters: the GI glow (OFF and dim levels; over a see-through body only)
 // [9] xyz where that light comes from (table space, unit), w how much the glow follows it (a lit side and a dark side)
+// Thick body (per-part sliders, all 0 = the look above, pixel-identical):
+// [10] x dome_body: 0 see-through, 1 the scene behind is replaced by the scattered interior (milky plastic); y dome_scatter:
+//      the lamp's light diffused through the body (in the lamp's colour); z dome_cap: highlight on the top edge (the cap's
+//      rim), room-lit and lamp-lit; w unused
+// [11] xyz the plastic's absorption (1/mm; the red acrylic preset, or from dome_tint = the colour at 2 mm), w unused
+// [12] xyz the lamp's colour (linear, max channel 1), w unused
+// [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -42,7 +49,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 
 #include "common.sh"
 
-uniform vec4 domeParams[10];
+uniform vec4 domeParams[14];
 
 #ifdef STEREO
 	uniform mat4 matView[2];
@@ -149,8 +156,13 @@ void main()
 
 	const float mode = domeParams[7].w;
 	const bool transPass = mode > 0.5 && mode < 1.5;
-	const vec3 sigma = vec3(0.100, 1.400, 1.500) * domeParams[7].z; // red acrylic absorption (1/mm)
+	const vec3 sigma = domeParams[11].xyz * domeParams[7].z; // the plastic's absorption (1/mm; red acrylic unless dome_tint is set)
 	const float wallB = R - 0.5 * (rootR + ridgeR);
+	// Thick body: how much of the scene behind the body replaces (coverage), the lamp-driven body scatter, the cap rim
+	const float bodyK = saturate(domeParams[10].x);
+	const float scatK = max(domeParams[10].y, 0.0);
+	const float capK = max(domeParams[10].z, 0.0);
+	const vec3 lampCol = domeParams[12].xyz;
 
 	// Only the outer skin emits (the inner flutes, base and cap underside are hidden behind it or seen through it); the base
 	// flange and the tabs still filter what lies under them (in, and the light that lit it, through the flange)
@@ -158,7 +170,7 @@ void main()
 	{
 		if (!transPass)
 			discard;
-		gl_FragColor = vec4(vec3_splat(1.0) - exp(-sigma * 2.5 * wallB), 1.0);
+		gl_FragColor = vec4(vec3_splat(1.0) - exp(-sigma * 2.5 * wallB) * (1.0 - bodyK), 1.0);
 		return;
 	}
 	const float capW = smoothstep(0.55, 0.9, Ns.y) * smoothstep(capY, capY + 0.5, P.y);
@@ -246,6 +258,8 @@ void main()
 		}
 		// The lit look was tuned over an opaque body: as the lamp comes up, its scattered light hides what lies behind
 		tr *= (1.0 - lvlG) * (1.0 - lvlG);
+		// A thick body (dome_body) scatters it away: the interior (the additive layer) replaces the scene behind
+		tr *= 1.0 - bodyK;
 		gl_FragColor = vec4(vec3_splat(1.0) - tr, 1.0);
 		return;
 	}
@@ -389,7 +403,7 @@ void main()
 		// scatter (the plastic's own ruby glow), weaker
 		{
 			const vec3 wt = d2.x * ex + d2.y * up + d2.z * ez;
-			sparkle += (mode < 1.5 ? 0.35 : 0.2) * (1.0 - Fr) * domeStudio(wt) * exp(-sigma * (thN + 1.2 * wallB)) * (0.7 + 0.6 * hA);
+			sparkle += (mode < 1.5 ? 0.35 : mix(0.2, 0.35, bodyK)) * (1.0 - Fr) * domeStudio(wt) * exp(-sigma * (thN + 1.2 * wallB)) * (0.7 + 0.6 * hA);
 		}
 
 		// Seen through the plastic (in and out through the walls: deep red): the bulb's glass envelope catches the room as a
@@ -401,7 +415,7 @@ void main()
 		{
 			const float Fg = 0.04 + 0.96 * pow(1.0 - saturate(dot(-d2, nb)), 5.0);
 			const vec3 rbv = reflect(d2, nb);
-			sparkle += domeParams[6].w * Fg * min(domeStudio(rbv.x * ex + rbv.y * up + rbv.z * ez), 6.0) * tint2;
+			sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * Fg * min(domeStudio(rbv.x * ex + rbv.y * up + rbv.z * ez), 6.0) * tint2;
 		}
 		if (newLook > 0.0 && !tir && d2.y < -0.05)
 		{
@@ -413,7 +427,7 @@ void main()
 			{
 				const vec3 nR = normalize(vec3(-0.35 * B.x / max(rB, 1e-3), 1.0, -0.35 * B.z / max(rB, 1e-3)));
 				const vec3 rr2 = reflect(d2, nR);
-				sparkle += domeParams[6].w * 0.6 * ringW * (0.75 + 0.25 * sin(rB * 7.0)) * min(domeStudio(rr2.x * ex + rr2.y * up + rr2.z * ez), 6.0) * tint2;
+				sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * 0.6 * ringW * (0.75 + 0.25 * sin(rB * 7.0)) * min(domeStudio(rr2.x * ex + rr2.y * up + rr2.z * ez), 6.0) * tint2;
 			}
 		}
 
@@ -462,10 +476,42 @@ void main()
 	const vec3 giGlow = (mode > 1.5 ? 1.0 : 0.0) * domeParams[8].yzw * trH * mix(facet * (0.7 + 0.6 * edge), 0.85 + 0.3 * edge, capW)
 		* giSide * (1.15 - 0.3 * saturate(P.y / max(H, 1.0))) * (1.0 - lvlG) * (1.0 / DOME_PI);
 
-	vec3 result = (body + bars + core + cap + white) * domeParams[7].x + sparkle + giGlow;
+	// Thick body: the milky interior that replaces the scene behind (dome_body), the lamp's light diffused through it
+	// (dome_scatter) and the top edge (dome_cap). All zero at the defaults.
+	vec3 thick = vec3_splat(0.0);
+	BRANCH if (bodyK > 0.0 || scatK > 0.0 || capK > 0.0)
+	{
+		const float bandF = mix(facet * (0.6 + 0.8 * edge), 0.7 + 0.6 * edge, capW); // the flutes (and the cap's ribs) band the scattered light
+		// Interior, lamp off: the room (the table's environment level) and the table's lights at the dome (the GI irradiance, from
+		// its side) scattered through the plastic: dim, deep in the plastic's colour, a touch brighter low (lit through the base)
+		// and at the flute edges; it gives way to the lamp as it comes up
+		const vec3 interior = bodyK * domeParams[10].w * (2.0 * domeParams[13].y * trH * bandF * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
+			+ 4.0 * domeParams[8].yzw * trH * bandF * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
+		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
+		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
+		const float fallS = 8.0 / max(dist, 8.0);
+		const vec3 scatCol = mix(lampCol * trH, bb * mix(trH, vec3_splat(1.0), 0.5), domeParams[8].x * pk * fallS * fallS);
+		const vec3 lampScat = scatK * domeParams[11].w * 8.0 * lvlG * scatCol * fallS * bandF * (1.0 + 0.5 * fallS) * mix(1.0, 1.0 + 0.35 * heatW, fallS) * (1.0 + 0.35 * (flash - 1.0));
+		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
+		// piping the lamp's light out through its thin edge
+		const float dEdge = length(vec2(rxz - domeParams[13].x, P.y - H));
+		const float rimW = exp(-(dEdge / 0.7) * (dEdge / 0.7));
+		const vec3 nB = normalize(radial + vec3(0.0, 1.0, 0.0));
+		const vec3 rV = reflect(-V, normalize(mix(Ns, nB, 0.6)));
+		const float FrB = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeStudio(rV.x * ex + rV.y * up + rV.z * ez), 6.0)) * mix(vec3_splat(1.0), trH, 0.3)
+			+ 4.0 * lvlG * mix(lampCol, bb, domeParams[8].x * pk) * exp(-sigma * 0.5 * wallB) * (1.0 + 0.35 * (flash - 1.0)));
+		thick = interior + lampScat + capRim;
+	}
+
+	vec3 result = (body + bars + core + cap + white) * domeParams[7].x + sparkle + giGlow + thick;
 	if (domeParams[7].y > 0.5)
 		result = domeParams[7].y < 1.5 ? (bars + core + cap) * domeParams[7].x : (domeParams[7].y < 2.5 ? body * domeParams[7].x : (domeParams[7].y < 3.5 ? sparkle : bars * domeParams[7].x));
 	if (domeParams[7].y > 4.5)
 		result = giGlow;
+	if (domeParams[7].y > 5.5)
+		result = thick;
+	if (domeParams[7].y > 6.5) // diagnostics: 7 = lamp level map, falloff, lamp colour; 8 = body, scatter, plastic transmission
+		result = domeParams[7].y < 7.5 ? 0.5 * vec3(lvlG, 8.0 / max(dist, 8.0), lampCol.r) : 0.5 * vec3(bodyK, scatK, trH.r);
 	gl_FragColor = vec4(result, 1.0);
 }

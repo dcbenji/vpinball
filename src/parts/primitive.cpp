@@ -1011,6 +1011,8 @@ const Primitive::FlasherDomeShape &Primitive::MeasureFlasherDome()
       const float px = v.x - d.cx, py = v.y - d.cy, r = sqrtf(px * px + py * py);
       if (v.nz < -0.7f && v.z > lo.z + 0.5f * d.height)
          d.capZ = min(d.capZ, v.z - lo.z);
+      if (v.z > lo.z + 0.9f * d.height)
+         d.topR = max(d.topR, r);
       if (r < 0.5f * d.radius || r > 0.98f * d.radius || fabsf(v.nz) > 0.3f || v.nx * px + v.ny * py > -0.3f * r)
          continue;
       d.rootR = max(d.rootR, r);
@@ -1204,6 +1206,8 @@ void Primitive::Render(const unsigned int renderMask)
       float level = 0.f;
       if (m_lightmap && m_lightmap->m_d.m_intensity * m_lightmap->m_d.m_intensity_scale > 0.f)
          level = m_lightmap->m_currentIntensity / (m_lightmap->m_d.m_intensity * m_lightmap->m_d.m_intensity_scale);
+      if (FlasherDomeTune("lvl=", -1.f) >= 0.f) // VPX_T9_TUNE lvl=: a fixed lamp level (look checks)
+         level = FlasherDomeTune("lvl=", -1.f);
       // The OFF glints are lit by the room: they follow the scene lighting level, relative to the table's default level
       const float roomLevel = m_renderer->m_sceneLighting.GetGlobalEmissionScale() / max(m_ptable->m_globalEmissionScale, 0.01f);
       // The table's light scattered in the plastic (GI glow): the irradiance at the bulb through a soft knee (a dome right next
@@ -1221,18 +1225,39 @@ void Primitive::Render(const unsigned int renderMask)
          }
          return vec4(leak, m_domeGI.x * k, m_domeGI.y * k, m_domeGI.z * k);
       };
-      const vec4 p[10] = {
+      // The plastic's absorption sigma (1/mm): 0 (black) = the built-in red acrylic preset, else from the tint (its colour at 2 mm)
+      vec4 sigma(0.100f, 1.400f, 1.500f, 0.f);
+      if (m_d.m_domeTint != 0)
+      {
+         const vec3 c = convertColor(m_d.m_domeTint);
+         sigma = vec4(-logf(max(c.x, 0.002f)) / 2.f, -logf(max(c.y, 0.002f)) / 2.f, -logf(max(c.z, 0.002f)) / 2.f, 0.f);
+      }
+      // The dome's lamp colour, normalised so its largest channel is 1
+      vec4 lampColor(1.f, 1.f, 1.f, 0.f);
+      if (m_lightmap)
+      {
+         const vec3 c = convertColor(m_lightmap->m_d.m_color);
+         const float m = max(c.x, max(c.y, c.z));
+         if (m > 0.f)
+            lampColor = vec4(c.x / m, c.y / m, c.z / m, 0.f);
+      }
+      const float ridgeR = m_d.m_domeFluteDepth == 1.f ? d.ridgeR : d.rootR - m_d.m_domeFluteDepth * (d.rootR - d.ridgeR);
+      const vec4 p[14] = {
          vec4(base.x, base.y, base.z, mm),
          vec4(axis.x, axis.y, axis.z, d.radius * scale * mm),
          vec4(coil.x, coil.y, coil.z, d.height * scale * mm),
-         vec4(FlasherDomeTune("fil=", 0.47f) * d.height * scale * mm, (float)d.flutes, d.phase, level),
-         vec4(d.rootR * scale * mm, d.ridgeR * scale * mm, d.capZ * scale * mm, FlasherDomeTune("room=", 1.5f) * (pass > 0.5f ? roomLevel : 1.f)),
+         vec4(FlasherDomeTune("fil=", 0.47f) * d.height * scale * mm, m_d.m_domeFlutes > 0 ? (float)m_d.m_domeFlutes : (float)d.flutes, d.phase, level),
+         vec4(d.rootR * scale * mm, ridgeR * scale * mm, d.capZ * scale * mm, FlasherDomeTune("room=", 1.5f) * (pass > 0.5f ? roomLevel : 1.f)),
          vec4(FlasherDomeTune("glow=", 300.f), FlasherDomeTune("bars=", 30000.f), FlasherDomeTune("needle=", 1.f), FlasherDomeTune("white=", 6000.f)),
          vec4(FlasherDomeTune("halo=", 2500.f), FlasherDomeTune("spot=", 2000.f), FlasherDomeTune("flash=", 8.f), FlasherDomeTune("bulb=", 1.f)),
          vec4(FlasherDomeTune("gain=", 1.f / 170.f), FlasherDomeTune("debug=", 0.f), FlasherDomeTune("sigma=", 1.f), pass),
          domeGI(FlasherDomeTune("leak=", 0.6f)),
-         vec4(m_domeGIDir.x, m_domeGIDir.y, m_domeGIDir.z, m_domeGIDir.w * FlasherDomeTune("gidir=", 1.f)) };
-      std::copy(p, p + 10, params);
+         vec4(m_domeGIDir.x, m_domeGIDir.y, m_domeGIDir.z, m_domeGIDir.w * FlasherDomeTune("gidir=", 1.f)),
+         vec4(clamp(m_d.m_domeBody, 0.f, 1.f), max(m_d.m_domeScatter, 0.f), max(m_d.m_domeCap, 0.f), FlasherDomeTune("interior=", 1.f)),
+         vec4(sigma.x, sigma.y, sigma.z, FlasherDomeTune("lscat=", 1.f)),
+         vec4(lampColor.x, lampColor.y, lampColor.z, FlasherDomeTune("rim=", 1.f)),
+         vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), 0.f, 0.f) };
+      std::copy(p, p + 14, params);
    };
 
    // Traced insert prototype: an additive card whose image is a multi-view traced bake ('TRACED_' image name prefix). It is
@@ -1479,7 +1504,7 @@ void Primitive::Render(const unsigned int renderMask)
       // submitted after it)
       if (flasherDome && mat->m_bOpacityActive && isPBR && MeasureFlasherDome().valid)
       {
-         vec4 params[10];
+         vec4 params[14];
          flasherDomeParams(params, 1.f);
          const RenderState saved = m_renderer->m_renderDevice->GetRenderState();
          m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
@@ -1487,13 +1512,16 @@ void Primitive::Render(const unsigned int renderMask)
          m_renderer->m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_COLOR);
          m_renderer->m_renderDevice->SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_ADD);
          m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
-         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 10);
+         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 14);
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
          m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
          m_renderer->m_renderDevice->GetRenderState() = saved;
       }
       m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, depthMask ? RenderState::RS_TRUE : RenderState::RS_FALSE);
-      const vec4 color = convertColor(m_d.m_color, alpha * (float)(1.0 / 100.0));
+      // A thick dome body (dome_body): the milky interior drawn by the dome layer replaces the body's lit diffuse (the glossy
+      // skin's reflections stay: the shader keeps the specular whatever the coverage)
+      const float bodyAlpha = (flasherDome && mat->m_bOpacityActive && m_dome.valid) ? alpha * (1.f - clamp(m_d.m_domeBody, 0.f, 1.f)) : alpha;
+      const vec4 color = convertColor(m_d.m_color, bodyAlpha * (float)(1.0 / 100.0));
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, &color);
       Shader::PBRTextureSet pbrMaps = isPBR
          ? m_renderer->GetPBRTextureSet(m_d, m_d.m_vPosition, -1.f, isReflectionPass, mat->m_bOpacityActive, renderMask, mat->m_bOpacityActive ? refractions : nullptr)
@@ -1608,13 +1636,13 @@ void Primitive::Render(const unsigned int renderMask)
    // Flasher dome layer: additive over the body just drawn (same sort key, submitted after it), outer skin only (depth equal)
    if (flasherDome && !is_reflection_only_pass && MeasureFlasherDome().valid)
    {
-      vec4 params[10];
+      vec4 params[14];
       flasherDomeParams(params, mat->m_bOpacityActive ? 2.f : 0.f);
       m_renderer->m_renderDevice->ResetRenderState();
       m_renderer->m_renderDevice->EnableAlphaBlend(true);
       m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, cullMode);
-      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 10);
+      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 14);
       m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
       m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
    }
@@ -1811,6 +1839,12 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(RWFL), m_d.m_refractionWaveFlow);
    writer.WriteFloat(FID(RNOI), m_d.m_refractionNoise);
    writer.WriteFloat(FID(RNSC), m_d.m_refractionNoiseScale);
+   writer.WriteFloat(FID(DMBD), m_d.m_domeBody);
+   writer.WriteFloat(FID(DMSC), m_d.m_domeScatter);
+   writer.WriteFloat(FID(DMCP), m_d.m_domeCap);
+   writer.WriteInt(FID(DMFL), m_d.m_domeFlutes);
+   writer.WriteFloat(FID(DMFD), m_d.m_domeFluteDepth);
+   writer.WriteInt(FID(DMTN), m_d.m_domeTint);
 
    SaveSharedEditableFields(writer);
 
@@ -2050,6 +2084,12 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RANI): m_d.m_refractionAnisotropy = reader.AsFloat(); break;
          case FID(RWAV): m_d.m_refractionWave = reader.AsFloat(); break;
          case FID(RWFL): m_d.m_refractionWaveFlow = reader.AsFloat(); break;
+         case FID(DMBD): m_d.m_domeBody = reader.AsFloat(); break;
+         case FID(DMSC): m_d.m_domeScatter = reader.AsFloat(); break;
+         case FID(DMCP): m_d.m_domeCap = reader.AsFloat(); break;
+         case FID(DMFL): m_d.m_domeFlutes = reader.AsInt(); break;
+         case FID(DMFD): m_d.m_domeFluteDepth = reader.AsFloat(); break;
+         case FID(DMTN): m_d.m_domeTint = reader.AsInt(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 

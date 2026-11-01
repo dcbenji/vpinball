@@ -342,6 +342,35 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); }, 0.f, 4.f, 2);
 
+      props.Separator("Flasher Dome"s);
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Body"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeBody; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeBody = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
+         "Thick body: 0 = see-through (the scene behind filters through the plastic), 1 = the scene behind is replaced by the scattered interior");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Scatter"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeScatter; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeScatter = max(v, 0.f); }, 0.f, 4.f, 2,
+         "Body scatter driven by the dome's own lamp (milky glow in the lamp's colour; 0 = off)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Cap Highlight"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeCap; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeCap = max(v, 0.f); }, 0.f, 4.f, 2, "Highlight on the cap seam/bevel at the top (0 = off)");
+      props.InputInt<Primitive>(
+         m_part, "Dome Flutes"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeFlutes; }, //
+         [](Primitive* primitive, int v) { primitive->m_d.m_domeFlutes = clamp(v, 0, 96); }, "Flute count override, 0..96 (0 = measured from the mesh)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Flute Depth"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeFluteDepth; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeFluteDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2, "Flute depth scale (1 = measured from the mesh)");
+      props.InputRGB<Primitive>(
+         m_part, "Dome Tint"s, //
+         [](const Primitive* primitive) { return convertColor(primitive->m_d.m_domeTint); }, //
+         [](Primitive* primitive, const vec3& v) { primitive->m_d.m_domeTint = convertColorRGB(v); },
+         "Plastic colour at 2 mm thickness; black = the built-in red acrylic preset");
+
       props.EndSection();
    }
 

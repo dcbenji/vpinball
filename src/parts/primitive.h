@@ -79,6 +79,14 @@ public:
    float m_refractionWaveFlow = 0.0f; // PBR: 0..1, stretches the wave along the sweep and keeps it at grazing (0 = plain wave)
    float m_refractionWave = 0.0f; // PBR: forming waves, the view through the part undulates gently (0 = off)
 
+   // Flasher dome look (image name starting with 'dome_')
+   float m_domeBody = 0.f; // thick body: 0 = see-through (the scene behind filters through the plastic), 1 = the scene behind is replaced by the scattered interior
+   float m_domeScatter = 0.f; // body scatter driven by the dome's own lamp (milky glow in the lamp's colour; 0 = off)
+   float m_domeCap = 0.f; // highlight on the cap seam/bevel at the top (0 = off)
+   int m_domeFlutes = 0; // flute count override (0 = measured from the mesh)
+   float m_domeFluteDepth = 1.f; // flute depth scale (1 = measured from the mesh)
+   COLORREF m_domeTint = 0; // plastic colour at 2 mm thickness; 0 (black) = the built-in red acrylic preset
+
    bool m_toy = false;
    bool m_backfacesEnabled = false;
    bool m_displayTexture = false;     // in editor
@@ -348,6 +356,7 @@ private:
       float rootR = 0.f, ridgeR = 0.f, capZ = 0.f; // inner flutes: radius at the groove roots (thin wall) and ridge tips, cap underside (from the base)
       int flutes = 0;
       float phase = 0.f; // angle of a groove root (rad, object space around +z from +x)
+      float topR = 0.f; // outer radius at the top edge (the cap's rim, for the thick-body rim highlight)
       unsigned int outerIndices = 0; // the outer skin's triangles come first in the index list: the body draws only those
    } m_dome;
    const FlasherDomeShape &MeasureFlasherDome();
