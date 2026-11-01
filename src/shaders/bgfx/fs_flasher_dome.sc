@@ -398,7 +398,7 @@ void main()
 		const float side = mix(s > 0.0 ? 1.0 : 0.25, 1.0, capN);
 		const float facing = smoothstep(-0.15, 0.35, dot(V, s * tg));
 		const float spark = mix(mix(0.12, 2.2, pow(domeHash(idx * 12.9898 + 4.1), 8.0)), 0.5, capN); // a few hot facets, most dim
-		sparkle = Fr * min(domeStudio(wd), mix(8.0, 1.0, capW)) * tint * facetGain * side * spark * mix(1.0, 0.6 + 0.8 * edge, capN);
+		sparkle = (1.0 + 1.5 * bodyK) * Fr * min(domeStudio(wd), mix(8.0, 1.0, capW)) * tint * facetGain * side * spark * mix(1.0, 0.6 + 0.8 * edge, capN);
 		// The room seen through the dome (into the cavity, out through the far wall): deep red, lensed by the flutes. Over a
 		// see-through body, which shows the real scene behind (transmittance pass), it stays as the room light the flutes
 		// scatter (the plastic's own ruby glow), weaker
@@ -452,7 +452,7 @@ void main()
 			const float hc = domeHash((cI + flankId * 17.0) * 12.9898);
 			const float hc2 = domeHash((cI + flankId * 17.0) * 78.233);
 			const float taper = exp(-2.5 * u * u) * (abs(u) < 1.3 ? 1.0 : 0.0);
-			sparkle += domeParams[5].z * (1.0 + 2.0 * bodyK) * 0.33 * (hc < 0.45 ? 1.0 : 0.0) * taper * exp(-dE * dE) * mix(0.3, 1.0, hc2 * hc2) * max(Fr, 0.2) * tint * facing * (1.0 - capW);
+			sparkle += domeParams[5].z * (1.0 + 4.0 * bodyK) * 0.33 * (hc < 0.45 ? 1.0 : 0.0) * taper * exp(-dE * dE) * mix(0.3, 1.0, hc2 * hc2) * max(Fr, 0.2) * tint * facing * (1.0 - capW);
 		}
 		else if (hF2 < 0.5)
 		{
@@ -464,7 +464,7 @@ void main()
 			const float slide = exp(-pow((Pin.y - hcN) / (0.3 * Ln), 2.0));
 			const float br = mix(0.35, 1.0, domeHash(idx * 5.13 + 1.1));
 			const vec3 nCol = mix(tint, vec3(1.0, 0.6, 0.45) * tint.r, 0.8 * lin * lin * slide);
-			sparkle += domeParams[5].z * (1.0 + 2.0 * bodyK) * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
+			sparkle += domeParams[5].z * (1.0 + 4.0 * bodyK) * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
 		}
 		sparkle *= domeParams[4].w;
 	}
@@ -486,8 +486,11 @@ void main()
 		// Interior, lamp off: the room (the table's environment level) and the table's lights at the dome (the GI irradiance, from
 		// its side) scattered through the plastic: dim, deep in the plastic's colour, a touch brighter low (lit through the base)
 		// and at the flute edges; it gives way to the lamp as it comes up
-		const vec3 interior = bodyK * domeParams[10].w * (2.0 * domeParams[13].y * trH * bandF * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
-			+ 4.0 * domeParams[8].yzw * trH * bandF * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
+		// OFF the ridges read as thin lines through the wall (the VPE look: dark deep red, fine ridge lines, glints), not soft bands
+		const float ridgeLine = exp(-(eTip / 0.035) * (eTip / 0.035)) * (1.0 - capW);
+		const float bandOff = mix(facet * (0.45 + 0.4 * edge) + 3.0 * ridgeLine, 0.6 + 1.0 * edge, capW);
+		const vec3 interior = bodyK * domeParams[10].w * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
+			+ 0.6 * domeParams[8].yzw * trH * bandOff * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
 		const float fallS = 8.0 / max(dist, 8.0);
