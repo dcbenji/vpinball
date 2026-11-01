@@ -698,6 +698,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(LZRA), "light_range" },
             { FID(LIES), "light_emission_scale" },
             { FID(ENES), "env_emission_scale" },
+            { FID(ENRS), "env_reflection_scale" },
             { FID(GLES), "global_emission_scale" },
             { FID(AOSC), "AO_scale" },
             { FID(SSSC), "SSR_scale" },
