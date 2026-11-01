@@ -353,7 +353,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, u_basic_shade_mode, 1), // BGFX Only
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionTint_thickness, 1), SHADER_UNIFORM(ShaderUniformType::Float4, mirrorNormal_factor, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams, 1), // BGFX PBR only: x: curvature gain, y: anisotropy, z: soft in-front rejection
-   SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams2, 1), // BGFX PBR only: x: forming wave strength, y: refraction noise strength, z: noise scale (mm)
+   SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams2, 1), // BGFX PBR only: x: forming wave strength, y: refraction noise strength, z: noise scale (mm), w: wave flow
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrAbsorption, 1), // BGFX PBR only: rgb: absorption colour, w: strength
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrPresence, 1), // BGFX PBR only: x: scatter floor, y: scatter env share, z: rim gain, w: dense albedo
    SHADER_UNIFORM(ShaderUniformType::Bool, objectSpaceNormalMap, 1),

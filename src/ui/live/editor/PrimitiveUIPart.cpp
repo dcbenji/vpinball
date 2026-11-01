@@ -311,7 +311,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_refractionWave; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionWave = max(v, 0.f); }, 0.f, 3.f, 2);
       props.SliderFloat<Primitive>(
-         m_part, "Refraction Noise (not yet active)"s, //
+         m_part, "Refraction Wave Flow"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_refractionWaveFlow; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_refractionWaveFlow = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+      props.SliderFloat<Primitive>(
+         m_part, "Refraction Noise"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_refractionNoise; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionNoise = max(v, 0.f); }, 0.f, 1.f, 2);
       props.SliderFloat<Primitive>(

@@ -1562,7 +1562,7 @@ void Primitive::Render(const unsigned int renderMask)
             static const float refrSoftFallback = std::getenv("VPX_REFR_SOFT") ? (float)atof(std::getenv("VPX_REFR_SOFT")) : 1.f;
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionTint_thickness, &colorR);
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams, m_d.m_refractionCurvature, clamp(m_d.m_refractionAnisotropy, 0.f, 1.f), refrSoftFallback, m_refrCurvatureEncoded ? 1.f : 0.f);
-            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams2, max(m_d.m_refractionWave, 0.f), max(m_d.m_refractionNoise, 0.f), max(m_d.m_refractionNoiseScale, 0.01f), 0.f);
+            m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::refractionParams2, max(m_d.m_refractionWave, 0.f), max(m_d.m_refractionNoise, 0.f), max(m_d.m_refractionNoiseScale, 0.01f), clamp(m_d.m_refractionWaveFlow, 0.f, 1.f));
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, refractions->GetColorSampler());
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_probe_depth, refractions->GetDepthSampler());
             m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
@@ -1788,6 +1788,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(RCRV), m_d.m_refractionCurvature);
    writer.WriteFloat(FID(RANI), m_d.m_refractionAnisotropy);
    writer.WriteFloat(FID(RWAV), m_d.m_refractionWave);
+   writer.WriteFloat(FID(RWFL), m_d.m_refractionWaveFlow);
    writer.WriteFloat(FID(RNOI), m_d.m_refractionNoise);
    writer.WriteFloat(FID(RNSC), m_d.m_refractionNoiseScale);
 
@@ -2024,6 +2025,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RCRV): m_d.m_refractionCurvature = reader.AsFloat(); break;
          case FID(RANI): m_d.m_refractionAnisotropy = reader.AsFloat(); break;
          case FID(RWAV): m_d.m_refractionWave = reader.AsFloat(); break;
+         case FID(RWFL): m_d.m_refractionWaveFlow = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 

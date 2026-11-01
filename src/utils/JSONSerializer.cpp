@@ -419,6 +419,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RSTR), "reflection_strength" },
             { FID(RTHI), "refraction_thickness" },
             { FID(RWAV), "refraction_wave" },
+            { FID(RWFL), "refraction_wave_flow" },
             { FID(RNOI), "refraction_noise" },
             { FID(RNSC), "refraction_noise_scale" },
             { FID(RTV0), "prim_rot1_x" },

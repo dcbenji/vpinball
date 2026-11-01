@@ -135,7 +135,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 uniform vec4 refractionTint_thickness;
 uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on),
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
-uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm (unused yet)
+uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm, w: wave flow 0..1
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
@@ -1181,7 +1181,7 @@ void main() {
          float refrCurvExtra = 0.0; // also read by the debug views
          vec3 refrSmear = vec3_splat(0.0), refrWave = vec3_splat(0.0);
          vec3 behind;
-         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0 || refractionParams2.x > 0.0)
+         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0 || refractionParams2.x > 0.0 || refractionParams2.y > 0.0)
          {
             const bool refrAxis = refractionParams.y > 0.0 || refractionParams2.x > 0.0;
             const vec4 curv = refrAxis || (refractionParams.x > 0.0 && refractionParams.w == 0.0) ? pbr_curvature(Nv, v_tablePos) : vec4_splat(0.0);
@@ -1247,11 +1247,30 @@ void main() {
                {
                   const vec3 Tn = T * (1.0 / lt);
                   const vec3 Bn = normalize(cross(wN, Tn));
-                  const vec3 g = pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
+                  // Flow (refraction_wave_flow 0..1, 0 = the plain wave): the pattern is stretched along the sweep (up to 4x at 1)
+                  // so it reads as flow lines, and its amplitude (up to 3x) no longer fades out toward grazing, which is how the
+                  // walls are seen from above
+                  const float flow = refractionParams2.w;
+                  vec3 pw = v_tablePos;
+                  if (flow > 0.0)
+                     pw -= Tn * (dot(pw, Tn) * (1.0 - 1.0 / (1.0 + 3.0 * flow)));
+                  vec3 g = pbr_noised(pw * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(pw * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
+                  if (flow > 0.0) // gradient back to table space (the stretch is symmetric)
+                     g -= Tn * (dot(g, Tn) * (1.0 - 1.0 / (1.0 + 3.0 * flow)));
                   // Faded out toward grazing incidence, where the refraction's sensitivity to the tilt would turn it into ripples
                   // on water (the light-guide band takes over there)
-                  refrWave = (-REFR_WAVE_TILT * refractionParams2.x * smoothstep(0.15, 0.5, refrCosI)) * (dot(g, Tn) * Tn + 0.3 * dot(g, Bn) * Bn);
+                  float waveFade = smoothstep(0.15, 0.5, refrCosI);
+                  if (flow > 0.0)
+                     waveFade = mix(waveFade, smoothstep(0.03, 0.15, refrCosI), flow) * (1.0 + 2.0 * flow);
+                  refrWave = (-REFR_WAVE_TILT * refractionParams2.x * waveFade) * (dot(g, Tn) * Tn + 0.3 * dot(g, Bn) * Bn);
                }
+            }
+            // Refraction imperfections (refraction_noise, 0 = off): mould / orange-peel, a tiny tilt of the refraction normal only
+            // (reflections keep the clean normal) from the gradient of value noise at the scale (mm -> VPU), 0.7 deg per unit
+            BRANCH if (refractionParams2.y > 0.0)
+            {
+               const vec3 gn = pbr_noised(v_tablePos * (1.0 / (refractionParams2.z * 1.853))).yzw;
+               refrWave += (-0.0122 * refractionParams2.y * smoothstep(0.1, 0.3, refrCosI)) * (gn - dot(gn, wN) * wN);
             }
             #ifdef STEREO
                behind = pbr_transmit_ex(v_tablePos, wN, wI, blur, gl_FragCoord, refrSheet, 1.0 + min(refrGraze, 2.0), refrCurvExtra, refrSmear, refrWave, v_eye) * (staticColor_Alpha.rgb * coatIBL);
