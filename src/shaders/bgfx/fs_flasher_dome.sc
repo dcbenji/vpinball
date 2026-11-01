@@ -37,7 +37,8 @@
 //      rim), room-lit and lamp-lit; w unused
 // [11] xyz the plastic's absorption (1/mm; the red acrylic preset, or from dome_tint = the colour at 2 mm), w unused
 // [12] xyz the lamp's colour (linear, max channel 1), w unused
-// [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting)
+// [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
+//      z dome_glint (the OFF sparkle's scale, 1 = as tuned)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -466,7 +467,7 @@ void main()
 			const vec3 nCol = mix(tint, vec3(1.0, 0.6, 0.45) * tint.r, 0.8 * lin * lin * slide);
 			sparkle += domeParams[5].z * (1.0 + 4.0 * bodyK) * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
 		}
-		sparkle *= domeParams[4].w;
+		sparkle *= domeParams[4].w * domeParams[13].z; // dome_glint
 	}
 
 	// GI glow: the table's light scattered in the red plastic (deep red: the hemispherical path through the wall), banded by

@@ -396,6 +396,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(DMFL), "dome_flutes" },
             { FID(DMSC), "dome_scatter" },
             { FID(DMTN), "dome_tint" },
+            { FID(DMGL), "dome_glint" },
             { FID(DTXI), "draw_textures_inside" },
             { FID(EBFC), "backfaces_enabled" },
             { FID(EFUI), "ui_edge_factor" },

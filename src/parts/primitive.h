@@ -89,6 +89,7 @@ public:
    int m_domeFlutes = 0; // flute count override (0 = measured from the mesh)
    float m_domeFluteDepth = 1.f; // flute depth scale (1 = measured from the mesh)
    COLORREF m_domeTint = 0; // plastic colour at 2 mm thickness; 0 (black) = the built-in red acrylic preset
+   float m_domeGlint = 1.f; // OFF glints (facet glints, ridge glints, needles, the room seen in the plastic) scale (1 = as tuned)
 
    bool m_toy = false;
    bool m_backfacesEnabled = false;

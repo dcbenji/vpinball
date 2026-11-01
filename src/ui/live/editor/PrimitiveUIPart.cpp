@@ -382,6 +382,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Dome Flute Depth"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeFluteDepth; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeFluteDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2, "Flute depth scale (1 = measured from the mesh)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Glints"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeGlint; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeGlint = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
+         "The lamp-off sparkle: facet glints, ridge glints and needles along the flutes, the room seen in the plastic (1 = as tuned, 0 = none)");
       props.InputRGB<Primitive>(
          m_part, "Dome Tint"s, //
          [](const Primitive* primitive) { return convertColor(primitive->m_d.m_domeTint); }, //
