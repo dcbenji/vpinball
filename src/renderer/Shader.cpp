@@ -921,7 +921,8 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), pbrMaps->ownLampRadius);
       // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
       static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
-      SetVector(ShaderUniform::pbrCoat, coatEnabled ? saturate(mat.m_fClearcoat) : 0.f, clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), 0.f, 0.f);
+      // z: see-through surface scatter (presence)
+      SetVector(ShaderUniform::pbrCoat, coatEnabled ? saturate(mat.m_fClearcoat) : 0.f, clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), saturate(mat.m_fScatter), 0.f);
       // VPX_PBR_TI=0: the old routing (transparent parts on the opaque in-shader technique without the prepass), for A/B
       static const bool transparentInShader = []() { const char* const v = std::getenv("VPX_PBR_TI"); return v == nullptr || v[0] != '0'; }();
       if (pbrMaps->transparent && (!pbrMaps->inShaderSpecular || (transparentInShader && !(textured && doAlphaTest))))

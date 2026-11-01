@@ -109,6 +109,7 @@ uniform vec4 pbrMapFlags; // x: ORM map bound, y: emission map bound, z: thin su
 
 uniform vec4 pbrCoat; // x: clear coat strength (0 = off), y: clear coat perceptual roughness
 #define coatStrength  (pbrCoat.x)
+#define pbrScatter    (pbrCoat.z) // material scatter 0..1: the see-through surface itself, lit (0 = off)
 #define coatRoughness (pbrCoat.y)
 
 uniform vec4 pbrLightGrid;  // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
@@ -419,6 +420,17 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 #define REFR_WAVE_TILT 0.06
 #define REFR_WAVE_L1 22.0
 #define REFR_WAVE_L2 9.0
+// SURFACE PRESENCE (material scatter, round 4): the see-through surface itself, lit. Scatter floor (the whole part scatters
+// this much of its scatter where it is neither edge-on nor bent), env/ambient share
+#define PRES_SCATTER_FLOOR 0.06
+#define PRES_SCATTER_ENV 0.25
+// Dense edge: where a see-through part with scatter turns edge-on (|N.V| below PRES_DENSE_C1, fading in from PRES_DENSE_C0:
+// the thin cut edge faces, a wall-top bevel at grazing) it stops being see-through and reads as dense shiny plastic of this
+// albedo, lit by the local light (dark grey in a dark room, light when lit). Full density from scatter PRES_DENSE_FULL.
+#define PRES_DENSE_C0 0.15
+#define PRES_DENSE_C1 0.05
+#define PRES_DENSE_ALBEDO 0.55
+#define PRES_DENSE_FULL 0.25
 
 // Smooth 3D value noise with its analytic gradient (Inigo Quilez's quintic value noise): x = value 0..1, yzw = gradient
 float pbr_hash3(vec3 p)
@@ -891,6 +903,39 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
    return acc;
 }
 
+#ifdef TRANSPARENT
+// Light arriving at a see-through surface from either side, for its scatter lobe: the clustered lights (GI bulbs, inserts,
+// flasher domes), unshadowed (the light is inside the plastic), wrapped on |N.L| so light from behind the sheet counts as
+// well as from the front
+vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN)
+{
+   const vec2 cellf = clamp((wPos.xy - pbrLightGrid.xy) * pbrLightGrid.z, vec2_splat(0.0),
+      vec2(pbrLightGrid.w - 1.0, pbrLightGrid2.x - 1.0));
+   const vec4 cell = pbr_light_texel(512 + int(cellf.y) * int(pbrLightGrid.w) + int(cellf.x));
+   const int start = int(cell.x);
+   const int count = min(int(cell.y), 32); // must match the renderer's maxPerCell
+   vec3 acc = vec3_splat(0.0);
+   for (int i = 0; i < count; i++)
+   {
+      const vec4 lIdx = pbr_light_texel(1024 + start + i);
+      const int li = int(lIdx.x);
+      const vec4 lPos = pbr_light_texel(li * 2);
+      const vec4 lRad = pbr_light_texel(li * 2 + 1);
+      const vec3 dl = lPos.xyz - wPos;
+      const float dist2 = max(dot(dl, dl), max(lIdx.y * lIdx.y, 1.0));
+      const float rangeRatio = dist2 / (lPos.w * lPos.w);
+      const float x = saturate(1.0 - rangeRatio * rangeRatio);
+      if (x <= 0.0 || (lIdx.w > 0.0 && dist2 < pbrOwnLampRadius * pbrOwnLampRadius))
+         continue;
+      vec3 lCol = lRad.rgb;
+      if (lIdx.z > 0.0) // upward facing emitter (lit insert)
+         lCol *= saturate(-dl.z * inversesqrt(max(dot(dl, dl), 1e-6)));
+      acc += lCol * ((x * x / dist2) * (0.5 + 0.5 * abs(dot(wN, dl) * inversesqrt(dist2))));
+   }
+   return acc;
+}
+#endif
+
 #if !defined(AT) && !defined(CLIP)
 EARLY_DEPTH_STENCIL
 #endif
@@ -1224,6 +1269,32 @@ void main() {
             #else
                behind = pbr_transmit(v_tablePos, wN, wI, blur, gl_FragCoord) * (staticColor_Alpha.rgb * coatIBL);
             #endif
+         }
+         // Ramp presence (material scatter > 0, see SURFACE PRESENCE below the defines): the see-through surface is drawn too
+         BRANCH if (pbrScatter > 0.0)
+         {
+            const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
+            const float pCos = max(abs(dot(Ng, V)), 1e-3);
+            BRANCH if (pbrScatter > 0.0)
+            {
+               // Scatter lobe: light inside the plastic scatters toward the eye (white, the plastic's own milkiness), most
+               // where the view goes through the sheet steeply (walls, edges seen edge-on) and in the fillets and bevels, and
+               // where the wear mask (ORM alpha when an ORM map is bound) says so. Driven by the actual lights (GI bulbs,
+               // flashers, inserts: the ramp blooms white next to a flasher) plus a little env/ambient: dark room = clear.
+               const float wear = hasORMMap ? orm.w : 1.0;
+               // look-through factor: 0 down to ~66 deg from the normal, full from ~82 deg (walls and edges seen steeply)
+               const float edge = saturate(((1.0 - pCos) / pCos - 1.5) * (1.0 / 4.5));
+               const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
+               const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
+               const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
+               const vec3 lamps = pbr_scatter_light(v_tablePos, wNg) * (1.0 / PI);
+               const vec3 lit = lamps + PRES_SCATTER_ENV * envIrr;
+               // Dense edge: at the edge-on limit the look-through saturates into an opaque scatter surface (rough cut edge,
+               // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
+               const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
+               behind = mix(behind, PRES_DENSE_ALBEDO * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
+               spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, 0.6 * bend))) * lit;
+            }
          }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
          if (pbrLightGrid2.w == 1.0)
