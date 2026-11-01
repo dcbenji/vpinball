@@ -424,7 +424,7 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 #define REFR_WAVE_L2 9.0
 // SURFACE PRESENCE (material scatter / absorption, round 4): the see-through surface itself, lit. Scatter floor (the whole
 // part scatters this much of its scatter where it is neither edge-on nor bent), env/ambient share, rim gain
-#define PRES_SCATTER_FLOOR 0.06
+#define PRES_SCATTER_FLOOR 0.03
 #define PRES_SCATTER_ENV 0.25
 #define PRES_RIM_GAIN 2.0
 // Dense edge: where a see-through part with scatter turns edge-on (|N.V| below PRES_DENSE_C1, fading in from PRES_DENSE_C0:
@@ -1294,8 +1294,9 @@ void main() {
                // where the wear mask (ORM alpha when an ORM map is bound) says so. Driven by the actual lights (GI bulbs,
                // flashers, inserts: the ramp blooms white next to a flasher) plus a little env/ambient: dark room = clear.
                const float wear = hasORMMap ? orm.w : 1.0;
-               // look-through factor: 0 down to ~66 deg from the normal, full from ~82 deg (walls and edges seen steeply)
-               const float edge = saturate(((1.0 - pCos) / pCos - 1.5) * (1.0 / 4.5));
+               // look-through factor: 0 up to ~75 deg from the normal, full from ~86 deg (only edges and wall tops seen
+               // nearly edge-on; the walls and floor seen from the player stay clear: Ben 10-31, too much on walls/floor)
+               const float edge = saturate(((1.0 - pCos) / pCos - 3.8) * (1.0 / 9.5));
                const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
                const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
                const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
@@ -1305,7 +1306,7 @@ void main() {
                // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
                behind = mix(behind, PRES_DENSE_ALBEDO * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
-               spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, 0.6 * bend))) * lit;
+               spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, bend))) * lit;
                // Rim: the thin bright line along wall tops and fillets seen at an angle (light piped along the sheet by total
                // internal reflection comes out where the surface bends)
                spec += (pbrScatter * wear * PRES_RIM_GAIN * bend * edge) * lit;
