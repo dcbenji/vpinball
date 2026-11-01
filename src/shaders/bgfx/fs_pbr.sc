@@ -123,6 +123,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 uniform vec4 refractionTint_thickness;
 uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on),
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
+uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off)
 #endif
 
 #include "ball_shadows.sh"
@@ -409,6 +410,56 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wV, const float rou
 // curvature term). Flat panels stay sharp.
 #define REFR_CURV_BLUR 0.125
 
+// The curvature and anisotropy effects grow with the distance from the part to what is seen behind it, from about zero (a
+// decal a few mm under the floor shows the gloss and a little parallax only) to full at REFR_FULL_DEPTH (the playfield
+// ~50 mm under a ramp): a curved or scuffed surface deflects by an angle, so the shift it causes is proportional to depth
+#define REFR_FULL_DEPTH 90.0
+// Anisotropic streak half length (VPU) at anisotropy 1 on a flat panel at full depth: a scuff-sized constant, so a
+// wireform 50 to 100 VPU behind a ramp at anisotropy 0.5 stays readable, slightly streaked along the ramp
+#define REFR_SMEAR_CAP 1.2
+// Thin-sheet incidence term (with refraction_curvature): cap of the base offset multiplier at grazing incidence (a flat
+// sheet shifts the view by at most about its thickness), and of the whole offset multiplier (sheet + curvature term)
+#define REFR_SHEET_MAX 1.5
+#define REFR_OFFSET_MAX 12.0
+// Light guide (with refraction_curvature): a steep face (wall, a plastic's rim) seen toward edge-on is looked through
+// along the sheet, the path through the plastic grows as thickness / cos(incidence): cap of that path in thicknesses,
+// and how much brighter the band gets (light piped along the sheet, plus the Fresnel reflection rising at grazing)
+#define REFR_GUIDE_MAX 12.0
+#define REFR_GUIDE_GLOW 0.75
+// A smidge of blur on curved regions (Ben 10-31, round 3: a quarter of the first cut's): blur radius x (1 + this x the
+// curvature term). Flat panels stay sharp.
+#define REFR_CURV_BLUR 0.125
+// Forming waves (refraction_wave): normal tilt (radians) at strength 1 per unit noise slope, and the two wavelengths (VPU)
+#define REFR_WAVE_TILT 0.06
+#define REFR_WAVE_L1 22.0
+#define REFR_WAVE_L2 9.0
+
+// Smooth 3D value noise with its analytic gradient (Inigo Quilez's quintic value noise): x = value 0..1, yzw = gradient
+float pbr_hash3(vec3 p)
+{
+   p = fract(p * 0.3183099 + vec3(0.1, 0.17, 0.13));
+   p *= 17.0;
+   return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+vec4 pbr_noised(const vec3 x)
+{
+   const vec3 i = floor(x);
+   const vec3 f = x - i;
+   const vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+   const vec3 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+   const float a = pbr_hash3(i);
+   const float b = pbr_hash3(i + vec3(1.0, 0.0, 0.0));
+   const float c = pbr_hash3(i + vec3(0.0, 1.0, 0.0));
+   const float d = pbr_hash3(i + vec3(1.0, 1.0, 0.0));
+   const float e = pbr_hash3(i + vec3(0.0, 0.0, 1.0));
+   const float g = pbr_hash3(i + vec3(1.0, 0.0, 1.0));
+   const float h = pbr_hash3(i + vec3(0.0, 1.0, 1.0));
+   const float k = pbr_hash3(i + vec3(1.0, 1.0, 1.0));
+   const float k0 = a, k1 = b - a, k2 = c - a, k3 = e - a, k4 = a - b - c + d, k5 = a - c - e + h, k6 = a - b - e + g, k7 = -a + b + c - d + e - g - h + k;
+   return vec4(k0 + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z,
+      du * vec3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z, k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x, k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y));
+}
+
 // pbr_transmit with the refraction options of refractionParams (curvature, anisotropy, soft fallback). The plain version
 // above stays as it was so a part without them renders bit for bit as before.
 // sheet: multiplier of the base offset (1 = as pbr_transmit; the thin-sheet incidence and light-guide terms with
@@ -416,19 +467,20 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wV, const float rou
 // curvExtra: the curvature term (the offset grows by thickness x curvExtra, a third of it right behind the part and all
 // of it from REFR_FULL_DEPTH: a bevel bends even what is close behind it; no blur, a clean formed bend is bright and bent,
 // frost belongs to wear), smear: long axis of the anisotropic blur (world space, length = anisotropy x the
-// bend and grazing boosts, 0 = none)
+// bend and grazing boosts, 0 = none), waveN: tilt added to the normal by the forming waves (world space, 0 = none)
 #ifdef STEREO
-vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float sheet, const float graze, const float curvExtra, const vec3 smear, const float v_eye)
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float sheet, const float graze, const float curvExtra, const vec3 smear, const vec3 waveN, const float v_eye)
 #else
-vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float sheet, const float graze, const float curvExtra, const vec3 smear)
+vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float roughness, const vec3 screenCoord, const float sheet, const float graze, const float curvExtra, const vec3 smear, const vec3 waveN)
 #endif
 {
    const vec2 uv0 = screenCoord.xy * w_h_height.xy;
    const bool hasSmear = refractionParams.y > 0.0 && dot(smear, smear) > 0.0;
+   const bool hasWave = dot(waveN, waveN) > 0.0;
    // Distance to what lies behind, from the probe depth: window depth = a + b / w (w the view depth), a and b fitted from
    // this fragment and a point 10 VPU farther along the view ray
    float az = 0.0, bz = 0.0, w1 = 1.0, depthF0 = 0.0, behind0 = 0.0;
-   BRANCH if (curvExtra > 0.0 || hasSmear)
+   BRANCH if (curvExtra > 0.0 || hasSmear || hasWave)
    {
       const vec4 c1 = mul(mRotViewProj, vec4(wPos - cCameraPosWorld, 1.0));
       const vec4 c2 = mul(mRotViewProj, vec4(wPos + normalize(wPos - cCameraPosWorld) * 10.0 - cCameraPosWorld, 1.0));
@@ -449,6 +501,10 @@ vec3 pbr_transmit_ex(const vec3 wPos, const vec3 wN, const vec3 wV, const float 
    const vec3 R = refract(-wV, wN, 1.0 / 1.5); // n1 = 1.0 (air), n2 = 1.5 (plastic), eta = n1 / n2
    const float curvF = curvExtra * depthF0 * graze;
    vec3 refracted_pos = wPos + (refractionTint_thickness.w * min(sheet + curvF, REFR_OFFSET_MAX)) * R; // Shift ray by the thickness of the material
+   // Forming waves: the tilted normal turns the ray by a small angle, so the view behind shifts by that angle times the
+   // distance to it (nothing for a decal right under the floor, a gentle undulation of the playfield)
+   if (hasWave)
+      refracted_pos += (refract(-wV, normalize(wN + waveN), 1.0 / 1.5) - R) * min(behind0, REFR_FULL_DEPTH);
    const vec4 proj = mul(mRotViewProj, vec4(refracted_pos - cCameraPosWorld, 1.0));
    #if TEX_V_IS_UP
    const vec2 uvR = vec2(0.5, 0.5) + proj.xy * (0.5 / proj.w);
@@ -949,11 +1005,11 @@ void main() {
          // path through the plastic (at most 1 + REFR_GUIDE_MAX).
          float refrSheet = 1.0, refrGuide = 0.0;
          float refrCurvExtra = 0.0;
-         vec3 refrSmear = vec3_splat(0.0);
+         vec3 refrSmear = vec3_splat(0.0), refrWave = vec3_splat(0.0);
          vec3 behind;
-         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0)
+         BRANCH if (refractionParams.x > 0.0 || refractionParams.y > 0.0 || refractionParams.z > 0.0 || refractionParams2.x > 0.0)
          {
-            const bool refrAxis = refractionParams.y > 0.0;
+            const bool refrAxis = refractionParams.y > 0.0 || refractionParams2.x > 0.0;
             const vec4 curv = refrAxis || (refractionParams.x > 0.0 && refractionParams.w == 0.0) ? pbr_curvature(normalize(v_normal), v_tablePos) : vec4_splat(0.0);
             const float refrK = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * curv.x; // curvature relative to a 10 VPU radius
             refrCurvExtra = min(refractionParams.x * max(refrK - 0.3, 0.0), 3.0);
@@ -966,7 +1022,7 @@ void main() {
                refrGuide = smoothstep(0.6, 0.85, lh) * min(1.0 / refrCosI, REFR_GUIDE_MAX);
                refrSheet = max(min(refrGraze, REFR_SHEET_MAX), refrGuide);
             }
-            // The part's long axis (the sweep of a ramp wall or fillet), for the anisotropic streak. It is
+            // The part's long axis (the sweep of a ramp wall or fillet), for the anisotropic streak and the forming waves. It is
             // the min curvature direction where the surface is clearly curved one way (fillet, bevel); elsewhere (where both
             // curvatures are about zero so the min curvature direction means nothing) it is the horizontal tangent on steep
             // faces (walls) and the texture u direction on the flatter ones (UV u along the ramp floor); without UVs a floor
@@ -1009,11 +1065,24 @@ void main() {
                const float bendBoost = 1.0 + saturate((refrK - 0.3) * (1.0 / 1.7));
                if (refractionParams.y > 0.0)
                   refrSmear = lt > 1e-3 ? T * (saturate(2.0 * lt) / lt * refractionParams.y * bendBoost * (1.0 + max(min(refrGraze, 4.0), refrGuide))) : vec3_splat(0.0);
+               // Forming waves (refraction_wave, 0 = off): a vacuum-formed sheet is not flat, it undulates gently, so the view
+               // through flat floors and walls wavers. Static 3D value noise (two octaves, REFR_WAVE_L1 / L2 VPU) tilts the
+               // refraction normal only (not the shading one), mostly along the sweep (across it at 0.3x), by up to a few
+               // degrees x the strength: no blur, the art behind undulates.
+               BRANCH if (refractionParams2.x > 0.0 && lt > 1e-3)
+               {
+                  const vec3 Tn = T * (1.0 / lt);
+                  const vec3 Bn = normalize(cross(wN, Tn));
+                  const vec3 g = pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L1)).yzw + 0.5 * pbr_noised(v_tablePos * (1.0 / REFR_WAVE_L2) + vec3(17.3, 5.1, 9.7)).yzw;
+                  // Faded out toward grazing incidence, where the refraction's sensitivity to the tilt would turn it into ripples
+                  // on water (the light-guide band takes over there)
+                  refrWave = (-REFR_WAVE_TILT * refractionParams2.x * smoothstep(0.15, 0.5, refrCosI)) * (dot(g, Tn) * Tn + 0.3 * dot(g, Bn) * Bn);
+               }
             }
             #ifdef STEREO
-               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrSheet, 1.0 + min(refrGraze, 2.0), refrCurvExtra, refrSmear, v_eye) * staticColor_Alpha.rgb;
+               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrSheet, 1.0 + min(refrGraze, 2.0), refrCurvExtra, refrSmear, refrWave, v_eye) * staticColor_Alpha.rgb;
             #else
-               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrSheet, 1.0 + min(refrGraze, 2.0), refrCurvExtra, refrSmear) * staticColor_Alpha.rgb;
+               behind = pbr_transmit_ex(v_tablePos, wN, wV, roughness, gl_FragCoord.xyz, refrSheet, 1.0 + min(refrGraze, 2.0), refrCurvExtra, refrSmear, refrWave) * staticColor_Alpha.rgb;
             #endif
             // The light-guide band reads bright: light piped along the sheet, and the reflection rising toward grazing; so do
             // strong bevels and fillets seen at an angle (the bright highlight lines along a new ramp's wall tops)
