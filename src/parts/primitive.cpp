@@ -869,7 +869,8 @@ void Primitive::RenderSetup(Renderer *renderer)
       // Compute and upload mesh to let a chance for renderdevice to share the buffers with other static objects
       RecalculateMatrices();
       // The PBR refraction options (curvature, anisotropy) read a smooth per-vertex curvature from the normal lengths
-      m_refrCurvatureEncoded = (m_d.m_refractionCurvature > 0.f || m_d.m_refractionAnisotropy > 0.f || m_d.m_refractionWave > 0.f) && !m_d.m_szRefractionProbe.empty() && m_mesh.m_animationFrames.empty();
+      const Material* const refrMat = m_ptable->GetMaterial(m_d.m_szMaterial);
+      m_refrCurvatureEncoded = (m_d.m_refractionCurvature > 0.f || m_d.m_refractionAnisotropy > 0.f || m_d.m_refractionWave > 0.f || (refrMat && refrMat->m_fScatter > 0.f)) && !m_d.m_szRefractionProbe.empty() && m_mesh.m_animationFrames.empty();
       UploadMeshToVB(vertexBuffer);
    }
    else

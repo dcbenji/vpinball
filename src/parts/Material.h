@@ -129,6 +129,7 @@ public:
       , m_fFriction(pmat->m_fFriction)
       , m_fScatterAngle(pmat->m_fScatterAngle)
       , m_cRefractionTint(pmat->m_cRefractionTint)
+      , m_fScatter(pmat->m_fScatter)
    {
    }
 
@@ -201,6 +202,9 @@ public:
    float m_fFriction;
    float m_fScatterAngle;
    COLORREF m_cRefractionTint; // 10.8+ only
+   // PBR see-through surface presence (clear plastics): scatter = the plastic's own milkiness lit by the local light (edges,
+   // fillets, a dense opaque look on the thin edge faces; 0 = off)
+   float m_fScatter = 0.f;
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -230,6 +234,7 @@ public:
       writer.WriteFloat(FID(ELFO), m_fElasticityFalloff);
       writer.WriteFloat(FID(FRIC), m_fFriction);
       writer.WriteFloat(FID(SCAT), m_fScatterAngle);
+      writer.WriteFloat(FID(PSCT), m_fScatter);
       writer.EndObject();
    }
 
@@ -264,6 +269,7 @@ public:
             case FID(ELFO): m_fElasticityFalloff = reader.AsFloat(); break;
             case FID(FRIC): m_fFriction = reader.AsFloat(); break;
             case FID(SCAT): m_fScatterAngle = reader.AsFloat(); break;
+            case FID(PSCT): m_fScatter = reader.AsFloat(); break;
             }
             return true;
          },
