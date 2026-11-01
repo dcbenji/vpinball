@@ -756,6 +756,8 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(FRIC), "friction" },
          { FID(SCAT), "scatter_angle" },
          { FID(PSCT), "scatter" },
+         { FID(ABSC), "absorption_color" },
+         { FID(ABSS), "absorption" },
       });
 
       m[JSONSerializer::kRenderProbeNode] = MakeMap({

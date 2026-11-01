@@ -354,6 +354,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionTint_thickness, 1), SHADER_UNIFORM(ShaderUniformType::Float4, mirrorNormal_factor, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams, 1), // BGFX PBR only: x: curvature gain, y: anisotropy, z: soft in-front rejection
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams2, 1), // BGFX PBR only: x: forming wave strength
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrAbsorption, 1), // BGFX PBR only: rgb: absorption colour, w: strength
    SHADER_UNIFORM(ShaderUniformType::Bool, objectSpaceNormalMap, 1),
    SHADER_SAMPLER(tex_base_color, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // base texture
    SHADER_SAMPLER(tex_base_transmission, 3, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // bulb light/transmission buffer texture
@@ -920,8 +921,10 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), pbrMaps->ownLampRadius);
       // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
       static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
-      // z: see-through surface scatter (presence)
+      // z: see-through surface scatter (presence); absorption tint (colour, strength) in pbrAbsorption
       SetVector(ShaderUniform::pbrCoat, coatEnabled ? saturate(mat.m_fClearcoat) : 0.f, clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), saturate(mat.m_fScatter), 0.f);
+      const vec4 absorption = convertColor(mat.m_cAbsorption, max(mat.m_fAbsorption, 0.f));
+      SetVector(ShaderUniform::pbrAbsorption, &absorption);
       // VPX_PBR_TI=0: the old routing (transparent parts on the opaque in-shader technique without the prepass), for A/B
       static const bool transparentInShader = []() { const char* const v = std::getenv("VPX_PBR_TI"); return v == nullptr || v[0] != '0'; }();
       if (pbrMaps->transparent && (!pbrMaps->inShaderSpecular || (transparentInShader && !(textured && doAlphaTest))))

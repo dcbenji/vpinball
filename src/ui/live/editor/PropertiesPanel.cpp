@@ -772,6 +772,14 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             material, "Scatter"s, //
             [](const Material *material) { return material->m_fScatter; }, //
             [](Material *material, float v) { material->m_fScatter = clamp(v, 0.f, 1.f); }, PropertyPane::Unit::None, 2);
+         props.InputRGB<Material>(
+            material, "Absorption Color", //
+            [](const Material *material) { return convertColor(material->m_cAbsorption); }, //
+            [](Material *material, const vec3 &v) { material->m_cAbsorption = convertColorRGB(v); });
+         props.InputFloat<Material>(
+            material, "Absorption"s, //
+            [](const Material *material) { return material->m_fAbsorption; }, //
+            [](Material *material, float v) { material->m_fAbsorption = max(v, 0.f); }, PropertyPane::Unit::None, 2);
       }
       props.EndSection();
    }
