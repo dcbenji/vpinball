@@ -294,7 +294,8 @@ void main()
 			}
 		}
 	}
-	const vec3 body = lvlB * domeParams[5].x * glow * flash;
+	// A thick body stays red at the peak: its glow flood steps back (the lamp scatter carries the body) and its flash is damped
+	const vec3 body = lvlB * domeParams[5].x * glow * mix(flash, 1.0 + 0.35 * (flash - 1.0), bodyK) * (1.0 - 0.7 * bodyK);
 
 	// Bars: each flank transmits the coil as a narrow vertical bar where its GGX transmission lobe (in the horizontal
 	// plane: a vertical flute smears elevation) meets the filament. Broken, staggered and tapered per flank.
@@ -367,7 +368,7 @@ void main()
 	const float nv = saturate(dot(Ns, V));
 	const float whS = (1.0 - 0.45 * edge) * (0.05 + 0.95 * nv * nv) * fall;
 	// at the peak the shell facing the viewer passes some of the filament's white (the leak), its silhouette stays red
-	const vec3 white = domeParams[5].w * pk * whS * mix(vec3(1.0, 0.05, 0.018), bb * vec3(1.0, 0.8, 0.65), domeParams[8].x * nv * nv * fall / (1.0 + fall));
+	const vec3 white = (1.0 - 0.85 * bodyK) * domeParams[5].w * pk * whS * mix(vec3(1.0, 0.05, 0.018), bb * vec3(1.0, 0.8, 0.65), domeParams[8].x * nv * nv * fall / (1.0 + fall));
 
 	// OFF sparkle: the view ray reflects off the (hash-tilted) inner facet with Fresnel, goes back out through the skin and
 	// picks up a fixed studio room. Deep red: two passes through the wall. Ridge glints and needles on the flute edges.
@@ -451,7 +452,7 @@ void main()
 			const float hc = domeHash((cI + flankId * 17.0) * 12.9898);
 			const float hc2 = domeHash((cI + flankId * 17.0) * 78.233);
 			const float taper = exp(-2.5 * u * u) * (abs(u) < 1.3 ? 1.0 : 0.0);
-			sparkle += domeParams[5].z * 0.33 * (hc < 0.45 ? 1.0 : 0.0) * taper * exp(-dE * dE) * mix(0.3, 1.0, hc2 * hc2) * max(Fr, 0.2) * tint * facing * (1.0 - capW);
+			sparkle += domeParams[5].z * (1.0 + 2.0 * bodyK) * 0.33 * (hc < 0.45 ? 1.0 : 0.0) * taper * exp(-dE * dE) * mix(0.3, 1.0, hc2 * hc2) * max(Fr, 0.2) * tint * facing * (1.0 - capW);
 		}
 		else if (hF2 < 0.5)
 		{
@@ -463,7 +464,7 @@ void main()
 			const float slide = exp(-pow((Pin.y - hcN) / (0.3 * Ln), 2.0));
 			const float br = mix(0.35, 1.0, domeHash(idx * 5.13 + 1.1));
 			const vec3 nCol = mix(tint, vec3(1.0, 0.6, 0.45) * tint.r, 0.8 * lin * lin * slide);
-			sparkle += domeParams[5].z * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
+			sparkle += domeParams[5].z * (1.0 + 2.0 * bodyK) * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
 		}
 		sparkle *= domeParams[4].w;
 	}
@@ -491,7 +492,10 @@ void main()
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
 		const float fallS = 8.0 / max(dist, 8.0);
 		const vec3 scatCol = mix(lampCol * trH, bb * mix(trH, vec3_splat(1.0), 0.5), domeParams[8].x * pk * fallS * fallS);
-		const vec3 lampScat = scatK * domeParams[11].w * 8.0 * lvlG * scatCol * fallS * bandF * (1.0 + 0.5 * fallS) * mix(1.0, 1.0 + 0.35 * heatW, fallS) * (1.0 + 0.35 * (flash - 1.0));
+		// Soft knee on the level: the scattered body saturates below the tonemapper's desaturation (a red body at full, not
+		// pink-white); the bars, core and cap carry the hot streaks
+		const float scatL = 1.35 * lvlG / (0.35 + lvlG);
+		const vec3 lampScat = scatK * domeParams[11].w * 1.5 * scatL * scatCol * fallS * bandF * (1.0 + 0.5 * fallS) * mix(1.0, 1.0 + 0.2 * heatW, fallS) * (1.0 + 0.2 * (flash - 1.0));
 		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
 		// piping the lamp's light out through its thin edge
 		const float dEdge = length(vec2(rxz - domeParams[13].x, P.y - H));
