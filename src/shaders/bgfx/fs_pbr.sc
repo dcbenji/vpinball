@@ -119,6 +119,7 @@ uniform vec4 pbrProbes0; // reflection plane of the first bound probe (dot(n,p) 
 uniform vec4 pbrProbes1; // reflection plane of the second bound probe
 uniform vec4 pbrProbeParams; // x/y: influence ranges of probe0/1 (0 = unbound), z: SSR/probe blend factor, w: refraction probe bound
 uniform vec4 pbrProbeLods;   // x/y: max mip level of probe0/1, z: max mip level of the refraction probe (roughness-dependent lod)
+                             // w: env_reflection_scale (table, reflection-only env level, 1 = as the env)
 
 SAMPLER2DARRAY(tex_vsm_pool, 3);     // VSM physical page pool: depth texture array, one 128^2 page per layer
 SAMPLER2D     (tex_vsm_pagetables, 5); // VSM page table: physical layer+1 per virtual page (0 = not resident)
@@ -310,7 +311,7 @@ vec3 pbr_specular_weight(const vec3 N, const vec3 V, const vec3 F0, const float 
    const float SO = saturate(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
    const vec3 R = mul(vec4(reflect(-V, N), 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
    const float lod = roughness * log2(fenvEmissionScale_TexWidth.y);
-   envSpec = texture2DLod(tex_env, ray_to_equirectangular_uv(R), lod).xyz * fenvEmissionScale_TexWidth.x;
+   envSpec = texture2DLod(tex_env, ray_to_equirectangular_uv(R), lod).xyz * (fenvEmissionScale_TexWidth.x * pbrProbeLods.w); // env_reflection_scale (table): the room in reflections only
    return (Fss + Fms) * SO;
 }
 
@@ -1286,6 +1287,26 @@ void main() {
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
                behind = mix(behind, PRES_DENSE_ALBEDO * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
                spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, 0.6 * bend))) * lit;
+               // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
+               // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor
+               const vec3 wRg = reflect(-wV, wNg);
+               BRANCH if (wRg.z < -0.05)
+               {
+                  const vec3 Q = v_tablePos + wRg * min(-v_tablePos.z / wRg.z, 600.0);
+                  const vec4 pq = mul(mRotViewProj, vec4(Q - cCameraPosWorld, 1.0));
+                  #if TEX_V_IS_UP
+                  const vec2 uvQ = vec2(0.5, 0.5) + pq.xy * (0.5 / pq.w);
+                  #else
+                  const vec2 uvQ = vec2(0.5, 0.5) + vec2(pq.x, -pq.y) * (0.5 / pq.w);
+                  #endif
+                  const float down = smoothstep(0.05, 0.3, -wRg.z) * saturate(min(uvQ.x, min(uvQ.y, min(1.0 - uvQ.x, 1.0 - uvQ.y))) * 16.0) * step(0.0, pq.w);
+                  const vec3 pf = texStereoLod(tex_pbr_refr, uvQ, roughness * pbrProbeLods.z).rgb;
+                  #if defined(INSHADERSPEC)
+                     spec += (W * coatIBL) * (pf - specSrc) * down;
+                  #else
+                     spec += (W * coatIBL) * pf * down;
+                  #endif
+               }
             }
          }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
