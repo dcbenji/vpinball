@@ -230,10 +230,10 @@ public:
    float m_fScatterEdgeAngle = kScatterEdgeAngleDefault;
    float m_fRimGain = 2.0f;
    float m_fDenseAlbedo = 0.55f;
-   float m_fRimWidth = 1.0f; // 1 = the rim band as is; < 1 chokes it thinner (rim weight = (bend*edge)^(1/width))
+   float m_fRimWidth = 1.0f; // 1 = the rim band as is; < 1 chokes it thinner at the same peak (flanks below the band core choked by exponent 1/width)
    float m_fBevelBright = 1.0f; // scales the light-guide / bevel brightening of transmission and specular (1 = as is, 0 = off)
    float m_fScatterLocality = 0.0f; // 0 = as is; 1 = scatter lit only near the lamps (unwrapped |N.L|, steeper falloff, no ambient share)
-   float m_fScatterWidth = 1.0f; // 1 = as is; < 1 chokes the scatter + rim band, thinner where the surface is dimly lit
+   float m_fScatterWidth = 1.0f; // 1 = as is; < 1 chokes the scatter + rim band thinner at the same peak, thinner still where the surface is dimly lit
    float m_fAbsorptionLightTint = 0.0f; // 0 = as is; 1 = the absorption colour takes the hue of the local lamp light (keeps its own luminance)
    float m_fScatterSaturation = 1.0f; // saturation of the light colour in the scatter and rim lobes (1 = as is, 0 = grey, 2 = boosted)
    
