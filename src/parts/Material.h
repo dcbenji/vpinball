@@ -124,6 +124,8 @@ public:
       , m_fScatterAngle(pmat->m_fScatterAngle)
       , m_cRefractionTint(pmat->m_cRefractionTint)
       , m_fScatter(pmat->m_fScatter)
+      , m_cAbsorption(pmat->m_cAbsorption)
+      , m_fAbsorption(pmat->m_fAbsorption)
    {
    }
 
@@ -194,8 +196,11 @@ public:
    float m_fScatterAngle;
    COLORREF m_cRefractionTint; // 10.8+ only
    // PBR see-through surface presence (clear plastics): scatter = the plastic's own milkiness lit by the local light (edges,
-   // fillets, a dense opaque look on the thin edge faces; 0 = off)
+   // fillets, a dense opaque look on the thin edge faces; 0 = off), absorption = Beer-Lambert tint by the path through the
+   // plastic (colour = transmittance through one thickness, strength 0 = off)
    float m_fScatter = 0.f;
+   COLORREF m_cAbsorption = 0xFFFFFF;
+   float m_fAbsorption = 0.f;
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -224,6 +229,8 @@ public:
       writer.WriteFloat(FID(FRIC), m_fFriction);
       writer.WriteFloat(FID(SCAT), m_fScatterAngle);
       writer.WriteFloat(FID(PSCT), m_fScatter);
+      writer.WriteInt(FID(ABSC), m_cAbsorption);
+      writer.WriteFloat(FID(ABSS), m_fAbsorption);
       writer.EndObject();
    }
 
@@ -257,6 +264,8 @@ public:
             case FID(FRIC): m_fFriction = reader.AsFloat(); break;
             case FID(SCAT): m_fScatterAngle = reader.AsFloat(); break;
             case FID(PSCT): m_fScatter = reader.AsFloat(); break;
+            case FID(ABSC): m_cAbsorption = reader.AsInt(); break;
+            case FID(ABSS): m_fAbsorption = reader.AsFloat(); break;
             }
             return true;
          },

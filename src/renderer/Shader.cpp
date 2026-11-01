@@ -350,6 +350,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionTint_thickness, 1), SHADER_UNIFORM(ShaderUniformType::Float4, mirrorNormal_factor, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams, 1), // BGFX PBR only: x: curvature gain, y: anisotropy, z: soft in-front rejection
    SHADER_UNIFORM(ShaderUniformType::Float4, refractionParams2, 1), // BGFX PBR only: x: forming wave strength
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrAbsorption, 1), // BGFX PBR only: rgb: absorption colour, w: strength
    SHADER_UNIFORM(ShaderUniformType::Bool, objectSpaceNormalMap, 1),
    SHADER_SAMPLER(tex_base_color, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // base texture
    SHADER_SAMPLER(tex_base_transmission, 3, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // bulb light/transmission buffer texture
@@ -913,6 +914,8 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), saturate(mat.m_fScatter)); // w: see-through surface scatter (presence)
+      const vec4 absorption = convertColor(mat.m_cAbsorption, max(mat.m_fAbsorption, 0.f)); // see-through absorption tint (colour, strength)
+      SetVector(ShaderUniform::pbrAbsorption, &absorption);
       // See-through parts use the transparent shading (premultiplied: their reflections are not modulated by their coverage,
       // refraction probe) also when the specular is evaluated in-shader (no depth prepass, which is the Player default, or
       // inside a probe render): the 'ti' variants, without the sideband outputs. Alpha-tested parts keep pbr_is_at (the 'ti'
