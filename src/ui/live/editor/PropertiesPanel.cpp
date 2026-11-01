@@ -756,6 +756,10 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             material, "Emission Intensity"s, //
             [](const Material *material) { return material->m_fEmissionIntensity; }, //
             [](Material *material, float v) { material->m_fEmissionIntensity = v; }, PropertyPane::Unit::None, 2);
+         props.InputFloat<Material>(
+            material, "Scatter"s, //
+            [](const Material *material) { return material->m_fScatter; }, //
+            [](Material *material, float v) { material->m_fScatter = clamp(v, 0.f, 1.f); }, PropertyPane::Unit::None, 2);
       }
       props.EndSection();
    }

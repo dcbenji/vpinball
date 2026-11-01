@@ -912,7 +912,7 @@ void Shader::SetTechniqueMaterial(
       const vec4 emission = convertColor(mat.m_cEmission, mat.m_fEmissionIntensity);
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
-      SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), 0.f);
+      SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), saturate(mat.m_fScatter)); // w: see-through surface scatter (presence)
       // See-through parts use the transparent shading (premultiplied: their reflections are not modulated by their coverage,
       // refraction probe) also when the specular is evaluated in-shader (no depth prepass, which is the Player default, or
       // inside a probe render): the 'ti' variants, without the sideband outputs. Alpha-tested parts keep pbr_is_at (the 'ti'

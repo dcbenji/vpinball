@@ -748,6 +748,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(ELFO), "elasticity_falloff" },
          { FID(FRIC), "friction" },
          { FID(SCAT), "scatter_angle" },
+         { FID(PSCT), "scatter" },
       });
 
       m[JSONSerializer::kRenderProbeNode] = MakeMap({
