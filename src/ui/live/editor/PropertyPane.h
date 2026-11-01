@@ -11,6 +11,7 @@
 #include "imgui/imgui_stdlib.h"
 #include "imgui/imgui_internal.h"
 #include "ResURIPicker.h"
+#include "PinnedPanel.h"
 
 namespace VPX::EditorUI
 {
@@ -141,7 +142,53 @@ public:
 
    int GetModifiedField() const { return m_modified; }
 
+   // Pinned properties overlay support. Panel: fields register their definition and offer the pin context menu;
+   // Harvest: fields only register their definition (pane drawn in a hidden window); Overlay: fields only offer the
+   // context menu (the pane draws pinned fields). The owner identifies what provides the definitions: the part's
+   // EditorUIPart for part panes (their getters/setters may capture it), nullptr for the edited object itself.
+   enum class PinMode
+   {
+      Off,
+      Panel,
+      Harvest,
+      Overlay
+   };
+   void SetPinning(PinnedPanel *pins, PinMode mode, const void *owner = nullptr)
+   {
+      m_pins = pins;
+      m_pinMode = pins ? mode : PinMode::Off;
+      m_pinOwner = owner;
+   }
+   void SetPinOwner(const void *owner) { m_pinOwner = owner; }
+
+   // Pinnable field object types and the cast from the pointer resolved by the overlay (PinTable*, Material* or IEditable*)
+   template <class T> static constexpr bool IsPinnable = std::is_base_of_v<PinTable, T> || std::is_same_v<T, Material> || std::is_base_of_v<IEditable, T>;
+   template <class T> static T *PinCast(void *o)
+   {
+      if (o == nullptr)
+         return nullptr;
+      if constexpr (std::is_base_of_v<PinTable, T>)
+         return static_cast<T *>(static_cast<PinTable *>(o));
+      else if constexpr (std::is_same_v<T, Material>)
+         return static_cast<Material *>(o);
+      else if constexpr (std::is_base_of_v<IEditable, T>)
+         return dynamic_cast<T *>(static_cast<IEditable *>(o));
+      else
+         return nullptr;
+   }
+
 private:
+   template <class T, class MakeDraw> void PinField(T *obj, const string &label, const MakeDraw &makeDraw);
+   void PinContext(const PinKey &key, const IEditable *part, const Material *material);
+   static string PinTip(const char *tooltip) { return tooltip ? string(tooltip) : string(); }
+   static const char *PinTipPtr(const string &tip) { return tip.empty() ? nullptr : tip.c_str(); }
+
+   PinnedPanel *m_pins = nullptr;
+   PinMode m_pinMode = PinMode::Off;
+   const void *m_pinOwner = nullptr;
+   mutable string m_pinGroup; // Current section or separator, used to pin field groups
+   ImVec2 m_rowMin; // Top left of the current field row (label included), for the pin context menu
+
    static constexpr const char* ICON_SAVE = ICON_FK_FLOPPY_O;
 
    bool IsStartup() const { return m_table->m_liveBaseTable && m_showStartup; }
@@ -214,6 +261,43 @@ template <class T> T* PropertyPane::GetEditedPart(T* obj) const
          return startupObj;
    }
    return obj;
+}
+
+template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const string &label, const MakeDraw &makeDraw)
+{
+   if constexpr (IsPinnable<T>)
+   {
+      if (m_pinMode == PinMode::Off || obj == nullptr)
+         return;
+      PinKey key;
+      key.prop = label;
+      const IEditable *part = nullptr;
+      const Material *material = nullptr;
+      if constexpr (std::is_base_of_v<PinTable, T>)
+         key.kind = PinKind::Table;
+      else if constexpr (std::is_same_v<T, Material>)
+      {
+         key.kind = PinKind::Material;
+         key.name = obj->m_name;
+         material = obj;
+      }
+      else
+      {
+         key.kind = PinKind::Part;
+         part = obj;
+         key.name = part->GetName();
+      }
+      if (key.kind != PinKind::Table && key.name.empty())
+         return;
+      if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Harvest)
+      {
+         const void *const owner = (key.kind == PinKind::Part && m_pinOwner) ? m_pinOwner : static_cast<const void *>(obj);
+         if (m_pins->NeedsDef(key.Id(), owner))
+            m_pins->SetDef(key, m_pinGroup, owner, makeDraw());
+      }
+      if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Overlay)
+         PinContext(key, part, material);
+   }
 }
 
 template <class T> PropertyPane::SyncField<T> PropertyPane::BeginSyncField(T* obj)
@@ -337,6 +421,15 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.Checkbox<T>(t, label, getter, setter, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -361,6 +454,15 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.InputInt<T>(t, label, getter, setter, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -395,6 +497,15 @@ inline void PropertyPane::InputFloat(
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, unit, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.InputFloat<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -422,6 +533,15 @@ inline void PropertyPane::SliderFloat(
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, vMin, vMax, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.SliderFloat<T>(t, label, getter, setter, vMin, vMax, nDecimals, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -458,6 +578,15 @@ inline void PropertyPane::InputFloat2(
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, unit, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.InputFloat2<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -496,6 +625,15 @@ inline void PropertyPane::InputFloat3(
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, unit, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.InputFloat3<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -520,6 +658,15 @@ inline void PropertyPane::InputRGB(T* obj, const string& label, const std::funct
    ImGui::PopItemFlag();
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.InputRGB<T>(t, label, getter, setter, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
@@ -584,7 +731,8 @@ inline void PropertyPane::InputResURI(T* obj, const string& label, const std::fu
          },
          displayFamily, semanticType, writableOnly, dataFormat);
    WidgetTooltip(tooltip);
-   ResURIPicker::Render();
+   if (m_pinMode != PinMode::Harvest) // The hidden harvest pane must not draw the picker a second time
+      ResURIPicker::Render();
    EndSyncField(sync, targets, getter, setter, value);
    ImGui::PopID();
 }

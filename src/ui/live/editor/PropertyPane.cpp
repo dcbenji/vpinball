@@ -23,6 +23,7 @@ void PropertyPane::SetShowStartup(bool showStartup)
 void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 {
    const ImVec2 pos = ImGui::GetCursorScreenPos();
+   m_rowMin = pos;
    const float xSpacing = ImGui::GetStyle().ItemSpacing.x;
    const float xWidth = ImGui::GetContentRegionAvail().x * 0.5f - m_syncWidth;
 
@@ -85,6 +86,7 @@ void PropertyPane::EditableHeader(const string& typeName, IEditable* editable)
 
 void PropertyPane::Separator(const string& label) const
 {
+   m_pinGroup = label;
    ImGui::TextUnformatted(label.c_str());
    // Underline the text
    const ImVec2 headerMin = ImGui::GetItemRectMin();
@@ -112,6 +114,7 @@ bool PropertyPane::BeginSection(const string& name)
       return false;
 
    m_inSection = true;
+   m_pinGroup = name;
    m_sectionHasSync = m_table->m_liveBaseTable;
    // for some reason I don't really get, the computed size is too large
    //m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + ImGui::GetStyle().ItemSpacing.x) : 0.f;
@@ -123,6 +126,39 @@ void PropertyPane::EndSection()
 {
    assert(m_inSection);
    m_inSection = false;
+}
+
+void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Material* material)
+{
+   // Right click anywhere on the field row (label or widget) opens the pin menu
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   const ImVec2 rowMax(window->WorkRect.Max.x, ImGui::GetItemRectMax().y);
+   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(m_rowMin, rowMax, false))
+      ImGui::OpenPopup("##PinMenu");
+   if (!ImGui::BeginPopup("##PinMenu"))
+      return;
+   if (m_pins->IsPinned(key))
+   {
+      if (ImGui::MenuItem(ICON_FK_THUMB_TACK " Unpin from overlay"))
+         m_pins->Unpin(key);
+   }
+   else if (ImGui::MenuItem(ICON_FK_THUMB_TACK " Pin to overlay"))
+      m_pins->Pin(key);
+   if (part != nullptr && m_pins->HasSeeThroughSet(part))
+   {
+      if (ImGui::MenuItem("Pin see-through set"))
+         m_pins->PinSeeThroughSet(part);
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Pin the refraction fields of this part and the See-Through Surface fields of its material");
+   }
+   else if (material != nullptr && material->m_type == Material::PBR)
+   {
+      if (ImGui::MenuItem("Pin see-through set"))
+         m_pins->PinMaterialSeeThrough(material->m_name);
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Pin the See-Through Surface fields of this material");
+   }
+   ImGui::EndPopup();
 }
 
 void PropertyPane::ConvertUnit(Unit from, Unit& to, float& value, int& nDecimalAdjust)

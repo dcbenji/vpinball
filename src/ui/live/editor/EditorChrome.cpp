@@ -76,6 +76,12 @@ void EditorChrome::RenderMenuBar()
             editor.PickUnityPrefab();
          ImGui::EndMenu();
       }
+      if (ImGui::BeginMenu("View"))
+      {
+         if (ImGui::MenuItem("Pinned Properties", "P", editor.m_pinned.IsVisible()))
+            editor.m_pinned.ToggleVisible();
+         ImGui::EndMenu();
+      }
       if (editor.IsInspectMode() && !editor.m_table->IsLocked() && ImGui::BeginMenu("Debug"))
       {
          if (ImGui::MenuItem("Open debugger"))

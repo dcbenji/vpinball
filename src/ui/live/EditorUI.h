@@ -12,6 +12,7 @@
 #include "editor/EditorChrome.h"
 #include "editor/OutlinerPanel.h"
 #include "editor/PartLibraryPanel.h"
+#include "editor/PinnedPanel.h"
 #include "editor/PropertiesPanel.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ConvertToPBRModal.h"
@@ -56,6 +57,7 @@ class EditorUI final
    friend class ConvertToPBRModal;
    friend class PartLibraryPanel;
    friend class ScriptPanel;
+   friend class PinnedPanel;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -94,6 +96,7 @@ private:
    ConvertToPBRModal m_pbrConvertModal;
    PartLibraryPanel m_partLibrary;
    ScriptPanel m_scriptPanel;
+   PinnedPanel m_pinned; // Floating overlay of pinned properties
 
    Selection m_selection;
 

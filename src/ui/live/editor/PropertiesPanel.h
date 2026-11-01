@@ -26,6 +26,8 @@ class PropertyPane;
 // camera view setup, image, material, render probe, sound or editable part).
 class PropertiesPanel
 {
+   friend class PinnedPanel; // Harvests the field definitions of pinned objects through the panes below
+
 public:
    explicit PropertiesPanel(EditorUI &editor);
    ~PropertiesPanel();

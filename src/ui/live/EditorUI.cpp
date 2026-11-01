@@ -69,6 +69,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_pbrConvertModal(*this)
    , m_partLibrary(*this)
    , m_scriptPanel(*this)
+   , m_pinned(*this)
    , m_undo(m_player->m_ptable)
 {
    m_table = m_player->m_ptable;
@@ -420,6 +421,7 @@ void EditorUI::StartFileOp(std::unique_ptr<AsyncFileOp> op)
          RestorePartsVisibility(); // Save the authored visibility, not the editor display state
       AsyncFileOp *const fileOp = op.get();
       PinTable *const table = op->saveTable != nullptr ? op->saveTable : m_table;
+      m_pinned.SaveTo(table); // The pinned properties list is saved with the table (table.json of packs)
       op->worker = std::thread(
          [fileOp, table]()
          {
@@ -682,6 +684,8 @@ void EditorUI::RenderUI()
       m_outliner.Render(m_chrome.GetTopBarHeight());
       m_properties.Render(m_chrome.GetTopBarHeight());
    }
+   if (!m_inspectionModal.IsVisible())
+      m_pinned.Render(m_chrome.GetTopBarHeight());
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
    m_partLibrary.Render();
@@ -1251,6 +1255,10 @@ void EditorUI::RenderUI()
          }
          else
             EnterPointEditMode();
+      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_P, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+      {
+         m_pinned.ToggleVisible(); // Pinned properties overlay
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl)
       {

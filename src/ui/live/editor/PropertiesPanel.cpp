@@ -61,6 +61,8 @@ void PropertiesPanel::Render(float topBarHeight)
       ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
 
    PropertyPane props(editor.m_table);
+   // Fields register their definition for the pinned properties overlay and offer the pin context menu
+   props.SetPinning(&editor.m_pinned, PropertyPane::PinMode::Panel, editor.m_selection.GetType() == Selection::S_EDITABLE ? editor.m_selection.GetPart().get() : nullptr);
    switch (editor.m_units)
    {
    case EditorUI::Units::VPX: props.SetLengthUnit(PropertyPane::Unit::VPLength); break;
