@@ -132,6 +132,11 @@ public:
       , m_fScatter(pmat->m_fScatter)
       , m_cAbsorption(pmat->m_cAbsorption)
       , m_fAbsorption(pmat->m_fAbsorption)
+      , m_fScatterFloor(pmat->m_fScatterFloor)
+      , m_fScatterEnv(pmat->m_fScatterEnv)
+      , m_fScatterEdgeAngle(pmat->m_fScatterEdgeAngle)
+      , m_fRimGain(pmat->m_fRimGain)
+      , m_fDenseAlbedo(pmat->m_fDenseAlbedo)
    {
    }
 
@@ -210,6 +215,15 @@ public:
    float m_fScatter = 0.f;
    COLORREF m_cAbsorption = 0xFFFFFF;
    float m_fAbsorption = 0.f;
+   // Presence tuning (author sliders; defaults = the former shader constants): floor = scatter where neither edge-on nor bent,
+   // env = env/ambient share of the scatter light, edge angle (deg from the normal) where the look-through factor starts
+   // (full ~9.5 later in tan-like units), rim gain, albedo of the dense edge
+   static constexpr float kScatterEdgeAngleDefault = 77.9696f; // = acos(1/4.8): (1-c)/c = 3.8 exactly
+   float m_fScatterFloor = 0.03f;
+   float m_fScatterEnv = 0.25f;
+   float m_fScatterEdgeAngle = kScatterEdgeAngleDefault;
+   float m_fRimGain = 2.0f;
+   float m_fDenseAlbedo = 0.55f;
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -242,6 +256,11 @@ public:
       writer.WriteFloat(FID(PSCT), m_fScatter);
       writer.WriteInt(FID(ABSC), m_cAbsorption);
       writer.WriteFloat(FID(ABSS), m_fAbsorption);
+      writer.WriteFloat(FID(PSFL), m_fScatterFloor);
+      writer.WriteFloat(FID(PSEN), m_fScatterEnv);
+      writer.WriteFloat(FID(PSEA), m_fScatterEdgeAngle);
+      writer.WriteFloat(FID(PRGN), m_fRimGain);
+      writer.WriteFloat(FID(PDAL), m_fDenseAlbedo);
       writer.EndObject();
    }
 
@@ -279,6 +298,11 @@ public:
             case FID(PSCT): m_fScatter = reader.AsFloat(); break;
             case FID(ABSC): m_cAbsorption = reader.AsInt(); break;
             case FID(ABSS): m_fAbsorption = reader.AsFloat(); break;
+            case FID(PSFL): m_fScatterFloor = reader.AsFloat(); break;
+            case FID(PSEN): m_fScatterEnv = reader.AsFloat(); break;
+            case FID(PSEA): m_fScatterEdgeAngle = reader.AsFloat(); break;
+            case FID(PRGN): m_fRimGain = reader.AsFloat(); break;
+            case FID(PDAL): m_fDenseAlbedo = reader.AsFloat(); break;
             }
             return true;
          },

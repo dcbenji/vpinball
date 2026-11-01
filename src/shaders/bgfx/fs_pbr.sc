@@ -111,6 +111,7 @@ uniform vec4 pbrCoat; // x: clear coat strength (0 = off), y: clear coat percept
 #define coatStrength  (pbrCoat.x)
 #define pbrScatter    (pbrCoat.z) // material scatter 0..1: the see-through surface itself, lit (0 = off)
 #define coatRoughness (pbrCoat.y)
+#define pbrScatterEdge0 (pbrCoat.w) // look-through starts where (1-|N.V|)/|N.V| exceeds this (3.8 = ~78 deg)
 
 uniform vec4 pbrLightGrid;  // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
 uniform vec4 pbrLightGrid2; // x: cell count y, y: light count, z: specular AA strength (VPX_SPEC_AA, 1 = default, 0 = off)
@@ -134,7 +135,8 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 uniform vec4 refractionTint_thickness;
 uniform vec4 refractionParams; // x: curvature gain (0 = off), y: anisotropy 0..1 (0 = off), z: soft in-front fallback (VPX_REFR_SOFT, 1 = on),
                                // w: 1 = v_refrCurv carries the per-vertex curvature (else the per-triangle estimate is used)
-uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off)
+uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 = off), y: refraction noise strength, z: noise scale mm (unused yet)
+uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -424,15 +426,12 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 #define REFR_WAVE_L2 9.0
 // SURFACE PRESENCE (material scatter / absorption, round 4): the see-through surface itself, lit. Scatter floor (the whole
 // part scatters this much of its scatter where it is neither edge-on nor bent), env/ambient share, rim gain
-#define PRES_SCATTER_FLOOR 0.03
-#define PRES_SCATTER_ENV 0.25
-#define PRES_RIM_GAIN 2.0
+// (floor, env share, rim gain, dense albedo and the edge start are material sliders now: pbrPresence, pbrCoat.w)
 // Dense edge: where a see-through part with scatter turns edge-on (|N.V| below PRES_DENSE_C1, fading in from PRES_DENSE_C0:
 // the thin cut edge faces, a wall-top bevel at grazing) it stops being see-through and reads as dense shiny plastic of this
 // albedo, lit by the local light (dark grey in a dark room, light when lit). Full density from scatter PRES_DENSE_FULL.
 #define PRES_DENSE_C0 0.15
 #define PRES_DENSE_C1 0.05
-#define PRES_DENSE_ALBEDO 0.55
 #define PRES_DENSE_FULL 0.25
 
 // Smooth 3D value noise with its analytic gradient (Inigo Quilez's quintic value noise): x = value 0..1, yzw = gradient
@@ -1296,20 +1295,20 @@ void main() {
                const float wear = hasORMMap ? orm.w : 1.0;
                // look-through factor: 0 up to ~75 deg from the normal, full from ~86 deg (only edges and wall tops seen
                // nearly edge-on; the walls and floor seen from the player stay clear: Ben 10-31, too much on walls/floor)
-               const float edge = saturate(((1.0 - pCos) / pCos - 3.8) * (1.0 / 9.5));
+               const float edge = saturate(((1.0 - pCos) / pCos - pbrScatterEdge0) * (1.0 / 9.5));
                const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
                const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
                const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
                const vec3 lamps = pbr_scatter_light(v_tablePos, wNg) * (1.0 / PI);
-               const vec3 lit = lamps + PRES_SCATTER_ENV * envIrr;
+               const vec3 lit = lamps + pbrPresence.y * envIrr;
                // Dense edge: at the edge-on limit the look-through saturates into an opaque scatter surface (rough cut edge,
                // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
-               behind = mix(behind, PRES_DENSE_ALBEDO * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
-               spec += (pbrScatter * wear * (PRES_SCATTER_FLOOR + (1.0 - PRES_SCATTER_FLOOR) * max(edge, bend))) * lit;
+               behind = mix(behind, pbrPresence.w * (lamps + envIrr), dense); // all the local light: dark grey in a dark room
+               spec += (pbrScatter * wear * (pbrPresence.x + (1.0 - pbrPresence.x) * max(edge, bend))) * lit;
                // Rim: the thin bright line along wall tops and fillets seen at an angle (light piped along the sheet by total
                // internal reflection comes out where the surface bends)
-               spec += (pbrScatter * wear * PRES_RIM_GAIN * bend * edge) * lit;
+               spec += (pbrScatter * wear * pbrPresence.z * bend * edge) * lit;
                // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
                // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor
                const vec3 wRg = reflect(-wV, wNg);

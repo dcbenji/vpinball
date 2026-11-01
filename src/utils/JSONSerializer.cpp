@@ -419,6 +419,8 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RSTR), "reflection_strength" },
             { FID(RTHI), "refraction_thickness" },
             { FID(RWAV), "refraction_wave" },
+            { FID(RNOI), "refraction_noise" },
+            { FID(RNSC), "refraction_noise_scale" },
             { FID(RTV0), "prim_rot1_x" },
             { FID(RTV1), "prim_rot1_y" },
             { FID(RTV2), "prim_rot1_z" },
@@ -758,6 +760,11 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(PSCT), "scatter" },
          { FID(ABSC), "absorption_color" },
          { FID(ABSS), "absorption" },
+         { FID(PSFL), "scatter_floor" },
+         { FID(PSEN), "scatter_env" },
+         { FID(PSEA), "scatter_edge_angle" },
+         { FID(PRGN), "rim_gain" },
+         { FID(PDAL), "dense_albedo" },
       });
 
       m[JSONSerializer::kRenderProbeNode] = MakeMap({
