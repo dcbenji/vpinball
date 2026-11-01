@@ -332,7 +332,7 @@ void PinnedPanel::Render(float topBarHeight)
    const float dpi = editor.m_liveUI.GetDPI();
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
    const float width = 300.f * dpi;
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - (PropertiesPanel::PaneWidth + 8.f) * dpi, viewport->Pos.y + topBarHeight + 8.f * dpi), ImGuiCond_FirstUseEver,
+   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - (PropertiesPanel::PaneWidth + 8.f) * dpi, viewport->Pos.y + topBarHeight + (8.f + 128.f + 16.f) * dpi), ImGuiCond_FirstUseEver,
       ImVec2(1.f, 0.f));
    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.f), ImVec2(width, viewport->Size.y * 0.8f));
    ImGui::SetNextWindowSize(ImVec2(width, 0.f)); // Fixed width, height fitted to the rows

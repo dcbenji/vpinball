@@ -337,6 +337,8 @@ private:
    bool m_fitPlayfieldCamera = false;
    Matrix3D m_camView, m_camProj;
    float m_camDistance;
+   bool m_showNavCube = true; // View > Navigation Cube
+   void RenderNavCube(); // ImGuizmo view cube: drag orbits around the orbit pivot, click a face snaps to the axis view
 };
 
 }

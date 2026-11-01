@@ -80,6 +80,8 @@ void EditorChrome::RenderMenuBar()
       {
          if (ImGui::MenuItem("Pinned Properties", "P", editor.m_pinned.IsVisible()))
             editor.m_pinned.ToggleVisible();
+         if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
+            editor.m_showNavCube = !editor.m_showNavCube;
          ImGui::EndMenu();
       }
       if (editor.IsInspectMode() && !editor.m_table->IsLocked() && ImGui::BeginMenu("Debug"))

@@ -195,8 +195,13 @@ void EditorUI::PlayTest()
 
 void EditorUI::SaveTable()
 {
+   PLOGI << "SaveTable requested (inspect=" << IsInspectMode() << ", locked=" << m_table->IsLocked() << ", fileOpBusy=" << (m_fileOp != nullptr) << ", file=" << PathToUTF8(m_table->m_filename) << ')';
    if (m_table->IsLocked() || m_fileOp != nullptr)
+   {
+      PLOGW << "SaveTable ignored: " << (m_table->IsLocked() ? "table is locked" : "a file operation is in progress");
+      m_liveUI.PushNotification(m_table->IsLocked() ? "Nothing saved: the table is locked"s : "Nothing saved: a file operation is still in progress"s, 8000);
       return;
+   }
    PinTable *saveTable = m_table;
    if (IsInspectMode())
    {
@@ -491,6 +496,13 @@ void EditorUI::FinishFileOp()
       break;
 
    case AsyncFileOp::Type::Save:
+      if (FAILED(result))
+      {
+         PLOGE << "Save failed (hr=" << std::hex << static_cast<unsigned long>(result) << std::dec << ") for " << op->displayPath;
+         m_liveUI.PushNotification("SAVE FAILED: '" + op->displayPath + "'", 15000);
+      }
+      else
+         PLOGI << "Save done: " << op->displayPath;
       if (SUCCEEDED(result))
       {
          m_undo.SetCleanPoint(SaveDirtyState::Clean);
@@ -959,6 +971,8 @@ void EditorUI::RenderUI()
       }
    }
 
+   RenderNavCube();
+
    // Handle uncaught mouse & keyboard shortcuts
    if (!io.WantCaptureMouse && m_fileOp == nullptr)
    {
@@ -1030,7 +1044,7 @@ void EditorUI::RenderUI()
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
       // In drag point edit mode, click selects a drag point of the edited curve (shift toggles), dragging a
       // selected point moves the selected points in the table XY plane, drag box selects points
-      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver()) // Option+click is orbit (local Mac patch)
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate()) // Option+click is orbit (local Mac patch)
       {
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_addPartType != eItemInvalid)
@@ -2285,6 +2299,92 @@ void EditorUI::UpdateEditableList()
       for (size_t i = 0; i < sorted.size(); i++)
          m_editables[i] = std::move(sorted[i].second);
    }
+}
+
+void EditorUI::RenderNavCube()
+{
+   // Edit mode only: not in the 2D desktop backdrop view, nor in inspect (play) mode, nor with the side panels hidden
+   if (!m_showNavCube || IsInspectMode() || m_flyMode || m_table->IsLocked() || m_inspectionModal.IsVisible() || m_camMode == ViewMode::DesktopBackdrop)
+      return;
+
+   ImGuiIO &io = ImGui::GetIO();
+   const float dpi = m_liveUI.GetDPI();
+   const float size = 128.f * dpi;
+   const ImVec2 pos(io.DisplaySize.x - PropertiesPanel::PaneWidth * dpi - size - 16.f * dpi, m_chrome.GetTopBarHeight() + 8.f * dpi);
+
+   // The cube is computed in a right handed, Y up world, while the editor world is X right, Y down the table, Z down (height is -Z):
+   // R (row vector convention) maps editor Z (down) to -Y and editor Y to Z, a pure rotation about X. viewG = R^-1 * viewV, viewV = R * viewG
+   static constexpr float R[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, -1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f };
+   auto mul = [](const float *a, const float *b, float *o)
+   {
+      for (int i = 0; i < 4; i++)
+         for (int j = 0; j < 4; j++)
+            o[i * 4 + j] = a[i * 4 + 0] * b[0 * 4 + j] + a[i * 4 + 1] * b[1 * 4 + j] + a[i * 4 + 2] * b[2 * 4 + j] + a[i * 4 + 3] * b[3 * 4 + j];
+   };
+   float Rinv[16];
+   for (int i = 0; i < 4; i++)
+      for (int j = 0; j < 4; j++)
+         Rinv[i * 4 + j] = R[j * 4 + i];
+
+   Matrix3D inv(m_camView);
+   inv.Invert();
+   const vec3 oldDir = inv.GetOrthoNormalDir();
+   const vec3 camTarget = inv.GetOrthoNormalPos() - oldDir * m_camDistance; // Same orbit pivot as the mouse orbit
+
+   float viewG[16], viewGIn[16];
+   mul(Rinv, &m_camView.m[0][0], viewG);
+   memcpy(viewGIn, viewG, sizeof(viewG));
+   // Own right handed projection so that the cube handedness does not depend on the editor (possibly orthographic) projection
+   const Matrix3D proj = Matrix3D::MatrixPerspectiveFovRH(editorCamFovY, io.DisplaySize.x / io.DisplaySize.y, 1.f, 1000.f);
+   const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
+
+   // Do not fight the selection gizmo: while it is dragged, the cube gets no mouse input (it is still drawn)
+   const ImVec2 savedMousePos = io.MousePos;
+   const bool savedMouseDown = io.MouseDown[0];
+   const bool gizmoBusy = ImGuizmo::IsUsing();
+   if (gizmoBusy)
+   {
+      io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+      io.MouseDown[0] = false;
+   }
+   ImGuizmo::ViewManipulate(viewG, proj.m[0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD, const_cast<float *>(identity), m_camDistance, pos, ImVec2(size, size), 0x40101010);
+   if (gizmoBusy)
+   {
+      io.MousePos = savedMousePos;
+      io.MouseDown[0] = savedMouseDown;
+   }
+
+   if (memcmp(viewG, viewGIn, sizeof(viewG)) == 0)
+      return;
+
+   // Back to the editor camera: keep the pivot and distance, take the new direction and up
+   float viewV[16];
+   mul(R, viewG, viewV);
+   Matrix3D newInv;
+   memcpy(&newInv.m[0][0], viewV, sizeof(viewV));
+   newInv.Invert();
+   vec3 newDir = newInv.GetOrthoNormalDir();
+   vec3 newUp = newInv.GetOrthoNormalUp();
+   m_predefinedView = PredefinedView::None;
+
+   if (!io.MouseDown[0]) // Face click: the cube animates the view toward an axis; use the editor predefined views up vectors and an orthographic camera
+   {
+      struct Axis { vec3 dir, up; PredefinedView view; };
+      const Axis axes[6] = { { vec3(0.f, 0.f, -1.f), vec3(0.f, -1.f, 0.f), PredefinedView::Top }, { vec3(0.f, 0.f, 1.f), vec3(0.f, -1.f, 0.f), PredefinedView::Bottom },
+         { vec3(0.f, 1.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Front }, { vec3(0.f, -1.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Back },
+         { vec3(-1.f, 0.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Left }, { vec3(1.f, 0.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Right } };
+      m_perspectiveCam = false;
+      for (const Axis &a : axes)
+         if (newDir.Dot(a.dir) > 0.9999f)
+         {
+            newDir = a.dir;
+            newUp = a.up;
+            m_predefinedView = a.view;
+            break;
+         }
+   }
+   m_camMode = ViewMode::EditorCam;
+   m_camView = Matrix3D::MatrixLookAtRH(camTarget + newDir * m_camDistance, camTarget, newUp);
 }
 
 void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
