@@ -323,6 +323,21 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_refractionNoiseScale; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionNoiseScale = max(v, 0.01f); }, 0.5f, 10.f, 2);
 
+      // Traced insert (an additive card with a TRACED_ image): the lit insert's hot spot over the bulb, parallaxing with the view
+      props.Separator("Traced Insert Bulb"s);
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Depth (mm)"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbDepth; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbDepth = max(v, 0.f); }, 0.f, 30.f, 1, "A soft hot spot in the lit insert over the bulb, this far below the top, shifting with the view (0 = off)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Spot Size"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbScale; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); }, 0.2f, 2.f, 2, "Hot spot size (1 = about 19 mm across at half height)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Brightness"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); }, 0.f, 4.f, 2, "Hot spot brightness (1 = +80 % of the glow's peak at its centre)");
+
       props.Separator("Flasher Dome"s);
       props.SliderFloat<Primitive>(
          m_part, "Dome Body"s, //
