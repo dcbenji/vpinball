@@ -18,6 +18,12 @@ namespace VPX::EditorUI
 // Field groups pinned by the see-through quick set (property pane separators)
 static const string kRefractionGroup = "Refractions"s;
 static const string kSeeThroughGroup = "See-Through Surface"s;
+static const string kBulbGroup = "Traced Insert Bulb"s;
+
+static bool IsTracedInsert(const IEditable *part)
+{
+   return part != nullptr && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsTracedInsert();
+}
 
 static const char *PinKindName(PinKind kind)
 {
@@ -80,10 +86,14 @@ void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *own
    def.draw = std::move(draw);
 }
 
+bool PinnedPanel::HasBulbSet(const IEditable *part) const { return IsTracedInsert(part); }
+
 bool PinnedPanel::HasSeeThroughSet(const IEditable *part) const
 {
    if (part == nullptr || part->GetItemType() != eItemPrimitive)
       return false;
+   if (IsTracedInsert(part)) // The quick set of a traced insert also holds its bulb fields
+      return true;
    const Primitive *const prim = static_cast<const Primitive *>(part);
    if (!prim->m_d.m_szRefractionProbe.empty())
       return true;
@@ -97,8 +107,19 @@ void PinnedPanel::PinSeeThroughSet(const IEditable *part)
       return;
    const Primitive *const prim = static_cast<const Primitive *>(part);
    m_groupRequests.push_back({ PinKind::Part, part->GetName(), kRefractionGroup });
+   if (prim->IsTracedInsert())
+      m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
    if (!prim->m_d.m_szMaterial.empty())
       PinMaterialSeeThrough(prim->m_d.m_szMaterial);
+   m_visible = true;
+   m_collapsed = false;
+}
+
+void PinnedPanel::PinBulbSet(const IEditable *part)
+{
+   if (!HasBulbSet(part))
+      return;
+   m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
    m_visible = true;
    m_collapsed = false;
 }
@@ -222,7 +243,7 @@ void PinnedPanel::ProcessGroupRequests()
          }
    }
    if (found == 0)
-      m_editor.m_liveUI.PushNotification("No see-through fields found to pin"s, 4000);
+      m_editor.m_liveUI.PushNotification("No fields found to pin"s, 4000);
 }
 
 void PinnedPanel::ApplyUnits(PropertyPane &props) const
@@ -263,7 +284,7 @@ void PinnedPanel::RenderHeader()
    if (ImGui::SmallButton(ICON_FK_TINT))
       PinSelectionSeeThrough();
    ImGui::EndDisabled();
-   ImGui::SetItemTooltip("Pin see-through set for selection (refraction fields of the selected part and the See-Through Surface fields of its material)");
+   ImGui::SetItemTooltip("Pin see-through set for selection (refraction fields of the selected part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
    ImGui::SameLine();
    ImGui::BeginDisabled(m_pins.empty());
    if (ImGui::SmallButton(ICON_FK_TRASH))
@@ -367,12 +388,16 @@ void PinnedPanel::Render(float topBarHeight)
             continue;
          }
          IEditable *const part = (kind == PinKind::Part && obj != nullptr) ? static_cast<IEditable *>(obj) : nullptr;
+         // "Apply to all traced inserts": the pinned bulb sliders of a traced insert also write to the other traced inserts
+         props.ArmBulbBroadcast(part);
          // Undo of part edits outside of an inspection session, recorded like the properties panel (only while interacting, as it snapshots the part)
          const bool withUndo = part != nullptr && !inspect && m_hovered;
          if (withUndo)
          {
             editor.m_undo.BeginUndo();
             editor.m_undo.MarkForUndo(part);
+            for (IEditable *const other : props.GetBroadcastParts())
+               editor.m_undo.MarkForUndo(other);
          }
          props.SetPinOwner(owner);
          const int modifiedBefore = props.GetModifiedField();
@@ -414,6 +439,9 @@ void PinnedPanel::Render(float topBarHeight)
                editor.m_renderer->ReinitRenderable(part->GetIRenderable());
                editor.m_player->m_physics->Update(part);
             }
+            if (props.WasBroadcast())
+               for (IEditable *const other : props.GetBroadcastParts())
+                  editor.m_renderer->ReinitRenderable(other->GetIRenderable());
             if (inspect)
             {
                // Same tracking as the panel's 'Live' tab: 'Save' copies these edits back to the startup table
@@ -421,6 +449,9 @@ void PinnedPanel::Render(float topBarHeight)
                   editor.m_liveEditedMaterials.insert(static_cast<Material *>(obj));
                else if (part != nullptr)
                   editor.m_liveEditedParts.insert(part);
+               if (props.WasBroadcast())
+                  for (IEditable *const other : props.GetBroadcastParts())
+                     editor.m_liveEditedParts.insert(other);
             }
             else if (part == nullptr)
                editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);

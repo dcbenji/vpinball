@@ -53,11 +53,25 @@ public:
    // When set, fields show a mixed ("-") state for diverging values and edits apply to every part.
    void SetCoEditedParts(const vector<IEditable*>& parts) { m_coEdited = parts; }
    bool IsMultiEdit() const { return !m_coEdited.empty(); }
+
+   // Apply-to-all broadcast: fields flagged with BroadcastFields(true) (in the panel; pinned rows remember the flag) also write
+   // their new value to the broadcast parts (e.g. every other traced insert). Unlike multi-edit, the fields do not show a mixed
+   // state, and the caller does the undo / live-edit bookkeeping of the parts when WasBroadcast() is true.
+   static inline bool s_applyBulbToAll = false; // Session toggle ("Apply to all traced inserts"), not saved to the table
+   void SetBroadcastParts(const vector<IEditable*>& parts) { m_broadcast = parts; }
+   const vector<IEditable*>& GetBroadcastParts() const { return m_broadcast; }
+   // Arms the "Apply to all traced inserts" broadcast for the pane's part: when the toggle is on and the part is a traced insert,
+   // the other traced inserts of the table become the broadcast parts (otherwise none). Also resets WasBroadcast()
+   void ArmBulbBroadcast(const IEditable* part);
+   void BroadcastFields(bool on) { m_broadcastField = on; }
+   bool WasBroadcast() const { return m_broadcastApplied; }
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
 
    void Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName);
    void EditableHeader(const string& typeName, IEditable* editable);
    void Separator(const string& label) const;
+   // A checkbox on session state (not part data): never marks the part as edited. Pinnable like the other fields
+   template <class T> void SessionToggle(T* obj, const string& label, bool& state, const char* tooltip = nullptr);
    template <class T> void Checkbox(T* obj, const string& label, const std::function<bool(const T*)>& getter, const std::function<void(T*, bool)>& setter, const char* tooltip = nullptr);
    template <class T> void InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip = nullptr);
    template <class T>
@@ -211,7 +225,8 @@ private:
       T* other; // Counterpart on the other side (nullptr when the part has none)
    };
    // Resolves the co-edited parts on the same side (edited or startup) as the pane's display object
-   template <class T> vector<CoTarget<T>> GetCoTargets(const SyncField<T>& sync, T* obj) const;
+   template <class T> vector<CoTarget<T>> GetCoTargets(const SyncField<T>& sync, T* obj) const { return ResolveTargets(m_coEdited, sync, obj); }
+   template <class T> vector<CoTarget<T>> ResolveTargets(const vector<IEditable*>& parts, const SyncField<T>& sync, T* obj) const;
    // True when a field's value differs between the edited part and any co-edited part
    template <class T, class Getter> bool IsMixed(const Getter& getter, const T* display, const vector<CoTarget<T>>& targets) const;
    template <class T, class Getter, class Setter, class V>
@@ -231,6 +246,9 @@ private:
    bool m_showStartup = false;
    PinTable* const m_table;
    vector<IEditable*> m_coEdited; // Other parts of a uniform-type selection, co-edited with the pane's object
+   vector<IEditable*> m_broadcast; // Parts receiving the values of the broadcast fields
+   bool m_broadcastField = false; // The fields drawn now are broadcast fields
+   bool m_broadcastApplied = false; // A broadcast field was changed
    bool m_inSection = false;
    bool m_sectionHasSync = false;
    float m_syncWidth = 0.f;
@@ -308,14 +326,14 @@ template <class T> PropertyPane::SyncField<T> PropertyPane::BeginSyncField(T* ob
    return m_showStartup ? SyncField<T> { startupObj, obj } : SyncField<T> { obj, startupObj };
 }
 
-template <class T> vector<PropertyPane::CoTarget<T>> PropertyPane::GetCoTargets(const SyncField<T>& sync, T* obj) const
+template <class T> vector<PropertyPane::CoTarget<T>> PropertyPane::ResolveTargets(const vector<IEditable*>& parts, const SyncField<T>& sync, T* obj) const
 {
    vector<CoTarget<T>> targets;
-   if (m_coEdited.empty())
+   if (parts.empty())
       return targets;
-   targets.reserve(m_coEdited.size());
+   targets.reserve(parts.size());
    const bool editedSide = (sync.display == obj);
-   for (IEditable* co : m_coEdited)
+   for (IEditable* co : parts)
    {
       T* const edited = dynamic_cast<T*>(co);
       if (edited == nullptr)
@@ -434,6 +452,26 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
 }
 
 template <class T>
+inline void PropertyPane::SessionToggle(T* obj, const string& label, bool& state, const char* tooltip)
+{
+   assert(m_inSection);
+   PropertyLabel(label, tooltip);
+   ImGui::PushID(label.c_str());
+   ImGui::Checkbox(("##" + label).c_str(), &state);
+   WidgetTooltip(tooltip);
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, pState = &state, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               p.SessionToggle<T>(t, label, *pState, PinTipPtr(tip));
+         };
+      });
+   ImGui::PopID();
+}
+
+template <class T>
 inline void PropertyPane::InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip)
 {
    assert(m_inSection);
@@ -528,6 +566,12 @@ inline void PropertyPane::SliderFloat(
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
          setter(target.display, value);
+      if (m_broadcastField && !m_broadcast.empty())
+      {
+         for (const CoTarget<T>& target : ResolveTargets(m_broadcast, sync, obj))
+            setter(target.display, value);
+         m_broadcastApplied = true;
+      }
       m_modified = m_modifyFieldId;
    }
    ImGui::PopItemFlag();
@@ -536,10 +580,14 @@ inline void PropertyPane::SliderFloat(
    PinField<T>(obj, label,
       [&]() -> PinDrawFn
       {
-         return [label, getter, setter, vMin, vMax, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         return [label, getter, setter, vMin, vMax, nDecimals, broadcast = m_broadcastField, tip = PinTip(tooltip)](PropertyPane &p, void *o)
          {
             if (T *t = PinCast<T>(o))
+            {
+               p.m_broadcastField = broadcast; // Pinned rows keep the field's apply-to-all behaviour
                p.SliderFloat<T>(t, label, getter, setter, vMin, vMax, nDecimals, PinTipPtr(tip));
+               p.m_broadcastField = false;
+            }
          };
       });
    ImGui::PopID();

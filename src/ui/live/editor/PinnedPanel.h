@@ -67,6 +67,9 @@ public:
    bool HasSeeThroughSet(const IEditable *part) const;
    void PinSeeThroughSet(const IEditable *part);
    void PinMaterialSeeThrough(const string &materialName);
+   // "Bulb set": the Traced Insert Bulb fields (sliders and the apply-to-all toggle) of a traced insert; also part of its see-through set
+   bool HasBulbSet(const IEditable *part) const;
+   void PinBulbSet(const IEditable *part);
 
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;

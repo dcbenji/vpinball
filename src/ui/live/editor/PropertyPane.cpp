@@ -2,6 +2,7 @@
 #include "PropertyPane.h"
 
 #include "imgui/imgui_stdlib.h"
+#include "parts/primitive.h"
 #include "ui/live/LiveUI.h"
 
 namespace VPX::EditorUI
@@ -13,6 +14,18 @@ PropertyPane::PropertyPane(PinTable* table)
 }
 
 PropertyPane::~PropertyPane() { }
+
+void PropertyPane::ArmBulbBroadcast(const IEditable* part)
+{
+   m_broadcast.clear();
+   m_broadcastApplied = false;
+   const auto isTraced = [](const IEditable* p) { return p->GetItemType() == eItemPrimitive && static_cast<const Primitive*>(p)->IsTracedInsert(); };
+   if (!s_applyBulbToAll || part == nullptr || !isTraced(part))
+      return;
+   for (IEditable* other : m_table->GetParts())
+      if (other != part && isTraced(other))
+         m_broadcast.push_back(other);
+}
 
 void PropertyPane::SetShowStartup(bool showStartup)
 {
@@ -151,7 +164,14 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Pin the refraction fields of this part and the See-Through Surface fields of its material");
    }
-   else if (material != nullptr && material->m_type == Material::PBR)
+   if (part != nullptr && m_pins->HasBulbSet(part))
+   {
+      if (ImGui::MenuItem("Pin bulb set"))
+         m_pins->PinBulbSet(part);
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Pin the Traced Insert Bulb fields of this part (depth, spot size, brightness, apply to all)");
+   }
+   if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == Material::PBR)
    {
       if (ImGui::MenuItem("Pin see-through set"))
          m_pins->PinMaterialSeeThrough(material->m_name);
