@@ -44,6 +44,10 @@ public:
    float m_tracedHaloSize = 0.f; // Traced insert: soft spill drawn around the card, in card widths (0 = none)
    float m_tracedHaloStrength = 1.5f; // Traced insert: spill level at its centre, relative to the lamp
    string m_tracedParams; // Traced insert: its bake type's look, as VPX_TRACED ("elev=10,20,35,60 tilt=48.9 turn=-80 ...")
+   float m_bulbDepth = 0.f; // Traced insert: parallax bulb, mm below the insert top (0 = off)
+   string m_szBulbImage; // Traced insert: bulb image over 16 x 16 mm x scale (rgb look, alpha coverage); empty = procedural bulb + socket
+   float m_bulbScale = 1.f; // Traced insert: bulb size (1 = 10 mm glass envelope, 15 mm socket ring)
+   float m_bulbBrightness = 1.f; // Traced insert: bulb layer brightness
 
    float m_edgeFactorUI = 0.25f; // for drawing the mesh in the editorUI
    float m_collision_reductionFactor = 0.f; // 0=none..1=pow(num_vertices,0.75)

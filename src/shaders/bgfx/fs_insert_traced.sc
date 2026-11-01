@@ -28,6 +28,9 @@
 //      w how much the plastic's colour tints the room glints (0 white, 1 the plastic's colour)
 // [11] x print map tint (inktint): an insert under printed art (Police Force's jackpot car and character patches) shows
 //      through the print by its alpha (the print's transmission) tinted by its hue; 0 = alpha only, as a cut-out window
+// [12] parallax bulb: x its depth below the insert top in mm (0 = off: the block is skipped, output unchanged), y its scale
+//      (1 = a 10 mm glass envelope in a 15 mm socket ring), z brightness, w 1 = tex_traced_bulb bound (rgb the bulb's look,
+//      alpha its coverage, over 16 x 16 mm x scale), 0 = the procedural bulb (glass envelope, coil and posts, socket ring)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -40,7 +43,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #include "common.sh"
 
 uniform vec4 staticColor_Alpha;
-uniform vec4 tracedParams[12];
+uniform vec4 tracedParams[13];
 
 #ifdef STEREO
 	uniform vec4 cameraPosWorld[2];
@@ -54,6 +57,7 @@ SAMPLER2D(tex_base_color, 0);     // traced light
 SAMPLER2D(tex_base_normalmap, 4); // traced facets
 SAMPLER2D(tex_traced_env, 7);     // traced lamp-off atlas
 SAMPLER2D(tex_pbr_orm, 8);        // the table's print map: art in rgb, clear insert windows in alpha
+SAMPLER2D(tex_traced_bulb, 9);    // parallax bulb image (optional)
 
 // How much each of the four traced elevations counts at this one: linear between neighbours, held at the ends
 vec4 tracedAngleWeights(float elevation)
@@ -264,6 +268,63 @@ void main()
 	vec3 lampOff = vec3(0.0, 0.0, 0.0);
 	if (tracedParams[6].w > 0.0)
 		lampOff = tracedParams[6].w * tracedParams[7].rgb * tracedEnv(lightUv, weights, 8.0 * frost);
+
+	// Parallax bulb: the bulb and its socket seen through the plastic, bulb_depth mm below the top. The refracted eye ray
+	// travels that far down before it meets them, so they shift against the top (and the traced light, which parallaxes over
+	// its own baked depth) as the eye moves: interior-mapping style, one tap. It stands in for the cavity look where it covers
+	// it (under the traced light and the glints, which the plastic adds on top). A frosted cap hides it.
+	if (tracedParams[12].x > 0.0)
+	{
+		const vec2 bulbUv = card + inside.xy * (tracedParams[12].x / size / steepInside);
+		// Bulb space in mm about the bake square's centre; bulb_scale 1 = a #44/#555 wedge bulb: a 10 mm glass envelope in a
+		// 15 mm socket ring, whatever the insert's size (a long insert's bake square is long, the bulb under it is not)
+		const vec2 p = (bulbUv - 0.5) * (size / max(tracedParams[12].y, 0.05));
+		const vec3 plastic = tracedParams[7].rgb;
+		const vec3 lamp = staticColor_Alpha.rgb; // the lamp's colour x level (0 when off)
+		const vec3 room = tracedParams[6].rgb * (1.0 / 0.3); // the room's level, 1 at the table's default lighting
+		vec3 bulb;
+		float cover;
+		if (tracedParams[12].w > 0.5)
+		{
+			// Image over 16 x 16 mm (x bulb_scale): rgb the bulb's look under room light (sRGB), alpha where it covers the
+			// cavity; it glows with the lamp
+			const vec2 q = p * (0.5 / 8.0) + 0.5;
+			const vec4 t = texture2D(tex_traced_bulb, q);
+			cover = t.a * step(0.0, q.x) * step(0.0, q.y) * step(q.x, 1.0) * step(q.y, 1.0);
+			bulb = t.rgb * (0.5 * room * plastic + 3.0 * lamp);
+		}
+		else
+		{
+			// Levels: the lamp-off look sits in the lamp-off atlas's units (its gain x the room level, else the room level
+			// alone); the lit look scales with the part's glow gain, so the core and the glass stay in step with the traced light
+			const float offLevel = 5.0 * (tracedParams[6].w > 0.0 ? tracedParams[6].w : dot(room, vec3_splat(0.333)));
+			const float onLevel = tracedParams[2].x;
+			const float r = length(p);
+			const float aa = fwidth(r) + 1e-3;
+			const float cup = 1.0 - smoothstep(7.5 - aa, 7.5 + aa, r); // the socket hole, 15 mm
+			// its metal ring: we see its inner wall on the far side and only the top edge near us, so it shades across the cup
+			// against the eye (the card adds: it reads lit, not darker)
+			const float ring = cup * smoothstep(6.0 - aa, 6.0 + aa, r) * (0.55 + 0.45 * dot(p / max(r, 1e-3), -normalize(v.xy + vec2(1e-4, 1e-4))));
+			const float glass = 1.0 - smoothstep(5.0 - aa, 5.0 + aa, r); // the glass envelope, 10 mm
+			const float rim = glass * smoothstep(3.4, 4.9, r); // its bright edge (the glass seen through its own wall)
+			const vec2 hl = p - vec2(-1.6, -1.8) + 2.0 * v.xy; // one room highlight on the glass, sliding with the eye
+			const float spec = glass * exp(-dot(hl, hl) * 1.2);
+			// the filament: a 3 mm coil across the middle, two posts down to the base; the lit core falls off from the coil
+			const float dCoil = length(vec2(max(abs(p.x) - 1.5, 0.0), p.y));
+			const float coil = 1.0 - smoothstep(0.35, 0.35 + 2.0 * aa, dCoil);
+			const float post = (1.0 - smoothstep(0.2, 0.2 + 2.0 * aa, abs(abs(p.x) - 1.5))) * step(0.0, p.y) * (1.0 - step(3.8, p.y));
+			cover = cup;
+			// off: a dark cup with a grey metal ring, dim grey glass with a bright rim and a highlight, a dark coil
+			vec3 look = mix(vec3_splat(0.012 + 0.11 * ring), vec3_splat(0.03) + 0.14 * rim + 0.8 * spec, glass);
+			look = mix(look, vec3_splat(0.03), max(coil, post));
+			bulb = look * offLevel * plastic;
+			// on: a white-hot core on the coil (the white leak share, at least most of it), the glass glowing with the lamp's
+			// colour and falling off from the coil, the cup catching its bounce
+			const vec3 hot = mix(lamp, vec3_splat(staticColor_Alpha.a), max(tracedParams[10].z, 0.7));
+			bulb += onLevel * (lamp * (0.03 * cup + 0.35 * glass * exp(-dCoil * dCoil / 9.0)) + hot * (2.5 * coil + exp(-dCoil * dCoil / 1.6)));
+		}
+		lampOff = mix(lampOff, bulb * tracedParams[12].z, cover * (1.0 - frost));
+	}
 
 	// The lamp's glow and glints, plus the room glinting in the facets whatever the lamp does
 	// (the white share grows with the glow: the bake's peak (1) gets all of it, the dim body almost none)

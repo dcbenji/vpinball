@@ -323,6 +323,25 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_refractionNoiseScale; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_refractionNoiseScale = max(v, 0.01f); }, 0.5f, 10.f, 2);
 
+      // Traced insert (an additive card with a TRACED_ image): the parallax bulb under the plastic
+      props.Separator("Traced Insert Bulb"s);
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Depth (mm)"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbDepth; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbDepth = max(v, 0.f); }, 0.f, 30.f, 1, "Bulb and socket drawn this far below the insert top, shifting with the view (0 = off)");
+      props.ImageCombo<Primitive>(
+         m_part, "Bulb Image"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_szBulbImage; }, //
+         [](Primitive* primitive, const string& v) { primitive->m_d.m_szBulbImage = v; });
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Scale"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbScale; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); }, 0.2f, 2.f, 2, "Bulb size (1 = a #44/#555 bulb: 10 mm glass envelope in a 15 mm socket ring)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Brightness"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); }, 0.f, 4.f, 2);
+
       props.EndSection();
    }
 
