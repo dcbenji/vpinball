@@ -337,7 +337,7 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4, lightCenter_doShadow, 1), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4v, balls, 8), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4, staticColor_Alpha, 1), // Basic & Flasher
-   SHADER_UNIFORM(ShaderUniformType::Float4v, tracedParams, 13), // Basic (traced insert parameters, see fs_insert_traced.sc)
+   SHADER_UNIFORM(ShaderUniformType::Float4v, tracedParams, 12), // Basic (traced insert parameters, see fs_insert_traced.sc)
    SHADER_UNIFORM(ShaderUniformType::Float4v, domeParams, 14), // Basic (flasher dome parameters, see fs_flasher_dome.sc)
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)
 
@@ -380,7 +380,6 @@ enum class ShaderUniform : unsigned int
    SHADER_SAMPLER(tex_refraction, 6, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // screen space refraction
    SHADER_SAMPLER(tex_probe_depth, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // depth probe
    SHADER_SAMPLER(tex_traced_env, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // traced insert lamp-off atlas
-   SHADER_SAMPLER(tex_traced_bulb, 9, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // traced insert parallax bulb image (stage 9 is free in the traced technique)
 
    // PBR extensions (BGFX only)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrFactors, 1), // metallic/occlusion/roughness factors + AO flag
