@@ -1024,7 +1024,9 @@ void EditorChrome::RenderUndoHistory()
          ImGui::PopID();
       }
       // Clicking outside of the window dismisses it (not on the frame it opened, as the click that opened it may be still pending)
-      if (!m_undoHistoryJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+      // (a press on a row makes it the active item, which would read as not hovered and close the window before the row is released)
+      if (!m_undoHistoryJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+         && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
          open = false;
    }
    ImGui::End();
