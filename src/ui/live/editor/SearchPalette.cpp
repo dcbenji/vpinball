@@ -80,7 +80,7 @@ void SearchPalette::Open()
    // Retry types whose harvest failed earlier
    m_queue.clear();
    for (TypeInfo &type : m_types)
-      type.queued = false;
+      type.queued = 0;
 }
 
 int SearchPalette::TypeIndex(const string &key, const string &name)
@@ -114,7 +114,14 @@ void SearchPalette::BuildIndex()
       const ItemTypeEnum itemType = part->GetItemType();
       if (itemType == eItemTable)
          continue;
-      const int type = TypeIndex("p"s + std::to_string(static_cast<int>(itemType)), string(LocalString(EditableRegistry::GetTypeNameStringID(itemType)).m_szbuffer));
+      int type;
+      if (const auto cached = m_itemTypeIdx.find(static_cast<int>(itemType)); cached != m_itemTypeIdx.end())
+         type = cached->second;
+      else
+      {
+         type = TypeIndex("p"s + std::to_string(static_cast<int>(itemType)), string(LocalString(EditableRegistry::GetTypeNameStringID(itemType)).m_szbuffer));
+         m_itemTypeIdx[static_cast<int>(itemType)] = type;
+      }
       const string &name = part->GetName();
       m_partType[name] = type;
       m_objects.push_back({ PinKind::Part, name, name, Lower(name), type });
@@ -177,16 +184,23 @@ void SearchPalette::RefreshCatalog()
    }
 }
 
-// One representative object per type without catalog gets harvested (a few per frame)
+// Up to 3 objects per type without catalog get harvested (first, middle, last: conditional fields differ per object)
 void SearchPalette::QueueMissingTypes()
 {
-   for (const Object &o : m_objects)
+   vector<vector<size_t>> perType(m_types.size());
+   for (size_t i = 0; i < m_objects.size(); ++i)
+      if (m_types[m_objects[i].type].queued == 0 && m_types[m_objects[i].type].fields.empty())
+         perType[m_objects[i].type].push_back(i);
+   for (size_t t = 0; t < perType.size(); ++t)
    {
-      TypeInfo &type = m_types[o.type];
-      if (type.queued || !type.fields.empty())
+      const vector<size_t> &list = perType[t];
+      if (list.empty())
          continue;
-      type.queued = true;
-      m_queue.push_back({ o.kind, o.name });
+      m_types[t].queued = 3;
+      size_t picks[3] = { 0, list.size() / 2, list.size() - 1 };
+      for (size_t k = 0; k < 3; ++k)
+         if (k == 0 || picks[k] != picks[k - 1])
+            m_queue.push_back({ m_objects[list[picks[k]]].kind, m_objects[list[picks[k]]].name });
    }
 }
 
@@ -461,8 +475,20 @@ void SearchPalette::Activate(const Result &r, bool pin)
       return;
    }
    if (r.isField)
+   {
+      m_editor.m_showProperties = true; // A workspace may hide the panel, which would never consume the request
       PropertyPane::RequestFocus(key);
+   }
    Remember(r);
+}
+
+bool SearchPalette::ConsumedEscape()
+{
+   if (!m_escPending)
+      return false;
+   if (!ImGui::IsKeyDown(ImGuiKey_Escape))
+      m_escPending = false; // Released: this is the frame of the release, still consumed
+   return true;
 }
 
 void SearchPalette::Render()
@@ -502,7 +528,7 @@ void SearchPalette::Render()
    const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
    const float chrome = 2.f * style.WindowPadding.y + ImGui::GetFrameHeight() + 4.f * style.ItemSpacing.y + ImGui::GetTextLineHeight() + 1.f;
    const float maxList = std::max(3.f * rowHeight, vp->Size.y * 0.6f - chrome);
-   const size_t count = m_results.size();
+   size_t count = m_results.size();
    const float listHeight = count == 0 ? ImGui::GetTextLineHeight() : std::min(static_cast<float>(count) * rowHeight, maxList);
 
    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.2f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
@@ -531,6 +557,14 @@ void SearchPalette::Render()
       }
       ImGui::SetNextItemWidth(innerWidth);
       ImGui::InputTextWithHint("##query", "Search: object, field, type  (e.g. ramp refraction, l31 bulb depth)", &m_query);
+      if (m_query != m_lastQuery)
+      {
+         // Recompute now so that Enter acts on the list matching the text
+         m_lastQuery = m_query;
+         m_dirty = false;
+         Recompute();
+         count = m_results.size();
+      }
 
       if (count > 0)
       {
@@ -553,7 +587,10 @@ void SearchPalette::Render()
          }
       }
       if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      {
          close = true;
+         m_escPending = true;
+      }
 
       ImGui::Separator();
       if (count == 0)

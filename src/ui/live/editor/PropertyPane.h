@@ -97,6 +97,9 @@ public:
    void SetAfterHeader(std::function<void(PropertyPane &)> hook) { m_afterHeader = std::move(hook); }
    // While set, sections and fields are skipped (the full sheet is collapsed under the Advanced header)
    void SkipRest(bool skip) { m_skipRest = skip; }
+   // Dial surfaces (curated sections, pinned overlay): float fields with a known range draw as sliders (ctrl+click still types)
+   void SetLookSliders(bool on) { m_lookSliders = on; }
+   static bool LookSliderRange(const string &label, Unit displayUnit, float &vMin, float &vMax);
    bool IsHarvest() const { return m_pinMode == PinMode::Harvest; } // Drawn in the hidden window that registers the pin definitions
    bool IsSkippingRest() const { return m_skipRest; }
    // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
@@ -246,6 +249,7 @@ private:
    Tier m_tier = Tier::Advanced;
    std::function<void(PropertyPane &)> m_afterHeader;
    bool m_skipRest = false;
+   bool m_lookSliders = false;
    bool m_pinCombo = true; // Combo registers its own definition (off while a name list combo registers its own)
    static inline PinKey s_focusKey;
    static inline bool s_focusPending = false;
@@ -581,7 +585,10 @@ inline void PropertyPane::InputFloat(
    float displayValue = value;
    ConvertUnit(unit, displayUnit, displayValue, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputFloat(("##" + label).c_str(), &displayValue, 0.f, 0.f, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
+   float vMin, vMax;
+   const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax);
+   if (slider ? ImGui::SliderFloat(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str())
+              : ImGui::InputFloat(("##" + label).c_str(), &displayValue, 0.f, 0.f, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
    {
       value = displayValue;
       ConvertUnit(displayUnit, unit, value, nDecimalAdjust);

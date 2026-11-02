@@ -25,6 +25,7 @@ public:
    }
 
    void Render(float topBarHeight);
+   void FocusFilter() { m_focusFilter = true; } // Ctrl+F: type a filter right away
 
    // Width of the panel in logical pixels (scaled by the UI DPI)
    static constexpr float PaneWidth = 200.f;
@@ -64,6 +65,7 @@ private:
 
    EditorUI &m_editor;
    string m_filter;
+   bool m_focusFilter = false;
    bool m_syncToSelection = false; // When enabled, the tree is expanded & scrolled to reveal the selected part on selection change
    std::shared_ptr<EditorUIPart> m_lastSyncedPart; // Last selection revealed in the tree while syncing
 
@@ -86,6 +88,7 @@ private:
 
    // Lowercase names/materials of m_editables (only filled when a matching token exists), refreshed when the part count,
    // filter or view mode changes, or every second to catch renames
+   vector<const IEditable *> m_cachePtrs; // Editable each cached index was built from, a mismatch means the cache is stale
    vector<string> m_lowerNames;
    vector<string> m_lowerMaterials;
    size_t m_cacheSize = 0;

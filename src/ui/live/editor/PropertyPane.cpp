@@ -218,6 +218,35 @@ void PropertyPane::EndSection()
    m_inSection = false;
 }
 
+bool PropertyPane::LookSliderRange(const string& label, Unit displayUnit, float& vMin, float& vMax)
+{
+   // Fields whose useful range is known (display units). Percentages are 0..100, scales up to 200 %
+   struct Range
+   {
+      const char* label;
+      float vMin, vMax;
+   };
+   static constexpr Range ranges[] = {
+      { "Roughness", 0.f, 1.f }, { "Metallic", 0.f, 1.f }, { "Occlusion", 0.f, 1.f }, { "Clear Coat", 0.f, 1.f }, { "Clear Coat Roughness", 0.f, 1.f },
+      { "Edge Brightness", 0.f, 1.f }, { "Wrap Lighting", 0.f, 1.f }, { "Glossy Image Lerp", 0.f, 1.f }, { "Opacity", 0.f, 1.f }, { "Edge Opacity", 0.f, 1.f },
+      { "Thickness", 0.f, 1.f }, { "Falloff Power", 0.f, 10.f }, { "Reflection Strength", 0.f, 1.f }, { "Exposure", 0.f, 4.f },
+   };
+   for (const Range& range : ranges)
+      if (label == range.label)
+      {
+         vMin = range.vMin;
+         vMax = range.vMax;
+         return true;
+      }
+   if (displayUnit == Unit::PercentX100)
+   {
+      vMin = 0.f;
+      vMax = label.find("Scale") != string::npos ? 200.f : 100.f;
+      return true;
+   }
+   return false;
+}
+
 void PropertyPane::RequestFocus(const PinKey& key)
 {
    s_focusKey = key;
@@ -241,6 +270,10 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          s_focusPending = false;
          s_flashUntil = ImGui::GetTime() + 1.2;
          ImGui::SetScrollHereY(0.3f);
+         // Keyboard focus on the field, so a value can be typed right away (the last item is the field's widget, unless the
+         // row ends with the copy-to-other-version button of an inspection session)
+         if (!m_sectionHasSync)
+            ImGui::SetKeyboardFocusHere(-1);
       }
       else
       {

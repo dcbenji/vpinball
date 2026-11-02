@@ -198,8 +198,10 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    ImGui::PushID("##Curated"); // The curated rows draw the same fields as the full sheet below: keep their IDs apart
    const auto drawDefs = [&props, &cur](const vector<const PinnedPanel::Def *> &defs)
    {
+      props.SetLookSliders(true);
       for (const PinnedPanel::Def *def : defs)
          def->draw(props, cur.obj);
+      props.SetLookSliders(false);
    };
    if (!cur.look.empty() && props.BeginSection("Look"s))
    {

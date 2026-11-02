@@ -1227,11 +1227,19 @@ void EditorUI::RenderUI()
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
    // Search to field palette (Cmd+K on macOS, where ImGui maps Cmd to Ctrl)
-   if (ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (!io.WantTextInput || m_palette.IsOpen()))
+   const bool panelsShown = !m_inspectionModal.IsVisible() && !m_flyMode; // The palette and workspaces need the editor panels
+   if (panelsShown && ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (!io.WantTextInput || m_palette.IsOpen()))
       m_palette.Toggle();
+   // Outliner filter (shows the outliner if a workspace hid it)
+   if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   {
+      m_showOutliner = true;
+      m_outliner.FocusFilter();
+   }
+   const bool paletteEsc = m_palette.ConsumedEscape(); // The Esc that closed the search palette is not an editor Esc
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
    {
-      if (ImGui::IsKeyReleased(ImGuiKey_Escape))
+      if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
       {
          if (m_gizmoOperation != ImGuizmo::OPERATION(0))
             m_gizmoOperation = ImGuizmo::OPERATION(0); // Cancel current operation
@@ -1244,7 +1252,7 @@ void EditorUI::RenderUI()
          else if (m_selection.GetType() != Selection::S_NONE)
             ClearSelection(); // Cancel current selection
       }
-      else if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
+      else if (panelsShown && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
          m_pinned.ApplyWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Workspaces (Cmd on macOS)
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {

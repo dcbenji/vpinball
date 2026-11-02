@@ -228,16 +228,25 @@ void OutlinerPanel::RefreshFilterCache()
    const bool backdropView = m_editor.m_camMode == ViewMode::DesktopBackdrop;
    const double now = ImGui::GetTime();
    if (editables.size() == m_cacheSize && m_filterGeneration == m_cacheGeneration && backdropView == m_cacheBackdrop && now - m_cacheTime < 1.0)
-      return;
+   {
+      // Reordered (drag & drop) or replaced (undo) parts keep the count: compare the content
+      bool same = true;
+      for (size_t i = 0; i < editables.size() && same; ++i)
+         same = editables[i]->GetEditable() == m_cachePtrs[i];
+      if (same)
+         return;
+   }
    m_cacheSize = editables.size();
    m_cacheGeneration = m_filterGeneration;
    m_cacheBackdrop = backdropView;
    m_cacheTime = now;
+   m_cachePtrs.resize(editables.size());
    m_lowerNames.resize(editables.size());
    m_lowerMaterials.resize(editables.size());
    for (size_t i = 0; i < editables.size(); ++i)
    {
       const IEditable *const editable = editables[i]->GetEditable();
+      m_cachePtrs[i] = editable;
       if (m_tokens.names.empty())
          m_lowerNames[i].clear();
       else
@@ -469,7 +478,13 @@ void OutlinerPanel::Render(float topBarHeight)
       ImGui::SameLine();
       const float clearFilterWidth = ImGui::CalcTextSize(ICON_FK_TIMES).x + ImGui::GetStyle().FramePadding.x * 2.0f;
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - clearFilterWidth - ImGui::GetStyle().ItemSpacing.x);
+      if (m_focusFilter)
+      {
+         ImGui::SetKeyboardFocusHere();
+         m_focusFilter = false;
+      }
       ImGui::InputTextWithHint("##OutlinerFilter", "Filter: name t:type m:material", &m_filter);
+      ImGui::SetItemTooltip("Name words, t:light, m:<material>, n:<name> (Ctrl+F)");
    }
    {
       ImGui::SameLine();

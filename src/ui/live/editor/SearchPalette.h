@@ -27,6 +27,10 @@ public:
 
    void Render();
 
+   // True while the Esc press that closed the palette is still held, and on the frame of its release: the editor's own Esc
+   // handler (which acts on the release) must skip that Esc. Call it every frame the editor checks for Esc.
+   bool ConsumedEscape();
+
 private:
    struct Field
    {
@@ -38,7 +42,7 @@ private:
    {
       string name, lower;
       vector<Field> fields;
-      bool queued = false; // A representative object was queued for harvest
+      int queued = 0; // Representative objects queued for harvest (conditional fields differ per object)
    };
    struct Object
    {
@@ -98,6 +102,8 @@ private:
    vector<TypeInfo> m_types;
    std::unordered_map<string, int> m_typeByKey;
    std::unordered_map<string, int> m_partType; // Part name -> type
+   std::unordered_map<int, int> m_itemTypeIdx; // Item type -> type index
+   bool m_escPending = false;
    int m_tableType = -1, m_matType = -1;
    vector<Object> m_objects;
    struct QueueItem

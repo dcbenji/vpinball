@@ -57,6 +57,7 @@ string PinKey::Id() const { return ObjectId(kind, name) + '\x1f' + prop; }
 PinnedPanel::PinnedPanel(EditorUI &editor)
    : m_editor(editor)
 {
+   ResetWorkspaces();
 }
 
 PinnedPanel::~PinnedPanel() = default;
@@ -221,6 +222,14 @@ void PinnedPanel::ApplyWorkspace(int index)
       return;
    if (m_activeWorkspace >= 0)
       CaptureWorkspace(m_workspaces[m_activeWorkspace]);
+   else
+   {
+      // First use with this table: the current panels and pins become the Layout workspace, and a target without its own
+      // pins starts from them (nothing pinned so far is lost)
+      CaptureWorkspace(m_workspaces[0]);
+      if (m_workspaces[index].pins.empty())
+         m_workspaces[index].pins = m_pins;
+   }
    m_activeWorkspace = index;
    const Workspace &ws = m_workspaces[index];
    m_pins = ws.pins;
@@ -241,6 +250,8 @@ void PinnedPanel::LoadWorkspaces(const string &json)
    const nlohmann::json doc = nlohmann::json::parse(json, nullptr, false);
    if (!doc.is_object())
       return;
+   try // Hand edited files may hold values of the wrong type (nlohmann's value() throws then)
+   {
    const string active = doc.value("active", ""s);
    if (const auto list = doc.find("workspaces"); list != doc.end() && list->is_array())
       for (const auto &entry : *list)
@@ -273,6 +284,12 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                m_activeWorkspace = i;
          }
       }
+   }
+   catch (const nlohmann::json::exception &)
+   {
+      ResetWorkspaces();
+      m_activeWorkspace = -1;
+   }
 }
 
 void PinnedPanel::SyncWithTable()
@@ -300,6 +317,8 @@ void PinnedPanel::SyncWithTable()
       m_visible = true;
    // The active workspace's panels (its pins are the table's current pin list loaded above)
    LoadWorkspaces(base->m_editorWorkspaces);
+   m_editor.m_showOutliner = true; // Panels of a table without workspaces: all shown
+   m_editor.m_showProperties = true;
    if (m_activeWorkspace >= 0)
    {
       const Workspace &ws = m_workspaces[m_activeWorkspace];
@@ -525,6 +544,7 @@ void PinnedPanel::Render(float topBarHeight)
       PropertyPane props(editor.m_table);
       ApplyUnits(props);
       props.SetPinning(this, PropertyPane::PinMode::Overlay);
+      props.SetLookSliders(true); // The overlay is a dial surface
       const bool inspect = editor.IsInspectMode();
       const vector<PinKey> pins = m_pins; // Rows may unpin while drawn
       for (const auto &[kind, name] : objects)
