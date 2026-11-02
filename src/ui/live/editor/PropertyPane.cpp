@@ -28,6 +28,12 @@ MaterialEditUndo::MaterialEditUndo(PinUndo &undo, PinTable *table, Material *mat
       m_before = std::make_unique<Material>(*m_material);
 }
 
+Material *MaterialEditUndo::Find(const PinTable *table, uint64_t uid)
+{
+   const auto it = std::ranges::find_if(table->m_materials, [uid](const Material *material) { return material->m_uid.Value() == uid; });
+   return it == table->m_materials.end() ? nullptr : *it;
+}
+
 bool MaterialEditUndo::Commit(int modifiedField, const string &label)
 {
    // The step being dragged / typed (same material, pane and field): only its first frame records a step
@@ -60,35 +66,32 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
       return false;
    s_material = m_material;
    s_field = field;
-   // The material may be deleted before the step is undone: check it is still in the table
+   // The material is found again by its runtime identity (not by address or name: a material deleted since is not undoable, and a new one of
+   // the same name may have been imported at the freed address). If it is gone the step is skipped, see ConsumeSkipped
    m_undo.BeginUndo();
    m_undo.SetFieldLabel(label);
-   // Undoable and redoable: undoing captures the state it replaces so that the step can be redone. The material may be deleted in between
-   // (a material created after a delete can reuse the freed address: the name must match too)
-   const auto inTable = [table = m_table](const Material* material, const string& name)
-   { return std::ranges::find(table->m_materials, material) != table->m_materials.end() && material->m_name == name; };
-   const auto inTableAddress = [table = m_table](const Material* material) { return std::ranges::find(table->m_materials, material) != table->m_materials.end(); };
-   const string nameAfter = m_material->m_name; // The material as the undo finds it
-   const string nameBefore = m_before->m_name; // ... and as the redo finds it
+   // Undoable and redoable: undoing captures the state it replaces so that the step can be redone
+   const uint64_t uid = m_material->m_uid.Value();
    m_undo.MarkForAction(
-      [inTable, nameAfter, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
+      [table = m_table, uid, before = std::shared_ptr<Material>(std::move(m_before))]()
       {
-         if (inTable(material, nameAfter))
+         if (Material *const material = Find(table, uid))
             *material = *before;
+         else
+            NoteSkipped();
       },
-      [inTable, inTableAddress, nameAfter, nameBefore, material = m_material]() -> std::function<void()>
+      // Also used for the inverse record: the material is in either state (edited or restored), the restore applies the other one
+      [table = m_table, uid]() -> std::function<void()>
       {
-         // Also used for the inverse record: the material is in either state (edited or restored), the restore expects the other one
-         if (!inTableAddress(material)) // (the address first: a deleted material must not be read)
-            return []() {};
-         const string cur = material->m_name;
-         if (cur != nameAfter && cur != nameBefore)
-            return []() {};
-         const string expected = (cur == nameAfter) ? nameBefore : nameAfter;
-         return [inTable, expected, material, state = std::make_shared<Material>(*material)]()
+         const Material *const material = Find(table, uid);
+         if (material == nullptr)
+            return []() { NoteSkipped(); };
+         return [table, uid, state = std::make_shared<Material>(*material)]()
          {
-            if (inTable(material, expected))
-               *material = *state;
+            if (Material *const target = Find(table, uid))
+               *target = *state;
+            else
+               NoteSkipped();
          };
       });
    m_undo.EndUndo();
@@ -96,16 +99,11 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    return true;
 }
 
-void PropertyPane::ArmBulbBroadcast(const IEditable* part)
+void PropertyPane::ApplyBulbToAllButton(IEditable* part)
 {
-   m_broadcast.clear();
-   m_broadcastApplied = false;
-   const auto isTraced = [](const IEditable* p) { return p->GetItemType() == eItemPrimitive && static_cast<const Primitive*>(p)->IsTracedInsert(); };
-   if (!s_applyBulbToAll || part == nullptr || !isTraced(part))
-      return;
-   for (IEditable* other : m_table->GetParts())
-      if (other != part && isTraced(other))
-         m_broadcast.push_back(other);
+   if (ImGui::Button("Apply to all traced inserts") && m_pins != nullptr)
+      m_pins->RequestApplyBulb(part);
+   ImGui::SetItemTooltip("Copies this insert's bulb values (depth, spot size, brightness, stretch, offset) to every other traced insert of the table, as one undo step");
 }
 
 void PropertyPane::SetShowStartup(bool showStartup)
@@ -747,7 +745,7 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       if (ImGui::MenuItem("Add bulb set to Quick Favorites"))
          m_pins->PinBulbSet(part);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Add the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset, apply to all)");
+         ImGui::SetTooltip("Add the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset)");
    }
    if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == Material::PBR)
    {

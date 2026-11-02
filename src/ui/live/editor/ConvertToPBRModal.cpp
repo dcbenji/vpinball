@@ -8,6 +8,7 @@
 #include "parts/Material.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "PropertyPane.h"
 
 namespace VPX::EditorUI
 {
@@ -143,11 +144,11 @@ void ConvertToPBRModal::Apply()
    PinTable *const table = m_editor.m_table;
    PBRConvertMaterialOptions opts;
    opts.deriveMetallicFromGlossy = m_deriveMetallic;
-   vector<std::pair<Material *, Material>> snapshots;
+   vector<std::pair<uint64_t, Material>> snapshots; // (runtime identity of the material, its state)
    int nMat = 0, nLight = 0;
    for (const MaterialItem &it : m_materials)
       if (it.convert)
-         snapshots.emplace_back(it.mat, *it.mat);
+         snapshots.emplace_back(it.mat->m_uid.Value(), *it.mat);
    m_editor.m_undo.BeginUndo();
    for (const LightItem &it : m_lights)
       if (it.convert)
@@ -155,23 +156,33 @@ void ConvertToPBRModal::Apply()
    m_editor.m_undo.MarkForAction(
       [table, snapshots]()
       {
-         // A material deleted since (not undoable) is gone: skip it. The name must match too, as a new material may reuse the freed address
-         for (const auto &[mat, snapshot] : snapshots)
-            if (std::ranges::find(table->m_materials, mat) != table->m_materials.end() && mat->m_name == snapshot.m_name)
+         // A material deleted since (not undoable) is gone: skip it (found by its runtime identity, as a new one may reuse its name or address)
+         for (const auto &[uid, snapshot] : snapshots)
+         {
+            if (Material *const mat = MaterialEditUndo::Find(table, uid))
                *mat = snapshot;
+            else
+               MaterialEditUndo::NoteSkipped();
+         }
       },
       // Redo: the converted state of the materials, captured when the step is undone
       [table, snapshots]() -> std::function<void()>
       {
-         vector<std::pair<Material *, Material>> converted;
-         for (const auto &[mat, snapshot] : snapshots)
-            if (std::ranges::find(table->m_materials, mat) != table->m_materials.end() && mat->m_name == snapshot.m_name)
-               converted.emplace_back(mat, *mat);
+         vector<std::pair<uint64_t, Material>> converted;
+         for (const auto &[uid, snapshot] : snapshots)
+         {
+            if (const Material *const mat = MaterialEditUndo::Find(table, uid))
+               converted.emplace_back(uid, *mat);
+            else
+               MaterialEditUndo::NoteSkipped();
+         }
          return [table, converted]()
          {
-            for (const auto &[mat, state] : converted)
-               if (std::ranges::find(table->m_materials, mat) != table->m_materials.end() && mat->m_name == state.m_name)
+            for (const auto &[uid, state] : converted)
+               if (Material *const mat = MaterialEditUndo::Find(table, uid))
                   *mat = state;
+               else
+                  MaterialEditUndo::NoteSkipped();
          };
       });
    for (MaterialItem &it : m_materials)

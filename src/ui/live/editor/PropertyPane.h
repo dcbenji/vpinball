@@ -35,6 +35,11 @@ public:
    // Called once the pane is drawn: `modifiedField` is the id of the field edited this frame (0 if none)
    // Returns true when a new undo step was recorded (the caller then breaks the part edit coalescing)
    bool Commit(int modifiedField, const string &label);
+   // The material of the table with this runtime identity (Material::m_uid), null if it was deleted since
+   static Material *Find(const PinTable *table, uint64_t uid);
+   // Material undo / redo steps skipped since the last call because their material is gone (the caller reports it)
+   static int ConsumeSkipped() { return std::exchange(s_skipped, 0); }
+   static void NoteSkipped() { s_skipped++; }
 
 private:
    PinUndo &m_undo;
@@ -42,6 +47,7 @@ private:
    Material *const m_material;
    const int m_source;
    std::unique_ptr<Material> m_before; // The material as it was before the pane was drawn
+   static inline int s_skipped = 0;
 };
 
 // Resolves to a part's data class (the type of its m_d member); member pointers to fields declared on a data class base also convert
@@ -82,9 +88,6 @@ public:
    void SetCoEditedParts(const vector<IEditable*>& parts) { m_coEdited = parts; }
    bool IsMultiEdit() const { return !m_coEdited.empty(); }
 
-   // Apply-to-all broadcast: fields flagged with BroadcastFields(true) (in the panel; pinned rows remember the flag) also write
-   // their new value to the broadcast parts (e.g. every other traced insert). Unlike multi-edit, the fields do not show a mixed
-   // state, and the caller does the undo / live-edit bookkeeping of the parts when WasBroadcast() is true.
    // Field focus (search palette): the next panel row drawing this field scrolls to it, then flashes for a moment. While the
    // request is pending, the panel opens its sections and its Advanced header so that the field gets drawn
    static void RequestFocus(const PinKey &key);
@@ -95,19 +98,14 @@ public:
    void SetHighlight(const vector<string> *terms) { m_highlight = terms; }
    static bool IsFocusPending() { return s_focusPending; }
    static const PinKey &GetFocusKey() { return s_focusKey; }
-   static inline bool s_applyBulbToAll = false; // Session toggle ("Apply to all traced inserts"), not saved to the table
-   void SetBroadcastParts(const vector<IEditable*>& parts) { m_broadcast = parts; }
-   const vector<IEditable*>& GetBroadcastParts() const { return m_broadcast; }
-   // Arms the "Apply to all traced inserts" broadcast for the pane's part: when the toggle is on and the part is a traced insert,
-   // the other traced inserts of the table become the broadcast parts (otherwise none). Also resets WasBroadcast()
-   void ArmBulbBroadcast(const IEditable* part);
-   void BroadcastFields(bool on) { m_broadcastField = on; }
-   bool WasBroadcast() const { return m_broadcastApplied; }
+   // "Apply to all traced inserts" button: queues the copy of this traced insert's bulb values to the other traced inserts of the table
+   // (one undo step, run after the areas are drawn)
+   void ApplyBulbToAllButton(IEditable* part);
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
 
    // Field tiers: Common fields make the curated sections (Look, Transform) the properties panel draws first; Advanced fields only
-   // live in the full sheet, drawn below them under a collapsed "Advanced" header. Panes scope a run of fields with SetTier (same
-   // pattern as BroadcastFields) or a TierScope; the panel also curates fields by group and label (see PropertiesPanel)
+   // live in the full sheet, drawn below them under a collapsed "Advanced" header. Panes scope a run of fields with SetTier or a
+   // TierScope; the panel also curates fields by group and label (see PropertiesPanel)
    enum class Tier
    {
       Advanced,
@@ -167,8 +165,6 @@ public:
    void Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName);
    void EditableHeader(const string& typeName, IEditable* editable);
    void Separator(const string& label);
-   // A checkbox on session state (not part data): never marks the part as edited. Pinnable like the other fields
-   template <class T> void SessionToggle(T* obj, const string& label, bool& state, const char* tooltip = nullptr);
    template <class T> void Checkbox(T* obj, const string& label, const std::function<bool(const T*)>& getter, const std::function<void(T*, bool)>& setter, const char* tooltip = nullptr);
    template <class T> void InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip = nullptr);
    template <class T>
@@ -395,9 +391,6 @@ private:
    bool m_showStartup = false;
    PinTable* const m_table;
    vector<IEditable*> m_coEdited; // Other parts of a uniform-type selection, co-edited with the pane's object
-   vector<IEditable*> m_broadcast; // Parts receiving the values of the broadcast fields
-   bool m_broadcastField = false; // The fields drawn now are broadcast fields
-   bool m_broadcastApplied = false; // A broadcast field was changed
    bool m_inSection = false;
    bool m_sectionHasSync = false;
    float m_syncWidth = 0.f;
@@ -614,28 +607,6 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
 }
 
 template <class T>
-inline void PropertyPane::SessionToggle(T* obj, const string& label, bool& state, const char* tooltip)
-{
-   if (m_skipRest)
-      return;
-   assert(m_inSection);
-   PropertyLabel(label, tooltip);
-   ImGui::PushID(label.c_str());
-   FlatCheckbox(("##" + label).c_str(), &state);
-   WidgetTooltip(tooltip);
-   PinField<T>(obj, label,
-      [&]() -> PinDrawFn
-      {
-         return [label, pState = &state, tip = PinTip(tooltip)](PropertyPane &p, void *o)
-         {
-            if (T *t = PinCast<T>(o))
-               p.SessionToggle<T>(t, label, *pState, PinTipPtr(tip));
-         };
-      });
-   ImGui::PopID();
-}
-
-template <class T>
 inline void PropertyPane::InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip)
 {
    if (m_skipRest)
@@ -745,12 +716,6 @@ inline void PropertyPane::SliderFloat(
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
          setter(target.display, value);
-      if (m_broadcastField && !m_broadcast.empty())
-      {
-         for (const CoTarget<T>& target : ResolveTargets(m_broadcast, sync, obj))
-            setter(target.display, value);
-         m_broadcastApplied = true;
-      }
       m_modified = m_modifyFieldId;
    }
    ImGui::PopItemFlag();
@@ -759,13 +724,11 @@ inline void PropertyPane::SliderFloat(
    PinField<T>(obj, label,
       [&]() -> PinDrawFn
       {
-         return [label, getter, setter, vMin, vMax, nDecimals, broadcast = m_broadcastField, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         return [label, getter, setter, vMin, vMax, nDecimals, tip = PinTip(tooltip)](PropertyPane &p, void *o)
          {
             if (T *t = PinCast<T>(o))
             {
-               p.m_broadcastField = broadcast; // Pinned rows keep the field's apply-to-all behaviour
                p.SliderFloat<T>(t, label, getter, setter, vMin, vMax, nDecimals, PinTipPtr(tip));
-               p.m_broadcastField = false;
             }
          };
       },
