@@ -67,6 +67,7 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    // (a material created after a delete can reuse the freed address: the name must match too)
    const auto inTable = [table = m_table](const Material* material, const string& name)
    { return std::ranges::find(table->m_materials, material) != table->m_materials.end() && material->m_name == name; };
+   const auto inTableAddress = [table = m_table](const Material* material) { return std::ranges::find(table->m_materials, material) != table->m_materials.end(); };
    const string nameAfter = m_material->m_name; // The material as the undo finds it
    const string nameBefore = m_before->m_name; // ... and as the redo finds it
    m_undo.MarkForAction(
@@ -75,14 +76,19 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
          if (inTable(material, nameAfter))
             *material = *before;
       },
-      [inTable, nameAfter, nameBefore, material = m_material]() -> std::function<void()>
+      [inTable, inTableAddress, nameAfter, nameBefore, material = m_material]() -> std::function<void()>
       {
-         if (!inTable(material, nameAfter))
+         // Also used for the inverse record: the material is in either state (edited or restored), the restore expects the other one
+         if (!inTableAddress(material)) // (the address first: a deleted material must not be read)
             return []() {};
-         return [inTable, nameBefore, material, after = std::make_shared<Material>(*material)]()
+         const string cur = material->m_name;
+         if (cur != nameAfter && cur != nameBefore)
+            return []() {};
+         const string expected = (cur == nameAfter) ? nameBefore : nameAfter;
+         return [inTable, expected, material, state = std::make_shared<Material>(*material)]()
          {
-            if (inTable(material, nameBefore))
-               *material = *after;
+            if (inTable(material, expected))
+               *material = *state;
          };
       });
    m_undo.EndUndo();
