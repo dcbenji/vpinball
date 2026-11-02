@@ -318,6 +318,15 @@ void PinnedPanel::SyncWithTable()
       return;
    m_sourceTable = base;
    m_pins.clear();
+   // The Properties editor's tab lists point into the definitions: drop them with the definitions
+   PropertiesPanel::Curation &curation = m_editor.m_properties.m_curation;
+   curation.active = false;
+   curation.stamp = 0;
+   for (auto &list : curation.tabs)
+      list.clear();
+   curation.look.clear();
+   curation.transform.clear();
+   m_editor.m_properties.m_materialCuration = PropertiesPanel::Curation();
    m_defs.clear();
    m_harvested.clear();
    m_groupRequests.clear();
@@ -337,6 +346,11 @@ void PinnedPanel::SyncWithTable()
    // loaded above)
    m_editor.m_showOutliner = true;
    m_editor.m_showProperties = true;
+   m_editor.m_showSidebar = false;
+   m_editor.m_sidebarTab = EditorUI::SidebarTab::Item;
+   m_editor.m_outlinerWidth = OutlinerPanel::PaneWidth;
+   m_editor.m_propertiesWidth = PropertiesPanel::PaneWidth;
+   m_editor.m_sidebarWidth = 300.f;
    if (m_activeWorkspace >= 0)
    {
       const vector<PinKey> pins = m_pins;
@@ -625,7 +639,7 @@ void PinnedPanel::RenderLookToolbar()
    ImGui::Separator();
 }
 
-void PinnedPanel::RenderItemTab()
+void PinnedPanel::RenderItemTab(bool hovered)
 {
    // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
    EditorUI &editor = m_editor;
@@ -645,7 +659,7 @@ void PinnedPanel::RenderItemTab()
    ApplyUnits(props);
    props.SetPinning(this, PropertyPane::PinMode::Overlay);
    props.SetLookSliders(true);
-   RenderObjectRows(props, properties.m_curation.kind, properties.m_curation.name, keys, false, ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows));
+   RenderObjectRows(props, properties.m_curation.kind, properties.m_curation.name, keys, false, hovered);
 }
 
 void PinnedPanel::RenderViewTab()
@@ -684,11 +698,15 @@ void PinnedPanel::Render(float topBarHeight)
    if (editor.m_table->IsLocked())
       return;
    SyncWithTable();
+   ProcessGroupRequests(); // Quick sets added from the Properties editor, whether or not the favorites are shown
    const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Look;
-   if (lookShown || m_quickOpen)
+   if (lookShown || m_quickOpen || editor.m_openQuickFavorites)
       LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun
    if (!editor.m_showSidebar)
       return;
+   // The Item tab shows the Properties editor's Transform list: keep it current when the Properties editor is hidden
+   if (!editor.m_showProperties && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
+      editor.m_properties.PrepareCuration();
 
    // N-panel: a fixed area along the viewport's right edge (left of the Properties editor), resized by its splitter
    const float dpi = editor.m_liveUI.GetDPI();
@@ -721,7 +739,7 @@ void PinnedPanel::Render(float topBarHeight)
             ImGui::BeginChild("##SidebarContent");
             switch (tab)
             {
-            case EditorUI::SidebarTab::Item: RenderItemTab(); break;
+            case EditorUI::SidebarTab::Item: RenderItemTab(hovered); break;
             case EditorUI::SidebarTab::Look:
                RenderLookToolbar();
                RenderFavoriteRows(hovered);
@@ -753,7 +771,8 @@ void PinnedPanel::RenderQuickFavorites()
       return;
    ImGui::TextUnformatted("Quick Favorites");
    ImGui::Separator();
-   RenderFavoriteRows(true);
+   // Undo snapshots only while interacting with the popup (as the sidebar)
+   RenderFavoriteRows(ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive()));
    ImGui::EndPopup();
 }
 

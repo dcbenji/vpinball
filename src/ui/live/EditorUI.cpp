@@ -788,6 +788,8 @@ void EditorUI::RenderUI()
    }
    if (!m_inspectionModal.IsVisible())
       m_pinned.Render(m_chrome.GetTopBarHeight()); // N-panel
+   if (!showFullUI)
+      m_openQuickFavorites = false;
    if (showFullUI)
    {
       m_pinned.RenderQuickFavorites(); // Q

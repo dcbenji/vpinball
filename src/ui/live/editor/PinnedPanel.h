@@ -138,7 +138,7 @@ private:
    void RenderFavoriteRows(bool hovered);
    void RenderObjectRows(PropertyPane &props, PinKind kind, const string &name, const vector<PinKey> &keys, bool removable, bool hovered);
    void RenderLookToolbar();
-   void RenderItemTab();
+   void RenderItemTab(bool hovered);
    void RenderViewTab();
    void ApplyUnits(PropertyPane &props) const;
    void PinSelectionSeeThrough();
