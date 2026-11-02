@@ -277,26 +277,17 @@ void PinnedPanel::SaveTo(PinTable *table) const
    {
       // Layout is only shown as active: it becomes the table's workspace as soon as the user changed the areas (editor types, widths,
       // visibility, sidebar), otherwise the table data is left as it is
+      static const AreaLayout defaultLayout;
       const Workspace &now = workspaces[m_activeWorkspace];
-      const EditorUI &editor = m_editor;
-      const bool untouched = now.outliner && now.properties && !now.sidebar && now.sidebarTab == static_cast<int>(EditorUI::SidebarTab::Item)
-         && now.leftEditor == static_cast<int>(EditorUI::AreaEditor::Outliner) && now.rightEditor == static_cast<int>(EditorUI::AreaEditor::Properties)
-         && now.outlinerMode == 0 && now.outlinerTypes == static_cast<int64_t>(OutlinerPanel::AllTypesMask)
-         && now.outlinerWidth == OutlinerPanel::PaneWidth && now.propertiesWidth == PropertiesPanel::PaneWidth && now.sidebarWidth == 300.f;
-      (void)editor;
+      const bool untouched = now.layout == defaultLayout && !now.sidebar && now.sidebarTab == static_cast<int>(EditorUI::SidebarTab::Item)
+         && now.outlinerMode == 0 && now.outlinerTypes == static_cast<int64_t>(OutlinerPanel::AllTypesMask) && now.sidebarWidth == 300.f;
       if (untouched)
          return;
    }
-   // Widths of 0 mean 'keep the current one' when loading; what is written is the real width
+   // A width of 0 means 'keep the current one' when loading; what is written is the real width
    for (Workspace &ws : workspaces)
-   {
-      if (ws.outlinerWidth <= 0.f)
-         ws.outlinerWidth = m_editor.m_outlinerWidth;
-      if (ws.propertiesWidth <= 0.f)
-         ws.propertiesWidth = m_editor.m_propertiesWidth;
       if (ws.sidebarWidth <= 0.f)
          ws.sidebarWidth = m_editor.m_sidebarWidth;
-   }
    nlohmann::ordered_json list = nlohmann::ordered_json::array();
    for (const Workspace &ws : workspaces)
    {
@@ -304,10 +295,15 @@ void PinnedPanel::SaveTo(PinTable *table) const
       for (const PinKey &pin : ws.pins)
          pins.push_back({ { "kind", PinKindName(pin.kind) }, { "name", pin.name }, { "prop", pin.prop } });
       static constexpr const char *tabs[] = { "Item", "Look", "View" };
-      list.push_back({ { "name", ws.name }, { "outliner", ws.outliner }, { "properties", ws.properties }, { "sidebar", ws.sidebar },
-         { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "outliner_width", ws.outlinerWidth }, { "properties_width", ws.propertiesWidth },
-         { "sidebar_width", ws.sidebarWidth }, { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "left_editor", ws.leftEditor },
-         { "right_editor", ws.rightEditor }, { "pins", pins } });
+      // The layout tree, then the legacy keys derived from it for the older builds (they only know a left and a right area)
+      bool outliner = true, properties = true;
+      float outlinerWidth = AreaLayout::kDefaultOutlinerWidth, propertiesWidth = AreaLayout::kDefaultPropertiesWidth;
+      int leftEditor = 0, rightEditor = 1;
+      ws.layout.ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+      list.push_back({ { "name", ws.name }, { "sidebar", ws.sidebar }, { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "sidebar_width", ws.sidebarWidth },
+         { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "layout", nlohmann::ordered_json::parse(ws.layout.ToJson().dump()) }, { "outliner", outliner },
+         { "properties", properties }, { "outliner_width", outlinerWidth }, { "properties_width", propertiesWidth }, { "left_editor", leftEditor },
+         { "right_editor", rightEditor }, { "pins", pins } });
    }
    nlohmann::ordered_json doc = { { "active", workspaces[m_activeWorkspace].name }, { "workspaces", list } };
    table->m_editorWorkspaces = doc.dump();
@@ -315,25 +311,34 @@ void PinnedPanel::SaveTo(PinTable *table) const
 
 void PinnedPanel::ResetWorkspaces()
 {
-   m_workspaces[0] = Workspace { "Layout"s, true, true, false, static_cast<int>(EditorUI::SidebarTab::Item) };
-   m_workspaces[1] = Workspace { "Look-dev"s, false, true, true, static_cast<int>(EditorUI::SidebarTab::Look) };
-   m_workspaces[2] = Workspace { "Wiring"s, true, true, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   // Look-dev is the default tree without the Outliner (hidden), with the N-panel on its Look tab
+   m_workspaces[0] = Workspace { "Layout"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   m_workspaces[1] = Workspace { "Look-dev"s, true, static_cast<int>(EditorUI::SidebarTab::Look) };
+   m_workspaces[1].layout = AreaLayout::FromLegacy(false, true, 0.f, 0.f, static_cast<int>(AreaType::Outliner), static_cast<int>(AreaType::Properties));
+   m_workspaces[2] = Workspace { "Wiring"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   // Wiring: with kWiringBesideScript the script sits under the Properties editor, beside the fields being wired (Ben's call: the
+   // recommended preset of the layout spec), otherwise it is Layout, as it was before the layout tree
+   static constexpr bool kWiringBesideScript = false;
+   if constexpr (kWiringBesideScript)
+   {
+      const nlohmann::json wiring = nlohmann::json::parse(R"({ "split": "vertical", "fixed": "first", "size": 200, "children": [ { "editor": "Outliner" },
+         { "split": "vertical", "fixed": "second", "size": 360, "children": [ { "editor": "Viewport" },
+            { "split": "horizontal", "fixed": "second", "size": 380, "children": [ { "editor": "Properties" }, { "editor": "Script" } ] } ] } ] })");
+      AreaLayout layout;
+      if (layout.FromJson(wiring))
+         m_workspaces[2].layout = layout;
+   }
 }
 
 void PinnedPanel::CaptureWorkspace(Workspace &ws) const
 {
    const EditorUI &editor = m_editor;
-   ws.outliner = editor.m_showOutliner;
-   ws.properties = editor.m_showProperties;
    ws.sidebar = editor.m_showSidebar;
    ws.sidebarTab = static_cast<int>(editor.m_sidebarTab);
-   ws.outlinerWidth = editor.m_outlinerWidth;
-   ws.propertiesWidth = editor.m_propertiesWidth;
    ws.sidebarWidth = editor.m_sidebarWidth;
    ws.outlinerMode = editor.m_outliner.GetDisplayMode();
    ws.outlinerTypes = editor.m_outliner.GetTypeMask();
-   ws.leftEditor = static_cast<int>(editor.m_leftEditor);
-   ws.rightEditor = static_cast<int>(editor.m_rightEditor);
+   ws.layout = editor.m_areas;
    ws.pins = m_pins;
 }
 
@@ -364,21 +369,15 @@ void PinnedPanel::ApplyWorkspace(int index)
    const Workspace &ws = m_workspaces[index];
    EditorUI &editor = m_editor;
    m_pins = ws.pins;
-   editor.m_showOutliner = ws.outliner;
-   editor.m_showProperties = ws.properties;
    editor.m_showSidebar = ws.sidebar;
    editor.m_sidebarTab = static_cast<EditorUI::SidebarTab>(clamp(ws.sidebarTab, 0, 2));
-   if (ws.outlinerWidth > 0.f)
-      editor.m_outlinerWidth = ws.outlinerWidth;
-   if (ws.propertiesWidth > 0.f)
-      editor.m_propertiesWidth = ws.propertiesWidth;
    if (ws.sidebarWidth > 0.f)
       editor.m_sidebarWidth = ws.sidebarWidth;
    if (ws.outlinerMode >= 0)
       editor.m_outliner.SetDisplayMode(ws.outlinerMode);
    if (ws.outlinerTypes >= 0)
       editor.m_outliner.SetTypeMask(static_cast<uint32_t>(ws.outlinerTypes));
-   editor.SetAreaEditors(ws.leftEditor, ws.rightEditor);
+   editor.SetAreaLayout(ws.layout); // A copy: the workspace keeps its own tree until it is captured again
 }
 
 void PinnedPanel::LoadWorkspaces(const string &json)
@@ -404,19 +403,39 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                Workspace &ws = m_workspaces[i];
                if (ws.name != name)
                   continue;
-               ws.outliner = entry.value("outliner", ws.outliner);
-               ws.properties = entry.value("properties", ws.properties);
                ws.sidebar = entry.value("sidebar", entry.value("pinned", ws.sidebar));
                const string tab = entry.value("sidebar_tab", ""s);
                if (!tab.empty())
                   ws.sidebarTab = tab == "Look" ? 1 : tab == "View" ? 2 : 0;
-               ws.outlinerWidth = entry.value("outliner_width", ws.outlinerWidth);
-               ws.propertiesWidth = entry.value("properties_width", ws.propertiesWidth);
                ws.sidebarWidth = entry.value("sidebar_width", ws.sidebarWidth);
                ws.outlinerMode = entry.value("outliner_mode", ws.outlinerMode);
                ws.outlinerTypes = entry.value("outliner_types", ws.outlinerTypes);
-               ws.leftEditor = entry.value("left_editor", ws.leftEditor); // Missing in tables saved before the editor types: the defaults
-               ws.rightEditor = entry.value("right_editor", ws.rightEditor);
+               // The "layout" tree when it is there and valid, otherwise the tree equivalent to the legacy keys (tables saved before the layout
+               // tree: visibility, widths and editor types of the left and right areas, the defaults of the workspace for the missing ones)
+               bool haveLayout = false;
+               if (const auto layout = entry.find("layout"); layout != entry.end())
+               {
+                  AreaLayout parsed;
+                  if (parsed.FromJson(*layout) && parsed.Validate()) // Logs the reason when it is rejected
+                  {
+                     ws.layout = parsed;
+                     haveLayout = true;
+                  }
+               }
+               if (!haveLayout)
+               {
+                  bool outliner = true, properties = true;
+                  float outlinerWidth = 0.f, propertiesWidth = 0.f;
+                  int leftEditor = 0, rightEditor = 1;
+                  ws.layout.ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+                  outliner = entry.value("outliner", outliner);
+                  properties = entry.value("properties", properties);
+                  outlinerWidth = entry.value("outliner_width", 0.f); // 0 or missing: the default width
+                  propertiesWidth = entry.value("properties_width", 0.f);
+                  leftEditor = entry.value("left_editor", leftEditor); // Missing in tables saved before the editor types: the defaults
+                  rightEditor = entry.value("right_editor", rightEditor);
+                  ws.layout = AreaLayout::FromLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+               }
                ws.pins.clear();
                if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())
                   for (const auto &pin : *pins)
@@ -476,15 +495,10 @@ void PinnedPanel::SyncWithTable()
    LoadWorkspaces(base->m_editorWorkspaces);
    // Areas of a table without workspaces: the defaults; with workspaces: the active one's (its favorites are the current list
    // loaded above)
-   m_editor.m_showOutliner = true;
-   m_editor.m_showProperties = true;
    m_editor.m_showSidebar = false;
    m_editor.m_sidebarTab = EditorUI::SidebarTab::Item;
-   m_editor.m_leftEditor = EditorUI::AreaEditor::Outliner;
-   m_editor.m_rightEditor = EditorUI::AreaEditor::Properties;
-   m_editor.m_outlinerWidth = OutlinerPanel::PaneWidth;
-   m_editor.m_propertiesWidth = PropertiesPanel::PaneWidth;
    m_editor.m_sidebarWidth = 300.f;
+   m_editor.SetAreaLayout(AreaLayout());
    m_workspacesPristine = false;
    if (m_activeWorkspace == -1)
    {
@@ -928,7 +942,7 @@ void PinnedPanel::RenderViewTab()
    ImGui::SetItemTooltip("F / Numpad .");
 }
 
-void PinnedPanel::Render(float topBarHeight, float bottomInset)
+void PinnedPanel::Render()
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
@@ -945,13 +959,12 @@ void PinnedPanel::Render(float topBarHeight, float bottomInset)
    if (!editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties) && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
       editor.m_properties.PrepareCuration();
 
-   // N-panel: a fixed area along the viewport's right edge (left of the Properties editor), resized by its splitter
+   // N-panel: a fixed area along the right edge of the viewport area, resized by its splitter
    const float dpi = editor.m_liveUI.GetDPI();
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const AreaRect &leaf = editor.m_viewportRect; // The viewport area, the N-panel being at its right edge
    const float width = editor.m_sidebarWidth * dpi;
-   const float right = viewport->Pos.x + viewport->Size.x - (editor.m_showProperties ? editor.m_propertiesWidth * dpi : 0.f);
-   ImGui::SetNextWindowPos(ImVec2(right - width, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(width, viewport->Size.y - topBarHeight - bottomInset));
+   ImGui::SetNextWindowPos(ImVec2(leaf.x1 - width, leaf.y0));
+   ImGui::SetNextWindowSize(ImVec2(width, leaf.Height()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 4.f * dpi));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "AreaLayout.h"
 #include "core/ieditable.h"
 #include "imgui/imgui.h"
 
@@ -33,6 +34,11 @@ public:
    // Draws the status bar (context key hints, last operation report). Called once the areas have been rendered so that it stays on top of them
    void RenderStatusBar(bool showFullUI);
    void ToggleStatusBar() { m_showStatusBar = !m_showStatusBar; }
+   // Tool shelf overlay inside the viewport area (View > Tool Shelf): drawn right after the areas by the tool shelf task, the rect being the
+   // visible part of the 3D view
+   void RenderToolShelf(const AreaRect &viewportContent);
+   bool IsToolShelfShown() const { return m_showToolShelf; }
+   void ToggleToolShelf() { m_showToolShelf = !m_showToolShelf; }
    // Opens the Edit > Undo History window at the mouse position
    void OpenUndoHistory()
    {
@@ -61,6 +67,7 @@ private:
    float m_toolBarHeight = 0.0f;
    float m_statusBarHeight = 0.0f;
    bool m_showStatusBar = true; // View > Status Bar
+   bool m_showToolShelf = true; // View > Tool Shelf (global, not per workspace)
    bool m_undoHistoryOpen = false;
    bool m_undoHistoryJustOpened = false;
    ImVec2 m_undoHistoryPos {};

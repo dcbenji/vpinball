@@ -141,18 +141,14 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });
    add("View" + sep + "Properties", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Properties); });
-   // Editor type of the left and right areas (Blender's editor type switcher)
-   for (int side = 0; side < 2; ++side)
-      for (int i = 0; i < static_cast<int>(EditorUI::AreaEditor::Count); ++i)
-      {
-         const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
-         add("View" + sep + (side == 0 ? "Left Area: " : "Right Area: ") + EditorUI::AreaEditorName(type), "", nullptr,
-            [&ed, side, type]()
-            {
-               ed.SetAreaEditor(side == 1, type);
-               (side == 1 ? ed.m_showProperties : ed.m_showOutliner) = true;
-            });
-      }
+   // Reveals an editor, hosting it in its preferred area if no area shows it
+   for (int i = 0; i < kPanelTypeCount; ++i)
+   {
+      const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
+      add("View" + sep + "Show " + EditorUI::AreaEditorName(type), "", nullptr, [&ed, type]() { ed.ShowAreaEditor(type); });
+   }
+   add("View" + sep + "Toggle Maximize Area", "Ctrl+Space", nullptr, [&ed]() { ed.ToggleMaximizeArea(); });
+   add("View" + sep + "Tool Shelf", "", nullptr, [&ed]() { ed.m_chrome.ToggleToolShelf(); });
    add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });
    add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
    // Edit menu
@@ -163,8 +159,7 @@ void SearchPalette::BuildOperators()
    add("Edit" + sep + "Paste", "Ctrl+V", [&ed]() { return ed.CanPaste(); },
       [&ed]()
       {
-         const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-         ed.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
+         ed.PasteSelection(ed.GetViewportContentCenter());
       });
    add("Edit" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
    add("Edit" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });

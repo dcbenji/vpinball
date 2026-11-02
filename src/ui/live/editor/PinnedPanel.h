@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "AreaLayout.h"
+
 #include <array>
 #include <functional>
 #include <map>
@@ -55,7 +57,7 @@ public:
    explicit PinnedPanel(EditorUI &editor);
    ~PinnedPanel();
 
-   void Render(float topBarHeight, float bottomInset); // The N-panel sidebar, when shown (between the top bar and the status bar)
+   void Render(); // The N-panel sidebar, when shown (at the right edge of the viewport area)
    void RenderQuickFavorites(); // The Q popup, when opened
    bool ConsumedEscape(); // The Esc that closed the Q popup is not an editor Esc
 
@@ -117,23 +119,18 @@ public:
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;
 
-   // Workspaces (Blender's top bar tabs): Layout, Look-dev and Wiring presets of the areas (outliner, properties, N-panel and its
-   // tab, area widths, editor types of the left and right areas, outliner display mode and type filter) with their own Quick Favorites, saved with the table
+   // Workspaces (Blender's top bar tabs): Layout, Look-dev and Wiring presets of the areas (the area layout tree: editor types, widths and
+   // visibility of the areas; N-panel and its tab, outliner display mode and type filter) with their own Quick Favorites, saved with the table
    // ("editor_workspaces" in table.json, beside "editor_pins" which stays the current favorites list)
    struct Workspace
    {
       string name;
-      bool outliner = true;
-      bool properties = true;
       bool sidebar = false;
       int sidebarTab = 0; // EditorUI::SidebarTab
-      float outlinerWidth = 0.f; // 0: keep the current width
-      float propertiesWidth = 0.f;
-      float sidebarWidth = 0.f;
+      float sidebarWidth = 0.f; // 0: keep the current width
       int outlinerMode = -1; // -1: keep the current one
       int64_t outlinerTypes = -1;
-      int leftEditor = 0; // EditorUI::AreaEditor of the left area (0: Outliner)
-      int rightEditor = 1; // EditorUI::AreaEditor of the right area (1: Properties)
+      AreaLayout layout; // Saved as "layout", and as the legacy outliner / properties / widths / left_editor / right_editor keys (see AreaLayout::ToLegacy)
       vector<PinKey> pins;
    };
    static constexpr int WorkspaceCount = 3;

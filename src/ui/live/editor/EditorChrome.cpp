@@ -161,10 +161,7 @@ void EditorChrome::RenderMenuBar()
          if (ImGui::MenuItem("Copy", "Ctrl+C", false, editor.CanCopy()))
             editor.CopySelection();
          if (ImGui::MenuItem("Paste", "Ctrl+V", false, editor.CanPaste()))
-         {
-            const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-            editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
-         }
+            editor.PasteSelection(editor.GetViewportContentCenter());
          if (ImGui::MenuItem("Duplicate", "Shift+D", false, editor.CanDuplicate()))
             editor.DuplicateSelection();
          if (ImGui::MenuItem("Delete", "Del", false, editor.CanDelete()))
@@ -307,29 +304,19 @@ void EditorChrome::RenderMenuBar()
             editor.ToggleAreaEditor(EditorUI::AreaEditor::Outliner);
          if (ImGui::MenuItem("Properties", nullptr, editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties)))
             editor.ToggleAreaEditor(EditorUI::AreaEditor::Properties);
-         // Editor type of the left and right areas (Blender's editor type switcher, also the button at the left of each area header)
-         for (int side = 0; side < 2; ++side)
+         // Reveals an editor, hosting it in its preferred area if no area shows it (the editor type button at the left of each area header re-types that area)
+         if (ImGui::BeginMenu("Show Editor"))
          {
-            const bool right = side == 1;
-            if (ImGui::BeginMenu(right ? "Right Area" : "Left Area"))
+            for (int i = 0; i < kPanelTypeCount; ++i)
             {
-               bool &shown = right ? editor.m_showProperties : editor.m_showOutliner;
-               if (ImGui::MenuItem("Visible", nullptr, shown))
-                  shown = !shown;
-               ImGui::Separator();
-               const EditorUI::AreaEditor current = right ? editor.m_rightEditor : editor.m_leftEditor;
-               for (int i = 0; i < static_cast<int>(EditorUI::AreaEditor::Count); ++i)
-               {
-                  const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
-                  if (ImGui::MenuItem(EditorUI::AreaEditorName(type), nullptr, current == type))
-                  {
-                     editor.SetAreaEditor(right, type);
-                     shown = true;
-                  }
-               }
-               ImGui::EndMenu();
+               const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
+               if (ImGui::MenuItem(EditorUI::AreaEditorName(type), nullptr, editor.IsAreaEditorShown(type)))
+                  editor.ShowAreaEditor(type);
             }
+            ImGui::EndMenu();
          }
+         if (ImGui::MenuItem("Toggle Maximize Area", "Ctrl+Space"))
+            editor.ToggleMaximizeArea();
          if (ImGui::MenuItem("Sidebar", "N", editor.m_showSidebar))
             editor.ToggleSidebar();
          if (ImGui::MenuItem("Quick Favorites", "Q"))
@@ -338,6 +325,8 @@ void EditorChrome::RenderMenuBar()
             editor.m_palette.Open();
          if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
             editor.m_showNavCube = !editor.m_showNavCube;
+         if (ImGui::MenuItem("Tool Shelf", nullptr, m_showToolShelf))
+            m_showToolShelf = !m_showToolShelf;
          if (ImGui::MenuItem("Status Bar", nullptr, m_showStatusBar))
             m_showStatusBar = !m_showStatusBar;
          ImGui::EndMenu();
@@ -669,7 +658,7 @@ void EditorChrome::RenderToolbar()
       ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(!editor.CanPaste());
       if (ToolButton(ICON_LC_CLIPBOARD_PASTE))
-         editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
+         editor.PasteSelection(editor.GetViewportContentCenter());
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Paste\n[Ctrl+V]");
       ImGui::EndDisabled();
@@ -794,13 +783,20 @@ void EditorChrome::RenderToolbar()
    ImGui::End();
 }
 
+void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
+{
+   // Stub: filled in by the tool shelf task (View > Tool Shelf, m_showToolShelf)
+   (void)viewportContent;
+}
+
 void EditorChrome::RenderStatusOverlay()
 {
    EditorUI &editor = m_editor;
-   const ImGuiIO &io = ImGui::GetIO();
 
-   // Overlay Info Text
-   const ImVec2 overlayPos((editor.m_showOutliner ? editor.m_outlinerWidth : 0.f) * editor.m_liveUI.GetDPI(), m_toolBarHeight + m_menuBarHeight + 5.f * editor.m_liveUI.GetDPI());
+   // Overlay Info Text: at the top left of the viewport area
+   const float dpi = editor.m_liveUI.GetDPI();
+   const AreaRect &vc = editor.m_viewportContentRect;
+   const ImVec2 overlayPos(vc.x0, vc.y0 + 5.f * dpi);
 
    // Camera orbit lock toggle (drawn in its own window as the status overlay does not capture inputs)
    ImGui::SetNextWindowPos(overlayPos);
@@ -819,8 +815,7 @@ void EditorChrome::RenderStatusOverlay()
    const float lockToggleWidth = ImGui::GetItemRectSize().x;
    ImGui::End();
 
-   ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - (editor.m_showOutliner ? editor.m_outlinerWidth : 0.f) * editor.m_liveUI.GetDPI(),
-      io.DisplaySize.y - m_toolBarHeight - m_menuBarHeight - 5.f * editor.m_liveUI.GetDPI())); // Fixed outliner width (to be adjusted when moving ImGui to the docking branch)
+   ImGui::SetNextWindowSize(ImVec2(max(1.f, vc.Width()), max(1.f, vc.Height() - 5.f * dpi)));
    ImGui::SetNextWindowPos(overlayPos);
    ImGui::Begin("text overlay", nullptr, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
    const float labelAlign = ImGui::GetCursorPosX() + lockToggleWidth + ImGui::GetStyle().ItemSpacing.x;
