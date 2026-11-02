@@ -40,7 +40,8 @@
 // [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
 //      z dome_glint (the OFF sparkle's scale, 1 = as tuned), w dome_peak (white-hot peak, 0 = the red peak)
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
-//      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off)
+//      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
+//      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -522,7 +523,7 @@ void main()
 		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
 		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
 		const vec3 hotCol = bb * vec3(1.0, 0.86, 0.68);
-		const vec3 peakScat = whiteK * scatK * 2.5 * mix(lampCol * trH, hotCol, saturate(0.55 + 0.45 * fallS)) * fallS * (0.85 + 0.3 * edge) * (1.0 + 0.2 * (flash - 1.0));
+		const vec3 peakScat = (1.0 - 0.8 * saturate(max(domeParams[14].z, 0.0))) * whiteK * scatK * 2.5 * mix(lampCol * trH, hotCol, saturate(0.55 + 0.45 * fallS)) * fallS * (0.85 + 0.3 * edge) * (1.0 + 0.2 * (flash - 1.0));
 		const float capHot = capW * exp(-(rxz / (0.5 * rootR)) * (rxz / (0.5 * rootR)));
 		const vec3 capSpot = scatK * capHot * lvlG * (1.2 * mix(lampCol * trN, hotCol, 0.3) + 2.5 * whiteK * hotCol);
 		// Depth (dome_depth, lamp off): the cavity ray, bent by the near flank it entered through, meets the far wall: its ridge
@@ -565,7 +566,41 @@ void main()
 		thick = interior + lampScat + capRim + peakScat + capSpot + depthL;
 	}
 
-	vec3 result = (body + bars + core + cap + white) * domeParams[7].x + sparkle + giGlow + thick;
+	// Orb (dome_orb, lamp lit): the bulb itself seen through the near wall. The cavity ray, bent by the flank it entered
+	// through, passes the glass envelope: the coil glows hot inside it and the frosted glass and milky plastic spread it into
+	// a soft ball with a halo. Each flute bends its own slice, so the ball breaks into vertical strips (on the cap, the ribs
+	// make it a starburst) that slide as the view moves. Seen through the wall (the plastic's colour); bright enough that the
+	// tonemapper rolls the hot centre to cream at full, warm orange in a low pulse.
+	vec3 orb = vec3_splat(0.0);
+	const float orbK = max(domeParams[14].z, 0.0);
+	BRANCH if (orbK > 0.0 && lvlE > 0.0 && !tir)
+	{
+		const float tC = max(dot(Fc - Pin, d2), 0.0);
+		const vec3 Qc = Pin + d2 * tC;
+		const float miss = length(Qc - Fc) / rbulb; // 0: through the bulb's centre, 1: grazing the envelope
+		// the dark wedge base below the socket hides the lower part
+		const float base = smoothstep(ySock - 1.0, ySock + 1.0, Qc.y);
+		// the coil (horizontal along x, 3.2 mm): its distance from the ray, spread by the frosted glass
+		const vec3 Qf = Pin + d2 * max(dot(F - Pin, d2), 0.0);
+		const float coilD = length(vec3(max(abs(Qf.x) - 1.6, 0.0), Qf.y - F.y, Qf.z));
+		const float coil = exp(-(coilD / 1.6) * (coilD / 1.6));
+		const float ball = exp(-2.2 * miss * miss) * base;          // the lit envelope
+		const float halo = 0.35 * exp(-max(miss - 0.8, 0.0) / 0.9);   // spread by the plastic around it
+		// flute lensing: brighter through the thin groove roots, each flank its own strength (on the cap: the ribs' starburst)
+		const float strips = (0.35 + 0.65 * (0.5 + 0.5 * cos(2.0 * DOME_PI * eP))) * (0.7 + 0.6 * domeHash(flankId * 2.91 + 0.3));
+		// hot centre white-yellow, the ball the filament's colour, the halo deeper; all through the near wall
+		const vec3 hot = mix(bb, vec3(1.0, 0.95, 0.85), 0.6 * pk);
+		// through the cap the bulb sits right under thin plastic: the hot centre is a white starburst (the ribs), not a band
+		const vec3 col = (6.0 * coil * hot + 1.6 * ball * bb + halo * bb * vec3(1.0, 0.55, 0.3)) * (1.0 + 2.0 * capW)
+			+ capW * 4.0 * coil * pk * vec3(1.0, 0.97, 0.9);
+		const vec3 thru = mix(trN, vec3_splat(1.0), domeParams[8].x * coil * (0.3 + 0.7 * heatW)); // the white leak at the hot centre
+		orb = orbK * domeParams[14].w * lvlG * mix(1.0, 3.0, heatW) * strips * col * thru;
+	}
+
+	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange
+	// body with a white-hot centre, as in a bake), and so does the white-hot scattered body
+	const float orbW = 1.0 - 0.9 * saturate(orbK);
+	vec3 result = (body + bars + core + cap + white * orbW + orb) * domeParams[7].x + sparkle + giGlow + thick;
 	if (domeParams[7].y > 0.5)
 		result = domeParams[7].y < 1.5 ? (bars + core + cap) * domeParams[7].x : (domeParams[7].y < 2.5 ? body * domeParams[7].x : (domeParams[7].y < 3.5 ? sparkle : bars * domeParams[7].x));
 	if (domeParams[7].y > 4.5)
@@ -574,5 +609,7 @@ void main()
 		result = thick;
 	if (domeParams[7].y > 6.5) // diagnostics: 7 = lamp level map, falloff, lamp colour; 8 = body, scatter, plastic transmission
 		result = domeParams[7].y < 7.5 ? 0.5 * vec3(lvlG, 8.0 / max(dist, 8.0), lampCol.r) : 0.5 * vec3(bodyK, scatK, trH.r);
+	if (domeParams[7].y > 8.5) // diagnostics: 9 = the orb alone
+		result = orb * domeParams[7].x;
 	gl_FragColor = vec4(result, 1.0);
 }

@@ -385,6 +385,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Primitive* primitive, float v) { primitive->m_d.m_domePeak = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
          "At full power the lit body and the top go white-hot like a real flash (0 = stays red at the peak); also a hot spot in the middle of the cap");
       props.SliderFloat<Primitive>(
+         m_part, "Dome Orb"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeOrb; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeOrb = clamp(v, 0.f, 4.f); }, 0.f, 4.f, 2,
+         "The lit bulb seen through the ridges as a hot glowing ball that moves with the view (0 = off)");
+      props.SliderFloat<Primitive>(
          m_part, "Dome Cooldown"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeCooldown; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeCooldown = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
