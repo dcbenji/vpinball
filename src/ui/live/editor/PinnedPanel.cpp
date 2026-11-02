@@ -555,8 +555,8 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       ImGui::PushID(pin.prop.c_str());
       if (removable)
       {
-         // Small muted icon on the text baseline, shown while the row is hovered or the button focused (the button itself is always
-         // submitted, so keyboard navigation still reaches it)
+         // Small muted icon overlaid in the label's left margin (not a flow item, the row starts at the edge), shown while the row
+         // is hovered or the button focused (the button itself is always submitted, so keyboard navigation still reaches it)
          const ImVec2 rowPos = ImGui::GetCursorScreenPos();
          const float frameHeight = ImGui::GetFrameHeight();
          const float buttonWidth = ImGui::GetFontSize() * 1.2f; // ~18 px reserved
@@ -573,7 +573,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
                itemHovered ? EditorTheme::Text : EditorTheme::IconMuted, ICON_LC_X);
          }
          ImGui::SetItemTooltip("Remove from Quick Favorites");
-         ImGui::SameLine(0.f, 0.f);
+         ImGui::SetCursorScreenPos(rowPos);
       }
       const auto it = m_defs.find(pin.Id());
       if (obj == nullptr)
@@ -658,8 +658,7 @@ void PinnedPanel::RenderLookToolbar()
          ImGui::CloseCurrentPopup();
       ImGui::EndPopup();
    }
-   ImGui::Dummy(ImVec2(0.f, 6.f * dpi));
-   ImGui::Separator();
+   ImGui::Dummy(ImVec2(0.f, max(0.f, 6.f * dpi - ImGui::GetStyle().ItemSpacing.y)));
 }
 
 void PinnedPanel::RenderItemTab(bool hovered)
@@ -767,11 +766,11 @@ void PinnedPanel::Render(float topBarHeight)
    ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 4.f);
    ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0.f);
    ImGui::PushStyleVar(ImGuiStyleVar_TabBarOverlineSize, 0.f);
-   ImGui::PushStyleColor(ImGuiCol_Tab, EditorTheme::V(EditorTheme::Inactive));
-   ImGui::PushStyleColor(ImGuiCol_TabHovered, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_TabSelected, EditorTheme::V(EditorTheme::Raised));
-   ImGui::PushStyleColor(ImGuiCol_TabDimmed, EditorTheme::V(EditorTheme::Inactive));
-   ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, EditorTheme::V(EditorTheme::Raised));
+   ImGui::PushStyleColor(ImGuiCol_Tab, ImVec4(0.f, 0.f, 0.f, 0.f));
+   ImGui::PushStyleColor(ImGuiCol_TabHovered, EditorTheme::V(EditorTheme::TabHover));
+   ImGui::PushStyleColor(ImGuiCol_TabSelected, EditorTheme::V(EditorTheme::TabActive));
+   ImGui::PushStyleColor(ImGuiCol_TabDimmed, ImVec4(0.f, 0.f, 0.f, 0.f));
+   ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, EditorTheme::V(EditorTheme::TabActive));
    ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, ImVec4(0.f, 0.f, 0.f, 0.f));
    ImGui::PushStyleColor(ImGuiCol_TabDimmedSelectedOverline, ImVec4(0.f, 0.f, 0.f, 0.f));
    const bool tabBar = ImGui::BeginTabBar("##SidebarTabs");
@@ -785,7 +784,11 @@ void PinnedPanel::Render(float topBarHeight)
       for (int t = 0; t < 3; t++)
       {
          const EditorUI::SidebarTab tab = static_cast<EditorUI::SidebarTab>(t);
-         if (ImGui::BeginTabItem(names[t], nullptr, (external && editor.m_sidebarTab == tab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+         // The tab label is drawn by BeginTabItem: active tab white, the others dim
+         ImGui::PushStyleColor(ImGuiCol_Text, (editor.m_sidebarTab == tab) ? IM_COL32_WHITE : EditorTheme::TextDim);
+         const bool tabOpen = ImGui::BeginTabItem(names[t], nullptr, (external && editor.m_sidebarTab == tab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
+         ImGui::PopStyleColor();
+         if (tabOpen)
          {
             shown = t;
             ImGui::BeginChild("##SidebarContent");
@@ -827,17 +830,37 @@ void PinnedPanel::RenderQuickFavorites()
 {
    // Q: Blender's Quick Favorites, here the favorite fields themselves, editable in the popup
    EditorUI &editor = m_editor;
+   // Opens at the mouse; fixed width, height capped at 75% of the work area, kept 8 px inside it
+   static ImVec2 s_openPos;
+   static float s_lastHeight = 0.f;
    if (editor.m_openQuickFavorites)
    {
       editor.m_openQuickFavorites = false;
+      s_openPos = ImGui::GetMousePos();
+      s_lastHeight = 0.f;
       ImGui::OpenPopup("Quick Favorites##QuickFavorites");
    }
-   ImGui::SetNextWindowSizeConstraints(ImVec2(320.f * editor.m_liveUI.GetDPI(), 0.f), ImVec2(420.f * editor.m_liveUI.GetDPI(), ImGui::GetMainViewport()->Size.y * 0.8f));
+   const float dpi = editor.m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float width = 320.f * dpi;
+   const float margin = 8.f * dpi;
+   const float maxHeight = viewport->WorkSize.y * 0.75f;
+   const float height = s_lastHeight > 0.f ? s_lastHeight : maxHeight; // Until measured, assume the worst
+   ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.f), ImVec2(width, maxHeight));
+   ImGui::SetNextWindowPos(ImVec2(clamp(s_openPos.x, viewport->WorkPos.x + margin, max(viewport->WorkPos.x + margin, viewport->WorkPos.x + viewport->WorkSize.x - width - margin)),
+      clamp(s_openPos.y, viewport->WorkPos.y + margin, max(viewport->WorkPos.y + margin, viewport->WorkPos.y + viewport->WorkSize.y - height - margin))));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 8.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f * dpi);
    m_quickOpen = ImGui::BeginPopup("Quick Favorites##QuickFavorites");
+   ImGui::PopStyleVar(2);
    if (!m_quickOpen)
       return;
+   s_lastHeight = ImGui::GetWindowSize().y;
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
    ImGui::TextUnformatted("Quick Favorites");
+   ImGui::PopStyleColor();
    ImGui::Separator();
+   ImGui::Dummy(ImVec2(0.f, max(0.f, 6.f * dpi - ImGui::GetStyle().ItemSpacing.y)));
    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
    {
       ImGui::CloseCurrentPopup();

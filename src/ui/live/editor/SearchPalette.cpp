@@ -75,6 +75,7 @@ SearchPalette::~SearchPalette() = default;
 void SearchPalette::Open()
 {
    m_open = true;
+   m_ctrlHeldFromOpen = ImGui::GetIO().KeyCtrl;
    m_focusInput = true;
    m_firstFrame = true;
    m_indexStale = true;
@@ -288,7 +289,8 @@ void SearchPalette::MakeResult(Result &r) const
    {
       const Operator &op = m_ops[r.op];
       r.label = op.label;
-      r.right = op.path == op.label ? op.shortcut : (op.shortcut.empty() ? op.path : op.path + "   " + op.shortcut);
+      r.right = op.path == op.label ? string() : op.path;
+      r.chip = op.shortcut;
       return;
    }
    const Object &o = m_objects[r.obj];
@@ -545,8 +547,8 @@ void SearchPalette::Activate(const Result &r, bool pin)
 {
    if (r.op >= 0)
    {
-      if (pin || r.op >= static_cast<int>(m_ops.size()))
-         return;
+      if (r.op >= static_cast<int>(m_ops.size()))
+         return; // Ctrl+Enter (pin) has no meaning for a command: run it
       const Operator op = m_ops[r.op]; // Copy: the action may reopen or rebuild the palette
       if (op.enabled && !op.enabled())
          return;
@@ -727,6 +729,8 @@ void SearchPalette::Render()
          count = m_results.size();
       }
 
+      if (!ImGui::GetIO().KeyCtrl)
+         m_ctrlHeldFromOpen = false;
       if (count > 0)
       {
          const int last = static_cast<int>(count) - 1;
@@ -744,7 +748,7 @@ void SearchPalette::Render()
          {
             hasActivation = true;
             activateIdx = static_cast<size_t>(m_sel);
-            activatePin = ImGui::GetIO().KeyCtrl;
+            activatePin = ImGui::GetIO().KeyCtrl && !m_ctrlHeldFromOpen;
          }
       }
       if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
@@ -783,10 +787,24 @@ void SearchPalette::Render()
             const float rightWidth = ImGui::CalcTextSize(r.right.c_str()).x;
             const float textY = itemMin.y + 0.5f * (rowH - ImGui::GetFontSize());
             const float margin = 10.f * dpi;
+            const float labelEnd = itemMin.x + margin + ImGui::CalcTextSize(r.label.c_str()).x;
             draw->AddText(ImVec2(itemMin.x + margin, textY), EditorTheme::Text, r.label.c_str());
+            // Operator shortcut as a small key chip (1 px border, faint fill, 4 px padding), right aligned with an 8 px margin
+            float metaRight = itemMax.x - margin;
+            if (!r.chip.empty())
+            {
+               const float chipPad = 4.f * dpi;
+               const ImVec2 chipSize = ImGui::CalcTextSize(r.chip.c_str());
+               const ImVec2 chipMax(itemMax.x - 8.f * dpi, itemMin.y + 0.5f * (rowH + chipSize.y) + chipPad);
+               const ImVec2 chipMin(chipMax.x - chipSize.x - 2.f * chipPad, chipMax.y - chipSize.y - 2.f * chipPad);
+               draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
+               draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
+               draw->AddText(ImVec2(chipMin.x + chipPad, chipMin.y + chipPad), EditorTheme::TextDim, r.chip.c_str());
+               metaRight = chipMin.x - margin;
+            }
             // Skip the meta column when it would overlap the label
-            if (ImGui::CalcTextSize(r.label.c_str()).x + rightWidth + 3.f * margin < itemMax.x - itemMin.x)
-               draw->AddText(ImVec2(itemMax.x - rightWidth - margin, textY), selected ? EditorTheme::Text : EditorTheme::TextDim, r.right.c_str());
+            if (!r.right.empty() && labelEnd + margin + rightWidth < metaRight)
+               draw->AddText(ImVec2(metaRight - rightWidth, textY), selected ? EditorTheme::Text : EditorTheme::TextDim, r.right.c_str());
             ImGui::PopID();
          }
          ImGui::PopStyleColor(3);

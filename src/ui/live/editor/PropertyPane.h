@@ -548,7 +548,7 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    int value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputInt(("##" + label).c_str(), &value))
+   if (ImGui::InputInt(("##" + label).c_str(), &value, 0, 0)) // No step buttons: they never matched the frame height
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
@@ -778,14 +778,36 @@ inline void PropertyPane::InputRGB(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    vec3 value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   // No per-channel colour markers (1 px bars under each field); the swatch gets a thin dark border instead
-   const bool colorChanged = ImGui::ColorEdit3(("##" + label).c_str(), &value.x, ImGuiColorEditFlags_NoColorMarkers);
+   // Bare 0..255 numbers (Blender style) and a bordered swatch, built by hand: ImGui::ColorEdit3 adds R:/G:/B: prefixes on wide fields
+   bool colorChanged = false;
+   ImGui::BeginGroup();
    {
+      const ImGuiStyle& style = ImGui::GetStyle();
       const float swatch = ImGui::GetFrameHeight();
-      const ImVec2 itemMax = ImGui::GetItemRectMax();
-      const ImVec2 itemMin = ImGui::GetItemRectMin();
-      ImGui::GetWindowDrawList()->AddRect(ImVec2(itemMax.x - swatch, itemMin.y), ImVec2(itemMax.x, itemMin.y + swatch), IM_COL32(0, 0, 0, 100), ImGui::GetStyle().FrameRounding, 0, 1.f);
+      const float fieldWidth = IM_TRUNC((ImGui::CalcItemWidth() - swatch - 3.f * style.ItemInnerSpacing.x) / 3.f);
+      if (ImGui::BeginPopup("##ColorPicker"))
+      {
+         colorChanged |= ImGui::ColorPicker3("##Picker", &value.x);
+         ImGui::EndPopup();
+      }
+      for (int c = 0; c < 3; c++)
+      {
+         if (c > 0)
+            ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+         int channel = static_cast<int>((&value.x)[c] * 255.f + 0.5f);
+         ImGui::SetNextItemWidth(fieldWidth);
+         if (ImGui::DragInt(c == 0 ? "##R" : c == 1 ? "##G" : "##B", &channel, 0.5f, 0, 255, "%d"))
+         {
+            (&value.x)[c] = static_cast<float>(channel) / 255.f;
+            colorChanged = true;
+         }
+      }
+      ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+      if (ImGui::ColorButton("##Swatch", ImVec4(value.x, value.y, value.z, 1.f), ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoBorder, ImVec2(swatch, swatch)))
+         ImGui::OpenPopup("##ColorPicker");
+      ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(0, 0, 0, 100), style.FrameRounding, 0, 1.f);
    }
+   ImGui::EndGroup();
    if (colorChanged)
    {
       setter(sync.display, value);

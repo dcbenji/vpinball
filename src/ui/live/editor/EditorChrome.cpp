@@ -55,7 +55,7 @@ void EditorChrome::Render(bool showFullUI)
    //SetupImGuiStyle(m_editor.m_selection.GetType() == Selection::S_CAMERA ? 0.3f : 1.0f);
 
    m_menuBarHeight = 0.0f;
-   m_toolBarHeight = showFullUI ? (ToolButtonSize + 4.f) * m_editor.m_liveUI.GetDPI() : 0.f;
+   m_toolBarHeight = showFullUI ? (ToolButtonSize + 4.f) * m_editor.m_liveUI.GetDPI() + 1.f : 0.f; // + 1 px separator at the bottom, panels start below it
 
    if (!showFullUI)
       return;
@@ -70,7 +70,7 @@ void EditorChrome::RenderMenuBar()
    EditorUI &editor = m_editor;
    const float dpi = editor.m_liveUI.GetDPI();
    // The menu bar is tall enough for the workspace tabs, and shares the toolbar background
-   constexpr float menuBarHeight = 26.f;
+   constexpr float menuBarHeight = 28.f;
    constexpr float tabHeight = 24.f;
    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, max(ImGui::GetStyle().FramePadding.y, 0.5f * (menuBarHeight * dpi - ImGui::GetFontSize()))));
    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, EditorTheme::V(EditorTheme::Bar));
@@ -159,7 +159,7 @@ void EditorChrome::RenderMenuBar()
       {
          const ImGuiStyle &tabStyle = ImGui::GetStyle();
          const float tabPadding = 12.f * dpi;
-         const float tabGap = 2.f * dpi;
+         const float tabGap = 0.f; // Tabs touch each other
          float tabsWidth = 0.f;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
             tabsWidth += ImGui::CalcTextSize(editor.m_pinned.GetWorkspace(i).name.c_str()).x + tabPadding * 2.f + (i > 0 ? tabGap : 0.f);
@@ -168,7 +168,7 @@ void EditorChrome::RenderMenuBar()
          const float barBottom = barPos.y + ImGui::GetWindowHeight();
          const float savedScreenY = ImGui::GetCursorScreenPos().y;
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
-         drawList->AddLine(ImVec2(barPos.x, barBottom - 1.f), ImVec2(barPos.x + ImGui::GetWindowWidth(), barBottom - 1.f), EditorTheme::Border, 1.f); // Bottom rule
+         drawList->AddLine(ImVec2(barPos.x, barBottom - 1.f), ImVec2(barPos.x + ImGui::GetWindowWidth(), barBottom - 1.f), EditorTheme::TabActive, 1.f); // Bottom rule
          float x = barPos.x + startX;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
          {
@@ -182,28 +182,38 @@ void EditorChrome::RenderMenuBar()
             const bool hovered = ImGui::IsItemHovered();
             const ImVec2 tabMin = ImGui::GetItemRectMin();
             const ImVec2 tabMax = ImGui::GetItemRectMax();
-            drawList->AddRectFilled(tabMin, tabMax, active ? EditorTheme::Workspace : (hovered ? EditorTheme::Inactive : EditorTheme::WorkspaceOff), 5.f * dpi, ImDrawFlags_RoundCornersTop);
-            drawList->AddText(ImVec2(tabMin.x + tabPadding, tabMin.y + 0.5f * (tabSize.y - textSize.y)), active ? EditorTheme::Text : EditorTheme::TextDim, name.c_str());
+            drawList->AddRectFilled(tabMin, tabMax, active ? EditorTheme::TabActive : (hovered ? EditorTheme::TabHover : 0u), 5.f * dpi, ImDrawFlags_RoundCornersTop);
+            drawList->AddText(ImVec2(tabMin.x + tabPadding, tabMin.y + 0.5f * (tabSize.y - textSize.y)), active ? IM_COL32_WHITE : EditorTheme::TextDim, name.c_str());
             ImGui::SetItemTooltip("Workspace (Ctrl+%d)", i + 1);
             x += tabSize.x + tabGap;
          }
          ImGui::SetCursorScreenPos(ImVec2(x, savedScreenY));
       }
-      float buttonWidth = 0.f;
+      // Right side buttons: 28x28, transparent, red when hovering the close one
+      const float barButton = 28.f * dpi;
+      const auto barIconButton = [barButton](const char *icon, ImU32 hoverColor)
+      {
+         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(hoverColor));
+         ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(hoverColor));
+         const bool pressed = ImGui::Button(icon, ImVec2(barButton, barButton));
+         ImGui::PopStyleColor(3);
+         return pressed;
+      };
+      float buttonWidth = barButton;
       if (editor.IsInspectMode())
-         buttonWidth += ImGui::CalcTextSize(ICON_LC_UNDO_2, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-      buttonWidth += ImGui::CalcTextSize(ICON_LC_X, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+         buttonWidth += barButton + ImGui::GetStyle().ItemSpacing.x;
       ImVec2 padding = ImGui::GetCursorScreenPos();
       padding.x += ImGui::GetContentRegionAvail().x - buttonWidth;
       ImGui::SetCursorScreenPos(padding);
       if (editor.IsInspectMode())
       {
-         if (ImGui::Button(ICON_LC_UNDO_2)) // ICON_LC_SQUARE
+         if (barIconButton(ICON_LC_UNDO_2, EditorTheme::Hover)) // ICON_LC_SQUARE
             editor.Close();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Get back to player");
       }
-      if (ImGui::Button(ICON_LC_X))
+      if (barIconButton(ICON_LC_X, EditorTheme::Rgb(200, 60, 60)))
          editor.RequestClose(editor.IsInspectMode() ? Player::CS_STOP_PLAY : Player::CS_CLOSE_APP);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Close editor");
@@ -231,6 +241,8 @@ void EditorChrome::RenderToolbar()
    ImGui::Begin("TOOLBAR", nullptr, window_flags);
    ImGui::PopStyleColor();
    ImGui::PopStyleVar(2);
+   // 1 px separator between the toolbar and the area panels below
+   ImGui::GetWindowDrawList()->AddLine(ImVec2(viewport->Pos.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), EditorTheme::TabActive, 1.f);
    if (editor.IsInspectMode())
    {
       if (ToolButton(editor.m_player->IsPlaying() ? ICON_LC_PAUSE : ICON_LC_PLAY))

@@ -30,5 +30,9 @@ namespace EditorTheme
    constexpr ImU32 TextFaint = Rgb(110, 110, 110);  // hidden items, disabled icons
    constexpr ImU32 IconMuted = Rgb(140, 140, 140);  // remove buttons
 
+   // Tabs (sidebar tabs, workspace tabs): inactive tabs are transparent
+   constexpr ImU32 TabHover = Rgb(70, 70, 72);
+   constexpr ImU32 TabActive = Rgb(80, 80, 82);
+
    inline ImVec4 V(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 }

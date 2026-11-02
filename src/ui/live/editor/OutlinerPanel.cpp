@@ -35,6 +35,24 @@ static void PushInactiveSelectionColor()
    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(color.x, color.y, color.z, color.w * 0.4f));
 }
 
+// Name shortened with "..." so that it fits in maxWidth (whole UTF-8 characters are removed)
+static string EllipsizeToWidth(const string &text, float maxWidth)
+{
+   if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth)
+      return text;
+   string cut = text;
+   while (!cut.empty())
+   {
+      while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80)
+         cut.pop_back(); // Continuation bytes
+      if (!cut.empty())
+         cut.pop_back(); // Lead byte (or ASCII character)
+      if (ImGui::CalcTextSize((cut + "...").c_str()).x <= maxWidth)
+         break;
+   }
+   return cut + "...";
+}
+
 // Push the full row selection color of the outliner (active selection)
 static void PushSelectionColor()
 {
@@ -428,7 +446,9 @@ void OutlinerPanel::Render(float topBarHeight)
          const ImVec2 textPos = ImGui::GetItemRectMin();
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
          drawList->AddText(textPos, EditorTheme::TextDim, icon);
-         drawList->AddText(ImVec2(textPos.x + ImGui::CalcTextSize(icon).x + 6.f, textPos.y), EditorTheme::Text, editable->GetName().c_str());
+         const float nameX = textPos.x + ImGui::CalcTextSize(icon).x + 6.f;
+         const float eyeScreenX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX; // Where the eye button is placed by SameLine(eyeX)
+         drawList->AddText(ImVec2(nameX, textPos.y), EditorTheme::Text, EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX).c_str());
       }
       if (clicked)
       {
@@ -570,7 +590,13 @@ void OutlinerPanel::Render(float topBarHeight)
                   const string &groupName = edit->GetEditable()->GetName();
                   const string idPart = "###" + groupName;
                   const bool wasOpen = ImGui::GetStateStorage()->GetInt(ImGui::GetID(idPart.c_str()), 0) != 0;
-                  const string groupLabel = (wasOpen ? ICON_LC_FOLDER_OPEN "  " : ICON_LC_FOLDER "  ") + groupName + idPart;
+                  // Name shortened so that it ends before the count, the new part marker and the eye button
+                  const string countText = std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0);
+                  const string iconPart = wasOpen ? ICON_LC_FOLDER_OPEN "  " : ICON_LC_FOLDER "  ";
+                  const float arrowWidth = ImGui::CalcTextSize(ICON_LC_CIRCLE_ARROW_LEFT).x;
+                  const float labelStartX = ImGui::GetCursorScreenPos().x + ImGui::GetTreeNodeToLabelSpacing();
+                  const float labelEndX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX - arrowWidth - style.ItemSpacing.x * 3.f - ImGui::CalcTextSize(countText.c_str()).x;
+                  const string groupLabel = iconPart + EllipsizeToWidth(groupName, labelEndX - labelStartX - ImGui::CalcTextSize(iconPart.c_str()).x) + idPart;
                   opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
                   ImGui::PopStyleColor();
                   const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -586,8 +612,6 @@ void OutlinerPanel::Render(float topBarHeight)
                   }
                   {
                      // Part count (dim, right aligned before the eye column); the new part target marker is only shown on row hover
-                     const float arrowWidth = ImGui::CalcTextSize(ICON_LC_CIRCLE_ARROW_LEFT).x;
-                     const string countText = std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0);
                      ImGui::SameLine(eyeX - arrowWidth - style.ItemSpacing.x * 2.f - ImGui::CalcTextSize(countText.c_str()).x);
                      ImGui::TextColored(EditorTheme::V(EditorTheme::TextDim), "%s", countText.c_str());
                      if (isNewPartTarget && rowHovered)

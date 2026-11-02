@@ -63,6 +63,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    const float xWidth = max(60.f, min(max(availWidth * 0.42f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
    const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - 2.f * m_syncWidth);
    const float pinWidth = 0.f;
+   float fieldDy = 0.f; // Wrapped labels: the value field is centred against the two lines
    const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
 
    const char* const text = label.c_str();
@@ -121,21 +122,24 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
       else
       {
          const float lineHeight = ImGui::GetFontSize();
-         drawLine(text, split, pos.y);
+         const float rowHeight = max(2.f * lineHeight, ImGui::GetFrameHeight());
+         const float labelY = pos.y + (rowHeight - 2.f * lineHeight) * 0.5f; // Two lines centred against the field
+         fieldDy = (rowHeight - ImGui::GetFrameHeight()) * 0.5f;
+         drawLine(text, split, labelY);
          if (ImGui::CalcTextSize(split + 1, textEnd).x <= maxWidth)
-            drawLine(split + 1, textEnd, pos.y + lineHeight);
+            drawLine(split + 1, textEnd, labelY + lineHeight);
          else
          {
             const string line = ellipsized(split + 1);
-            drawLine(line.c_str(), line.c_str() + line.size(), pos.y + lineHeight);
+            drawLine(line.c_str(), line.c_str() + line.size(), labelY + lineHeight);
          }
          m_rowBottom = max(pos.y + 2.f * lineHeight, pos.y + ImGui::GetFrameHeight()) + style.ItemSpacing.y;
       }
    }
 
-   ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y));
+   ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y + fieldDy));
    ImGui::SetNextItemWidth(valueWidth);
-   m_syncPos = ImVec2(pos.x + xWidth + valueWidth, pos.y);
+   m_syncPos = ImVec2(pos.x + xWidth + valueWidth, pos.y + fieldDy);
 }
 
 void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName)
@@ -205,10 +209,12 @@ bool PropertyPane::BeginSection(const string& name)
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
    drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
+   drawList->AddLine(ImVec2(headerMin.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), EditorTheme::WorkspaceOff, 1.f); // Separates stacked headers
 
    if (!opened)
       return false;
 
+   ImGui::Dummy(ImVec2(0.f, 4.f));
    m_inSection = true;
    m_pinGroup = name;
    m_pinSection = name;

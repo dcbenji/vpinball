@@ -61,6 +61,7 @@ private:
       string label, group; // Cached display strings
       string right;
       int op = -1; // Index in m_ops
+      string chip; // Operator shortcut, drawn as a key chip
    };
    // Menu command (Blender's menu search); path is the full menu path, its last component is the label
    struct Operator
@@ -117,6 +118,7 @@ private:
    std::unordered_map<string, int> m_partType; // Part name -> type
    std::unordered_map<int, int> m_itemTypeIdx; // Item type -> type index
    bool m_escPending = false;
+   bool m_ctrlHeldFromOpen = false; // Ctrl (Cmd) of the Ctrl+K that opened the palette is still down: not a Ctrl+Enter
    int m_tableType = -1, m_matType = -1;
    vector<Object> m_objects;
    vector<Operator> m_ops;

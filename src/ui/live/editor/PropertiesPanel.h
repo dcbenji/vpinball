@@ -40,7 +40,7 @@ public:
    void Render(float topBarHeight);
 
    // Width of the panel in logical pixels (scaled by the UI DPI)
-   static constexpr float PaneWidth = 280.f;
+   static constexpr float PaneWidth = 300.f;
 
    // Main visual material of a part (the one its header chip opens), empty if none
    static string PartMaterial(const IEditable *part);
