@@ -2,6 +2,7 @@
 
 #include "fonts/IconsForkAwesome.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 #include "utils/fileio.h"
 #include "parts/Sound.h"
 #include "parts/pintable.h"
@@ -62,6 +63,8 @@ public:
    void SetShowStartup(bool showStartup);
 
    bool BeginSection(const string& name);
+   // Collapsing header in the section style (accent rule, TextDim chevron); label may carry a ###id
+   static bool SectionHeader(const char* labelAndId, ImGuiTreeNodeFlags flags = 0);
    void EndSection();
    template <class T> T* GetEditedPart(T* obj) const;
    void TimerSection(IEditable* obj);
@@ -130,6 +133,7 @@ public:
    void SkipRest(bool skip) { m_skipRest = skip; }
    // Dial surfaces (curated sections, pinned overlay): float fields with a known range draw as sliders (ctrl+click still types)
    void SetLookSliders(bool on) { m_lookSliders = on; }
+   static string PinKeyProp(const string &label); // Stable favorite key of a field label (see the legacy map)
    static bool LookSliderRange(const string &label, Unit displayUnit, float &vMin, float &vMax);
    // Blender-style slider: the value is a filled bar behind the number (no grab knob over it); ctrl+click or double-click types
    static bool FillSlider(const char *id, float *value, float vMin, float vMax, const char *format);
@@ -332,7 +336,7 @@ private:
    Tier m_tier = Tier::Advanced;
    std::function<void(PropertyPane &)> m_afterHeader;
    bool m_skipRest = false;
-   bool m_lookSliders = false;
+   bool m_lookSliders = true; // Fields with a known range are fill sliders on every tab (Look and Advanced alike)
    bool m_rowFocusable = false; // The row's last item is its only widget (search palette keyboard focus)
    bool m_pinCombo = true; // Combo registers its own definition (off while a name list combo registers its own)
    static inline PinKey s_focusKey;
@@ -430,7 +434,7 @@ template <class T, class MakeDraw, class CopyMaker> void PropertyPane::PinField(
       if (m_pinMode == PinMode::Off || obj == nullptr)
          return;
       PinKey key;
-      key.prop = label;
+      key.prop = PinKeyProp(label);
       const IEditable *part = nullptr;
       IEditable *editablePart = nullptr;
       const Material *material = nullptr;
@@ -509,10 +513,12 @@ void PropertyPane::EndSyncField(const SyncField<T>& sync, const vector<CoTarget<
    const bool hasOthers = (sync.other != nullptr) || std::ranges::any_of(targets, [](const CoTarget<T>& target) { return target.other != nullptr; });
    if (!hasOthers)
       return;
-   ImGui::SetCursorScreenPos(m_syncPos);
    const bool synced = (sync.other == nullptr || displayValue == getter(sync.other))
       && std::ranges::all_of(targets, [&getter](const CoTarget<T>& target) { return target.other == nullptr || getter(target.other) == getter(target.display); });
-   ImGui::BeginDisabled(synced);
+   if (synced)
+      return; // Nothing drawn: the width stays reserved so that rows do not shift, the cursor stays under the field
+   ImGui::SetCursorScreenPos(m_syncPos);
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::Accent);
    if (ImGui::Button(ICON_SAVE))
    {
       if (sync.other != nullptr)
@@ -522,15 +528,9 @@ void PropertyPane::EndSyncField(const SyncField<T>& sync, const vector<CoTarget<
             setter(target.other, getter(target.display));
       m_modified = m_modifyFieldId;
    }
+   ImGui::PopStyleColor();
    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-   {
-      ImGui::BeginTooltip();
-      ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-      ImGui::Text("Copy this value to the %s version", m_showStartup ? "live" : "startup");
-      ImGui::PopTextWrapPos();
-      ImGui::EndTooltip();
-   }
-   ImGui::EndDisabled();
+      ImGui::SetTooltip("Copy this value to the %s version", m_showStartup ? "live" : "startup");
 }
 
 inline void PropertyPane::TimerSection(IEditable* obj)
@@ -543,7 +543,7 @@ inline void PropertyPane::TimerSection(IEditable* obj)
          [](IEditable* pObj, bool v) { pObj->m_timerEnabled = v; });
 
       Combo<IEditable>(
-         obj, "Timer mode"s, vector { "Fixed interval"s, "Per Frame"s, "Game Logic Sync"s }, //
+         obj, "Timer Mode"s, vector { "Fixed Interval"s, "Per Frame"s, "Game Logic Sync"s }, //
          [](const IEditable* pObj)
          {
             int interval = pObj->m_timerInterval;

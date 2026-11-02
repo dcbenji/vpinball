@@ -169,8 +169,13 @@ bool PropertyPane::BeginFlatCombo(const char* id, const char* preview)
    const ImVec2 min = ImGui::GetCursorScreenPos();
    ImDrawList* const drawList = ImGui::GetWindowDrawList();
    const float chevronSize = ImGui::GetFontSize() * 0.3f;
-   const string text = Ellipsize(preview, width - 2.f * style.FramePadding.x - 2.f * chevronSize - style.ItemInnerSpacing.x);
+   const bool none = preview == nullptr || preview[0] == '\0'; // Empty value: a dim "None" instead of a blank field
+   const string text = Ellipsize(none ? "None" : preview, width - 2.f * style.FramePadding.x - 2.f * chevronSize - style.ItemInnerSpacing.x);
+   if (none)
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
    const bool open = ImGui::BeginCombo(id, text.c_str(), ImGuiComboFlags_NoArrowButton);
+   if (none)
+      ImGui::PopStyleColor();
    DrawChevron(drawList, ImVec2(min.x + width - style.FramePadding.x - chevronSize, min.y + height * 0.5f), true, chevronSize, EditorTheme::TextDim);
    return open;
 }
@@ -205,8 +210,17 @@ int PropertyPane::FloatDecimals(Unit displayUnit, int requested, float shown)
    case Unit::VPSpeed:
    case Unit::Degree:
    case Unit::Millimeters: decimals = 1; break;
-   default: decimals = requested == 0 ? 0 : 2; break; // Unitless factors; 0 stays for fields that are explicitly integral
+   default: // Unitless factors; 0 stays for fields that are explicitly integral
+      decimals = requested == 0 ? 0 : 2;
+      if (fabsf(shown) >= 1000.f)
+         decimals = 0; // Large values do not need decimals ("4000000", not "4000000.00")
+      else if (fabsf(shown) >= 100.f)
+         decimals = fabsf(shown - roundf(shown)) < 0.005f ? 0 : min(decimals, 1);
+      break;
    }
+   // A percentage is whole unless it holds a fraction (1.5 % must not read as 2)
+   if ((displayUnit == Unit::Percent || displayUnit == Unit::PercentX100) && fabsf(shown - roundf(shown)) >= 0.05f)
+      decimals = 1;
    if (requested >= 4) // Explicitly asked for more precision (tiny values)
       decimals = max(decimals, requested);
    // Never display a small non-zero value as zero
@@ -287,15 +301,14 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 
 void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName)
 {
-   ImGui::Dummy(ImVec2(0.f, 2.f));
-   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-   LiveUI::CenteredText(IsMultiEdit() ? typeName + " x" + std::to_string(GetEditCount()) : typeName);
-   ImGui::PopStyleColor();
-   ImGui::Dummy(ImVec2(0.f, 2.f));
+   ImGui::Dummy(ImVec2(0.f, 4.f));
    m_modifyFieldId++;
    // Do not edit name of live objects as it would break the script, nor of multi selections (no bulk renaming)
    ImGui::BeginDisabled(m_table->m_liveBaseTable || IsMultiEdit());
-   PropertyLabel("Name"s);
+   // One header row: the type (dim caption in the label column, instead of a separate centred line) and the name field
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+   PropertyLabel(IsMultiEdit() ? typeName + " x" + std::to_string(GetEditCount()) : typeName, "Name");
+   ImGui::PopStyleColor();
    const string current = getName();
    string name = current;
    // Apply on Enter only: renaming on each keystroke would make each intermediate name unique, corrupting the name being typed
@@ -322,14 +335,43 @@ void PropertyPane::Separator(const string& label)
    if (m_skipRest)
       return;
    FlushRow();
-   ImGui::TextUnformatted(label.c_str());
-   // Underline the text
+   // Sub-group inside a section: the section header look (accent rule, label, hairline) without the chevron, since it does not collapse
+   ImGui::Dummy(ImVec2(0.f, 2.f));
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float fontSize = ImGui::GetFontSize();
+   const ImVec2 min = ImGui::GetCursorScreenPos();
+   const float height = ImGui::GetFrameHeight();
+   const float width = ImGui::GetContentRegionAvail().x;
+   ImGui::Dummy(ImVec2(width, height));
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   const ImVec2 max(min.x + width, min.y + height);
+   drawList->AddRectFilled(min, ImVec2(min.x + 2.f, max.y), EditorTheme::Accent);
+   drawList->AddText(ImVec2(min.x + fontSize * 0.5f + style.FramePadding.x, min.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), label.c_str(), ImGui::FindRenderedTextEnd(label.c_str()));
+   drawList->AddLine(ImVec2(min.x, max.y), max, EditorTheme::WorkspaceOff, 1.f);
+   ImGui::Dummy(ImVec2(0.f, 2.f));
+}
+
+bool PropertyPane::SectionHeader(const char* labelAndId, ImGuiTreeNodeFlags flags)
+{
+   // ImGui's filled triangle clashes with the line icons: the header is submitted with invisible text (same ID, click, keyboard
+   // and open-state behaviour), then the label and a TextDim chevron are drawn over it
+   const ImU32 labelColor = ImGui::GetColorU32(ImGuiCol_Text);
+   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
+   const bool opened = ImGui::CollapsingHeader(labelAndId, flags);
+   ImGui::PopStyleColor();
+
+   // Thin accent rule on the left of the header
    const ImVec2 headerMin = ImGui::GetItemRectMin();
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
-   const ImVec2 lineStart(headerMin.x, headerMax.y);
-   const ImVec2 lineEnd(headerMax.x, headerMax.y);
-   drawList->AddLine(lineStart, lineEnd, ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float fontSize = ImGui::GetFontSize();
+   const float chevronSize = fontSize * 0.3f;
+   DrawChevron(drawList, ImVec2(headerMin.x + style.FramePadding.x + fontSize * 0.5f, (headerMin.y + headerMax.y) * 0.5f), opened, chevronSize, EditorTheme::TextDim);
+   drawList->AddText(ImVec2(headerMin.x + fontSize + style.FramePadding.x * 3.f, headerMin.y + style.FramePadding.y), labelColor, labelAndId, ImGui::FindRenderedTextEnd(labelAndId));
+   drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
+   drawList->AddLine(ImVec2(headerMin.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), EditorTheme::WorkspaceOff, 1.f); // Separates stacked headers
+   return opened;
 }
 
 bool PropertyPane::BeginSection(const string& name)
@@ -345,26 +387,7 @@ bool PropertyPane::BeginSection(const string& name)
       else
          ImGui::SetNextItemOpen(true);
    }
-   // ImGui's filled triangle clashes with the line icons: the header is submitted with invisible text (same ID, click, keyboard
-   // and open-state behaviour), then the label and a TextDim chevron are drawn over it
-   const ImU32 labelColor = ImGui::GetColorU32(ImGuiCol_Text);
-   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
-   const bool opened = ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
-   ImGui::PopStyleColor();
-
-   // Thin accent rule on the left of the header
-   const ImVec2 headerMin = ImGui::GetItemRectMin();
-   const ImVec2 headerMax = ImGui::GetItemRectMax();
-   ImDrawList* drawList = ImGui::GetWindowDrawList();
-   {
-      const ImGuiStyle& style = ImGui::GetStyle();
-      const float fontSize = ImGui::GetFontSize();
-      const float chevronSize = fontSize * 0.3f;
-      DrawChevron(drawList, ImVec2(headerMin.x + style.FramePadding.x + fontSize * 0.5f, (headerMin.y + headerMax.y) * 0.5f), opened, chevronSize, EditorTheme::TextDim);
-      drawList->AddText(ImVec2(headerMin.x + fontSize + style.FramePadding.x * 3.f, headerMin.y + style.FramePadding.y), labelColor, name.c_str(), ImGui::FindRenderedTextEnd(name.c_str()));
-   }
-   drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
-   drawList->AddLine(ImVec2(headerMin.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), EditorTheme::WorkspaceOff, 1.f); // Separates stacked headers
+   const bool opened = SectionHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
    if (!opened)
       return false;
@@ -374,8 +397,8 @@ bool PropertyPane::BeginSection(const string& name)
    m_pinGroup = name;
    m_pinSection = name;
    m_sectionHasSync = m_table->m_liveBaseTable;
-   // Full button width (icon + frame padding) plus the gap before it
-   m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + 2.f * ImGui::GetStyle().FramePadding.x + ImGui::GetStyle().ItemInnerSpacing.x) : 0.f;
+   // Full button width (icon + frame padding) plus the gap before it, and a right margin so the button does not touch the pane edge
+   m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + 2.f * ImGui::GetStyle().FramePadding.x + 2.f * ImGui::GetStyle().ItemInnerSpacing.x) : 0.f;
    return true;
 }
 
@@ -582,7 +605,31 @@ bool PropertyPane::DragFieldImpl(const char* id, float* value, int* intValue, fl
    if (mixed && g.MixedValueLabel != nullptr)
       shown = g.MixedValueLabel;
    else
+   {
       intValue ? ImFormatString(text, IM_COUNTOF(text), format, *intValue) : ImFormatString(text, IM_COUNTOF(text), format, *value);
+      // Thousands separators from 10000 up (display only; typing shows the plain number)
+      const char* digits = text + (text[0] == '-' ? 1 : 0);
+      size_t intLen = 0;
+      while (digits[intLen] >= '0' && digits[intLen] <= '9')
+         intLen++;
+      const size_t total = strlen(text);
+      if (intLen >= 5 && total + (intLen - 1) / 3 < IM_COUNTOF(text))
+      {
+         char grouped[64];
+         size_t out = 0;
+         const size_t prefix = digits - text;
+         memcpy(grouped, text, prefix);
+         out = prefix;
+         for (size_t i = 0; i < intLen; i++)
+         {
+            if (i > 0 && (intLen - i) % 3 == 0)
+               grouped[out++] = ',';
+            grouped[out++] = digits[i];
+         }
+         strcpy(grouped + out, digits + intLen);
+         strcpy(text, grouped);
+      }
+   }
    ImGui::PushStyleColor(ImGuiCol_Text, mixed ? g.Style.Colors[ImGuiCol_TextMixedValue] : (fill ? ImVec4(1.f, 1.f, 1.f, 1.f) : g.Style.Colors[ImGuiCol_Text]));
    ImGui::RenderTextClipped(bb.Min, bb.Max, shown, nullptr, nullptr, ImVec2(0.5f, 0.5f));
    ImGui::PopStyleColor();
@@ -610,6 +657,12 @@ bool PropertyPane::DragFieldN(const char* id, float* values, int count, int deci
          ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
       ImGui::SetNextItemWidth(width);
       changed |= DragField((string(id) + std::to_string(i)).c_str(), &values[i], 0.f, 0.f, false, decimals, format);
+      if (count == 3) // Axis cue: a 2 px tick in a muted X / Y / Z colour on the left edge of the field
+      {
+         static constexpr ImU32 axisColors[3] = { IM_COL32(205, 85, 85, 255), IM_COL32(110, 175, 90, 255), IM_COL32(85, 130, 205, 255) };
+         const ImVec2 itemMin = ImGui::GetItemRectMin();
+         ImGui::GetWindowDrawList()->AddRectFilled(itemMin, ImVec2(itemMin.x + 2.f, ImGui::GetItemRectMax().y), axisColors[i], style.FrameRounding, ImDrawFlags_RoundCornersLeft);
+      }
    }
    ImGui::EndGroup();
    return changed;
@@ -638,7 +691,7 @@ bool PropertyPane::LookSliderRange(const string& label, Unit displayUnit, float&
       { "Edge Brightness", 0.f, 1.f }, { "Wrap Lighting", 0.f, 1.f }, { "Glossy Image Lerp", 0.f, 1.f }, { "Opacity", 0.f, 1.f }, { "Edge Opacity", 0.f, 1.f },
       { "Thickness", 0.f, 1.f }, { "Falloff Power", 0.f, 10.f }, { "Reflection Strength", 0.f, 1.f }, { "Exposure", 0.f, 4.f },
       // Known full labels of the part panes (no partial matching: "Thickness" must not catch "Refraction Thickness")
-      { "Modulate Opacity", 0.f, 100.f }, { "Intensity", 0.f, 10.f }, { "Env. Reflection Scale", 0.f, 2.f }, { "Translucency", 0.f, 1.f },
+      { "Modulate Opacity", 0.f, 100.f }, { "Intensity", 0.f, 10.f }, { "Environment Reflections", 0.f, 2.f }, { "Translucency", 0.f, 1.f },
    };
    for (const Range& range : ranges)
       if (label == range.label)
@@ -670,6 +723,20 @@ void PropertyPane::RequestOverlayFlash(const PinKey& key)
    s_overlayPending = true;
    s_overlayRequestTime = ImGui::GetTime();
    s_overlayFlashUntil = 0.0;
+}
+
+string PropertyPane::PinKeyProp(const string& label)
+{
+   // Stored favorites (tables, set_pins.py) are keyed by the label a field had when it was pinned: a renamed label keeps its stored key
+   static const std::pair<const char*, const char*> legacy[] = {
+      { "Light Emission Color", "Light Em. Color" }, { "Light Emission Scale", "Light Em. Scale" }, { "Environment Emission", "Environment Em. Scale" },
+      { "Environment Reflections", "Env. Reflection Scale" }, { "Ambient Occlusion", "Enable Ambient Occlusion" }, { "AO Scale", "Ambient Occlusion Scale" },
+      { "Screen Space Reflections", "Enable Sc. Sp. Reflections" }, { "SSR Scale", "Screen Space Reflection Scale" }, { "Timer Mode", "Timer mode" }, { "Toy", "Toy (never collidable)" },
+   };
+   for (const auto& [current, old] : legacy)
+      if (label == current)
+         return old;
+   return label;
 }
 
 void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Material* material)
@@ -735,21 +802,21 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    }
    if (part != nullptr && m_pins->HasSeeThroughSet(part))
    {
-      if (ImGui::MenuItem("Add see-through set to Quick Favorites"))
+      if (ImGui::MenuItem(ICON_LC_STAR " Add See-Through Set to Quick Favorites"))
          m_pins->PinSeeThroughSet(part);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add the refraction fields of this part and the See-Through Surface fields of its material");
    }
    if (part != nullptr && m_pins->HasBulbSet(part))
    {
-      if (ImGui::MenuItem("Add bulb set to Quick Favorites"))
+      if (ImGui::MenuItem(ICON_LC_STAR " Add Bulb Set to Quick Favorites"))
          m_pins->PinBulbSet(part);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset)");
    }
    if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == Material::PBR)
    {
-      if (ImGui::MenuItem("Add see-through set to Quick Favorites"))
+      if (ImGui::MenuItem(ICON_LC_STAR " Add See-Through Set to Quick Favorites"))
          m_pins->PinMaterialSeeThrough(material->m_name);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add the See-Through Surface fields of this material");

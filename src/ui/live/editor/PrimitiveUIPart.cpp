@@ -492,9 +492,9 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* surf) { return surf->m_d.m_collidable; }, //
          [](Primitive* surf, bool v) { surf->m_d.m_collidable = v; });
       props.Checkbox<Primitive>(
-         m_part, "Toy (never collidable)"s, //
+         m_part, "Toy"s, //
          [](const Primitive* surf) { return surf->m_d.m_toy; }, //
-         [](Primitive* surf, bool v) { surf->m_d.m_toy = v; });
+         [](Primitive* surf, bool v) { surf->m_d.m_toy = v; }, "Never collidable");
       props.InputFloat<Primitive>(
          m_part, "Reduction Factor"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_collision_reductionFactor; }, //

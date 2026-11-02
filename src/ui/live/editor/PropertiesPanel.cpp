@@ -195,7 +195,10 @@ bool PropertiesPanel::HasTab(Tab tab) const
    switch (tab)
    {
    case Tab::Advanced: return true;
-   case Tab::Object: return m_curation.kind == PinKind::Part || !m_curation.tabs[static_cast<int>(Tab::Object)].empty();
+   case Tab::Object:
+      // Skipped when there is nothing to show (e.g. a light has no object settings and no material)
+      return !m_curation.tabs[static_cast<int>(Tab::Object)].empty()
+         || (m_curation.kind == PinKind::Part && m_curation.obj != nullptr && !PartMaterial(static_cast<const IEditable *>(m_curation.obj)).empty());
    case Tab::Material: return m_hasMaterialTab;
    default: return !m_curation.tabs[static_cast<int>(tab)].empty();
    }
@@ -240,7 +243,7 @@ void PropertiesPanel::DrawTabStrip()
    {
       if (!HasTab(static_cast<Tab>(t)))
          continue;
-      const bool active = m_tab == static_cast<Tab>(t);
+      const bool active = m_tab == static_cast<Tab>(t) && !IsSearching(); // A search spans every tab: none is highlighted
       ImGui::PushID(t);
       if (tabButton(icons[t], active))
       {
@@ -260,41 +263,61 @@ void PropertiesPanel::DrawTabContent(PropertyPane &props)
 {
    EditorUI &editor = m_editor;
    const bool tabbed = m_curation.active && m_curation.tabbed;
-   // Object: the part's material chip (a click selects the material)
+   // Object: the part's material chip (a click selects the material) is the first row of the Object section, drawn below
+   string objectMaterial;
    if ((!tabbed || m_tab == Tab::Object) && !IsSearching() && editor.m_selection.GetType() == Selection::S_EDITABLE && !props.IsMultiEdit())
-   {
-      const string material = PartMaterial(props.GetEditedPart(editor.m_selection.GetPart()->GetEditable()));
-      if (!material.empty())
-      {
-         props.PropertyLabel("Material"s);
-         if (ImGui::Button((material + "  " ICON_LC_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
-            m_pendingMaterialSel = editor.m_table->GetMaterial(material);
-         ImGui::SetItemTooltip("Select this material");
-         props.FlushRow();
-      }
-   }
+      objectMaterial = PartMaterial(props.GetEditedPart(editor.m_selection.GetPart()->GetEditable()));
    if (tabbed && IsSearching())
    {
       const int shown = DrawSearchResults(props, m_curation, "");
       if (shown == 0 && CountSearchMatches(m_materialCuration) == 0)
-         ImGui::TextDisabled("No matching fields");
+      {
+         ImGui::Indent(ImGui::GetStyle().FramePadding.x * 2.f);
+         ImGui::TextDisabled("No fields match \"%s\"", m_search.c_str());
+         ImGui::Unindent(ImGui::GetStyle().FramePadding.x * 2.f);
+      }
       props.SkipRest(true);
       return;
    }
    if (!tabbed)
+   {
+      if (!objectMaterial.empty())
+      {
+         props.PropertyLabel("Material"s);
+         if (ImGui::Button((objectMaterial + "  " ICON_LC_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+            m_pendingMaterialSel = editor.m_table->GetMaterial(objectMaterial);
+         ImGui::SetItemTooltip("Select this material");
+         props.FlushRow();
+      }
       return;
+   }
    static constexpr const char *titles[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced" };
    const vector<const PinnedPanel::Def *> &defs = m_curation.tabs[static_cast<int>(m_tab)];
-   if (!defs.empty())
+   if (!defs.empty() || !objectMaterial.empty())
    {
       const int modifiedBefore = props.GetModifiedField();
       ImGui::PushID("##Tab"); // The tab rows draw the same fields as the full sheet: keep their IDs apart
       if (props.BeginSection(titles[static_cast<int>(m_tab)]))
       {
          props.SetLookSliders(true);
+         if (!objectMaterial.empty())
+         {
+            props.PropertyLabel("Material"s);
+            if (ImGui::Button((objectMaterial + "  " ICON_LC_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+               m_pendingMaterialSel = editor.m_table->GetMaterial(objectMaterial);
+            ImGui::SetItemTooltip("Select this material");
+            props.FlushRow();
+         }
+         // Several field groups on one tab (Transform: "Position, Rotation & Size" and "Additional Transform"): each gets its sub-header
+         const bool multiGroup = m_tab == Tab::Transform && std::ranges::any_of(defs, [&defs](const PinnedPanel::Def *def) { return def->group != defs.front()->group; });
+         string lastGroup;
          for (const PinnedPanel::Def *def : defs)
+         {
+            if (multiGroup && !def->group.empty() && def->group != lastGroup && def->group != titles[static_cast<int>(m_tab)])
+               props.Separator(def->group);
+            lastGroup = def->group;
             def->draw(props, m_curation.obj);
-         props.SetLookSliders(false);
+         }
          if (m_tab == Tab::Look)
             DrawApplyBulbButton(props, m_curation.kind, m_curation.obj);
          props.EndSection();
@@ -409,7 +432,6 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
       props.SetLookSliders(true);
       for (const PinnedPanel::Def *def : defs)
          def->draw(props, cur.obj);
-      props.SetLookSliders(false);
    };
    if (!cur.look.empty() && props.BeginSection("Look"s))
    {
@@ -429,7 +451,7 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    // Search palette focus on a field of this object: still pending here means it is not curated, so open the full sheet
    if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == cur.kind && PropertyPane::GetFocusKey().name == cur.name)
       ImGui::SetNextItemOpen(true);
-   const bool open = ImGui::CollapsingHeader(cur.advancedLabel.c_str());
+   const bool open = PropertyPane::SectionHeader(cur.advancedLabel.c_str());
    ImGui::SetItemTooltip("Every field of this object, in the full sheet layout");
    props.SkipRest(!open);
    if (open)
@@ -496,7 +518,7 @@ void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
 
    ImGui::PushID("##PartMaterialPane"); // Same fields as the material's own pane: keep the IDs apart from the part's
    ImGui::Spacing();
-   const bool open = ImGui::CollapsingHeader(("Material  " + name + "###PartMaterial").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+   const bool open = PropertyPane::SectionHeader(("Material  " + name + "###PartMaterial").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
    ImGui::SetItemTooltip("The material of this part, edited in place");
    if (open)
    {
@@ -683,7 +705,6 @@ int PropertiesPanel::DrawSearchResults(PropertyPane &props, Curation &cur, const
          props.EndSection();
       }
    ImGui::PopID();
-   props.SetLookSliders(false);
    props.SetHighlight(nullptr);
    return count;
 }
@@ -1223,7 +1244,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          });
 
       props.InputRGB<PinTable>(
-         table, "Light Em. Color", //
+         table, "Light Emission Color", //
          [](const PinTable *table) { return convertColor(table->m_Light[0].emission); }, //
          [&editor](PinTable *table, const vec3 &v)
          {
@@ -1231,7 +1252,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
             editor.m_renderer->MarkShaderDirty(); // Needed to update shaders with new light settings
          });
       props.InputFloat<PinTable>(
-         table, "Light Em. Scale"s, //
+         table, "Light Emission Scale"s, //
          [](const PinTable *table) { return table->m_lightEmissionScale; }, //
          [&editor](PinTable *table, float v)
          {
@@ -1278,7 +1299,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          },
          "Image used for ambient environment lighting");
       props.InputFloat<PinTable>(
-         table, "Environment Em. Scale"s, //
+         table, "Environment Emission"s, //
          [](const PinTable *table) { return table->m_envEmissionScale; }, //
          [&editor](PinTable *table, float v)
          {
@@ -1287,7 +1308,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          },
          PropertyPane::Unit::Percent, 3, "Intensity of the environment lighting");
       props.InputFloat<PinTable>(
-         table, "Env. Reflection Scale"s, //
+         table, "Environment Reflections"s, //
          [](const PinTable *table) { return table->m_envReflectionScale; }, //
          [&editor](PinTable *table, float v)
          {
@@ -1298,7 +1319,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
 
       props.Separator("Render Options"s);
       props.Checkbox<PinTable>(
-         table, "Enable Ambient Occlusion"s, //
+         table, "Ambient Occlusion"s, //
          [](const PinTable *table) { return table->m_enableAO; }, //
          [&editor](PinTable *table, bool v)
          {
@@ -1307,7 +1328,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          },
          "Darken creases and contact areas with ambient occlusion");
       props.InputFloat<PinTable>(
-         table, "Ambient Occlusion Scale"s, //
+         table, "AO Scale"s, //
          [](const PinTable *table) { return table->m_AOScale; }, //
          [&editor](PinTable *table, float v)
          {
@@ -1316,7 +1337,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          },
          PropertyPane::Unit::Percent, 1, "Strength of the ambient occlusion");
       props.Checkbox<PinTable>(
-         table, "Enable Sc. Sp. Reflections"s, //
+         table, "Screen Space Reflections"s, //
          [](const PinTable *table) { return table->m_enableSSR; }, //
          [&editor](PinTable *table, bool v)
          {
@@ -1325,7 +1346,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
          },
          "Reflect on-screen content on glossy surfaces (screen-space reflections)");
       props.InputFloat<PinTable>(
-         table, "Screen Space Reflection Scale"s, //
+         table, "SSR Scale"s, //
          [](const PinTable *table) { return table->m_SSRScale; }, //
          [](PinTable *table, float v) { table->m_SSRScale = v; }, PropertyPane::Unit::Percent, 1, "Strength of the screen-space reflections");
       props.InputFloat<PinTable>(
@@ -1509,7 +1530,7 @@ void PropertiesPanel::RenderProbeProperties(PropertyPane &props, RenderProbe *pr
       props.EndSection();
    }
 
-   if (ImGui::CollapsingHeader("Users", ImGuiTreeNodeFlags_DefaultOpen))
+   if (PropertyPane::SectionHeader("Users", ImGuiTreeNodeFlags_DefaultOpen))
    {
       // Add a white line above
       const ImVec2 headerMin = ImGui::GetItemRectMin();
