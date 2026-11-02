@@ -2600,9 +2600,13 @@ void EditorUI::RenderUI()
       PLOGI << "Workspace key ignored: panelsShown=" << panelsShown << " fileOp=" << (m_fileOp != nullptr) << " palette=" << m_palette.IsOpen() << " modal=" << modalWasActive;
    if (workspaceKeysAllowed && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
-      // Plain key test (owner Any): ImGui::Shortcut would lose the chord to a multiline text field (the script editor), which owns PageUp / PageDown
-      const bool nextWorkspace = ImGui::IsKeyPressed(ImGuiKey_PageDown, false);
-      const bool previousWorkspace = ImGui::IsKeyPressed(ImGuiKey_PageUp, false);
+      // Plain key test (owner Any): ImGui::Shortcut would lose the chord to a multiline text field (the script editor), which owns PageUp / PageDown.
+      // While a text field is being edited the keys are its own (they page the script text), so they do not also switch the workspace
+      const bool textKeys = io.WantTextInput;
+      if (textKeys && (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)))
+         PLOGI << "Workspace key left to the text field being edited";
+      const bool nextWorkspace = !textKeys && ImGui::IsKeyPressed(ImGuiKey_PageDown, false);
+      const bool previousWorkspace = !textKeys && ImGui::IsKeyPressed(ImGuiKey_PageUp, false);
       if (nextWorkspace || previousWorkspace)
          SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (nextWorkspace ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
       else if (!m_navEmulateNumpad && !io.WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))

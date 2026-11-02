@@ -327,7 +327,7 @@ void PinnedPanel::ResetWorkspaces()
    // (the Wiring preset below, when it is a tree of its own, has sizes of its own)
    // Wiring: with kWiringBesideScript the script sits under the Properties editor, beside the fields being wired (Ben's call: the
    // recommended preset of the layout spec), otherwise it is Layout, as it was before the layout tree
-   static constexpr bool kWiringBesideScript = false;
+   static constexpr bool kWiringBesideScript = true; // Ben 11-02: on
    if constexpr (kWiringBesideScript)
    {
       const nlohmann::json wiring = nlohmann::json::parse(R"({ "split": "vertical", "fixed": "first", "size": 200, "children": [ { "editor": "Outliner" },
@@ -448,7 +448,11 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                      haveLayout = true;
                   }
                }
-               if (!haveLayout)
+               // Legacy keys that only say "outliner and properties shown", with no widths or editor types, are the untouched pre-tree default: the
+               // workspace keeps its current default tree (Wiring's script beside the Properties editor)
+               const bool legacyDefault = !haveLayout && entry.value("outliner", true) && entry.value("properties", true) && !entry.contains("outliner_width")
+                  && !entry.contains("properties_width") && !entry.contains("left_editor") && !entry.contains("right_editor");
+               if (!haveLayout && !legacyDefault)
                {
                   bool outliner = true, properties = true;
                   float outlinerWidth = 0.f, propertiesWidth = 0.f;
