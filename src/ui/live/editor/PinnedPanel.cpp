@@ -858,7 +858,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       if (obj == nullptr)
       {
          LogUnresolved(pin, "object not found on the displayed table"s);
-         ImGui::TextDisabled("%s (object not found)", pin.prop.c_str());
+         ImGui::TextDisabled("%s (object not found)", PropertyPane::PinKeyLabel(pin.prop).c_str());
       }
       else if (it == m_defs.end() || !it->second.draw || (kind == PinKind::Part && it->second.owner != owner))
       {
@@ -866,7 +866,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
             owner == nullptr ? "object found but has no editor UI part (a part without a part group is a live object in full edit mode)"s
             : it == m_defs.end() ? "object found, field not found in its harvested property pane (label mismatch or field not drawn for this part)"s
                                  : "field definition is stale (owner changed)"s);
-         ImGui::TextDisabled("%s (not available)", pin.prop.c_str());
+         ImGui::TextDisabled("%s (not available)", PropertyPane::PinKeyLabel(pin.prop).c_str());
       }
       else
          it->second.draw(props, obj);

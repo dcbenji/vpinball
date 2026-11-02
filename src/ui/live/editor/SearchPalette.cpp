@@ -192,7 +192,7 @@ void SearchPalette::BuildOperators()
    add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
    add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
    add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
-   add("Object" + sep + "Edit Points", "Tab", editablePart, [&ed]() { ed.EnterPointEditMode(); });
+   add("Object" + sep + "Edit Points", "Tab", [&ed]() { return ed.CanEnterPointEdit(); }, [&ed]() { ed.EnterPointEditMode(); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::Geometry); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry Bottom", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::GeometryBottom); });
    add("Tools" + sep + "Convert to PBR...", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });

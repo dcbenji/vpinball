@@ -717,6 +717,15 @@ string PropertyPane::PinKeyProp(const string& label)
    return label;
 }
 
+string PropertyPane::PinKeyLabel(const string& key)
+{
+   for (const string& current : { "Light Emission Color"s, "Light Emission Scale"s, "Environment Emission"s, "Environment Reflections"s, "Ambient Occlusion"s, "AO Scale"s,
+                                  "Screen Space Reflections"s, "SSR Scale"s, "Timer Mode"s, "Toy"s })
+      if (PinKeyProp(current) == key)
+         return current;
+   return key;
+}
+
 void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Material* material)
 {
    // Right click anywhere on the field row (label or widget) opens the pin menu

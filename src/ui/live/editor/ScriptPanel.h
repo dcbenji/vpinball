@@ -36,7 +36,7 @@ private:
    EditorUI &m_editor;
 
    string m_extEditorCmd; // External editor command, mirrored to the Editor.ExternalScriptEditor app setting
-   size_t m_wrapSize = SIZE_MAX, m_wrapLines = 0; // Script size the cached line count belongs to (word wrap is off for very long scripts)
+   bool m_wrap = true; // Word wrap on (off for very long scripts); decided while the editor is not active
    bool m_extCmdLoaded = false;
 
    // External editing session: m_script_text of the armed table is written to a temporary file,

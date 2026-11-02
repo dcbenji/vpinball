@@ -4749,12 +4749,15 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 // Entered/exited with Tab (or Escape). The selection is saved on entry and restored on exit.
 //
 
+bool EditorUI::CanEnterPointEdit() const
+{
+   return m_pointEditPart == nullptr && !IsInspectMode() && !m_table->IsLocked() && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart() != nullptr
+      && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter());
+}
+
 void EditorUI::EnterPointEditMode()
 {
-   if (m_pointEditPart || IsInspectMode() || m_table->IsLocked())
-      return;
-   if (m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr
-      || (m_selection.GetPart()->GetDragPointCurve() == nullptr && !m_selection.GetPart()->HasEditCenter()))
+   if (!CanEnterPointEdit())
       return;
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
@@ -5106,6 +5109,7 @@ bool EditorUI::RenderAdjustParameters()
    const auto dragVec = [width](const char *id, float *v, const int n)
    {
       bool edited = false;
+      ImGui::BeginGroup(); // One item for the tooltip
       static constexpr const char *formats[] = { "X  %.2f", "Y  %.2f", "Z  %.2f" };
       const float w = (width - ImGui::GetStyle().ItemSpacing.x * static_cast<float>(n - 1)) / static_cast<float>(n);
       for (int i = 0; i < n; i++)
@@ -5120,6 +5124,7 @@ bool EditorUI::RenderAdjustParameters()
             edited = true;
          }
       }
+      ImGui::EndGroup();
       return edited;
    };
    switch (m_lastOp.type)

@@ -243,17 +243,15 @@ void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       // Basic embedded text editor, applied to the table script on every edit
       ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput;
       // Long lines wrap instead of clipping, but wrapping relays out the whole buffer every frame (measured ~0.75 ms at 4800 lines vs 0.09 ms
-      // unwrapped), so it is off for scripts of 6000+ lines. The count is refreshed only when the size changes.
+      // unwrapped), so it is off for scripts of 6000+ lines. Decided only while the field is not being typed in: flipping the flag mid-edit
+      // would jump the scroll position.
+      if (ImGui::GetActiveID() != ImGui::GetID("##script"))
       {
          const string &text = m_editor.m_table->m_script_text;
-         if (text.size() != m_wrapSize)
-         {
-            m_wrapSize = text.size();
-            m_wrapLines = static_cast<size_t>(std::count(text.begin(), text.end(), '\n'));
-         }
-         if (m_wrapLines < 6000)
-            flags |= ImGuiInputTextFlags_WordWrap;
+         m_wrap = std::count(text.begin(), text.end(), '\n') < 6000;
       }
+      if (m_wrap)
+         flags |= ImGuiInputTextFlags_WordWrap | ImGuiInputTextFlags_NoHorizontalScroll;
       if (readOnly)
          flags |= ImGuiInputTextFlags_ReadOnly;
       // Esc must not revert the typing: ImGui restores the text the field had when it was activated (the edits are applied on every keystroke), so

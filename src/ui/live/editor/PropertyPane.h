@@ -133,6 +133,7 @@ public:
    void SkipRest(bool skip) { m_skipRest = skip; }
    // Dial surfaces (curated sections, pinned overlay): float fields with a known range draw as sliders (ctrl+click still types)
    void SetLookSliders(bool on) { m_lookSliders = on; }
+   static string PinKeyLabel(const string &key); // Label shown for a stored favorite key (inverse of PinKeyProp)
    static string PinKeyProp(const string &label); // Stable favorite key of a field label (see the legacy map)
    static bool LookSliderRange(const string &label, Unit displayUnit, float &vMin, float &vMax);
    // Blender-style slider: the value is a filled bar behind the number (no grab knob over it); ctrl+click or double-click types

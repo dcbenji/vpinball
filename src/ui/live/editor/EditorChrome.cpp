@@ -245,7 +245,7 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::MenuItem("New Collection from Selection", nullptr, false, editablePart))
             editor.CreateCollection(true);
-         if (ImGui::MenuItem("Edit Points", "Tab", false, editablePart))
+         if (ImGui::MenuItem("Edit Points", "Tab", false, editor.CanEnterPointEdit()))
             editor.EnterPointEditMode();
          ImGui::Separator();
          if (ImGui::BeginMenu("Set Origin"))
@@ -752,13 +752,13 @@ void EditorChrome::RenderToolbar()
       ImGui::BeginDisabled(!editor.CanCopy());
       if (ToolButton(ICON_LC_COPY))
          editor.CopySelection();
-      Tip("Copy Selection", "Ctrl+C", editor.CanCopy() ? nullptr : "Nothing selected");
+      Tip("Copy Selection", "Ctrl+C", editor.CanCopy() ? nullptr : editor.m_table->IsLocked() ? "The table is locked" : "Nothing selected");
       ImGui::EndDisabled();
       ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(!editor.CanPaste());
       if (ToolButton(ICON_LC_CLIPBOARD_PASTE))
          editor.PasteSelection(editor.GetViewportContentCenter());
-      Tip("Paste", "Ctrl+V", editor.CanPaste() ? nullptr : "The clipboard is empty");
+      Tip("Paste", "Ctrl+V", editor.CanPaste() ? nullptr : editor.m_table->IsLocked() ? "The table is locked" : editor.IsInspectMode() ? "Not available while inspecting" : "The clipboard is empty");
       ImGui::EndDisabled();
 
       // Delete selection button, always visible but only enabled when there are selected parts

@@ -174,6 +174,7 @@ private:
    bool m_pointDragActive = false; // Left button drag is moving the selected points
    float m_pointDragZ = 0.f; // Table Z coordinate of the plane in which points are dragged
    Vertex2D m_pointDragPos; // Last drag position in table coordinates
+   bool CanEnterPointEdit() const; // A part with points (or an edit center) is selected and point edit is not active
    void EnterPointEditMode();
    void ExitPointEditMode(bool restoreSelection);
    bool IsPointSelected(const DragPoint *point) const;
