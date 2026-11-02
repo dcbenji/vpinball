@@ -1398,7 +1398,7 @@ PropInt(Editor, NavSelectionDisplay, "Selection Display"s, "How selected parts a
 PropBool(Editor, NavAutoDepth, "Auto Depth"s, "With nothing selected, orbit around the 3D point under the cursor when the drag starts"s, true);
 PropBool(Editor, NavAltMiddleButton, "Alt Acts As Middle Button"s, "Alt + left drag orbits / pans like the middle button (for trackpads and mice without a middle button)"s, VPX_NAV_ALT_DEFAULT);
 PropBool(Editor, NavTrackpad, "Trackpad Scrolling"s, "Two finger scroll pans the view, Ctrl / Cmd + scroll zooms (instead of scroll zooming)"s, VPX_NAV_ALT_DEFAULT);
-PropBool(Editor, NavEmulateNumpad, "Emulate Numpad"s, "Top row digits act as the numpad view keys (1 front, 3 side, 7 top, 5 perspective/orthographic, 2/4/6/8 orbit step)"s, true);
+PropBool(Editor, NavEmulateNumpad, "Emulate Numpad"s, "Top row digits act as the numpad view keys (1 front, 3 side, 7 top, 5 perspective/orthographic, 2/4/6/8 orbit step); edit mode only, while the table is not playing"s, VPX_NAV_ALT_DEFAULT);
 PropBool(Editor, NavBlenderTransform, "Blender Transform Keys"s, "G / R / S start a Blender style modal transform driven by the mouse instead of showing the gizmo"s, true);
 PropIntUnbounded(Editor, ImageMngPosX, "ImageMngPosX"s, "Image Manager window X position"s, 0);
 PropIntUnbounded(Editor, ImageMngPosY, "ImageMngPosY"s, "Image Manager window Y position"s, 0);

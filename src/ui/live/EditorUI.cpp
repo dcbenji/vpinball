@@ -2478,7 +2478,11 @@ bool EditorUI::IsNumpadPressed(int digit) const
 {
    if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit)))
       return true;
-   return m_navEmulateNumpad && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit)) && !ImGui::GetIO().KeyAlt;
+   // The digits are game keys (start, coin...) while the table plays (inspect mode) and text for widgets: emulate only with the 3D view in edit mode focused
+   const ImGuiIO &io = ImGui::GetIO();
+   if (!m_navEmulateNumpad || IsInspectMode() || io.WantTextInput || io.WantCaptureKeyboard)
+      return false;
+   return ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit)) && !io.KeyAlt;
 }
 
 namespace
