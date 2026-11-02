@@ -400,6 +400,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(DMPK), "dome_peak" },
             { FID(DMDP), "dome_depth" },
             { FID(DMBO), "dome_boost" },
+            { FID(DMCD), "dome_cooldown" },
             { FID(DTXI), "draw_textures_inside" },
             { FID(EBFC), "backfaces_enabled" },
             { FID(EFUI), "ui_edge_factor" },

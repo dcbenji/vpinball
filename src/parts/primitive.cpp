@@ -1263,7 +1263,7 @@ void Primitive::Render(const unsigned int renderMask)
          vec4(sigma.x, sigma.y, sigma.z, FlasherDomeTune("lscat=", 1.f)),
          vec4(lampColor.x, lampColor.y, lampColor.z, FlasherDomeTune("rim=", 1.f)),
          vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), max(m_d.m_domeGlint, 0.f), max(m_d.m_domePeak, 0.f)),
-         vec4(max(m_d.m_domeDepth, 0.f), 0.f, 0.f, 0.f) };
+         vec4(max(m_d.m_domeDepth, 0.f), clamp(m_d.m_domeCooldown, 0.f, 1.f), 0.f, 0.f) };
       std::copy(p, p + 15, params);
    };
 
@@ -1854,6 +1854,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DMGL), m_d.m_domeGlint);
    writer.WriteFloat(FID(DMPK), m_d.m_domePeak);
    writer.WriteFloat(FID(DMDP), m_d.m_domeDepth);
+   writer.WriteFloat(FID(DMCD), m_d.m_domeCooldown);
    writer.WriteFloat(FID(DMBO), m_d.m_domeBoost);
 
    SaveSharedEditableFields(writer);
@@ -2106,6 +2107,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMGL): m_d.m_domeGlint = reader.AsFloat(); break;
          case FID(DMPK): m_d.m_domePeak = reader.AsFloat(); break;
          case FID(DMDP): m_d.m_domeDepth = reader.AsFloat(); break;
+         case FID(DMCD): m_d.m_domeCooldown = reader.AsFloat(); break;
          case FID(DMBO): m_d.m_domeBoost = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;

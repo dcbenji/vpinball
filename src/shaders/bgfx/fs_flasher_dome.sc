@@ -39,7 +39,8 @@
 // [12] xyz the lamp's colour (linear, max channel 1), w unused
 // [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
 //      z dome_glint (the OFF sparkle's scale, 1 = as tuned), w dome_peak (white-hot peak, 0 = the red peak)
-// [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off)
+// [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
+//      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -182,11 +183,15 @@ void main()
 	const float level = max(domeParams[3].w, 0.0);
 	const float lvl = saturate(level);
 	const float lvlE = saturate((lvl - 0.01) / 0.99);
-	const float lvlG = lvlE >= 0.45 ? sqrt(lvlE) : sqrt(0.45) * pow(lvlE / 0.45, 1.5);
-	const float T = 2900.0 * pow(max(lvl, 1e-3), 0.1235);
+	// dome_cooldown (coolK): 0 = the white-hot parts gate on in the top 10-15 % of the level (a short ROM flash shows them for
+	// a frame or two: they snap); 1 = they follow the level all the way (a continuous blackbody pulse: white, yellow, orange,
+	// red as the filament cools), the brightness tracks the level more linearly and the filament colour cools with it
+	const float coolK = saturate(domeParams[14].y);
+	const float lvlG = mix(lvlE >= 0.45 ? sqrt(lvlE) : sqrt(0.45) * pow(lvlE / 0.45, 1.5), pow(lvlE, 0.8), coolK);
+	const float T = 2900.0 * pow(max(lvl, 1e-3), mix(0.1235, 0.25, coolK));
 	const vec3 bb = domeBlackbody(T);
-	const float pk = smoothstep(0.9, 1.0, level);                    // the 1-2 true peak frames
-	const float heatW = smoothstep(0.85, 1.0, level);
+	const float pk = mix(smoothstep(0.9, 1.0, level), pow(lvl, 6.0), coolK); // the 1-2 true peak frames (coolK: the hot end of the pulse)
+	const float heatW = mix(smoothstep(0.85, 1.0, level), pow(lvl, 4.0), coolK);
 
 	// The view ray refracted in at the smooth skin, carried through the wall to the inner surface
 	vec3 VrIn = refract(-V, Ns, 1.0 / 1.49);
@@ -299,7 +304,7 @@ void main()
 	}
 	// A thick body stays red at the peak: its glow flood steps back (the lamp scatter carries the body) and its flash is damped
 	// dome_peak: the white-hot peak (whiteK, from 85 % of full; a level above 1 pushes it further) undoes that damping
-	const float whiteK = min(peakK * smoothstep(0.85, 1.0, level) * (1.0 + 0.5 * saturate(level - 1.0)), 1.5);
+	const float whiteK = min(peakK * heatW * (1.0 + 0.5 * saturate(level - 1.0)), 1.5);
 	const vec3 body = lvlB * domeParams[5].x * glow * mix(mix(flash, 1.0 + 0.35 * (flash - 1.0), bodyK) * (1.0 - 0.7 * bodyK), flash, saturate(whiteK));
 
 	// Bars: each flank transmits the coil as a narrow vertical bar where its GGX transmission lobe (in the horizontal
@@ -503,7 +508,7 @@ void main()
 		const vec3 scatCol = mix(lampCol * trH, bb * mix(trH, vec3_splat(1.0), 0.5), domeParams[8].x * pk * fallS * fallS);
 		// Soft knee on the level: the scattered body saturates below the tonemapper's desaturation (a red body at full, not
 		// pink-white); the bars, core and cap carry the hot streaks
-		const float scatL = 1.35 * lvlG / (0.35 + lvlG);
+		const float scatL = mix(1.35 * lvlG / (0.35 + lvlG), lvlG, coolK);
 		const vec3 lampScat = scatK * domeParams[11].w * 1.5 * scatL * scatCol * fallS * bandF * (1.0 + 0.5 * fallS) * mix(1.0, 1.0 + 0.2 * heatW, fallS) * (1.0 + 0.2 * (flash - 1.0));
 		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
 		// piping the lamp's light out through its thin edge
