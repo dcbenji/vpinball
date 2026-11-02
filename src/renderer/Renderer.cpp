@@ -4278,7 +4278,7 @@ void Renderer::SetupTonemapping(RenderTarget* renderedRT, RenderTarget* tonemapR
 
    // The wide color gamut setup applies to the window being rendered to: the desktop display for the VR desktop scene, the playfield window otherwise
    VPX::Window* const outputWnd = m_desktopScenePass && m_renderDevice->m_outputWnd.size() >= 2 ? m_renderDevice->m_outputWnd[1] : m_renderDevice->m_outputWnd[0];
-   const bool isHdr2020 = (g_pplayer->m_vrDevice == nullptr || m_desktopScenePass) && outputWnd->IsWCGBackBuffer();
+   const bool isHdr2020 = !m_editorPreviewPass && (g_pplayer->m_vrDevice == nullptr || m_desktopScenePass) && outputWnd->IsWCGBackBuffer(); // The camera preview is an ImGui image: tonemapped to SDR
    if (isHdr2020)
    {
       const float maxDisplayLuminance = outputWnd->GetHDRHeadRoom()
@@ -4403,7 +4403,7 @@ RenderTarget* Renderer::ApplyTonemapping(RenderTarget* renderedRT, RenderTarget*
    {
       // The flags SetupTonemapping just set, with only the color grade cleared
       VPX::Window* const outputWnd = m_desktopScenePass && m_renderDevice->m_outputWnd.size() >= 2 ? m_renderDevice->m_outputWnd[1] : m_renderDevice->m_outputWnd[0];
-      const bool isHdr2020 = (g_pplayer->m_vrDevice == nullptr || m_desktopScenePass) && outputWnd->IsWCGBackBuffer();
+      const bool isHdr2020 = !m_editorPreviewPass && (g_pplayer->m_vrDevice == nullptr || m_desktopScenePass) && outputWnd->IsWCGBackBuffer(); // The camera preview is an ImGui image: tonemapped to SDR
       m_renderDevice->m_FBShader->SetVector(ShaderUniform::bloom_dither_colorgrade, //
          IsBloomEnabled() ? 1.f : 0.f, // Bloom
          (!isHdr2020 && (outputWnd->GetBackBuffer()->GetColorFormat() != colorFormat::RGBA10)) ? 1.f : 0.f, // Dither
