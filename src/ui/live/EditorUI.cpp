@@ -2411,6 +2411,11 @@ void EditorUI::RenderNavCube()
 
    if (memcmp(viewG, viewGIn, sizeof(viewG)) == 0)
       return;
+   // ImGuizmo's drag orbit builds a look at with a fixed Y up: from an axis view (default Top) the first drag frame has a zero mouse delta, the view direction
+   // is parallel to up and the look at is NaN, which would poison the editor camera for good. Skip such frames, the next ones recover.
+   for (int i = 0; i < 16; i++)
+      if (!std::isfinite(viewG[i]))
+         return;
 
    // Back to the editor camera: keep the pivot and distance, take the new direction and up
    float viewV[16];
