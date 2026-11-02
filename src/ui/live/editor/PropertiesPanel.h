@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "imgui/imgui.h"
+
 #include <optional>
 
 #include "audio/AudioPlayer.h"
@@ -37,7 +39,7 @@ public:
    explicit PropertiesPanel(EditorUI &editor);
    ~PropertiesPanel();
 
-   void Render(float topBarHeight);
+   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (header with the editor type button, then the content)
 
    // Width of the panel in logical pixels (scaled by the UI DPI)
    static constexpr float PaneWidth = 360.f;

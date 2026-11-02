@@ -180,7 +180,7 @@ void PinnedPanel::SaveTo(PinTable *table) const
    table->m_editorPins.clear();
    for (const PinKey &pin : m_pins)
       table->m_editorPins.push_back({ PinKindName(pin.kind), pin.name, pin.prop });
-   if (m_activeWorkspace < 0)
+   if (m_activeWorkspace < 0 || m_workspacesPristine)
       return; // Workspaces never used with this table: leave its data as it is
    std::array<Workspace, WorkspaceCount> workspaces = m_workspaces;
    CaptureWorkspace(workspaces[m_activeWorkspace]);
@@ -193,7 +193,8 @@ void PinnedPanel::SaveTo(PinTable *table) const
       static constexpr const char *tabs[] = { "Item", "Look", "View" };
       list.push_back({ { "name", ws.name }, { "outliner", ws.outliner }, { "properties", ws.properties }, { "sidebar", ws.sidebar },
          { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "outliner_width", ws.outlinerWidth }, { "properties_width", ws.propertiesWidth },
-         { "sidebar_width", ws.sidebarWidth }, { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "pins", pins } });
+         { "sidebar_width", ws.sidebarWidth }, { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "left_editor", ws.leftEditor },
+         { "right_editor", ws.rightEditor }, { "pins", pins } });
    }
    nlohmann::ordered_json doc = { { "active", workspaces[m_activeWorkspace].name }, { "workspaces", list } };
    table->m_editorWorkspaces = doc.dump();
@@ -218,6 +219,8 @@ void PinnedPanel::CaptureWorkspace(Workspace &ws) const
    ws.sidebarWidth = editor.m_sidebarWidth;
    ws.outlinerMode = editor.m_outliner.GetDisplayMode();
    ws.outlinerTypes = editor.m_outliner.GetTypeMask();
+   ws.leftEditor = static_cast<int>(editor.m_leftEditor);
+   ws.rightEditor = static_cast<int>(editor.m_rightEditor);
    ws.pins = m_pins;
 }
 
@@ -225,7 +228,16 @@ void PinnedPanel::ApplyWorkspace(int index)
 {
    if (index < 0 || index >= WorkspaceCount)
       return;
-   if (m_activeWorkspace >= 0)
+   if (m_workspacesPristine)
+   {
+      // First pick with this table (Layout was shown as active by default): the current areas and favorites become the Layout workspace,
+      // and a target without its own favorites starts from them (nothing added so far is lost)
+      CaptureWorkspace(m_workspaces[m_activeWorkspace]);
+      if (m_workspaces[index].pins.empty())
+         m_workspaces[index].pins = m_pins;
+      m_workspacesPristine = false;
+   }
+   else if (m_activeWorkspace >= 0)
       CaptureWorkspace(m_workspaces[m_activeWorkspace]);
    else if (m_activeWorkspace == -1)
    {
@@ -253,6 +265,7 @@ void PinnedPanel::ApplyWorkspace(int index)
       editor.m_outliner.SetDisplayMode(ws.outlinerMode);
    if (ws.outlinerTypes >= 0)
       editor.m_outliner.SetTypeMask(static_cast<uint32_t>(ws.outlinerTypes));
+   editor.SetAreaEditors(ws.leftEditor, ws.rightEditor);
 }
 
 void PinnedPanel::LoadWorkspaces(const string &json)
@@ -289,6 +302,8 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                ws.sidebarWidth = entry.value("sidebar_width", ws.sidebarWidth);
                ws.outlinerMode = entry.value("outliner_mode", ws.outlinerMode);
                ws.outlinerTypes = entry.value("outliner_types", ws.outlinerTypes);
+               ws.leftEditor = entry.value("left_editor", ws.leftEditor); // Missing in tables saved before the editor types: the defaults
+               ws.rightEditor = entry.value("right_editor", ws.rightEditor);
                ws.pins.clear();
                if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())
                   for (const auto &pin : *pins)
@@ -351,10 +366,18 @@ void PinnedPanel::SyncWithTable()
    m_editor.m_showProperties = true;
    m_editor.m_showSidebar = false;
    m_editor.m_sidebarTab = EditorUI::SidebarTab::Item;
+   m_editor.m_leftEditor = EditorUI::AreaEditor::Outliner;
+   m_editor.m_rightEditor = EditorUI::AreaEditor::Properties;
    m_editor.m_outlinerWidth = OutlinerPanel::PaneWidth;
    m_editor.m_propertiesWidth = PropertiesPanel::PaneWidth;
    m_editor.m_sidebarWidth = 300.f;
-   if (m_activeWorkspace >= 0)
+   m_workspacesPristine = false;
+   if (m_activeWorkspace == -1)
+   {
+      m_activeWorkspace = 0; // A table without saved workspaces starts on Layout (the defaults above), highlighted in the top bar
+      m_workspacesPristine = true;
+   }
+   else if (m_activeWorkspace >= 0)
    {
       const vector<PinKey> pins = m_pins;
       const int active = m_activeWorkspace;
@@ -571,6 +594,8 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
          const float buttonWidth = ImGui::GetFontSize() * 1.2f; // ~18 px reserved
          const bool rowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
             && ImGui::IsMouseHoveringRect(rowPos, ImVec2(rowPos.x + ImGui::GetContentRegionAvail().x, rowPos.y + frameHeight), false);
+         if (rowHovered) // Faint row highlight: the hover-remove icon visibly belongs to its row
+            ImGui::GetWindowDrawList()->AddRectFilled(rowPos, ImVec2(rowPos.x + ImGui::GetContentRegionAvail().x, rowPos.y + frameHeight), EditorTheme::RowHover);
          const bool remove = ImGui::InvisibleButton("##Unpin", ImVec2(buttonWidth, frameHeight));
          if (remove)
             Unpin(pin);
@@ -684,7 +709,9 @@ void PinnedPanel::RenderItemTab(bool hovered)
    // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
    EditorUI &editor = m_editor;
    const PropertiesPanel &properties = editor.m_properties;
-   const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
+   // Nothing selected: the table, like the Properties editor (the table has no transform, its Look fields are shown)
+   const bool tableFallback = editor.m_selection.GetType() == Selection::S_NONE && properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)].empty();
+   const auto &defs = properties.m_curation.tabs[static_cast<int>(tableFallback ? PropertiesPanel::Tab::Look : PropertiesPanel::Tab::Transform)];
    if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
    {
       // Centred in the panel: icon above a dim message
@@ -703,11 +730,7 @@ void PinnedPanel::RenderItemTab(bool hovered)
       ImGui::PopStyleColor();
       return;
    }
-   ImGui::Dummy(ImVec2(0.f, 2.f));
-   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-   ImGui::TextUnformatted(properties.m_curation.kind == PinKind::Table ? "Table" : properties.m_curation.name.c_str());
-   ImGui::PopStyleColor();
-   ImGui::Dummy(ImVec2(0.f, 2.f));
+   ImGui::Dummy(ImVec2(0.f, 2.f)); // The name is the header of the section drawn below
    vector<PinKey> &keys = m_itemKeys;
    keys.clear();
    for (const Def *def : defs)
@@ -762,7 +785,7 @@ void PinnedPanel::Render(float topBarHeight)
    if (!editor.m_showSidebar)
       return;
    // The Item tab shows the Properties editor's Transform list: keep it current when the Properties editor is hidden
-   if (!editor.m_showProperties && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
+   if (!editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties) && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
       editor.m_properties.PrepareCuration();
 
    // N-panel: a fixed area along the viewport's right edge (left of the Properties editor), resized by its splitter
@@ -772,7 +795,7 @@ void PinnedPanel::Render(float topBarHeight)
    const float right = viewport->Pos.x + viewport->Size.x - (editor.m_showProperties ? editor.m_propertiesWidth * dpi : 0.f);
    ImGui::SetNextWindowPos(ImVec2(right - width, viewport->Pos.y + topBarHeight));
    ImGui::SetNextWindowSize(ImVec2(width, viewport->Size.y - topBarHeight));
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * dpi, 4.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 4.f * dpi));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
    ImGui::Begin("SIDEBAR", nullptr,

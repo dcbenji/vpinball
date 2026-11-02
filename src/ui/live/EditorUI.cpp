@@ -11,8 +11,10 @@
 #include "core/VPApp.h"
 #include "core/vpversion.h"
 
+#include "editor/EditorTheme.h"
 #include "editor/EditorUIPart.h"
 #include "editor/EditorUIPartRegistry.h"
+#include "editor/IconsLucide.h"
 #include "editor/LiveRenderContext.h"
 
 #include "parts/Collection.h"
@@ -164,8 +166,6 @@ void EditorUI::Close()
    RestorePartsVisibility();
    m_inspectionModal.Close();
    m_pbrConvertModal.Close();
-   m_partLibrary.Close();
-   m_scriptPanel.Close();
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
 }
@@ -626,6 +626,195 @@ void EditorUI::RenderSplitters()
       splitter("##SplitSidebar", propertiesX - m_sidebarWidth * dpi, m_sidebarWidth, -1.f);
 }
 
+const char *EditorUI::AreaEditorName(const AreaEditor type)
+{
+   switch (type)
+   {
+   case AreaEditor::Outliner: return "Outliner";
+   case AreaEditor::Properties: return "Properties";
+   case AreaEditor::Script: return "Script";
+   case AreaEditor::PartLibrary: return "Part Library";
+   case AreaEditor::Count: break;
+   }
+   return "";
+}
+
+const char *EditorUI::AreaEditorIcon(const AreaEditor type)
+{
+   switch (type)
+   {
+   case AreaEditor::Outliner: return ICON_LC_LIST;
+   case AreaEditor::Properties: return ICON_LC_SLIDERS_HORIZONTAL;
+   case AreaEditor::Script: return ICON_LC_CODE_XML;
+   case AreaEditor::PartLibrary: return ICON_LC_BOX;
+   case AreaEditor::Count: break;
+   }
+   return "";
+}
+
+void EditorUI::SetAreaEditor(const bool right, const AreaEditor type)
+{
+   if (type >= AreaEditor::Count)
+      return;
+   AreaEditor &mine = right ? m_rightEditor : m_leftEditor;
+   AreaEditor &other = right ? m_leftEditor : m_rightEditor;
+   if (mine == type)
+      return;
+   if (other == type)
+      other = mine; // Each panel is a single instance: the other area takes the type this area leaves
+   mine = type;
+   if (type == AreaEditor::PartLibrary)
+      m_partLibrary.Show(); // Rescan the library folders
+}
+
+void EditorUI::SetAreaEditors(const int left, const int right)
+{
+   const int count = static_cast<int>(AreaEditor::Count);
+   const bool valid = left >= 0 && left < count && right >= 0 && right < count && left != right;
+   m_leftEditor = valid ? static_cast<AreaEditor>(left) : AreaEditor::Outliner;
+   m_rightEditor = valid ? static_cast<AreaEditor>(right) : AreaEditor::Properties;
+   if (valid && (m_leftEditor == AreaEditor::PartLibrary || m_rightEditor == AreaEditor::PartLibrary))
+      m_partLibrary.Show();
+}
+
+bool EditorUI::IsAreaEditorShown(const AreaEditor type) const
+{
+   return (m_leftEditor == type && m_showOutliner) || (m_rightEditor == type && m_showProperties);
+}
+
+void EditorUI::ShowAreaEditor(const AreaEditor type)
+{
+   // Entry point of the former dialogs (script, part library) and of the jumps to the outliner / properties: the area hosting the type
+   // is revealed, otherwise the type replaces the editor of its preferred area (Script and Properties: right, Outliner and Part Library: left)
+   if (m_leftEditor == type)
+      m_showOutliner = true;
+   else if (m_rightEditor == type)
+      m_showProperties = true;
+   else
+   {
+      const bool right = type == AreaEditor::Script || type == AreaEditor::Properties;
+      SetAreaEditor(right, type);
+      (right ? m_showProperties : m_showOutliner) = true;
+   }
+}
+
+void EditorUI::ToggleAreaEditor(const AreaEditor type)
+{
+   if (m_leftEditor == type)
+      m_showOutliner = !m_showOutliner;
+   else if (m_rightEditor == type)
+      m_showProperties = !m_showProperties;
+   else
+      ShowAreaEditor(type);
+}
+
+bool EditorUI::BeginAreaWindow(const char *const name, const ImVec2 &pos, const ImVec2 &size)
+{
+   const float pad = 4.0f * m_liveUI.GetDPI();
+   ImGui::SetNextWindowPos(pos);
+   ImGui::SetNextWindowSize(size);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+   return ImGui::Begin(name, nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
+         | ImGuiWindowFlags_NoNavFocus);
+}
+
+void EditorUI::EndAreaWindow()
+{
+   ImGui::End();
+   ImGui::PopStyleVar(3);
+}
+
+void EditorUI::RenderAreas(const float topBarHeight)
+{
+   if (m_table->IsLocked())
+      return;
+   const float dpi = m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float height = viewport->Size.y - topBarHeight;
+   // The editor types are read once: picking a type in the header of an area swaps them, which takes effect on the next frame
+   const AreaEditor leftEditor = m_leftEditor;
+   const AreaEditor rightEditor = m_rightEditor;
+   const auto host = [this](const AreaEditor type, const ImVec2 &pos, const ImVec2 &size)
+   {
+      switch (type)
+      {
+      case AreaEditor::Outliner: m_outliner.RenderInArea(pos, size); break;
+      case AreaEditor::Properties: m_properties.RenderInArea(pos, size); break;
+      case AreaEditor::Script: m_scriptPanel.RenderInArea(pos, size); break;
+      case AreaEditor::PartLibrary: m_partLibrary.RenderInArea(pos, size); break;
+      case AreaEditor::Count: break;
+      }
+   };
+   if (m_showOutliner)
+      host(leftEditor, ImVec2(viewport->Pos.x, viewport->Pos.y + topBarHeight), ImVec2(m_outlinerWidth * dpi, height));
+   if (m_showProperties)
+   {
+      const float width = m_propertiesWidth * dpi;
+      host(rightEditor, ImVec2(viewport->Pos.x + viewport->Size.x - width, viewport->Pos.y + topBarHeight), ImVec2(width, height));
+   }
+}
+
+void EditorUI::RenderAreaTypeButton(const AreaEditor current)
+{
+   // Blender's editor type switcher: the editor icon and a down chevron at the far left of the area header, opening the list of the editor types
+   const ImGuiStyle &style = ImGui::GetStyle();
+   const char *const icon = AreaEditorIcon(current);
+   const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+   const float chevronWidth = ImGui::GetFontSize() * 0.4f; // Small, drawn in TextDim
+   const ImVec2 buttonSize(style.FramePadding.x * 2.f + iconSize.x + style.ItemInnerSpacing.x + chevronWidth, ImGui::GetFrameHeight());
+   const bool right = m_rightEditor == current;
+
+   ImGui::PushID("##AreaType");
+   const bool clicked = ImGui::Button("##AreaTypeButton", buttonSize);
+   const ImVec2 itemMin = ImGui::GetItemRectMin();
+   const ImVec2 itemMax = ImGui::GetItemRectMax();
+   {
+      ImDrawList *const drawList = ImGui::GetWindowDrawList();
+      const float centerY = (itemMin.y + itemMax.y) * 0.5f;
+      drawList->AddText(ImVec2(itemMin.x + style.FramePadding.x, centerY - iconSize.y * 0.5f), EditorTheme::Text, icon);
+      const float half = chevronWidth * 0.5f;
+      const float centerX = itemMax.x - style.FramePadding.x - half;
+      drawList->AddTriangleFilled(ImVec2(centerX - half, centerY - half * 0.5f), ImVec2(centerX + half, centerY - half * 0.5f), ImVec2(centerX, centerY + half * 0.5f), EditorTheme::TextDim);
+   }
+   ImGui::SetItemTooltip("Editor Type");
+   if (clicked)
+      ImGui::OpenPopup("##AreaTypePopup");
+   ImGui::SetNextWindowPos(ImVec2(itemMin.x, itemMax.y), ImGuiCond_Always);
+   if (ImGui::BeginPopup("##AreaTypePopup"))
+   {
+      if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      {
+         ImGui::CloseCurrentPopup();
+         m_areaEscPending = true;
+      }
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+      ImGui::TextUnformatted("Editor Type");
+      ImGui::PopStyleColor();
+      ImGui::Separator();
+      for (int i = 0; i < static_cast<int>(AreaEditor::Count); ++i)
+      {
+         const AreaEditor type = static_cast<AreaEditor>(i);
+         const string label = string(AreaEditorIcon(type)) + "  " + AreaEditorName(type);
+         if (ImGui::Selectable(label.c_str(), type == current))
+            SetAreaEditor(right, type);
+      }
+      ImGui::EndPopup();
+   }
+   ImGui::PopID();
+}
+
+bool EditorUI::ConsumedAreaEscape()
+{
+   if (!m_areaEscPending)
+      return false;
+   if (!ImGui::IsKeyDown(ImGuiKey_Escape))
+      m_areaEscPending = false; // Released: this is the frame of the release, still consumed
+   return true;
+}
+
 void EditorUI::ShowSidebar(SidebarTab tab)
 {
    m_showSidebar = true;
@@ -760,11 +949,7 @@ void EditorUI::RenderUI()
    m_chrome.Render(showFullUI);
    if (showFullUI)
    {
-      // Side panels
-      if (m_showOutliner)
-         m_outliner.Render(m_chrome.GetTopBarHeight());
-      if (m_showProperties)
-         m_properties.Render(m_chrome.GetTopBarHeight());
+      RenderAreas(m_chrome.GetTopBarHeight()); // Left and right areas
    }
    if (!m_inspectionModal.IsVisible())
       m_pinned.Render(m_chrome.GetTopBarHeight()); // N-panel
@@ -779,8 +964,8 @@ void EditorUI::RenderUI()
       m_palette.Render();
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
-   m_partLibrary.Render();
-   m_scriptPanel.Render();
+   m_partLibrary.Update();
+   m_scriptPanel.Update();
 
 #endif
 
@@ -1366,13 +1551,13 @@ void EditorUI::RenderUI()
    // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
    if (panelsShown && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
       m_palette.Toggle();
-   // Outliner filter (shows the outliner if a workspace hid it)
+   // Outliner filter (shows the area hosting the outliner if a workspace hid it, or switches the left area to the outliner)
    if (panelsShown && !m_table->IsLocked() && (!io.WantTextInput || !m_palette.IsOpen()) && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
-      m_showOutliner = true;
+      ShowAreaEditor(AreaEditor::Outliner);
       m_outliner.FocusFilter();
    }
-   const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape(); // The Esc that closed a popup is not an editor Esc
+   const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape(); // The Esc that closed a popup is not an editor Esc
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
@@ -2477,7 +2662,18 @@ void EditorUI::RenderNavCube()
       io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
       io.MouseDown[0] = false;
    }
+   // The cube faces are tinted with the gizmo's axis colors (saturated red / green / blue): mute them halfway to grey for the cube only (axes stay
+   // identifiable, as in Blender's navigation gizmo), and restore the axis colors of the selection gizmo right after
+   ImGuizmo::Style &gizmoStyle = ImGuizmo::GetStyle();
+   const ImVec4 savedAxisColors[3] = { gizmoStyle.Colors[ImGuizmo::DIRECTION_X], gizmoStyle.Colors[ImGuizmo::DIRECTION_Y], gizmoStyle.Colors[ImGuizmo::DIRECTION_Z] };
+   for (int axis = 0; axis < 3; axis++)
+   {
+      const ImVec4 grey = EditorTheme::V(EditorTheme::OverlayGrey), c = savedAxisColors[axis];
+      gizmoStyle.Colors[ImGuizmo::DIRECTION_X + axis] = ImVec4((c.x + grey.x) * 0.5f, (c.y + grey.y) * 0.5f, (c.z + grey.z) * 0.5f, c.w);
+   }
    ImGuizmo::ViewManipulate(viewG, proj.m[0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD, const_cast<float *>(identity), m_camDistance, pos, ImVec2(size, size), 0x40101010);
+   for (int axis = 0; axis < 3; axis++)
+      gizmoStyle.Colors[ImGuizmo::DIRECTION_X + axis] = savedAxisColors[axis];
    if (gizmoBusy)
    {
       io.MousePos = savedMousePos;

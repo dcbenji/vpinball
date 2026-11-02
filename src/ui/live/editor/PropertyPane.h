@@ -103,6 +103,21 @@ public:
    static bool LookSliderRange(const string &label, Unit displayUnit, float &vMin, float &vMax);
    // Blender-style slider: the value is a filled bar behind the number (no grab knob over it); ctrl+click or double-click types
    static bool FillSlider(const char *id, float *value, float vMin, float vMax, const char *format);
+   // Shared widget helpers (all fields of the editor use the same frame, chevron, checkbox and number look)
+   // Text cut to maxWidth with a trailing "..." (the text itself when it fits)
+   static string Ellipsize(const char *text, float maxWidth);
+   // Line chevron (two segments) centred on `center`; `size` is its half width
+   static void DrawChevron(ImDrawList *drawList, const ImVec2 &center, bool down, float size, ImU32 color);
+   // Combo without ImGui's arrow block: a TextDim chevron-down at the right end, preview ellipsized to the field
+   static bool BeginFlatCombo(const char *id, const char *preview);
+   // Checkbox: unchecked = FrameBg, checked = Fill with a white tick
+   static bool FlatCheckbox(const char *id, bool *value);
+   // Number of decimals shown for a value in the given display unit (one precision per unit); `requested` is the part's own request
+   static int FloatDecimals(Unit displayUnit, int requested, float shown = 0.f);
+   // Blender-like number field: the fill slider frame with the value centred and no fill; drag to change, ctrl+click or double-click to type
+   static bool NumberField(const char *id, float *value, int decimals);
+   static void RoundDragged(float *values, const float *before, int count, int decimals);
+   static float DragSpeed(int decimals, float magnitude) { return max(0.5f * powf(10.f, -static_cast<float>(decimals)), magnitude * 0.005f); }
    bool IsHarvest() const { return m_pinMode == PinMode::Harvest; } // Drawn in the hidden window that registers the pin definitions
    bool IsSkippingRest() const { return m_skipRest; }
    // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
@@ -490,7 +505,7 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    bool value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::Checkbox(("##" + label).c_str(), &value))
+   if (FlatCheckbox(("##" + label).c_str(), &value))
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
@@ -520,7 +535,7 @@ inline void PropertyPane::SessionToggle(T* obj, const string& label, bool& state
    assert(m_inSection);
    PropertyLabel(label, tooltip);
    ImGui::PushID(label.c_str());
-   ImGui::Checkbox(("##" + label).c_str(), &state);
+   FlatCheckbox(("##" + label).c_str(), &state);
    WidgetTooltip(tooltip);
    PinField<T>(obj, label,
       [&]() -> PinDrawFn
@@ -548,7 +563,7 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    int value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputInt(("##" + label).c_str(), &value, 0, 0)) // No step buttons: they never matched the frame height
+   if (ImGui::DragInt(("##" + label).c_str(), &value, 0.25f, 0, 0, "%d")) // Same centred number look as the float fields
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
@@ -581,7 +596,6 @@ inline void PropertyPane::InputFloat(
    int nDecimalAdjust;
    Unit displayUnit = m_lengthUnit; // ResolveUnit will set it to the supported converted display unit
    ResolveUnit(unit, displayUnit, nDecimalAdjust);
-   string format = "%." + std::to_string(max(0, nDecimals + nDecimalAdjust)) + 'f';
    const char* unitLabel = GetUnitLabel(displayUnit);
    PropertyLabel(unitLabel ? (label + " (" + unitLabel + ')') : label, tooltip);
    const SyncField<T> sync = BeginSyncField(obj);
@@ -590,13 +604,14 @@ inline void PropertyPane::InputFloat(
    float value = getter(sync.display);
    float displayValue = value;
    ConvertUnit(unit, displayUnit, displayValue, nDecimalAdjust);
+   const int decimals = FloatDecimals(displayUnit, nDecimals, displayValue);
+   const string format = "%." + std::to_string(decimals) + 'f';
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
    float vMin, vMax;
-   // A value outside the guide range keeps the input field: a click on a slider would snap it into the range
-   const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax) && displayValue >= vMin && displayValue <= vMax;
+   // Ranges are soft (FillSlider extends them to include the value); fields without a known range are number fields
+   const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax);
    m_rowFocusable = true;
-   if (slider ? FillSlider(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str())
-              : ImGui::InputFloat(("##" + label).c_str(), &displayValue, 0.f, 0.f, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
+   if (slider ? FillSlider(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str()) : NumberField(("##" + label).c_str(), &displayValue, decimals))
    {
       value = displayValue;
       ConvertUnit(displayUnit, unit, value, nDecimalAdjust);
@@ -628,13 +643,13 @@ inline void PropertyPane::SliderFloat(
       return;
    assert(m_inSection);
    m_modifyFieldId++;
-   const string format = "%." + std::to_string(max(0, nDecimals)) + 'f';
    PropertyLabel(label, tooltip);
    m_rowFocusable = true;
    const SyncField<T> sync = BeginSyncField(obj);
    const vector<CoTarget<T>> targets = GetCoTargets(sync, obj);
    ImGui::PushID(label.c_str());
    float value = getter(sync.display);
+   const string format = "%." + std::to_string(FloatDecimals(Unit::None, nDecimals, value)) + 'f';
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
    // Slider range is a guide: ctrl+click types a value, which may go beyond it (the setters clamp where it matters)
    if (FillSlider(("##" + label).c_str(), &value, vMin, vMax, format.c_str()))
@@ -680,7 +695,8 @@ inline void PropertyPane::InputFloat2(
    int nDecimalAdjust;
    Unit displayUnit = m_lengthUnit; // ResolveUnit will set it to the supported converted display unit
    ResolveUnit(unit, displayUnit, nDecimalAdjust);
-   string format = "%." + std::to_string(max(0, nDecimals + nDecimalAdjust)) + 'f';
+   const int decimals = FloatDecimals(displayUnit, nDecimals);
+   const string format = "%." + std::to_string(decimals) + 'f';
    const char* unitLabel = GetUnitLabel(displayUnit);
    PropertyLabel(unitLabel ? (label + " (" + unitLabel + ')') : label, tooltip);
    const SyncField<T> sync = BeginSyncField(obj);
@@ -691,8 +707,10 @@ inline void PropertyPane::InputFloat2(
    ConvertUnit(unit, displayUnit, displayValue.x, nDecimalAdjust);
    ConvertUnit(unit, displayUnit, displayValue.y, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputFloat2(("##" + label).c_str(), &displayValue.x, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
+   const Vertex2D before2 = displayValue;
+   if (ImGui::DragFloat2(("##" + label).c_str(), &displayValue.x, DragSpeed(decimals, max(fabsf(displayValue.x), fabsf(displayValue.y))), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat))
    {
+      RoundDragged(&displayValue.x, &before2.x, 2, decimals);
       value = displayValue;
       ConvertUnit(displayUnit, unit, value.x, nDecimalAdjust);
       ConvertUnit(displayUnit, unit, value.y, nDecimalAdjust);
@@ -727,7 +745,8 @@ inline void PropertyPane::InputFloat3(
    int nDecimalAdjust;
    Unit displayUnit = m_lengthUnit; // ResolveUnit will set it to the supported converted display unit
    ResolveUnit(unit, displayUnit, nDecimalAdjust);
-   string format = "%." + std::to_string(max(0, nDecimals + nDecimalAdjust)) + 'f';
+   const int decimals = FloatDecimals(displayUnit, nDecimals);
+   const string format = "%." + std::to_string(decimals) + 'f';
    const char* unitLabel = GetUnitLabel(displayUnit);
    PropertyLabel(unitLabel ? (label + " (" + unitLabel + ')') : label, tooltip);
    const SyncField<T> sync = BeginSyncField(obj);
@@ -739,8 +758,10 @@ inline void PropertyPane::InputFloat3(
    ConvertUnit(unit, displayUnit, displayValue.y, nDecimalAdjust);
    ConvertUnit(unit, displayUnit, displayValue.z, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputFloat3(("##" + label).c_str(), &displayValue.x, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
+   const vec3 before3 = displayValue;
+   if (ImGui::DragFloat3(("##" + label).c_str(), &displayValue.x, DragSpeed(decimals, max(fabsf(displayValue.x), max(fabsf(displayValue.y), fabsf(displayValue.z)))), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat))
    {
+      RoundDragged(&displayValue.x, &before3.x, 3, decimals);
       value = displayValue;
       ConvertUnit(displayUnit, unit, value.x, nDecimalAdjust);
       ConvertUnit(displayUnit, unit, value.y, nDecimalAdjust);
@@ -916,7 +937,7 @@ inline void PropertyPane::Combo(
    int value = getter(sync.display);
    const int displayIndex = values.empty() ? -1 : clamp(value, 0, static_cast<int>(values.size()) - 1);
    const bool mixed = IsMixed(getter, sync.display, targets);
-   if (ImGui::BeginCombo(("##" + label).c_str(), mixed ? "-" : (displayIndex < 0 ? "" : values[displayIndex].c_str())))
+   if (BeginFlatCombo(("##" + label).c_str(), mixed ? "-" : (displayIndex < 0 ? "" : values[displayIndex].c_str())))
    {
       for (size_t i = 0; i < values.size(); i++)
       {

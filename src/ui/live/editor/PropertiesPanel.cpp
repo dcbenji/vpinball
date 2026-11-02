@@ -44,12 +44,13 @@ struct CurationRules
    std::initializer_list<const char *> lookGroups;
    std::initializer_list<const char *> lookLabels;
    std::initializer_list<const char *> transformLabels;
+   std::initializer_list<const char *> tracedInsertHiddenGroups; // Groups left out of the Look of a traced insert (fields that do not apply to it)
 };
 
 static const CurationRules *GetCurationRules(PinKind kind, int itemType)
 {
    static const CurationRules primitive { { "Refractions", "Traced Insert Bulb", "Flasher Dome" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
-      { "Position", "Orientation", "Scale" } };
+      { "Position", "Orientation", "Scale" }, { "Refractions" } }; // A traced insert has no refraction: its block is all zeros
    // The light pane marks its Light Settings section Common (PropertyPane::SetTier)
    static const CurationRules light { {}, { "Type", "State", "Show Bulb", "Transmit", "Modulate" }, { "Center", "Position", "Height", "Surface" } };
    static const CurationRules flasher { {}, { "Visible", "Color", "Image A", "Image B", "Mix", "Mix Factor (%)", "Opacity (%)", "Additive Blend", "Modulate" }, { "Position", "Rotation" } };
@@ -317,9 +318,11 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    cur.transform.clear();
    // The insert bulb and dome groups are only Look on the primitives they apply to (the full sheet keeps them for every primitive)
    const Primitive *const prim = (kind == PinKind::Part && itemType == eItemPrimitive) ? static_cast<const Primitive *>(static_cast<IEditable *>(obj)) : nullptr;
-   const auto offLook = [prim](const PinnedPanel::Def *def)
+   const auto offLook = [prim, rules](const PinnedPanel::Def *def)
    {
-      return prim != nullptr && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome()));
+      return prim != nullptr
+         && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome())
+            || (rules != nullptr && prim->IsTracedInsert() && Listed(rules->tracedInsertHiddenGroups, def->group)));
    };
    // Types without curation rules: the visual sections make their Look tab
    static constexpr const char *visualSections[] = { "Visuals", "Render Mode", "Light Settings", "Bulb", "Transparency", "Ball Reflections & Shadows" };
@@ -527,16 +530,14 @@ PropertiesPanel::PropertiesPanel(EditorUI &editor)
 
 PropertiesPanel::~PropertiesPanel() = default;
 
-void PropertiesPanel::Render(float topBarHeight)
+void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
       return;
 
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float pane_width = editor.m_propertiesWidth * editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - pane_width, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(pane_width, viewport->Size.y - topBarHeight));
+   ImGui::SetNextWindowPos(pos);
+   ImGui::SetNextWindowSize(size);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -566,6 +567,10 @@ void PropertiesPanel::Render(float topBarHeight)
    ImGui::Begin("PROPERTIES", nullptr,
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
          | ImGuiWindowFlags_NoNavFocus);
+
+   // Area header (Blender's editor type switcher), above the tab strip and the content
+   editor.RenderAreaTypeButton(EditorUI::AreaEditor::Properties);
+   ImGui::Separator();
 
    // Multi-edit only applies to uniform selections: all selected parts of the same type as the active one
    const bool uniformPartSel = editor.m_selection.GetType() == Selection::S_EDITABLE && editor.m_multiSel.size() > 1

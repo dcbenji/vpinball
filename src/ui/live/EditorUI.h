@@ -275,8 +275,8 @@ private:
    void FinishFileOp();
    void RenderFileOpModal();
 
-   // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel dialog)
-   void OpenPartLibrary() { m_partLibrary.Show(); }
+   // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel, hosted by an area)
+   void OpenPartLibrary() { ShowAreaEditor(AreaEditor::PartLibrary); }
    bool CanExportPartSelection() const { return m_partLibrary.CanExportSelection(); }
    void ExportPartSelection() { m_partLibrary.ExportSelection(); }
 
@@ -394,9 +394,11 @@ private:
    Matrix3D m_camView, m_camProj;
    float m_camDistance;
    bool m_showNavCube = true; // View > Navigation Cube
-   bool m_showOutliner = true; // View > Outliner (workspaces)
-   bool m_showProperties = true; // View > Properties (workspaces)
-   // Areas (Blender-style fixed layout: outliner | viewport + N-panel | properties): widths in logical pixels, resized by the
+   // Visibility of the left and right areas (View menu, workspaces). The names are historical: the left area is not necessarily the
+   // Outliner nor the right one the Properties, they show the editor type picked in m_leftEditor / m_rightEditor
+   bool m_showOutliner = true; // Left area shown
+   bool m_showProperties = true; // Right area shown
+   // Areas (Blender-style fixed layout: left area | viewport + N-panel | right area): widths in logical pixels, resized by the
    // splitters between areas, saved per workspace
    float m_outlinerWidth = OutlinerPanel::PaneWidth;
    float m_propertiesWidth = PropertiesPanel::PaneWidth;
@@ -412,6 +414,34 @@ private:
    SidebarTab m_sidebarTab = SidebarTab::Item;
    void ToggleSidebar(); // N
    void RenderSplitters();
+
+   // Editor types of the left and right areas (Blender's editor type switcher, the button at the left of each area header).
+   // An editor type is hosted by one area at most (each panel is a single instance): picking in one area a type shown by the
+   // other area swaps the two. Saved per workspace as ints (PinnedPanel::Workspace::leftEditor / rightEditor), keep the order.
+   enum class AreaEditor
+   {
+      Outliner,
+      Properties,
+      Script,
+      PartLibrary,
+      Count
+   };
+   AreaEditor m_leftEditor = AreaEditor::Outliner;
+   AreaEditor m_rightEditor = AreaEditor::Properties;
+   static const char *AreaEditorName(AreaEditor type);
+   static const char *AreaEditorIcon(AreaEditor type);
+   void SetAreaEditor(bool right, AreaEditor type); // Editor type of an area (swaps with the other area if it shows that type)
+   void SetAreaEditors(int left, int right); // Workspace restore: out of range or duplicated values fall back to the defaults
+   bool IsAreaEditorHosted(AreaEditor type) const { return m_leftEditor == type || m_rightEditor == type; }
+   bool IsAreaEditorShown(AreaEditor type) const; // Hosted by a visible area
+   void ShowAreaEditor(AreaEditor type); // Make the type visible: reveals the area hosting it, or hosts it in its preferred area (Script: right, others: left)
+   void ToggleAreaEditor(AreaEditor type); // View menu: hide / show the area hosting the type, or host it
+   void RenderAreas(float topBarHeight); // Hosts the panels of the left and right areas
+   void RenderAreaTypeButton(AreaEditor current); // Header button of the area hosting the given type, and its editor type popup
+   bool ConsumedAreaEscape(); // The Esc that closed the editor type popup is not an editor Esc
+   bool m_areaEscPending = false;
+   bool BeginAreaWindow(const char *name, const ImVec2 &pos, const ImVec2 &size); // Window filling an area rect (Script and Part Library), always pair with EndAreaWindow
+   void EndAreaWindow();
    void ShowSidebar(SidebarTab tab);
    void OpenQuickFavorites() { m_openQuickFavorites = true; } // Q: popup of the Quick Favorites at the mouse
    bool m_openQuickFavorites = false;

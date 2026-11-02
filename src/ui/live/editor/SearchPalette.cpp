@@ -140,8 +140,20 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
-   add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.m_showOutliner = !ed.m_showOutliner; });
-   add("View" + sep + "Properties", "", nullptr, [&ed]() { ed.m_showProperties = !ed.m_showProperties; });
+   add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });
+   add("View" + sep + "Properties", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Properties); });
+   // Editor type of the left and right areas (Blender's editor type switcher)
+   for (int side = 0; side < 2; ++side)
+      for (int i = 0; i < static_cast<int>(EditorUI::AreaEditor::Count); ++i)
+      {
+         const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
+         add("View" + sep + (side == 0 ? "Left Area: " : "Right Area: ") + EditorUI::AreaEditorName(type), "", nullptr,
+            [&ed, side, type]()
+            {
+               ed.SetAreaEditor(side == 1, type);
+               (side == 1 ? ed.m_showProperties : ed.m_showOutliner) = true;
+            });
+      }
    add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });
    add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
    add("Select" + sep + "All", "A", nullptr, [&ed]() { ed.SelectAllParts(); });
@@ -628,7 +640,7 @@ void SearchPalette::Activate(const Result &r, bool pin)
    }
    if (r.isField)
    {
-      m_editor.m_showProperties = true; // A workspace may hide the panel, which would never consume the request
+      m_editor.ShowAreaEditor(EditorUI::AreaEditor::Properties); // A workspace may hide the panel (or host another editor), which would never consume the request
       PropertyPane::RequestFocus(key);
    }
    Remember(r);

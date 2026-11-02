@@ -35,4 +35,10 @@ namespace EditorTheme
    constexpr ImU32 TabActive = Rgb(80, 80, 82);
 
    inline ImVec4 V(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
+
+   // Outliner / viewport overlay additions (round 4)
+   constexpr ImU32 RowSelectedHover = Rgb(61, 90, 128);   // hovered selected outliner row
+   constexpr ImU32 RowHover = Rgb(255, 255, 255, 18);     // faint row hover highlight (favourite rows)
+   constexpr ImU32 OverlayGrey = Rgb(120, 120, 124);      // neutral overlay lines (nav square)
+   constexpr ImU32 TextShadow = Rgb(0, 0, 0, 200);        // shadow of text drawn over the render
 }

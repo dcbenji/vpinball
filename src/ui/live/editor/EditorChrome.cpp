@@ -36,6 +36,14 @@ bool ToolButton(const char *icon, bool active = false)
    return pressed;
 }
 
+// Text drawn over the render (view name, tool name): 1 px drop shadow so that it stays readable on light renders
+void ShadowedText(const char *text)
+{
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + 1.f, pos.y + 1.f), EditorTheme::TextShadow, text);
+   ImGui::TextUnformatted(text);
+}
+
 // Group separator: 1 px vertical line centered in the group gap
 void ToolSeparator()
 {
@@ -235,10 +243,33 @@ void EditorChrome::RenderMenuBar()
             if (ImGui::MenuItem(("Workspace: " + editor.m_pinned.GetWorkspace(i).name).c_str(), workspaceKeys[i], editor.m_pinned.GetActiveWorkspace() == i))
                editor.m_pinned.ApplyWorkspace(i);
          ImGui::Separator();
-         if (ImGui::MenuItem("Outliner", nullptr, editor.m_showOutliner))
-            editor.m_showOutliner = !editor.m_showOutliner;
-         if (ImGui::MenuItem("Properties", nullptr, editor.m_showProperties))
-            editor.m_showProperties = !editor.m_showProperties;
+         if (ImGui::MenuItem("Outliner", nullptr, editor.IsAreaEditorShown(EditorUI::AreaEditor::Outliner)))
+            editor.ToggleAreaEditor(EditorUI::AreaEditor::Outliner);
+         if (ImGui::MenuItem("Properties", nullptr, editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties)))
+            editor.ToggleAreaEditor(EditorUI::AreaEditor::Properties);
+         // Editor type of the left and right areas (Blender's editor type switcher, also the button at the left of each area header)
+         for (int side = 0; side < 2; ++side)
+         {
+            const bool right = side == 1;
+            if (ImGui::BeginMenu(right ? "Right Area" : "Left Area"))
+            {
+               bool &shown = right ? editor.m_showProperties : editor.m_showOutliner;
+               if (ImGui::MenuItem("Visible", nullptr, shown))
+                  shown = !shown;
+               ImGui::Separator();
+               const EditorUI::AreaEditor current = right ? editor.m_rightEditor : editor.m_leftEditor;
+               for (int i = 0; i < static_cast<int>(EditorUI::AreaEditor::Count); ++i)
+               {
+                  const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
+                  if (ImGui::MenuItem(EditorUI::AreaEditorName(type), nullptr, current == type))
+                  {
+                     editor.SetAreaEditor(right, type);
+                     shown = true;
+                  }
+               }
+               ImGui::EndMenu();
+            }
+         }
          if (ImGui::MenuItem("Sidebar", "N", editor.m_showSidebar))
             editor.ToggleSidebar();
          if (ImGui::MenuItem("Quick Favorites", "Q"))
@@ -543,9 +574,9 @@ void EditorChrome::RenderToolbar()
 
       // Script editor button
       ToolSeparator();
-      const bool scriptActive = editor.m_scriptPanel.IsVisible();
+      const bool scriptActive = editor.IsAreaEditorShown(EditorUI::AreaEditor::Script);
       if (ToolButton(ICON_LC_CODE_XML, scriptActive))
-         editor.m_scriptPanel.Show();
+         editor.ShowAreaEditor(EditorUI::AreaEditor::Script);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Edit table script");
 
@@ -669,7 +700,7 @@ void EditorChrome::RenderStatusOverlay()
    ImGui::SetCursorPos(ImVec2(labelAlign, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
    switch (editor.m_camMode)
    {
-   case ViewMode::PreviewCam: ImGui::TextUnformatted("Preview Camera"); break;
+   case ViewMode::PreviewCam: ShadowedText("Preview Camera"); break;
    case ViewMode::EditorCam:
    {
       string text;
@@ -683,10 +714,10 @@ void EditorChrome::RenderStatusOverlay()
       case EditorUI::PredefinedView::Front: text = "Front"sv; break;
       case EditorUI::PredefinedView::Back: text = "Back"sv; break;
       }
-      ImGui::TextUnformatted((text + (editor.m_perspectiveCam ? " Perspective" : " Orthographic")).c_str());
+      ShadowedText((text + (editor.m_perspectiveCam ? " Perspective" : " Orthographic")).c_str());
       break;
    }
-   case ViewMode::DesktopBackdrop: ImGui::TextUnformatted("Desktop Backdrop"); break;
+   case ViewMode::DesktopBackdrop: ShadowedText("Desktop Backdrop"); break;
    }
    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + ImGui::GetStyle().FramePadding.x, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
    const char *gizmoIcon = nullptr;
@@ -713,12 +744,12 @@ void EditorChrome::RenderStatusOverlay()
    }
    if (gizmoIcon)
    {
-      ImGui::TextUnformatted(gizmoIcon);
+      ShadowedText(gizmoIcon);
       ImGui::SameLine(labelAlign);
-      ImGui::TextUnformatted(gizmoLabel);
+      ShadowedText(gizmoLabel);
    }
    if (editor.m_pointEditPart)
-      ImGui::TextUnformatted(editor.m_pointEditCenter ? "Center Edit (Tab to exit)" : "Drag Point Edit (Tab to exit)");
+      ShadowedText(editor.m_pointEditCenter ? "Center Edit (Tab to exit)" : "Drag Point Edit (Tab to exit)");
    ImGui::End();
 }
 

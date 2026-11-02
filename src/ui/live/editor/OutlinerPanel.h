@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "imgui/imgui.h"
+
 #include "Selection.h"
 #include "unordered_dense.h"
 
@@ -24,7 +26,7 @@ public:
    {
    }
 
-   void Render(float topBarHeight);
+   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (the area header holds the editor type button)
    void FocusFilter() { m_focusFilter = true; } // Ctrl+F: type a filter right away
 
    // Default width of the panel in logical pixels (scaled by the UI DPI), the current one is EditorUI::m_outlinerWidth

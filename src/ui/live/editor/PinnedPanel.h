@@ -101,7 +101,7 @@ public:
    void SaveTo(PinTable *table) const;
 
    // Workspaces (Blender's top bar tabs): Layout, Look-dev and Wiring presets of the areas (outliner, properties, N-panel and its
-   // tab, area widths, outliner display mode and type filter) with their own Quick Favorites, saved with the table
+   // tab, area widths, editor types of the left and right areas, outliner display mode and type filter) with their own Quick Favorites, saved with the table
    // ("editor_workspaces" in table.json, beside "editor_pins" which stays the current favorites list)
    struct Workspace
    {
@@ -115,6 +115,8 @@ public:
       float sidebarWidth = 0.f;
       int outlinerMode = -1; // -1: keep the current one
       int64_t outlinerTypes = -1;
+      int leftEditor = 0; // EditorUI::AreaEditor of the left area (0: Outliner)
+      int rightEditor = 1; // EditorUI::AreaEditor of the right area (1: Properties)
       vector<PinKey> pins;
    };
    static constexpr int WorkspaceCount = 3;
@@ -163,6 +165,7 @@ private:
    int m_harvestSeq = 0;
    const PinTable *m_sourceTable = nullptr; // Base table the pin list was loaded from
    std::array<Workspace, WorkspaceCount> m_workspaces;
+   bool m_workspacesPristine = false; // Layout is shown as active but the table has no saved workspaces: nothing is written to it until a workspace is picked or edited
    int m_activeWorkspace = -1; // None until one is picked or the table has saved workspaces (the table data stays untouched until then)
 };
 

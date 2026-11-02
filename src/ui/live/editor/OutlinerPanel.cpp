@@ -15,6 +15,7 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 
+#include "imgui/imgui_internal.h"
 #include "imgui/imgui_stdlib.h"
 
 namespace VPX::EditorUI
@@ -28,11 +29,15 @@ template <class T> static std::vector<T> SortedCaseInsensitive(std::vector<T> &l
 }
 
 // Push a dimmed selection color, used to highlight the non active elements of a multi selection
-// less than the active one (the element edited in the property pane keeps the normal selection color)
+// less than the active one (the element edited in the property pane keeps the normal selection color).
+// Pushes 3 colors (Header, HeaderHovered, HeaderActive): pop with PopStyleColor(3)
 static void PushInactiveSelectionColor()
 {
    const ImVec4 color = EditorTheme::V(EditorTheme::RowSelected);
+   const ImVec4 hover = EditorTheme::V(EditorTheme::RowSelectedHover);
    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(color.x, color.y, color.z, color.w * 0.4f));
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(hover.x, hover.y, hover.z, hover.w * 0.5f));
+   ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(hover.x, hover.y, hover.z, hover.w * 0.5f));
 }
 
 // Name shortened with "..." so that it fits in maxWidth (whole UTF-8 characters are removed)
@@ -54,9 +59,12 @@ static string EllipsizeToWidth(const string &text, float maxWidth)
 }
 
 // Push the full row selection color of the outliner (active selection)
+// (3 colors, pop with PopStyleColor(3)): a hovered selected row turns a lighter blue, not grey
 static void PushSelectionColor()
 {
    ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::RowSelected));
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::RowSelectedHover));
+   ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::RowSelectedHover));
 }
 
 namespace
@@ -163,7 +171,7 @@ const char *TypeIcon(ItemTypeEnum type)
    case eItemRamp: return ICON_LC_ROUTE;
    case eItemSurface: return ICON_LC_SQUARE;
    case eItemRubber: return ICON_LC_CIRCLE;
-   case eItemFlipper: return ICON_LC_POINTER;
+   case eItemFlipper: return ICON_LC_MOVE_3D; // Not a cursor
    case eItemBumper: return ICON_LC_DISC;
    case eItemHitTarget: return ICON_LC_CIRCLE_DOT;
    case eItemGate: return ICON_LC_MOVE_HORIZONTAL;
@@ -279,18 +287,16 @@ void OutlinerPanel::SelectViewSetup(int viewSetup)
    editor.m_table->SetViewSetupOverride(viewSetup == 0 ? BG_DESKTOP : viewSetup == 1 ? BG_FULLSCREEN : BG_FSS);
 }
 
-void OutlinerPanel::Render(float topBarHeight)
+void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
       return;
 
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float pane_width = editor.m_outlinerWidth * editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(pane_width, viewport->Size.y - topBarHeight));
+   ImGui::SetNextWindowPos(pos);
+   ImGui::SetNextWindowSize(size);
    constexpr ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
-      | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+      | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse; // The tree scrolls in its own child, under the header
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -317,8 +323,14 @@ void OutlinerPanel::Render(float topBarHeight)
       }
    }
 
-   // Header, first row: display mode (Blender's display mode combo) and sync button
+   // Width of the right aligned columns (filter button of the header, eye buttons of the tree): the tree's scrollbar space is always
+   // reserved, so that they do not shift when the scrollbar appears
+   const float columnWidth = ImGui::GetContentRegionAvail().x - style.ScrollbarSize;
+
+   // Header, first row: editor type (Blender's editor type switcher), sync button and display mode (Blender's display mode combo)
    {
+      editor.RenderAreaTypeButton(EditorUI::AreaEditor::Outliner);
+      ImGui::SameLine();
       const bool popStyle = m_syncToSelection;
       if (popStyle)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -342,11 +354,10 @@ void OutlinerPanel::Render(float topBarHeight)
          ImGui::EndCombo();
       }
    }
-   // Second row: search, clear and the filter popover
+   // Second row: search (with its clear button inside the field once there is a text) and the filter popover, aligned with the eye column
    {
-      const float buttonWidth = ImGui::CalcTextSize(ICON_LC_X).x + style.FramePadding.x * 2.0f;
       const float filterWidth = ImGui::CalcTextSize(ICON_LC_LIST_FILTER).x + style.FramePadding.x * 2.0f;
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - filterWidth - style.ItemSpacing.x * 2.0f);
+      ImGui::SetNextItemWidth(columnWidth - filterWidth - style.ItemSpacing.x);
       if (m_focusFilter)
       {
          ImGui::SetKeyboardFocusHere();
@@ -354,11 +365,19 @@ void OutlinerPanel::Render(float topBarHeight)
       }
       ImGui::InputTextWithHint("##OutlinerFilter", "Search", &m_filter);
       ImGui::SetItemTooltip("Name words, t:light, m:<material>, n:<name> (Ctrl+F)");
-      ImGui::SameLine();
-      ImGui::BeginDisabled(m_filter.empty());
-      if (ImGui::Button(ICON_LC_X "##ClearOutlinerFilter"))
-         m_filter.clear();
-      ImGui::EndDisabled();
+      if (!m_filter.empty())
+      {
+         const ImVec2 fieldMin = ImGui::GetItemRectMin();
+         const ImVec2 fieldMax = ImGui::GetItemRectMax();
+         const float side = fieldMax.y - fieldMin.y;
+         ImGui::SetCursorScreenPos(ImVec2(fieldMax.x - side, fieldMin.y));
+         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+         if (ImGui::Button(ICON_LC_X "##ClearOutlinerFilter", ImVec2(side, side)))
+            m_filter.clear();
+         ImGui::PopStyleColor(2);
+         ImGui::SetItemTooltip("Clear");
+      }
       ImGui::SameLine();
       const bool typeFilterActive = m_typeMask != AllTypesMask || m_selectedOnly;
       if (typeFilterActive)
@@ -397,6 +416,9 @@ void OutlinerPanel::Render(float topBarHeight)
    ParseFilter();
    RefreshFilterCache();
 
+   // The tree scrolls under the header
+   ImGui::BeginChild("##OutlinerTree", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
+
    // Drag & drop of parts and part groups to move them between groups (not supported in inspection
    // mode as the inspected table is a live copy). The drag payload is just a marker: the moved parts
    // are the multi selection (the dragged part is selected first if it was not part of it). The move
@@ -428,7 +450,7 @@ void OutlinerPanel::Render(float topBarHeight)
    };
    // Part row: type icon, selectable with ctrl/shift multi selection (double click frames the part), drag source, drop target and eye toggle
    std::shared_ptr<EditorUIPart> rangeTarget; // Shift+click: applied once all the rows are known
-   const auto renderPartLeaf = [this, &editor, &partDragSource, &partDropTarget, &rangeTarget](const std::shared_ptr<EditorUIPart> &edit, int &itemCounter, const std::shared_ptr<EditorUIPart> &revealPart, float eyeX)
+   const auto renderPartLeaf = [this, &editor, &partDragSource, &partDropTarget, &rangeTarget](const std::shared_ptr<EditorUIPart> &edit, int &itemCounter, const std::shared_ptr<EditorUIPart> &revealPart, float eyeX, float indentX)
    {
       IEditable *const editable = edit->GetEditable();
       m_listedParts.push_back(edit);
@@ -439,16 +461,32 @@ void OutlinerPanel::Render(float topBarHeight)
          PushSelectionColor();
       const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(),
          editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
-      ImGui::PopStyleColor();
+      ImGui::PopStyleColor(3);
       {
-         // Type icon (dim) and name (normal text) drawn over the selectable
+         // The highlight spans the whole row: the part left of the selectable (the tree indentation) gets the same color
+         const bool rowSelected = editor.IsPartSelected(edit);
+         const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
+         if (rowSelected || rowHovered)
+         {
+            ImVec4 color = rowSelected ? EditorTheme::V(rowHovered ? EditorTheme::RowSelectedHover : EditorTheme::RowSelected) : ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+            if (inactiveSel)
+               color.w *= 0.4f;
+            const float rowMinX = ImGui::GetCurrentWindow()->WorkRect.Min.x;
+            const ImVec2 itemMin = ImGui::GetItemRectMin();
+            if (itemMin.x > rowMinX)
+               ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(rowMinX, itemMin.y), ImVec2(itemMin.x, ImGui::GetItemRectMax().y), ImGui::GetColorU32(color));
+         }
+      }
+      {
+         // Type icon (dim) and name (normal text, faint when the part is hidden) drawn over the selectable, indented under the parent group's name
          const char *const icon = TypeIcon(editable->GetItemType());
-         const ImVec2 textPos = ImGui::GetItemRectMin();
+         const ImVec2 textPos = ImVec2(ImGui::GetItemRectMin().x + indentX, ImGui::GetItemRectMin().y);
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
          drawList->AddText(textPos, EditorTheme::TextDim, icon);
          const float nameX = textPos.x + ImGui::CalcTextSize(icon).x + 6.f;
          const float eyeScreenX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX; // Where the eye button is placed by SameLine(eyeX)
-         drawList->AddText(ImVec2(nameX, textPos.y), EditorTheme::Text, EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX).c_str());
+         drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : EditorTheme::TextFaint,
+            EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX).c_str());
       }
       if (clicked)
       {
@@ -544,7 +582,7 @@ void OutlinerPanel::Render(float topBarHeight)
          }
          vector<Node> stack;
          int outlinerItem = 0;
-         const float eyeX = ImGui::GetContentRegionAvail().x;
+         const float eyeX = columnWidth - (ImGui::CalcTextSize(ICON_LC_EYE).x + style.FramePadding.x * 2.0f); // Right edge of the eye buttons = right edge of the filter button
          // Highlight the group in which new and imported parts are added
          PartGroup *const newPartTarget = editor.GetPartGroupForNewPart();
          // When 'sync tree with selection' is enabled, reveal the newly selected part in the tree
@@ -597,8 +635,13 @@ void OutlinerPanel::Render(float topBarHeight)
                   const float labelStartX = ImGui::GetCursorScreenPos().x + ImGui::GetTreeNodeToLabelSpacing();
                   const float labelEndX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX - arrowWidth - style.ItemSpacing.x * 3.f - ImGui::CalcTextSize(countText.c_str()).x;
                   const string groupLabel = iconPart + EllipsizeToWidth(groupName, labelEndX - labelStartX - ImGui::CalcTextSize(iconPart.c_str()).x) + idPart;
+                  const bool groupHidden = !group->IsUIVisible(false);
+                  if (groupHidden)
+                     ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextFaint));
                   opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
-                  ImGui::PopStyleColor();
+                  if (groupHidden)
+                     ImGui::PopStyleColor();
+                  ImGui::PopStyleColor(3);
                   const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
                   partDragSource(edit);
                   partDropTarget(group);
@@ -650,7 +693,8 @@ void OutlinerPanel::Render(float topBarHeight)
                   partDropTarget(nullptr);
                }
                if (!stack.empty() && stack.back().opened && show)
-                  renderPartLeaf(edit, outlinerItem, revealPart, eyeX);
+                  renderPartLeaf(edit, outlinerItem, revealPart, eyeX,
+                     stack.back().group != nullptr ? ImGui::GetTreeNodeToLabelSpacing() - style.IndentSpacing + ImGui::CalcTextSize(ICON_LC_FOLDER_OPEN "  ").x : 0.f);
             }
          }
          while (!stack.empty())
@@ -773,6 +817,7 @@ void OutlinerPanel::Render(float topBarHeight)
       m_revealResource = false;
       ImGui::PopID();
    }
+   ImGui::EndChild();
    if (dropRequested)
       editor.MoveSelectionToPartGroup(dropGroup);
 
@@ -799,7 +844,7 @@ void OutlinerPanel::RenderResourceList(const char *label, bool asTree, vector<T 
          PushInactiveSelectionColor();
       const bool clicked = ImGui::Selectable(nameOf(item).c_str(), selected);
       if (inactiveSel)
-         ImGui::PopStyleColor();
+         ImGui::PopStyleColor(3);
       if (m_revealResource && editor.m_selection == Selection(item) && !ImGui::IsItemVisible())
          ImGui::SetScrollHereY();
       ImGui::PopID();

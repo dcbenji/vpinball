@@ -49,6 +49,117 @@ void PropertyPane::FlushRow()
    ImGui::Dummy(ImVec2(0.f, 0.f));
 }
 
+string PropertyPane::Ellipsize(const char* text, float maxWidth)
+{
+   const char* const textEnd = text + strlen(text);
+   if (ImGui::CalcTextSize(text, textEnd).x <= maxWidth)
+      return string(text);
+   static const char* const ellipsis = "..."; // ASCII: the UI font may not carry U+2026
+   const float dotsWidth = ImGui::CalcTextSize(ellipsis).x;
+   const char* end = textEnd;
+   while (end > text)
+   {
+      do // Step back one UTF-8 code point
+         end--;
+      while (end > text && (static_cast<unsigned char>(*end) & 0xC0) == 0x80);
+      if (ImGui::CalcTextSize(text, end).x + dotsWidth <= maxWidth)
+         break;
+   }
+   return trim_string(string(text, end)) + ellipsis;
+}
+
+void PropertyPane::DrawChevron(ImDrawList* drawList, const ImVec2& center, bool down, float size, ImU32 color)
+{
+   const float t = max(1.5f, 1.5f * size * 0.25f); // 1.5 px at the base font size
+   if (down)
+   {
+      const ImVec2 pts[3] = { ImVec2(center.x - size, center.y - size * 0.5f), ImVec2(center.x, center.y + size * 0.5f), ImVec2(center.x + size, center.y - size * 0.5f) };
+      drawList->AddPolyline(pts, 3, color, ImDrawFlags_None, t);
+   }
+   else
+   {
+      const ImVec2 pts[3] = { ImVec2(center.x - size * 0.5f, center.y - size), ImVec2(center.x + size * 0.5f, center.y), ImVec2(center.x - size * 0.5f, center.y + size) };
+      drawList->AddPolyline(pts, 3, color, ImDrawFlags_None, t);
+   }
+}
+
+bool PropertyPane::BeginFlatCombo(const char* id, const char* preview)
+{
+   // No ImGui arrow block (one tone field): a TextDim chevron is drawn inside the right end, and the preview is ellipsized to fit
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float width = ImGui::CalcItemWidth();
+   const float height = ImGui::GetFrameHeight();
+   const ImVec2 min = ImGui::GetCursorScreenPos();
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   const float chevronSize = ImGui::GetFontSize() * 0.3f;
+   const string text = Ellipsize(preview, width - 2.f * style.FramePadding.x - 2.f * chevronSize - style.ItemInnerSpacing.x);
+   const bool open = ImGui::BeginCombo(id, text.c_str(), ImGuiComboFlags_NoArrowButton);
+   DrawChevron(drawList, ImVec2(min.x + width - style.FramePadding.x - chevronSize, min.y + height * 0.5f), true, chevronSize, EditorTheme::TextDim);
+   return open;
+}
+
+bool PropertyPane::FlatCheckbox(const char* id, bool* value)
+{
+   // Blender look: unchecked = FrameBg grey, checked = Fill blue (the tick is the white CheckMark colour)
+   const bool mixed = (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_MixedValue) != 0;
+   const bool fill = *value && !mixed;
+   if (fill)
+   {
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::Fill);
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, EditorTheme::FillHovered);
+      ImGui::PushStyleColor(ImGuiCol_FrameBgActive, EditorTheme::FillActive);
+   }
+   const bool changed = ImGui::Checkbox(id, value);
+   if (fill)
+      ImGui::PopStyleColor(3);
+   return changed;
+}
+
+int PropertyPane::FloatDecimals(Unit displayUnit, int requested, float shown)
+{
+   int decimals;
+   switch (displayUnit)
+   {
+   case Unit::Percent:
+   case Unit::PercentX100: decimals = 0; break;
+   case Unit::Inches: decimals = 3; break;
+   case Unit::VPLength:
+   case Unit::VPMass:
+   case Unit::VPSpeed:
+   case Unit::Degree:
+   case Unit::Millimeters: decimals = 1; break;
+   default: decimals = requested == 0 ? 0 : 2; break; // Unitless factors; 0 stays for fields that are explicitly integral
+   }
+   if (requested >= 4) // Explicitly asked for more precision (tiny values)
+      decimals = max(decimals, requested);
+   // Never display a small non-zero value as zero
+   while (decimals < 4 && shown != 0.f && fabsf(shown) < 0.5f * powf(10.f, -static_cast<float>(decimals)))
+      decimals++;
+   return decimals;
+}
+
+bool PropertyPane::NumberField(const char* id, float* value, int decimals)
+{
+   // Same frame as the fill sliders, value centred, no fill; drag to change, ctrl+click or double-click to type
+   const string format = "%." + std::to_string(decimals) + 'f';
+   const float before = *value;
+   const bool changed = ImGui::DragFloat(id, value, DragSpeed(decimals, fabsf(*value)), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat);
+   if (changed)
+      RoundDragged(value, &before, 1, decimals);
+   return changed;
+}
+
+void PropertyPane::RoundDragged(float* values, const float* before, int count, int decimals)
+{
+   // Drag results are rounded to the displayed precision; typed values (text input active) keep every digit
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::GetIO().WantTextInput)
+      return;
+   const float scale = powf(10.f, static_cast<float>(decimals));
+   for (int i = 0; i < count; i++)
+      if (values[i] != before[i])
+         values[i] = roundf(values[i] * scale) / scale;
+}
+
 void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 {
    FlushRow();
@@ -63,79 +174,21 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    const float xWidth = max(60.f, min(max(availWidth * 0.5f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
    const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - 2.f * m_syncWidth);
    const float pinWidth = 0.f;
-   float fieldDy = 0.f; // Wrapped labels: the value field is centred against the two lines
+   const float fieldDy = 0.f;
    const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
 
-   const char* const text = label.c_str();
-   const char* const textEnd = text + label.size();
-   const auto drawLine = [&](const char* begin, const char* end, float y)
-   {
-      const float width = ImGui::CalcTextSize(begin, end).x;
-      ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - width - xSpacing), y));
-      ImGui::TextUnformatted(begin, end);
-      if (tooltip != nullptr)
-         ImGui::SetItemTooltip("%s\n%s", text, tooltip);
-      else
-         ImGui::SetItemTooltip("%s", text);
-   };
-   const auto ellipsized = [&](const char* begin)
-   {
-      // Longest prefix of [begin, textEnd) that fits with an ellipsis
-      const float dotsWidth = ImGui::CalcTextSize("...").x;
-      const char* end = textEnd;
-      while (end > begin + 1 && ImGui::CalcTextSize(begin, end).x + dotsWidth > maxWidth)
-         end--;
-      return trim_string(string(begin, end)) + "...";
-   };
-
-   if (ImGui::CalcTextSize(text, textEnd).x <= maxWidth)
-   {
-      ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - ImGui::CalcTextSize(text, textEnd).x - xSpacing), pos.y + style.FramePadding.y));
-      ImGui::TextUnformatted(text, textEnd);
-      if (tooltip != nullptr)
-         ImGui::SetItemTooltip("%s", tooltip);
-   }
-   else
-   {
-      // Wrap on two lines, at the space giving the most balanced lines; the second line gets an ellipsis if it still does not fit
-      const char* split = nullptr;
-      float best = FLT_MAX;
-      for (const char* c = text; c < textEnd; c++)
-      {
-         if (*c != ' ')
-            continue;
-         const float w1 = ImGui::CalcTextSize(text, c).x;
-         if (w1 > maxWidth)
-            break;
-         const float w = max(w1, ImGui::CalcTextSize(c + 1, textEnd).x);
-         if (w < best)
-         {
-            best = w;
-            split = c;
-         }
-      }
-      if (split == nullptr)
-      {
-         const string line = ellipsized(text);
-         drawLine(line.c_str(), line.c_str() + line.size(), pos.y + style.FramePadding.y);
-      }
-      else
-      {
-         const float lineHeight = ImGui::GetFontSize();
-         const float rowHeight = max(2.f * lineHeight, ImGui::GetFrameHeight());
-         const float labelY = pos.y + (rowHeight - 2.f * lineHeight) * 0.5f; // Two lines centred against the field
-         fieldDy = (rowHeight - ImGui::GetFrameHeight()) * 0.5f;
-         drawLine(text, split, labelY);
-         if (ImGui::CalcTextSize(split + 1, textEnd).x <= maxWidth)
-            drawLine(split + 1, textEnd, labelY + lineHeight);
-         else
-         {
-            const string line = ellipsized(split + 1);
-            drawLine(line.c_str(), line.c_str() + line.size(), labelY + lineHeight);
-         }
-         m_rowBottom = max(pos.y + 2.f * lineHeight, pos.y + ImGui::GetFrameHeight()) + style.ItemSpacing.y;
-      }
-   }
+   // Single line, right aligned against the value column; ellipsized (full label in the tooltip) when it does not fit
+   const string shown = Ellipsize(label.c_str(), maxWidth);
+   const bool truncated = shown != label;
+   const float width = ImGui::CalcTextSize(shown.c_str()).x;
+   ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - width - xSpacing), pos.y + style.FramePadding.y));
+   ImGui::TextUnformatted(shown.c_str());
+   if (truncated && tooltip != nullptr)
+      ImGui::SetItemTooltip("%s\n%s", label.c_str(), tooltip);
+   else if (truncated)
+      ImGui::SetItemTooltip("%s", label.c_str());
+   else if (tooltip != nullptr)
+      ImGui::SetItemTooltip("%s", tooltip);
 
    ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y + fieldDy));
    ImGui::SetNextItemWidth(valueWidth);
@@ -202,12 +255,24 @@ bool PropertyPane::BeginSection(const string& name)
       else
          ImGui::SetNextItemOpen(true);
    }
+   // ImGui's filled triangle clashes with the line icons: the header is submitted with invisible text (same ID, click, keyboard
+   // and open-state behaviour), then the label and a TextDim chevron are drawn over it
+   const ImU32 labelColor = ImGui::GetColorU32(ImGuiCol_Text);
+   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
    const bool opened = ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+   ImGui::PopStyleColor();
 
    // Thin accent rule on the left of the header
    const ImVec2 headerMin = ImGui::GetItemRectMin();
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
+   {
+      const ImGuiStyle& style = ImGui::GetStyle();
+      const float fontSize = ImGui::GetFontSize();
+      const float chevronSize = fontSize * 0.3f;
+      DrawChevron(drawList, ImVec2(headerMin.x + style.FramePadding.x + fontSize * 0.5f, (headerMin.y + headerMax.y) * 0.5f), opened, chevronSize, EditorTheme::TextDim);
+      drawList->AddText(ImVec2(headerMin.x + fontSize + style.FramePadding.x * 3.f, headerMin.y + style.FramePadding.y), labelColor, name.c_str(), ImGui::FindRenderedTextEnd(name.c_str()));
+   }
    drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
    drawList->AddLine(ImVec2(headerMin.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), EditorTheme::WorkspaceOff, 1.f); // Separates stacked headers
 
@@ -234,6 +299,9 @@ void PropertyPane::EndSection()
 
 bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vMax, const char* format)
 {
+   // Soft range: a value beyond it extends the displayed range instead of being pinned at the end
+   vMin = min(vMin, *value);
+   vMax = max(vMax, *value);
    // The widget draws in the upper channel with a transparent frame and grab; the frame and the fill go in the lower one
    ImDrawList* const drawList = ImGui::GetWindowDrawList();
    drawList->ChannelsSplit(2);
@@ -254,7 +322,8 @@ bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vM
    const bool editingText = active && ImGui::GetIO().WantTextInput; // Ctrl+click turns the slider into a text field
    drawList->ChannelsSetCurrent(0);
    const float rounding = ImGui::GetStyle().FrameRounding;
-   drawList->AddRectFilled(min, max, ImGui::GetColorU32(active ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
+   // Neutral grey on hover; the dark editing field only while typing a value
+   drawList->AddRectFilled(min, max, ImGui::GetColorU32(editingText ? ImGuiCol_FrameBgActive : (hovered || active) ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
    if (!editingText && vMax > vMin)
    {
       const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
@@ -271,16 +340,20 @@ bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vM
 
 bool PropertyPane::LookSliderRange(const string& label, Unit displayUnit, float& vMin, float& vMax)
 {
-   // Fields whose useful range is known (display units). Percentages are 0..100, scales up to 200 %
+   // Fields whose useful range is known (display units); the ranges are soft (FillSlider extends them to include the value).
+   // Percentages are 0..100, scales up to 200 %
    struct Range
    {
       const char* label;
       float vMin, vMax;
    };
    static constexpr Range ranges[] = {
+      // Exact labels
       { "Roughness", 0.f, 1.f }, { "Metallic", 0.f, 1.f }, { "Occlusion", 0.f, 1.f }, { "Clear Coat", 0.f, 1.f }, { "Clear Coat Roughness", 0.f, 1.f },
       { "Edge Brightness", 0.f, 1.f }, { "Wrap Lighting", 0.f, 1.f }, { "Glossy Image Lerp", 0.f, 1.f }, { "Opacity", 0.f, 1.f }, { "Edge Opacity", 0.f, 1.f },
       { "Thickness", 0.f, 1.f }, { "Falloff Power", 0.f, 10.f }, { "Reflection Strength", 0.f, 1.f }, { "Exposure", 0.f, 4.f },
+      // Known full labels of the part panes (no partial matching: "Thickness" must not catch "Refraction Thickness")
+      { "Modulate Opacity", 0.f, 100.f }, { "Intensity", 0.f, 10.f }, { "Env. Reflection Scale", 0.f, 2.f }, { "Translucency", 0.f, 1.f },
    };
    for (const Range& range : ranges)
       if (label == range.label)
