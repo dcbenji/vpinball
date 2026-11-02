@@ -1153,7 +1153,7 @@ bool EditorUI::CanUseAreaTools() const
       return false;
    if (IsInspectMode() && m_player->IsGameRunning())
       return false; // The game owns the keys and the mouse
-   return m_maximizedLeafId < 0 && !m_palette.IsOpen();
+   return m_maximizedLeafId < 0 && !m_palette.IsOpen() && ImGui::GetTopMostPopupModal() == nullptr;
 }
 
 const LeafRect *EditorUI::FindLeafRect(const int leafId) const
@@ -1534,6 +1534,11 @@ void EditorUI::RenderAreaModal()
       CancelAreaInteraction(false);
       return;
    }
+   if (ImGui::GetTopMostPopupModal() != nullptr)
+   {
+      CancelAreaInteraction(false); // A modal dialog (discard changes,...) opened: it must stay clickable
+      return;
+   }
    const bool escape = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
    if (escape || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
    {
@@ -1759,7 +1764,26 @@ Vertex2D EditorUI::GetUIVisibleFraction() const
    if (!m_areaRectsValid)
       ComputeAreaRects();
    if (!m_viewportVisible)
-      return Vertex2D(1.f, 1.f); // Maximized panel: no 3D view to fit
+   {
+      // A panel is maximized: frame for the layout that comes back on restore (its viewport area, N-panel excluded)
+      const ImGuiViewport *const mainViewport = ImGui::GetMainViewport();
+      const float top = mainViewport->Pos.y + m_chrome.GetTopBarHeight();
+      const AreaRect tree { mainViewport->Pos.x, top, mainViewport->Pos.x + mainViewport->Size.x, max(top, mainViewport->Pos.y + mainViewport->Size.y - m_chrome.GetStatusBarHeight()) };
+      const float dpi = m_liveUI.GetDPI();
+      vector<LeafRect> leaves;
+      vector<SplitterRect> splitters;
+      m_areas.Compute(tree, dpi, (m_showSidebar && !m_table->IsLocked()) ? m_sidebarWidth : 0.f, leaves, splitters, -1);
+      for (const LeafRect &leaf : leaves)
+         if (leaf.type == AreaType::Viewport && leaf.visible)
+         {
+            const ImGuiIO &displayIo = ImGui::GetIO();
+            const float x1 = max(leaf.rect.x0, leaf.rect.x1 - (m_showSidebar ? m_sidebarWidth * dpi : 0.f));
+            const float marginX = max(leaf.rect.x0, displayIo.DisplaySize.x - x1);
+            const float marginY = max(leaf.rect.y0, displayIo.DisplaySize.y - leaf.rect.y1);
+            return Vertex2D(max(0.1f, 1.f - 2.f * marginX / displayIo.DisplaySize.x), max(0.1f, 1.f - 2.f * marginY / displayIo.DisplaySize.y));
+         }
+      return Vertex2D(1.f, 1.f);
+   }
    // Otherwise, the top chrome (and the side panes, unless the table is locked) are drawn over the render:
    // evaluate the remaining visible fraction, applied as a symmetric margin so that fitted content stays centered. The area left to
    // the 3D view is the content of the viewport area (its N-panel excluded)
@@ -5097,51 +5121,53 @@ void EditorUI::RenderAdjustPanel()
    if (m_lastOp.type != LastOperation::Type::None
       && (m_modal.active || m_pointEditPart != nullptr || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId || m_multiSel != m_lastOp.selection))
       m_lastOp.type = LastOperation::Type::None;
-   if (m_lastOp.type == LastOperation::Type::None || !m_viewportVisible)
+   if (m_lastOp.type == LastOperation::Type::None)
    {
-      if (m_lastOp.type == LastOperation::Type::None)
-         m_adjustPopupOpen = false;
+      m_adjustPopupOpen = false;
       return;
    }
-   const float dpi = m_liveUI.GetDPI();
-   const char *const name = LastOperationName(m_lastOp.type);
-
-   // Collapsible panel at the bottom left of the viewport area (above the status bar)
-   ImGui::SetNextWindowPos(ImVec2(m_viewportContentRect.x0 + 8.f * dpi, m_viewportContentRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
-   ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
    bool changed = false;
-   if (ImGui::Begin("Adjust Last Operation", nullptr,
-          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
-             | ImGuiWindowFlags_NoMove))
+   if (m_viewportVisible) // The floating panel belongs to the viewport area; the F9 popup below does not
    {
-      // Header: a triangle (right when collapsed, down when expanded) and the name of the operation
-      const ImVec2 headerPos = ImGui::GetCursorScreenPos();
-      const ImVec2 textSize = ImGui::CalcTextSize(name);
-      const float headerWidth = max(220.f * dpi, textSize.x + 28.f * dpi);
-      if (ImGui::InvisibleButton("##AdjustHeader", ImVec2(headerWidth, ImGui::GetFrameHeight())))
-         m_lastOp.expanded = !m_lastOp.expanded;
-      const bool hovered = ImGui::IsItemHovered();
-      ImDrawList *const draw = ImGui::GetWindowDrawList();
-      const float cy = headerPos.y + 0.5f * ImGui::GetFrameHeight();
-      const float h = ImGui::GetFontSize() * 0.3f;
-      if (m_lastOp.expanded)
-         draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h * 0.6f), ImVec2(headerPos.x + 2.f * dpi + 2.f * h, cy - h * 0.6f), ImVec2(headerPos.x + 2.f * dpi + h, cy + h * 0.6f), EditorTheme::TextDim);
-      else
-         draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h), ImVec2(headerPos.x + 2.f * dpi, cy + h), ImVec2(headerPos.x + 2.f * dpi + h * 1.2f, cy), EditorTheme::TextDim);
-      draw->AddText(ImVec2(headerPos.x + 20.f * dpi, cy - 0.5f * textSize.y), hovered ? EditorTheme::Text : EditorTheme::TextDim, name);
-      ImGui::SetItemTooltip("Adjust Last Operation (F9)");
-      if (m_lastOp.expanded)
+      const float dpi = m_liveUI.GetDPI();
+      const char *const name = LastOperationName(m_lastOp.type);
+
+      // Collapsible panel at the bottom left of the viewport area (above the status bar)
+      ImGui::SetNextWindowPos(ImVec2(m_viewportContentRect.x0 + 8.f * dpi, m_viewportContentRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+      ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
+      if (ImGui::Begin("Adjust Last Operation", nullptr,
+             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+                | ImGuiWindowFlags_NoMove))
       {
-         ImGui::Separator();
-         changed = RenderAdjustParameters();
+         // Header: a triangle (right when collapsed, down when expanded) and the name of the operation
+         const ImVec2 headerPos = ImGui::GetCursorScreenPos();
+         const ImVec2 textSize = ImGui::CalcTextSize(name);
+         const float headerWidth = max(220.f * dpi, textSize.x + 28.f * dpi);
+         if (ImGui::InvisibleButton("##AdjustHeader", ImVec2(headerWidth, ImGui::GetFrameHeight())))
+            m_lastOp.expanded = !m_lastOp.expanded;
+         const bool hovered = ImGui::IsItemHovered();
+         ImDrawList *const draw = ImGui::GetWindowDrawList();
+         const float cy = headerPos.y + 0.5f * ImGui::GetFrameHeight();
+         const float h = ImGui::GetFontSize() * 0.3f;
+         if (m_lastOp.expanded)
+            draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h * 0.6f), ImVec2(headerPos.x + 2.f * dpi + 2.f * h, cy - h * 0.6f), ImVec2(headerPos.x + 2.f * dpi + h, cy + h * 0.6f), EditorTheme::TextDim);
+         else
+            draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h), ImVec2(headerPos.x + 2.f * dpi, cy + h), ImVec2(headerPos.x + 2.f * dpi + h * 1.2f, cy), EditorTheme::TextDim);
+         draw->AddText(ImVec2(headerPos.x + 20.f * dpi, cy - 0.5f * textSize.y), hovered ? EditorTheme::Text : EditorTheme::TextDim, name);
+         ImGui::SetItemTooltip("Adjust Last Operation (F9)");
+         if (m_lastOp.expanded)
+         {
+            ImGui::Separator();
+            changed = RenderAdjustParameters();
+         }
       }
+      ImGui::End();
+      ImGui::PopStyleColor(2);
+      ImGui::PopStyleVar(2);
    }
-   ImGui::End();
-   ImGui::PopStyleColor(2);
-   ImGui::PopStyleVar(2);
 
    // F9 popup at the mouse
    if (m_adjustPopupOpen)
