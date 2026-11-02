@@ -165,8 +165,16 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    editor.m_pinned.CollectDefs(kind, name, stamp, m_defScratch);
    cur.look.clear();
    cur.transform.clear();
+   // The insert bulb and dome groups are only Look on the primitives they apply to (the full sheet keeps them for every primitive)
+   const Primitive *const prim = (kind == PinKind::Part && itemType == eItemPrimitive) ? static_cast<const Primitive *>(static_cast<IEditable *>(obj)) : nullptr;
+   const auto offLook = [prim](const PinnedPanel::Def *def)
+   {
+      return prim != nullptr && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome()));
+   };
    for (const PinnedPanel::Def *def : m_defScratch)
    {
+      if (offLook(def))
+         continue;
       if (def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))
          cur.look.push_back(def);
       else if (Listed(rules->transformLabels, def->key.prop))

@@ -1228,7 +1228,8 @@ void EditorUI::RenderUI()
       SaveTable();
    // Search to field palette (Cmd+K on macOS, where ImGui maps Cmd to Ctrl)
    const bool panelsShown = !m_inspectionModal.IsVisible() && !m_flyMode; // The palette and workspaces need the editor panels
-   if (panelsShown && ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (!io.WantTextInput || m_palette.IsOpen()))
+   // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
+   if (panelsShown && ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       m_palette.Toggle();
    // Outliner filter (shows the outliner if a workspace hid it)
    if (panelsShown && !m_table->IsLocked() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)

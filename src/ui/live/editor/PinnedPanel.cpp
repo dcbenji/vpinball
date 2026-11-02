@@ -522,7 +522,7 @@ void PinnedPanel::Render(float topBarHeight)
    const bool left = m_activeWorkspace >= 0 && m_workspaces[m_activeWorkspace].overlayLeft;
    const float leftX = viewport->Pos.x + ((m_editor.m_showOutliner ? OutlinerPanel::PaneWidth : 0.f) + 8.f) * dpi;
    const float rightX = viewport->Pos.x + viewport->Size.x - ((m_editor.m_showProperties ? PropertiesPanel::PaneWidth : 0.f) + 8.f) * dpi;
-   ImGui::SetNextWindowPos(ImVec2(left ? leftX : rightX, viewport->Pos.y + topBarHeight + (left ? 8.f : 8.f + 128.f + 16.f) * dpi), m_placeOverlay ? ImGuiCond_Always : ImGuiCond_FirstUseEver,
+   ImGui::SetNextWindowPos(ImVec2(left ? leftX : rightX, viewport->Pos.y + topBarHeight + (left ? 40.f : 8.f + 128.f + 16.f) * dpi), m_placeOverlay ? ImGuiCond_Always : ImGuiCond_FirstUseEver,
       ImVec2(left ? 0.f : 1.f, 0.f));
    m_placeOverlay = false;
    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.f), ImVec2(width, viewport->Size.y * 0.8f));
