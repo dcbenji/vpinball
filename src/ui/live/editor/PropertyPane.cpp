@@ -60,7 +60,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    // Label column: ~42% of the pane, at least 120 px, while keeping a sane minimum for the value column
    const float availWidth = ImGui::GetContentRegionAvail().x;
    const float valueMin = 100.f;
-   const float xWidth = max(60.f, min(max(availWidth * 0.42f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
+   const float xWidth = max(60.f, min(max(availWidth * 0.5f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
    const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - 2.f * m_syncWidth);
    const float pinWidth = 0.f;
    float fieldDy = 0.f; // Wrapped labels: the value field is centred against the two lines

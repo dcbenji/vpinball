@@ -564,7 +564,7 @@ void PropertiesPanel::Render(float topBarHeight)
    }
    PrepareCuration(); // May harvest the selection's pane in a hidden window: before the panel window is begun
    ImGui::Begin("PROPERTIES", nullptr,
-      ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
          | ImGuiWindowFlags_NoNavFocus);
 
    // Multi-edit only applies to uniform selections: all selected parts of the same type as the active one
