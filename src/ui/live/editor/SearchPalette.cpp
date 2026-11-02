@@ -493,6 +493,9 @@ bool SearchPalette::ConsumedEscape()
 
 void SearchPalette::Render()
 {
+   // The Esc that closed the palette is forgotten once released, even if the editor did not ask (e.g. its key handling was skipped)
+   if (m_escPending && !ImGui::IsKeyDown(ImGuiKey_Escape) && !ImGui::IsKeyReleased(ImGuiKey_Escape))
+      m_escPending = false;
    if (!m_open)
       return;
 

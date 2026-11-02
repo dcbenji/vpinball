@@ -50,6 +50,7 @@ void PropertyPane::FlushRow()
 void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 {
    FlushRow();
+   m_rowFocusable = false;
    const ImVec2 pos = ImGui::GetCursorScreenPos();
    m_rowMin = pos;
    const ImGuiStyle& style = ImGui::GetStyle();
@@ -272,7 +273,7 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          ImGui::SetScrollHereY(0.3f);
          // Keyboard focus on the field, so a value can be typed right away (the last item is the field's widget, unless the
          // row ends with the copy-to-other-version button of an inspection session)
-         if (!m_sectionHasSync)
+         if (m_rowFocusable && !m_sectionHasSync)
             ImGui::SetKeyboardFocusHere(-1);
       }
       else

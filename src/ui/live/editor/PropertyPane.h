@@ -250,6 +250,7 @@ private:
    std::function<void(PropertyPane &)> m_afterHeader;
    bool m_skipRest = false;
    bool m_lookSliders = false;
+   bool m_rowFocusable = false; // The row's last item is its only widget (search palette keyboard focus)
    bool m_pinCombo = true; // Combo registers its own definition (off while a name list combo registers its own)
    static inline PinKey s_focusKey;
    static inline bool s_focusPending = false;
@@ -537,6 +538,7 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
+   m_rowFocusable = true;
    const SyncField<T> sync = BeginSyncField(obj);
    const vector<CoTarget<T>> targets = GetCoTargets(sync, obj);
    ImGui::PushID(label.c_str());
@@ -586,7 +588,9 @@ inline void PropertyPane::InputFloat(
    ConvertUnit(unit, displayUnit, displayValue, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
    float vMin, vMax;
-   const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax);
+   // A value outside the guide range keeps the input field: a click on a slider would snap it into the range
+   const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax) && displayValue >= vMin && displayValue <= vMax;
+   m_rowFocusable = true;
    if (slider ? ImGui::SliderFloat(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str())
               : ImGui::InputFloat(("##" + label).c_str(), &displayValue, 0.f, 0.f, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
    {
@@ -622,6 +626,7 @@ inline void PropertyPane::SliderFloat(
    m_modifyFieldId++;
    const string format = "%." + std::to_string(max(0, nDecimals)) + 'f';
    PropertyLabel(label, tooltip);
+   m_rowFocusable = true;
    const SyncField<T> sync = BeginSyncField(obj);
    const vector<CoTarget<T>> targets = GetCoTargets(sync, obj);
    ImGui::PushID(label.c_str());
