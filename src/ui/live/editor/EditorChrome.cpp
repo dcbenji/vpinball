@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include "EditorChrome.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 
 #include "core/FileLocator.h"
 #include "core/VPApp.h"
@@ -15,6 +16,38 @@
 namespace VPX::EditorUI
 {
 
+namespace
+{
+constexpr float ToolButtonSize = 28.f; // Toolbar button (square), in pixels at 100% DPI
+constexpr float ToolGroupGap = 8.f; // Gap between button groups (holds the 1 px separator)
+constexpr float ToolSeparatorHeight = 16.f;
+float s_toolDpi = 1.f;
+
+// Toolbar icon button: transparent, hovered = Hover, active (mode on) = Raised background with Accent icon
+bool ToolButton(const char *icon, bool active = false)
+{
+   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Raised : 0u));
+   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::Text));
+   const bool pressed = ImGui::Button(icon, ImVec2(ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
+   ImGui::PopStyleColor(4);
+   return pressed;
+}
+
+// Group separator: 1 px vertical line centered in the group gap
+void ToolSeparator()
+{
+   const float half = 0.5f * (ToolGroupGap - 1.f) * s_toolDpi;
+   ImGui::SameLine(0.f, half);
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   const float inset = 0.5f * (ToolButtonSize - ToolSeparatorHeight) * s_toolDpi;
+   ImGui::GetWindowDrawList()->AddLine(ImVec2(pos.x, pos.y + inset), ImVec2(pos.x, pos.y + inset + ToolSeparatorHeight * s_toolDpi), EditorTheme::Border, 1.f);
+   ImGui::Dummy(ImVec2(1.f, ToolButtonSize * s_toolDpi));
+   ImGui::SameLine(0.f, half);
+}
+}
+
 void EditorChrome::Render(bool showFullUI)
 {
    // Gives some transparency when positioning camera to better view camera view bounds
@@ -22,7 +55,7 @@ void EditorChrome::Render(bool showFullUI)
    //SetupImGuiStyle(m_editor.m_selection.GetType() == Selection::S_CAMERA ? 0.3f : 1.0f);
 
    m_menuBarHeight = 0.0f;
-   m_toolBarHeight = showFullUI ? 20.f * m_editor.m_liveUI.GetDPI() : 0.f;
+   m_toolBarHeight = showFullUI ? (ToolButtonSize + 4.f) * m_editor.m_liveUI.GetDPI() : 0.f;
 
    if (!showFullUI)
       return;
@@ -35,6 +68,13 @@ void EditorChrome::Render(bool showFullUI)
 void EditorChrome::RenderMenuBar()
 {
    EditorUI &editor = m_editor;
+   const float dpi = editor.m_liveUI.GetDPI();
+   // The menu bar is tall enough for the workspace tabs, and shares the toolbar background
+   constexpr float menuBarHeight = 26.f;
+   constexpr float tabHeight = 24.f;
+   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, max(ImGui::GetStyle().FramePadding.y, 0.5f * (menuBarHeight * dpi - ImGui::GetFontSize()))));
+   ImGui::PushStyleColor(ImGuiCol_MenuBarBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
    if (ImGui::BeginMainMenuBar())
    {
       if (!editor.IsInspectMode() && ImGui::BeginMenu("File"))
@@ -117,21 +157,37 @@ void EditorChrome::RenderMenuBar()
       // Workspace tabs (Blender's top bar), centered in the menu bar
       if (!editor.m_table->IsLocked())
       {
+         const ImGuiStyle &tabStyle = ImGui::GetStyle();
+         const float tabPadding = 12.f * dpi;
+         const float tabGap = 2.f * dpi;
          float tabsWidth = 0.f;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
-            tabsWidth += ImGui::CalcTextSize(editor.m_pinned.GetWorkspace(i).name.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.f + ImGui::GetStyle().ItemSpacing.x;
-         const float startX = max(ImGui::GetCursorPosX() + ImGui::GetStyle().ItemSpacing.x, 0.5f * (ImGui::GetWindowWidth() - tabsWidth));
-         ImGui::SetCursorPosX(startX);
+            tabsWidth += ImGui::CalcTextSize(editor.m_pinned.GetWorkspace(i).name.c_str()).x + tabPadding * 2.f + (i > 0 ? tabGap : 0.f);
+         const float startX = max(ImGui::GetCursorPosX() + tabStyle.ItemSpacing.x, 0.5f * (ImGui::GetWindowWidth() - tabsWidth));
+         const ImVec2 barPos = ImGui::GetWindowPos();
+         const float barBottom = barPos.y + ImGui::GetWindowHeight();
+         const float savedScreenY = ImGui::GetCursorScreenPos().y;
+         ImDrawList *const drawList = ImGui::GetWindowDrawList();
+         drawList->AddLine(ImVec2(barPos.x, barBottom - 1.f), ImVec2(barPos.x + ImGui::GetWindowWidth(), barBottom - 1.f), EditorTheme::Border, 1.f); // Bottom rule
+         float x = barPos.x + startX;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
          {
             const string &name = editor.m_pinned.GetWorkspace(i).name;
             const bool active = editor.m_pinned.GetActiveWorkspace() == i;
-            ImGui::PushStyleColor(ImGuiCol_Button, active ? ImGui::GetStyleColorVec4(ImGuiCol_Header) : ImVec4(0.f, 0.f, 0.f, 0.f));
-            if (ImGui::Button((name + "##Workspace").c_str()))
+            const ImVec2 textSize = ImGui::CalcTextSize(name.c_str());
+            const ImVec2 tabSize(textSize.x + tabPadding * 2.f, tabHeight * dpi);
+            ImGui::SetCursorScreenPos(ImVec2(x, barBottom - tabSize.y));
+            if (ImGui::InvisibleButton((name + "##Workspace").c_str(), tabSize))
                editor.m_pinned.ApplyWorkspace(i);
-            ImGui::PopStyleColor();
+            const bool hovered = ImGui::IsItemHovered();
+            const ImVec2 tabMin = ImGui::GetItemRectMin();
+            const ImVec2 tabMax = ImGui::GetItemRectMax();
+            drawList->AddRectFilled(tabMin, tabMax, active ? EditorTheme::Workspace : (hovered ? EditorTheme::Inactive : EditorTheme::WorkspaceOff), 5.f * dpi, ImDrawFlags_RoundCornersTop);
+            drawList->AddText(ImVec2(tabMin.x + tabPadding, tabMin.y + 0.5f * (tabSize.y - textSize.y)), active ? EditorTheme::Text : EditorTheme::TextDim, name.c_str());
             ImGui::SetItemTooltip("Workspace (Ctrl+%d)", i + 1);
+            x += tabSize.x + tabGap;
          }
+         ImGui::SetCursorScreenPos(ImVec2(x, savedScreenY));
       }
       float buttonWidth = 0.f;
       if (editor.IsInspectMode())
@@ -154,35 +210,43 @@ void EditorChrome::RenderMenuBar()
       m_menuBarHeight = ImGui::GetWindowSize().y;
       ImGui::EndMainMenuBar();
    }
+   ImGui::PopStyleColor(2);
+   ImGui::PopStyleVar();
 }
 
 void EditorChrome::RenderToolbar()
 {
    EditorUI &editor = m_editor;
+   s_toolDpi = editor.m_liveUI.GetDPI();
+   const float toolGap = 2.f * s_toolDpi;
+   const float oldIconSize = max(0.f, 20.f * s_toolDpi - 2.f * ImGui::GetStyle().WindowPadding.y); // Size of the add part popup icons
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + m_menuBarHeight));
    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, m_toolBarHeight));
    constexpr ImGuiWindowFlags window_flags
       = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * s_toolDpi, 2.f * s_toolDpi));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
    ImGui::Begin("TOOLBAR", nullptr, window_flags);
-   ImGui::PopStyleVar();
+   ImGui::PopStyleColor();
+   ImGui::PopStyleVar(2);
    if (editor.IsInspectMode())
    {
-      if (ImGui::Button(editor.m_player->IsPlaying() ? ICON_LC_PAUSE : ICON_LC_PLAY))
+      if (ToolButton(editor.m_player->IsPlaying() ? ICON_LC_PAUSE : ICON_LC_PLAY))
          editor.m_player->SetPlayState(!editor.m_player->IsPlaying());
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(editor.m_player->IsPlaying());
-      if (ImGui::Button(ICON_LC_SKIP_FORWARD))
+      if (ToolButton(ICON_LC_SKIP_FORWARD))
          editor.m_player->m_step = true;
       ImGui::EndDisabled();
    }
    else
    {
-      const float iconSize = ImGui::GetContentRegionAvail().y;
+      const float iconSize = oldIconSize;
 
       // File operations: same actions as the File menu, each button opening a sub menu
-      if (ImGui::Button(ICON_LC_FILE_PLUS))
+      if (ToolButton(ICON_LC_FILE_PLUS))
          ImGui::OpenPopup("New table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("New table\n[Ctrl+N]");
@@ -198,8 +262,8 @@ void EditorChrome::RenderToolbar()
             editor.NewTable(EditorUI::NewTableTemplate::LightSeq);
          ImGui::EndPopup();
       }
-      ImGui::SameLine();
-      if (ImGui::Button(ICON_LC_FOLDER_OPEN))
+      ImGui::SameLine(0.f, toolGap);
+      if (ToolButton(ICON_LC_FOLDER_OPEN))
          ImGui::OpenPopup("Open table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Open table");
@@ -211,9 +275,9 @@ void EditorChrome::RenderToolbar()
             editor.LoadTableFolder();
          ImGui::EndPopup();
       }
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_SAVE))
+      if (ToolButton(ICON_LC_SAVE))
          ImGui::OpenPopup("Save table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Save table\n[Ctrl+S]");
@@ -228,20 +292,16 @@ void EditorChrome::RenderToolbar()
          ImGui::EndPopup();
       }
       ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::Separator();
-      ImGui::SameLine();
+      ToolSeparator();
 
       // Play a shallow copy of the edited table
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_PLAY))
+      if (ToolButton(ICON_LC_PLAY))
          editor.PlayTest();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Play table\n[F5]");
       ImGui::EndDisabled();
-      ImGui::SameLine();
-      ImGui::Separator();
-      ImGui::SameLine();
+      ToolSeparator();
 
       // Edit mode selection (same actions as the Esc, G, S and R keyboard shortcuts)
       static const struct
@@ -258,18 +318,14 @@ void EditorChrome::RenderToolbar()
       for (const auto &mode : editModes)
       {
          const bool active = (editor.m_gizmoOperation == mode.operation);
-         if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-         if (ImGui::Button(mode.icon))
+         if (ToolButton(mode.icon, active))
             editor.SetGizmoOperation(mode.operation);
-         if (active)
-            ImGui::PopStyleColor();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", mode.tooltip);
-         ImGui::SameLine();
+         if (&mode != std::end(editModes) - 1)
+            ImGui::SameLine(0.f, toolGap);
       }
-      ImGui::Separator();
-      ImGui::SameLine();
+      ToolSeparator();
 
       // Add part buttons (same parts and icons as the WinUI toolbar)
       if (m_addPartButtons.empty())
@@ -310,73 +366,63 @@ void EditorChrome::RenderToolbar()
       // Add part button, opening the part type picker popup (same as the Shift+A shortcut)
       ImGui::BeginDisabled(editor.m_pointEditPart != nullptr || editor.m_table->IsLocked());
       const bool addPartActive = (editor.m_addPartType != eItemInvalid);
-      if (addPartActive)
-         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_LC_PLUS))
+      if (ToolButton(ICON_LC_PLUS, addPartActive))
          RequestAddPartPopup(ImGui::GetMousePos());
-      if (addPartActive)
-         ImGui::PopStyleColor();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add part\n[Shift+A]");
       ImGui::EndDisabled();
 
       // Copy/Paste buttons (same actions as the Ctrl+C and Ctrl+V keyboard shortcuts)
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       const bool canCopy
          = editor.m_pointEditPart ? (editor.m_pointEditCenter ? editor.m_centerSelected : editor.m_pointSel.size() == 1) : (editor.m_selection.GetType() == Selection::S_EDITABLE);
       ImGui::BeginDisabled(!canCopy || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_COPY))
+      if (ToolButton(ICON_LC_COPY))
          editor.CopySelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Copy selection\n[Ctrl+C]");
       ImGui::EndDisabled();
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       const bool canPaste = editor.m_pointEditPart
          ? (editor.m_pointEditCenter ? editor.m_centerSelected && VPX::EditorClipboard::HasPoint() : editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
          : VPX::EditorClipboard::HasParts();
       ImGui::BeginDisabled(!canPaste || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_CLIPBOARD_PASTE))
+      if (ToolButton(ICON_LC_CLIPBOARD_PASTE))
          editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Paste\n[Ctrl+V]");
       ImGui::EndDisabled();
 
       // Delete selection button, always visible but only enabled when there are selected parts
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(editor.m_selection.GetType() != Selection::S_EDITABLE || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_TRASH_2))
+      if (ToolButton(ICON_LC_TRASH_2))
          editor.DeleteSelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Delete selection\n[Delete]");
       ImGui::EndDisabled();
 
       // Part library import/export buttons
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_LC_DOWNLOAD))
+      if (ToolButton(ICON_LC_DOWNLOAD))
          editor.OpenPartLibrary();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Import parts (part library)");
       ImGui::EndDisabled();
-      ImGui::SameLine();
+      ImGui::SameLine(0.f, toolGap);
       ImGui::BeginDisabled(!editor.CanExportPartSelection());
-      if (ImGui::Button(ICON_LC_UPLOAD))
+      if (ToolButton(ICON_LC_UPLOAD))
          editor.ExportPartSelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Export selection to a VPZ pack");
       ImGui::EndDisabled();
 
       // Script editor button
-      ImGui::SameLine();
-      ImGui::Separator();
-      ImGui::SameLine();
+      ToolSeparator();
       const bool scriptActive = editor.m_scriptPanel.IsVisible();
-      if (scriptActive)
-         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_LC_CODE_XML))
+      if (ToolButton(ICON_LC_CODE_XML, scriptActive))
          editor.m_scriptPanel.Show();
-      if (scriptActive)
-         ImGui::PopStyleColor();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Edit table script");
 
@@ -409,12 +455,9 @@ void EditorChrome::RenderToolbar()
          ImGui::EndPopup();
       }
    }
-   const float buttonWidth = //
-      ImGui::CalcTextSize(ICON_LC_RULER, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
-      + ImGui::CalcTextSize(ICON_LC_STICKY_NOTE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
-      + ImGui::CalcTextSize(ICON_LC_LIST_FILTER, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+   const float buttonWidth = 3.f * ToolButtonSize * s_toolDpi + 2.f * toolGap;
    ImGui::SameLine(ImGui::GetContentRegionAvail().x - buttonWidth);
-   if (ImGui::Button(ICON_LC_RULER)) // Unit selection menu
+   if (ToolButton(ICON_LC_RULER)) // Unit selection menu
       ImGui::OpenPopup("Unit Popup");
    if (ImGui::BeginPopup("Unit Popup"))
    {
@@ -428,8 +471,8 @@ void EditorChrome::RenderToolbar()
          editor.m_units = EditorUI::Units::Imperial;
       ImGui::EndPopup();
    }
-   ImGui::SameLine();
-   if (ImGui::Button(ICON_LC_STICKY_NOTE)) // Overlay option menu
+   ImGui::SameLine(0.f, toolGap);
+   if (ToolButton(ICON_LC_STICKY_NOTE)) // Overlay option menu
       ImGui::OpenPopup("Overlay Popup");
    if (ImGui::BeginPopup("Overlay Popup"))
    {
@@ -446,8 +489,8 @@ void EditorChrome::RenderToolbar()
          editor.m_physOverlay = EditorUI::PhysicOverlay::All;
       ImGui::EndPopup();
    }
-   ImGui::SameLine();
-   if (ImGui::Button(ICON_LC_LIST_FILTER)) // Selection filter
+   ImGui::SameLine(0.f, toolGap);
+   if (ToolButton(ICON_LC_LIST_FILTER)) // Selection filter
       ImGui::OpenPopup("Selection filter Popup");
    if (ImGui::BeginPopup("Selection filter Popup"))
    {

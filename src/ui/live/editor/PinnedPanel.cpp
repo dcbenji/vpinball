@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include "PinnedPanel.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 
 #include "core/player.h"
 #include "parts/Material.h"
@@ -554,14 +555,25 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       ImGui::PushID(pin.prop.c_str());
       if (removable)
       {
-         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
-         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-         const bool remove = ImGui::SmallButton(ICON_LC_X);
-         ImGui::PopStyleColor(2);
+         // Small muted icon on the text baseline, shown while the row is hovered or the button focused (the button itself is always
+         // submitted, so keyboard navigation still reaches it)
+         const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+         const float frameHeight = ImGui::GetFrameHeight();
+         const float buttonWidth = ImGui::GetFontSize() * 1.2f; // ~18 px reserved
+         const bool rowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)
+            && ImGui::IsMouseHoveringRect(rowPos, ImVec2(rowPos.x + ImGui::GetContentRegionAvail().x, rowPos.y + frameHeight), false);
+         const bool remove = ImGui::InvisibleButton("##Unpin", ImVec2(buttonWidth, frameHeight));
          if (remove)
             Unpin(pin);
+         const bool itemHovered = ImGui::IsItemHovered();
+         if (rowHovered || itemHovered || ImGui::IsItemFocused())
+         {
+            const ImVec2 iconSize = ImGui::CalcTextSize(ICON_LC_X);
+            ImGui::GetWindowDrawList()->AddText(ImVec2(rowPos.x + (buttonWidth - iconSize.x) * 0.5f, rowPos.y + (frameHeight - iconSize.y) * 0.5f),
+               itemHovered ? EditorTheme::Text : EditorTheme::IconMuted, ICON_LC_X);
+         }
          ImGui::SetItemTooltip("Remove from Quick Favorites");
-         ImGui::SameLine();
+         ImGui::SameLine(0.f, 0.f);
       }
       const auto it = m_defs.find(pin.Id());
       if (obj == nullptr)
@@ -617,15 +629,20 @@ void PinnedPanel::RenderLookToolbar()
    const Selection &sel = m_editor.m_selection;
    const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
       || (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr && sel.GetMaterial()->m_type == Material::PBR);
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   const float buttonHeight = 24.f * dpi;
+   const float spacing = ImGui::GetStyle().ItemSpacing.x;
    ImGui::BeginDisabled(!canPinSel);
-   if (ImGui::SmallButton(ICON_LC_DROPLET " Add see-through set"))
+   if (ImGui::Button(ICON_LC_DROPLET " Add see-through set", ImVec2(max(1.f, ImGui::GetContentRegionAvail().x - buttonHeight - spacing), buttonHeight)))
       PinSelectionSeeThrough();
    ImGui::EndDisabled();
    ImGui::SetItemTooltip("Add the selection's see-through set to Quick Favorites (refraction fields of the part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
    ImGui::SameLine();
    ImGui::BeginDisabled(m_pins.empty());
-   if (ImGui::SmallButton(ICON_LC_TRASH_2 "##FavClear"))
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::IconMuted));
+   if (ImGui::Button(ICON_LC_TRASH_2 "##FavClear", ImVec2(buttonHeight, buttonHeight)))
       ImGui::OpenPopup("##PinClearAll");
+   ImGui::PopStyleColor();
    ImGui::EndDisabled();
    ImGui::SetItemTooltip("Remove all Quick Favorites");
    if (ImGui::BeginPopup("##PinClearAll"))
@@ -641,6 +658,7 @@ void PinnedPanel::RenderLookToolbar()
          ImGui::CloseCurrentPopup();
       ImGui::EndPopup();
    }
+   ImGui::Dummy(ImVec2(0.f, 6.f * dpi));
    ImGui::Separator();
 }
 
@@ -652,10 +670,27 @@ void PinnedPanel::RenderItemTab(bool hovered)
    const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
    if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
    {
-      ImGui::TextDisabled(editor.m_selection.GetType() == Selection::S_NONE ? "Nothing selected" : "No transform for this selection");
+      // Centred in the panel: icon above a dim message
+      const char *const message = editor.m_selection.GetType() == Selection::S_NONE ? "Nothing selected" : "No transform for this selection";
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      const ImVec2 iconSize = ImGui::CalcTextSize(ICON_LC_BOX);
+      const ImVec2 textSize = ImGui::CalcTextSize(message);
+      const float blockHeight = iconSize.y + ImGui::GetStyle().ItemSpacing.y + textSize.y;
+      const float x0 = ImGui::GetCursorPosX();
+      const float y0 = ImGui::GetCursorPosY();
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+      ImGui::SetCursorPos(ImVec2(x0 + max(0.f, (avail.x - iconSize.x) * 0.5f), y0 + max(0.f, (avail.y - blockHeight) * 0.4f)));
+      ImGui::TextUnformatted(ICON_LC_BOX);
+      ImGui::SetCursorPosX(x0 + max(0.f, (avail.x - textSize.x) * 0.5f));
+      ImGui::TextUnformatted(message);
+      ImGui::PopStyleColor();
       return;
    }
+   ImGui::Dummy(ImVec2(0.f, 2.f));
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
    ImGui::TextUnformatted(properties.m_curation.kind == PinKind::Table ? "Table" : properties.m_curation.name.c_str());
+   ImGui::PopStyleColor();
+   ImGui::Dummy(ImVec2(0.f, 2.f));
    vector<PinKey> &keys = m_itemKeys;
    keys.clear();
    for (const Def *def : defs)
@@ -728,7 +763,19 @@ void PinnedPanel::Render(float topBarHeight)
          | ImGuiWindowFlags_NoNavFocus);
    const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_AllowWhenBlockedByPopup)
       || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
-   if (ImGui::BeginTabBar("##SidebarTabs"))
+   // Muted chip tabs: the active one is a raised grey, no overline, no bar border
+   ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, 4.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_TabBarBorderSize, 0.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_TabBarOverlineSize, 0.f);
+   ImGui::PushStyleColor(ImGuiCol_Tab, EditorTheme::V(EditorTheme::Inactive));
+   ImGui::PushStyleColor(ImGuiCol_TabHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_TabSelected, EditorTheme::V(EditorTheme::Raised));
+   ImGui::PushStyleColor(ImGuiCol_TabDimmed, EditorTheme::V(EditorTheme::Inactive));
+   ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected, EditorTheme::V(EditorTheme::Raised));
+   ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, ImVec4(0.f, 0.f, 0.f, 0.f));
+   ImGui::PushStyleColor(ImGuiCol_TabDimmedSelectedOverline, ImVec4(0.f, 0.f, 0.f, 0.f));
+   const bool tabBar = ImGui::BeginTabBar("##SidebarTabs");
+   if (tabBar)
    {
       static constexpr const char *names[] = { "Item", "Look", "View" };
       // A tab picked from elsewhere (search, workspace) is brought to front (ImGui applies it on the next frame); otherwise the
@@ -761,6 +808,8 @@ void PinnedPanel::Render(float topBarHeight)
       if (shown == static_cast<int>(editor.m_sidebarTab))
          m_shownTab = shown;
    }
+   ImGui::PopStyleColor(7);
+   ImGui::PopStyleVar(3);
    ImGui::End();
    ImGui::PopStyleVar(3);
 }

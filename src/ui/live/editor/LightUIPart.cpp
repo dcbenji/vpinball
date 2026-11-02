@@ -99,6 +99,12 @@ void LightUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Light* light) { return light->m_d.m_intensity; }, //
          [](Light* light, float v)
          {
+            // Fades are stored as speeds (intensity per ms): rescale them so the fade durations stay the same
+            if (light->m_d.m_intensity > 0.f && v > 0.f)
+            {
+               light->m_d.m_fadeSpeedUp *= v / light->m_d.m_intensity;
+               light->m_d.m_fadeSpeedDown *= v / light->m_d.m_intensity;
+            }
             light->m_d.m_intensity = v;
             light->m_currentIntensity = light->m_d.m_intensity * light->m_d.m_intensity_scale * light->m_d.m_state;
          },
@@ -109,12 +115,12 @@ void LightUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Light* light, int v) { light->m_d.m_fader = static_cast<Fader>(v); }, "How the light interpolates between states: instantly, linearly, or emulating an incandescent filament");
       props.InputFloat<Light>(
          m_part, "Fade Up (ms)"s, //
-         [](const Light* light) { return light->m_d.m_fadeSpeedUp > 0.1f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / light->m_d.m_fadeSpeedUp : 100000.0f; }, //
+         [](const Light* light) { return light->m_d.m_fadeSpeedUp > 1e-6f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / light->m_d.m_fadeSpeedUp : 100000.0f; }, //
          [](Light* light, float v) { light->m_d.m_fadeSpeedUp = v > 0.001f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / v : 100000.0f; }, PropertyPane::Unit::None, 1,
          "Time for the light to ramp from off to its full intensity");
       props.InputFloat<Light>(
          m_part, "Fade Down (ms)"s, //
-         [](const Light* light) { return light->m_d.m_fadeSpeedDown > 0.1f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / light->m_d.m_fadeSpeedDown : 100000.0f; }, //
+         [](const Light* light) { return light->m_d.m_fadeSpeedDown > 1e-6f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / light->m_d.m_fadeSpeedDown : 100000.0f; }, //
          [](Light* light, float v) { light->m_d.m_fadeSpeedDown = v > 0.001f ? light->m_d.m_intensity * light->m_d.m_intensity_scale / v : 100000.0f; }, PropertyPane::Unit::None, 1,
          "Time for the light to fade from its full intensity to off");
       props.InputRGB<Light>(
@@ -261,6 +267,7 @@ void LightUIPart::UpdatePropertyPane(PropertyPane& props)
                light->m_d.m_state = 2.f;
             else if (light->m_d.m_state == 2.f)
                light->m_d.m_state = 1.f;
+            light->setInPlayState(light->m_d.m_state == 2.f ? (float)LightStateBlinking : light->m_d.m_state); // Apply live, like State
          });
       if (const Light* light = props.GetEditedPart<Light>(m_part); light->m_d.m_state == 2.f)
       {

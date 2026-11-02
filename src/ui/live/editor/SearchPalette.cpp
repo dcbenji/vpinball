@@ -8,7 +8,9 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 
+#include "EditorTheme.h"
 #include "EditorUIPart.h"
+#include "IconsLucide.h"
 #include "PropertyPane.h"
 #include "Selection.h"
 
@@ -669,14 +671,20 @@ void SearchPalette::Render()
    }
 
    const ImGuiViewport *const vp = ImGui::GetMainViewport();
-   const ImGuiStyle &style = ImGui::GetStyle();
-   const float width = 560.f * m_editor.m_liveUI.GetDPI();
-   const float innerWidth = width - 2.f * style.WindowPadding.x;
-   const float rowHeight = ImGui::GetTextLineHeightWithSpacing();
-   const float chrome = 2.f * style.WindowPadding.y + ImGui::GetFrameHeight() + 4.f * style.ItemSpacing.y + ImGui::GetTextLineHeight() + 1.f;
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   const float width = 560.f * dpi;
+   const float pad = 10.f * dpi; // Window padding
+   const float spacingY = 2.f * dpi; // Item spacing between rows
+   const float inputHeight = 28.f * dpi;
+   const float inputGap = 6.f * dpi; // Between the input and the results
+   const float footerGap = 4.f * dpi; // Between the footer rule and the footer text
+   const float rowH = 24.f * dpi;
+   const float innerWidth = width - 2.f * pad;
+   const float rowHeight = rowH + spacingY;
+   const float chrome = 2.f * pad + inputHeight + inputGap + 1.f + footerGap + spacingY + ImGui::GetTextLineHeight();
    const float maxList = std::max(3.f * rowHeight, vp->Size.y * 0.6f - chrome);
    size_t count = m_results.size();
-   const float listHeight = count == 0 ? ImGui::GetTextLineHeight() : std::min(static_cast<float>(count) * rowHeight, maxList);
+   const float listHeight = count == 0 ? ImGui::GetTextLineHeight() : std::min(static_cast<float>(count) * rowHeight - spacingY, maxList);
 
    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.2f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
    ImGui::SetNextWindowSize(ImVec2(width, chrome + listHeight), ImGuiCond_Always);
@@ -691,6 +699,8 @@ void SearchPalette::Render()
 
    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
       | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, spacingY));
    if (ImGui::Begin("##SearchPalette", nullptr, flags))
    {
       if (!m_firstFrame && !harvested && !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
@@ -703,7 +713,11 @@ void SearchPalette::Render()
          m_focusInput = false;
       }
       ImGui::SetNextItemWidth(innerWidth);
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(30.f * dpi, 0.5f * (inputHeight - ImGui::GetFontSize()))); // Room for the search icon
       ImGui::InputTextWithHint("##query", "Search menus and fields (F3)", &m_query);
+      ImGui::PopStyleVar();
+      ImGui::GetWindowDrawList()->AddText(ImVec2(ImGui::GetItemRectMin().x + 9.f * dpi, ImGui::GetItemRectMin().y + 0.5f * (inputHeight - ImGui::GetFontSize())), EditorTheme::TextDim, ICON_LC_SEARCH);
+      ImGui::Dummy(ImVec2(0.f, std::max(0.f, inputGap - 2.f * spacingY)));
       if (m_query != m_lastQuery)
       {
          // Recompute now so that Enter acts on the list matching the text
@@ -739,7 +753,6 @@ void SearchPalette::Render()
          m_escPending = true;
       }
 
-      ImGui::Separator();
       if (count == 0)
          ImGui::TextDisabled("%s", m_lastQuery.empty() ? "Type to search" : "No matches");
       else if (ImGui::BeginChild("##results", ImVec2(innerWidth, listHeight), ImGuiChildFlags_None, ImGuiWindowFlags_None))
@@ -747,13 +760,15 @@ void SearchPalette::Render()
          const ImGuiIO &io = ImGui::GetIO();
          const bool mouseMoved = io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f;
          ImDrawList *const draw = ImGui::GetWindowDrawList();
-         const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+         ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Fill));
+         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Fill));
+         ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::FillActive));
          for (size_t i = 0; i < count; ++i)
          {
             const Result &r = m_results[i];
             const bool selected = static_cast<int>(i) == m_sel;
             ImGui::PushID(static_cast<int>(i));
-            if (ImGui::Selectable(r.label.c_str(), selected))
+            if (ImGui::Selectable("##row", selected, ImGuiSelectableFlags_None, ImVec2(0.f, rowH)))
             {
                hasActivation = true;
                activateIdx = i;
@@ -766,18 +781,29 @@ void SearchPalette::Render()
             const ImVec2 itemMin = ImGui::GetItemRectMin();
             const ImVec2 itemMax = ImGui::GetItemRectMax();
             const float rightWidth = ImGui::CalcTextSize(r.right.c_str()).x;
-            // Skip the dim column when it would overlap the label
-            if (ImGui::CalcTextSize(r.label.c_str()).x + rightWidth + 3.f * style.ItemSpacing.x < itemMax.x - itemMin.x)
-               draw->AddText(ImVec2(itemMax.x - rightWidth - style.ItemSpacing.x, itemMin.y), dim, r.right.c_str());
+            const float textY = itemMin.y + 0.5f * (rowH - ImGui::GetFontSize());
+            const float margin = 10.f * dpi;
+            draw->AddText(ImVec2(itemMin.x + margin, textY), EditorTheme::Text, r.label.c_str());
+            // Skip the meta column when it would overlap the label
+            if (ImGui::CalcTextSize(r.label.c_str()).x + rightWidth + 3.f * margin < itemMax.x - itemMin.x)
+               draw->AddText(ImVec2(itemMax.x - rightWidth - margin, textY), selected ? EditorTheme::Text : EditorTheme::TextDim, r.right.c_str());
             ImGui::PopID();
          }
+         ImGui::PopStyleColor(3);
          m_scrollToSel = false;
       }
       if (count != 0)
          ImGui::EndChild(); // Always paired with BeginChild, whatever it returned
-      ImGui::TextDisabled("%s", kFooter);
+      // Footer hint, separated by a 1 px rule
+      {
+         const ImVec2 rulePos = ImGui::GetCursorScreenPos();
+         ImGui::GetWindowDrawList()->AddLine(ImVec2(rulePos.x, rulePos.y), ImVec2(rulePos.x + innerWidth, rulePos.y), EditorTheme::Border, 1.f);
+         ImGui::Dummy(ImVec2(0.f, 1.f + footerGap - spacingY));
+         ImGui::TextColored(EditorTheme::V(EditorTheme::TextFaint), "%s", kFooter);
+      }
    }
    ImGui::End();
+   ImGui::PopStyleVar(2);
 
    if (close)
       Close();

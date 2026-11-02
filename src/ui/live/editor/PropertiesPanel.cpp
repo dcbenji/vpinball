@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include "PropertiesPanel.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 
 #include "audio/AudioPlayer.h"
 #include "core/editablereg.h"
@@ -193,33 +194,53 @@ void PropertiesPanel::DrawTabStrip()
 {
    static constexpr const char *icons[] = { ICON_LC_BOX, ICON_LC_MOVE_3D, ICON_LC_CIRCLE_DOT, ICON_LC_SUN, ICON_LC_ATOM, ICON_LC_CODE, ICON_LC_SLIDERS_HORIZONTAL };
    static constexpr const char *names[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced (every field)" };
-   const ImVec2 size(ImGui::GetFrameHeight() + 4.f, ImGui::GetFrameHeight() + 4.f);
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   const float stripWidth = 32.f * dpi;
+   const ImVec2 size(28.f * dpi, 28.f * dpi);
+   // Strip background is the child's (ChildBg); 1 px border on its right edge
+   {
+      const ImVec2 pos = ImGui::GetWindowPos();
+      const ImVec2 winSize = ImGui::GetWindowSize();
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(pos.x + winSize.x - 1.f, pos.y), ImVec2(pos.x + winSize.x - 1.f, pos.y + winSize.y), EditorTheme::Border);
+   }
+   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 4.f * dpi));
+   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
+   const auto tabButton = [&](const char *label, bool active) -> bool
+   {
+      ImGui::SetCursorPosX((stripWidth - size.x) * 0.5f);
+      ImGui::PushStyleColor(ImGuiCol_Button, active ? EditorTheme::V(EditorTheme::Raised) : ImVec4(0.f, 0.f, 0.f, 0.f));
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::TextDim));
+      const bool clicked = ImGui::Button(label, size);
+      ImGui::PopStyleColor(2);
+      return clicked;
+   };
+   ImGui::SetCursorPosY(4.f * dpi);
    // Pin ID: lock the editor on the current object
-   ImGui::PushStyleColor(ImGuiCol_Button, m_locked ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
-   if (ImGui::Button(ICON_LC_PIN "##PinID", size))
+   if (tabButton(ICON_LC_PIN "##PinID", m_locked))
    {
       m_locked = !m_locked;
       m_lockedSel = m_editor.m_selection;
    }
-   ImGui::PopStyleColor();
    ImGui::SetItemTooltip(m_locked ? "Unpin: follow the selection again" : "Pin: keep showing this object while selecting others");
-   ImGui::Spacing();
+   ImGui::Dummy(ImVec2(0.f, 2.f * dpi)); // 10 px between the pin and the tabs (with the item spacings)
    for (int t = 0; t < static_cast<int>(Tab::Count); t++)
    {
       if (!HasTab(static_cast<Tab>(t)))
          continue;
       const bool active = m_tab == static_cast<Tab>(t);
-      ImGui::PushStyleColor(ImGuiCol_Button, active ? ImGui::GetStyleColorVec4(ImGuiCol_Header) : ImVec4(0.f, 0.f, 0.f, 0.f));
       ImGui::PushID(t);
-      if (ImGui::Button(icons[t], size))
+      if (tabButton(icons[t], active))
       {
          m_tab = static_cast<Tab>(t);
          m_tabMemory[TabKey()] = m_tab;
       }
       ImGui::PopID();
-      ImGui::PopStyleColor();
       ImGui::SetItemTooltip("%s", names[t]);
    }
+   ImGui::PopStyleColor(2);
+   ImGui::PopStyleVar(2);
 }
 
 void PropertiesPanel::DrawTabContent(PropertyPane &props)
@@ -564,10 +585,12 @@ void PropertiesPanel::Render(float topBarHeight)
    const bool tabbed = m_curation.active && m_curation.tabbed;
    if (tabbed)
    {
-      ImGui::BeginChild("##PropTabs", ImVec2(ImGui::GetFrameHeight() + 8.f, 0.f));
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorTheme::V(EditorTheme::Strip));
+      ImGui::BeginChild("##PropTabs", ImVec2(32.f * editor.m_liveUI.GetDPI(), 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+      ImGui::PopStyleColor();
       DrawTabStrip();
       ImGui::EndChild();
-      ImGui::SameLine(0.f, 2.f);
+      ImGui::SameLine(0.f, 4.f);
       ImGui::BeginChild("##PropContent", ImVec2(0.f, 0.f));
    }
    else

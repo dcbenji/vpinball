@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include "OutlinerPanel.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 
 #include "fonts/IconsForkAwesome.h"
 #include "parts/Collection.h"
@@ -30,8 +31,14 @@ template <class T> static std::vector<T> SortedCaseInsensitive(std::vector<T> &l
 // less than the active one (the element edited in the property pane keeps the normal selection color)
 static void PushInactiveSelectionColor()
 {
-   const ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+   const ImVec4 color = EditorTheme::V(EditorTheme::RowSelected);
    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(color.x, color.y, color.z, color.w * 0.4f));
+}
+
+// Push the full row selection color of the outliner (active selection)
+static void PushSelectionColor()
+{
+   ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::RowSelected));
 }
 
 namespace
@@ -410,10 +417,19 @@ void OutlinerPanel::Render(float topBarHeight)
       const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
       if (inactiveSel)
          PushInactiveSelectionColor();
-      const bool clicked = ImGui::Selectable((string(TypeIcon(editable->GetItemType())) + "  " + editable->GetName() + "##Outliner"s + std::to_string(itemCounter++)).c_str(),
+      else
+         PushSelectionColor();
+      const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(),
          editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
-      if (inactiveSel)
-         ImGui::PopStyleColor();
+      ImGui::PopStyleColor();
+      {
+         // Type icon (dim) and name (normal text) drawn over the selectable
+         const char *const icon = TypeIcon(editable->GetItemType());
+         const ImVec2 textPos = ImGui::GetItemRectMin();
+         ImDrawList *const drawList = ImGui::GetWindowDrawList();
+         drawList->AddText(textPos, EditorTheme::TextDim, icon);
+         drawList->AddText(ImVec2(textPos.x + ImGui::CalcTextSize(icon).x + 6.f, textPos.y), EditorTheme::Text, editable->GetName().c_str());
+      }
       if (clicked)
       {
          const ImGuiIO &selIO = ImGui::GetIO();
@@ -439,13 +455,14 @@ void OutlinerPanel::Render(float topBarHeight)
       if (editor.m_table->m_liveBaseTable == nullptr)
       {
          ImGui::SameLine(eyeX);
-         ImGui::PushStyleColor(ImGuiCol_Text, editable->IsUIVisible(false) ? IM_COL32_WHITE : IM_COL32(128, 128, 128, 255));
+         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(editable->IsUIVisible(false) ? EditorTheme::TextDim : EditorTheme::TextFaint));
+         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
          if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + editable->GetName()).c_str()))
          {
             editable->SetUIVisible(!editable->IsUIVisible(false));
             editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
-         ImGui::PopStyleColor();
+         ImGui::PopStyleColor(2);
       }
    };
 
@@ -510,7 +527,6 @@ void OutlinerPanel::Render(float topBarHeight)
          const float eyeX = ImGui::GetContentRegionAvail().x;
          // Highlight the group in which new and imported parts are added
          PartGroup *const newPartTarget = editor.GetPartGroupForNewPart();
-         const ImVec4 newPartTargetColor(1.0f, 0.6f, 0.2f, 1.0f);
          // When 'sync tree with selection' is enabled, reveal the newly selected part in the tree
          const std::shared_ptr<EditorUIPart> revealPart = (m_syncToSelection && editor.m_selection.GetPart() != m_lastSyncedPart) ? editor.m_selection.GetPart() : nullptr;
          m_lastSyncedPart = editor.m_selection.GetPart();
@@ -544,22 +560,20 @@ void OutlinerPanel::Render(float topBarHeight)
                   if ((revealPart && revealPart->GetEditable()->IsChild(group)) || (openMatches && m_visibleGroups.contains(group)))
                      ImGui::SetNextItemOpen(true);
                   const bool isNewPartTarget = (group == newPartTarget);
-                  if (isNewPartTarget)
-                     ImGui::PushStyleColor(ImGuiCol_Text, newPartTargetColor);
                   const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
                   if (inactiveSel)
                      PushInactiveSelectionColor();
+                  else
+                     PushSelectionColor();
                   // Folder icon and count are outside the ID (after ###) so that the node keeps its open state when they change
                   const auto countIt = m_groupCounts.find(group);
                   const string &groupName = edit->GetEditable()->GetName();
                   const string idPart = "###" + groupName;
                   const bool wasOpen = ImGui::GetStateStorage()->GetInt(ImGui::GetID(idPart.c_str()), 0) != 0;
-                  const string groupLabel = (wasOpen ? ICON_LC_FOLDER_OPEN "  " : ICON_LC_FOLDER "  ") + groupName + " (" + std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0) + ")" + idPart;
-                  opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
-                  if (inactiveSel)
-                     ImGui::PopStyleColor();
-                  if (isNewPartTarget)
-                     ImGui::PopStyleColor();
+                  const string groupLabel = (wasOpen ? ICON_LC_FOLDER_OPEN "  " : ICON_LC_FOLDER "  ") + groupName + idPart;
+                  opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
+                  ImGui::PopStyleColor();
+                  const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
                   partDragSource(edit);
                   partDropTarget(group);
                   if (ImGui::BeginPopupContextItem())
@@ -570,23 +584,31 @@ void OutlinerPanel::Render(float topBarHeight)
                         editor.SelectPartsInGroup(group);
                      ImGui::EndPopup();
                   }
-                  if (isNewPartTarget)
                   {
-                     ImGui::SameLine(eyeX - ImGui::CalcTextSize(ICON_LC_CIRCLE_ARROW_LEFT).x - style.ItemSpacing.x);
-                     ImGui::TextColored(newPartTargetColor, ICON_LC_CIRCLE_ARROW_LEFT);
-                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("New and imported parts are added to this group");
+                     // Part count (dim, right aligned before the eye column); the new part target marker is only shown on row hover
+                     const float arrowWidth = ImGui::CalcTextSize(ICON_LC_CIRCLE_ARROW_LEFT).x;
+                     const string countText = std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0);
+                     ImGui::SameLine(eyeX - arrowWidth - style.ItemSpacing.x * 2.f - ImGui::CalcTextSize(countText.c_str()).x);
+                     ImGui::TextColored(EditorTheme::V(EditorTheme::TextDim), "%s", countText.c_str());
+                     if (isNewPartTarget && rowHovered)
+                     {
+                        ImGui::SameLine(eyeX - arrowWidth - style.ItemSpacing.x);
+                        ImGui::TextColored(EditorTheme::V(EditorTheme::TextDim), ICON_LC_CIRCLE_ARROW_LEFT);
+                        if (ImGui::IsItemHovered())
+                           ImGui::SetTooltip("New and imported parts are added to this group");
+                     }
                   }
                   if (editor.m_table->m_liveBaseTable == nullptr)
                   {
                      ImGui::SameLine(eyeX);
-                     ImGui::PushStyleColor(ImGuiCol_Text, group->IsUIVisible(false) ? IM_COL32_WHITE : IM_COL32(128, 128, 128, 255));
+                     ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(group->IsUIVisible(false) ? EditorTheme::TextDim : EditorTheme::TextFaint));
+                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
                      if (ImGui::SmallButton(((group->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + edit->GetEditable()->GetName()).c_str()))
                      {
                         group->SetUIVisible(!group->IsUIVisible(false));
                         editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
                      }
-                     ImGui::PopStyleColor();
+                     ImGui::PopStyleColor(2);
                   }
                   if (edit == revealPart && !ImGui::IsItemVisible())
                      ImGui::SetScrollHereY();

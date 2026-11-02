@@ -778,7 +778,15 @@ inline void PropertyPane::InputRGB(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    vec3 value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::ColorEdit3(("##" + label).c_str(), &value.x))
+   // No per-channel colour markers (1 px bars under each field); the swatch gets a thin dark border instead
+   const bool colorChanged = ImGui::ColorEdit3(("##" + label).c_str(), &value.x, ImGuiColorEditFlags_NoColorMarkers);
+   {
+      const float swatch = ImGui::GetFrameHeight();
+      const ImVec2 itemMax = ImGui::GetItemRectMax();
+      const ImVec2 itemMin = ImGui::GetItemRectMin();
+      ImGui::GetWindowDrawList()->AddRect(ImVec2(itemMax.x - swatch, itemMin.y), ImVec2(itemMax.x, itemMin.y + swatch), IM_COL32(0, 0, 0, 100), ImGui::GetStyle().FrameRounding, 0, 1.f);
+   }
+   if (colorChanged)
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)

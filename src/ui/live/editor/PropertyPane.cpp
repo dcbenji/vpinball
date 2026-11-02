@@ -1,6 +1,7 @@
 #include "core/stdafx.h"
 #include "PropertyPane.h"
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 
 #include "imgui/imgui_stdlib.h"
 #include "parts/primitive.h"
@@ -56,7 +57,11 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    m_rowMin = pos;
    const ImGuiStyle& style = ImGui::GetStyle();
    const float xSpacing = style.ItemSpacing.x;
-   const float xWidth = ImGui::GetContentRegionAvail().x * 0.5f - m_syncWidth;
+   // Label column: ~42% of the pane, at least 120 px, while keeping a sane minimum for the value column
+   const float availWidth = ImGui::GetContentRegionAvail().x;
+   const float valueMin = 100.f;
+   const float xWidth = max(60.f, min(max(availWidth * 0.42f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
+   const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - 2.f * m_syncWidth);
    const float pinWidth = 0.f;
    const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
 
@@ -129,14 +134,17 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    }
 
    ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y));
-   ImGui::SetNextItemWidth(xWidth);
-   m_syncPos = ImVec2(pos.x + xWidth + xWidth, pos.y);
+   ImGui::SetNextItemWidth(valueWidth);
+   m_syncPos = ImVec2(pos.x + xWidth + valueWidth, pos.y);
 }
 
 void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName)
 {
-   ImGui::NewLine();
+   ImGui::Dummy(ImVec2(0.f, 2.f));
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
    LiveUI::CenteredText(IsMultiEdit() ? typeName + " x" + std::to_string(GetEditCount()) : typeName);
+   ImGui::PopStyleColor();
+   ImGui::Dummy(ImVec2(0.f, 2.f));
    m_modifyFieldId++;
    // Do not edit name of live objects as it would break the script, nor of multi selections (no bulk renaming)
    ImGui::BeginDisabled(m_table->m_liveBaseTable || IsMultiEdit());
@@ -151,7 +159,7 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
          m_modified = m_modifyFieldId; // Makes the rename undoable and marks the table as modified
    }
    ImGui::EndDisabled();
-   ImGui::Separator();
+   ImGui::Dummy(ImVec2(0.f, 4.f));
    if (m_afterHeader)
       m_afterHeader(*this);
 }
@@ -192,13 +200,11 @@ bool PropertyPane::BeginSection(const string& name)
    }
    const bool opened = ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
-   // Add a white line above
+   // Thin accent rule on the left of the header
    const ImVec2 headerMin = ImGui::GetItemRectMin();
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
-   const ImVec2 lineStart(headerMin.x, headerMin.y);
-   const ImVec2 lineEnd(headerMax.x, headerMin.y);
-   drawList->AddLine(lineStart, lineEnd, ImGui::GetColorU32(ImGuiCol_Text), 1.0f);
+   drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
 
    if (!opened)
       return false;
@@ -232,8 +238,9 @@ bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vM
    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, clear);
    ImGui::PushStyleColor(ImGuiCol_SliderGrab, clear);
    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, clear);
+   ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_WHITE);
    const bool changed = ImGui::SliderFloat(id, value, vMin, vMax, format);
-   ImGui::PopStyleColor(5);
+   ImGui::PopStyleColor(6);
    const ImVec2 min = ImGui::GetItemRectMin();
    const ImVec2 max = ImGui::GetItemRectMax();
    const bool active = ImGui::IsItemActive();
@@ -247,10 +254,9 @@ bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vM
       const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
       if (t > 0.f)
       {
-         // Muted fill (Blender's value bar), brighter while dragged
-         const ImVec4 grab = ImGui::GetStyleColorVec4(ImGuiCol_SliderGrab);
-         const ImVec4 fill(0.35f * grab.x + 0.25f, 0.35f * grab.y + 0.25f, 0.35f * grab.z + 0.25f, active ? 0.85f : hovered ? 0.7f : 0.55f);
-         drawList->AddRectFilled(min, ImVec2(min.x + (max.x - min.x) * t, max.y), ImGui::GetColorU32(fill), rounding);
+         // Opaque value bar (Blender style), brighter while dragged; only the left corners are rounded unless full
+         const ImU32 fill = active ? EditorTheme::FillActive : hovered ? EditorTheme::FillHovered : EditorTheme::Fill;
+         drawList->AddRectFilled(min, ImVec2(min.x + (max.x - min.x) * t, max.y), fill, rounding, t >= 1.f ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
       }
    }
    drawList->ChannelsMerge();
