@@ -29,7 +29,7 @@ public:
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (the area header holds the editor type button)
    void FocusFilter() { m_focusFilter = true; } // Ctrl+F: type a filter right away
 
-   // Default width of the panel in logical pixels (scaled by the UI DPI), the current one is EditorUI::m_outlinerWidth
+   // Default width of the panel in logical pixels (scaled by the UI DPI), the current one is stored in the area layout tree (EditorUI::m_areas)
    static constexpr float PaneWidth = 200.f;
 
    // Filter popover & display mode state, exposed to be saved with the workspaces.

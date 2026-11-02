@@ -45,6 +45,7 @@ public:
    void FocusSearch() { m_focusSearch = true; }
    // The mouse was over the area when it was last drawn
    bool IsMouseOver() const { return m_mouseOver; }
+   void ClearMouseOver() { m_mouseOver = false; } // Not drawn this frame (not hosted by a visible area)
    // The search applies to the current selection (a single part, material or the table; not a multi selection, image, sound,...)
    bool CanSearch() const { return m_curation.active && m_curation.tabbed; }
 
