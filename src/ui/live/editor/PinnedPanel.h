@@ -75,9 +75,8 @@ public:
    bool IsHarvesting() const { return m_harvestStamp != 0; }
 
    // Curated (Look / Transform) sections of the properties panel: the fields of an object, as registered by its latest harvest
-   void *ResolveObject(PinKind kind, const string &name, const void **owner) const { return Resolve(kind, name, owner); }
    // Harvests the object if it was never harvested from its current owner; returns the stamp of its latest harvest (0 if unresolved)
-   unsigned EnsureHarvested(PinKind kind, const string &name);
+   unsigned EnsureHarvested(PinKind kind, const string &name, void **resolved = nullptr);
    void InvalidateHarvest(PinKind kind, const string &name);
    // Definitions registered by the given harvest of an object, in draw order
    void CollectDefs(PinKind kind, const string &name, unsigned stamp, vector<const Def *> &out) const;

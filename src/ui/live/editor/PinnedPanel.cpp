@@ -85,19 +85,22 @@ void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *own
    def.owner = owner;
    def.draw = std::move(draw);
    def.common = common;
+   // Only a harvest records which fields an object shows: a panel registration (e.g. from the startup copy in an inspection
+   // session, whose owner differs) keeps the def in the object's curated sections
    if (m_harvestStamp != 0)
    {
       def.stamp = m_harvestStamp;
       def.seq = m_harvestSeq++;
    }
-   else
-      def.stamp = 0;
 }
 
-unsigned PinnedPanel::EnsureHarvested(PinKind kind, const string &name)
+unsigned PinnedPanel::EnsureHarvested(PinKind kind, const string &name, void **resolved)
 {
    const void *owner = nullptr;
-   if (Resolve(kind, name, &owner) == nullptr || owner == nullptr)
+   void *const obj = Resolve(kind, name, &owner);
+   if (resolved != nullptr)
+      *resolved = obj;
+   if (obj == nullptr || owner == nullptr)
       return 0;
    const string objId = ObjectId(kind, name);
    const auto harvested = m_harvested.find(objId);
@@ -444,6 +447,7 @@ void PinnedPanel::Render(float topBarHeight)
          {
             if (pin.kind != kind || pin.name != name)
                continue;
+            props.FlushRow(); // Below the previous row when its label wrapped
             ImGui::PushID(pin.prop.c_str());
             if (ImGui::SmallButton(ICON_FK_TIMES))
                Unpin(pin);

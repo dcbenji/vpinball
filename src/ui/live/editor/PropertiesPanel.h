@@ -22,6 +22,7 @@ namespace VPX::EditorUI
 {
 
 class EditorUI;
+class EditorUIPart;
 class PropertyPane;
 
 // Right side panel displaying the properties of the current selection (table,
@@ -76,14 +77,28 @@ private:
       vector<const PinnedPanel::Def *> transform;
       int advancedCount = 0; // Fields of the full sheet not in the curated sections
       bool active = false;
+      bool reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
+      bool advancedIndent = false;
+      int harvestFrame = 0;
+      string advancedLabel;
    };
    void PrepareCuration();
-   void DrawCuration(PropertyPane &props);
-   void EndCuration(PropertyPane &props);
-   Curation m_curation;
-   bool m_reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
-   bool m_advancedIndent = false;
+   void PrepareCurationFor(PinKind kind, const string &name, int itemType, bool enabled, Curation &cur);
+   void DrawCuration(PropertyPane &props, Curation &cur);
+   void EndCuration(PropertyPane &props, Curation &cur);
+   void ApplyUnits(PropertyPane &props) const;
+   Curation m_curation; // The selection
+   Curation m_materialCuration; // The material of the selected part
+   vector<const PinnedPanel::Def *> m_defScratch;
    Material *m_pendingMaterialSel = nullptr; // Header material chip clicked: selected once the panel is drawn
+   std::shared_ptr<EditorUIPart> m_pendingPartSel; // Material users list clicked: selected once the panel is drawn
+
+   // The selected part's material, drawn under the part's pane (with its own Look section), and the parts sharing it
+   void PartMaterialPane(bool showStartup, bool isLive);
+   bool m_inPartMaterialPane = false;
+   Material *m_usersFor = nullptr;
+   int m_usersFrame = 0;
+   vector<WhereUsedInfo> m_users;
 
    EditorUI &m_editor;
    bool m_selectLiveTab = true;

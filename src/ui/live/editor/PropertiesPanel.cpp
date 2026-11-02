@@ -104,12 +104,13 @@ string PropertiesPanel::PartMaterial(const IEditable *part)
 void PropertiesPanel::PrepareCuration()
 {
    EditorUI &editor = m_editor;
-   PinKind kind;
+   PinKind kind = PinKind::Table;
    string name;
    int itemType = -1;
+   string partMaterial;
    switch (editor.m_selection.GetType())
    {
-   case Selection::S_NONE: kind = PinKind::Table; break;
+   case Selection::S_NONE: break;
    case Selection::S_MATERIAL:
       kind = PinKind::Material;
       name = editor.m_selection.GetMaterial()->m_name;
@@ -118,51 +119,68 @@ void PropertiesPanel::PrepareCuration()
       kind = PinKind::Part;
       name = editor.m_selection.GetPart()->GetEditable()->GetName();
       itemType = editor.m_selection.GetPart()->GetEditable()->GetItemType();
+      partMaterial = PartMaterial(editor.m_selection.GetPart()->GetEditable());
       break;
-   default: m_curation.active = false; return;
-   }
-   const CurationRules *const rules = GetCurationRules(kind, itemType);
-   if (rules == nullptr || editor.m_multiSel.size() > 1) // Multi selections keep the full sheet (fields of other types, mixed values)
-   {
+   default:
       m_curation.active = false;
+      m_materialCuration.active = false;
       return;
    }
-   if (m_reharvest && !ImGui::IsAnyItemActive())
-   {
-      m_reharvest = false;
-      editor.m_pinned.InvalidateHarvest(kind, name);
-   }
-   const unsigned stamp = editor.m_pinned.EnsureHarvested(kind, name);
-   const void *owner = nullptr;
-   void *const obj = editor.m_pinned.ResolveObject(kind, name, &owner);
-   m_curation.active = stamp != 0 && obj != nullptr;
-   if (!m_curation.active)
-      return;
-   if (stamp == m_curation.stamp && kind == m_curation.kind && name == m_curation.name && obj == m_curation.obj)
-      return;
-   m_curation.kind = kind;
-   m_curation.name = name;
-   m_curation.obj = obj;
-   m_curation.stamp = stamp;
-   vector<const PinnedPanel::Def *> defs;
-   editor.m_pinned.CollectDefs(kind, name, stamp, defs);
-   m_curation.look.clear();
-   m_curation.transform.clear();
-   for (const PinnedPanel::Def *def : defs)
-   {
-      if (def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))
-         m_curation.look.push_back(def);
-      else if (Listed(rules->transformLabels, def->key.prop))
-         m_curation.transform.push_back(def);
-   }
-   m_curation.advancedCount = static_cast<int>(defs.size() - m_curation.look.size() - m_curation.transform.size());
+   // Multi selections keep the full sheet (fields of other types, mixed values)
+   const bool single = editor.m_multiSel.size() <= 1;
+   PrepareCurationFor(kind, name, itemType, single, m_curation);
+   const bool hasMaterial = single && !partMaterial.empty() && editor.m_table->GetMaterial(partMaterial) != nullptr;
+   PrepareCurationFor(PinKind::Material, partMaterial, -1, hasMaterial, m_materialCuration);
 }
 
-void PropertiesPanel::DrawCuration(PropertyPane &props)
+void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int itemType, bool enabled, Curation &cur)
 {
    EditorUI &editor = m_editor;
-   // Header material chip: the part's material, a click selects it
-   if (editor.m_selection.GetType() == Selection::S_EDITABLE && !props.IsMultiEdit())
+   const CurationRules *const rules = enabled ? GetCurationRules(kind, itemType) : nullptr;
+   if (rules == nullptr)
+   {
+      cur.active = false;
+      return;
+   }
+   // Harvest again after an edit, and every 2 s for changes made elsewhere (undo, script, other panes) that can show or hide
+   // fields (material type, render mode,...); never while a field is being dragged or typed in
+   const int frame = ImGui::GetFrameCount();
+   if ((cur.reharvest || frame - cur.harvestFrame > 120) && !ImGui::IsAnyItemActive())
+   {
+      cur.reharvest = false;
+      cur.harvestFrame = frame;
+      editor.m_pinned.InvalidateHarvest(kind, name);
+   }
+   void *obj = nullptr;
+   const unsigned stamp = editor.m_pinned.EnsureHarvested(kind, name, &obj);
+   cur.active = stamp != 0 && obj != nullptr;
+   if (!cur.active)
+      return;
+   if (stamp == cur.stamp && kind == cur.kind && name == cur.name && obj == cur.obj)
+      return;
+   cur.kind = kind;
+   cur.name = name;
+   cur.obj = obj;
+   cur.stamp = stamp;
+   editor.m_pinned.CollectDefs(kind, name, stamp, m_defScratch);
+   cur.look.clear();
+   cur.transform.clear();
+   for (const PinnedPanel::Def *def : m_defScratch)
+   {
+      if (def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))
+         cur.look.push_back(def);
+      else if (Listed(rules->transformLabels, def->key.prop))
+         cur.transform.push_back(def);
+   }
+   cur.advancedCount = static_cast<int>(m_defScratch.size() - cur.look.size() - cur.transform.size());
+   cur.advancedLabel = "Advanced (" + std::to_string(cur.advancedCount) + " more)###Advanced";
+}
+
+void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
+{
+   EditorUI &editor = m_editor;
+   // Header material chip of a part: its material, a click selects it (its fields are also drawn under the part, see PartMaterialPane)
+   if (&cur == &m_curation && editor.m_selection.GetType() == Selection::S_EDITABLE && !props.IsMultiEdit())
    {
       const string material = PartMaterial(props.GetEditedPart(editor.m_selection.GetPart()->GetEditable()));
       if (!material.empty())
@@ -174,48 +192,135 @@ void PropertiesPanel::DrawCuration(PropertyPane &props)
          props.FlushRow();
       }
    }
-   if (!m_curation.active)
+   if (!cur.active)
       return;
    const int modifiedBefore = props.GetModifiedField();
    ImGui::PushID("##Curated"); // The curated rows draw the same fields as the full sheet below: keep their IDs apart
-   const auto drawDefs = [&props, this](const vector<const PinnedPanel::Def *> &defs)
+   const auto drawDefs = [&props, &cur](const vector<const PinnedPanel::Def *> &defs)
    {
       for (const PinnedPanel::Def *def : defs)
-         def->draw(props, m_curation.obj);
+         def->draw(props, cur.obj);
    };
-   if (!m_curation.look.empty() && props.BeginSection("Look"s))
+   if (!cur.look.empty() && props.BeginSection("Look"s))
    {
-      drawDefs(m_curation.look);
+      drawDefs(cur.look);
       props.EndSection();
    }
-   if (!m_curation.transform.empty() && props.BeginSection("Transform"s))
+   if (!cur.transform.empty() && props.BeginSection("Transform"s))
    {
-      drawDefs(m_curation.transform);
+      drawDefs(cur.transform);
       props.EndSection();
    }
    ImGui::PopID();
    if (props.GetModifiedField() != modifiedBefore)
-      m_reharvest = true;
+      cur.reharvest = true;
    ImGui::Spacing();
-   const bool open = ImGui::CollapsingHeader(("Advanced (" + std::to_string(m_curation.advancedCount) + " more)###Advanced").c_str());
+   const bool open = ImGui::CollapsingHeader(cur.advancedLabel.c_str());
    ImGui::SetItemTooltip("Every field of this object, in the full sheet layout");
    props.SkipRest(!open);
    if (open)
    {
       ImGui::Indent();
-      m_advancedIndent = true;
+      cur.advancedIndent = true;
    }
 }
 
-void PropertiesPanel::EndCuration(PropertyPane &props)
+void PropertiesPanel::EndCuration(PropertyPane &props, Curation &cur)
 {
    props.FlushRow();
    props.SkipRest(false);
-   if (m_advancedIndent)
+   if (cur.advancedIndent)
    {
       ImGui::Unindent();
-      m_advancedIndent = false;
+      cur.advancedIndent = false;
    }
+   if (props.GetModifiedField() > 0)
+      cur.reharvest = true;
+}
+
+void PropertiesPanel::ApplyUnits(PropertyPane &props) const
+{
+   switch (m_editor.m_units)
+   {
+   case EditorUI::Units::VPX: props.SetLengthUnit(PropertyPane::Unit::VPLength); break;
+   case EditorUI::Units::Metric: props.SetLengthUnit(PropertyPane::Unit::Millimeters); break;
+   case EditorUI::Units::Imperial: props.SetLengthUnit(PropertyPane::Unit::Inches); break;
+   }
+}
+
+void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
+{
+   EditorUI &editor = m_editor;
+   if (editor.m_selection.GetType() != Selection::S_EDITABLE || editor.m_multiSel.size() > 1)
+      return;
+   const string name = PartMaterial(editor.m_selection.GetPart()->GetEditable());
+   Material *const material = name.empty() ? nullptr : editor.m_table->GetMaterial(name);
+   if (material == nullptr)
+      return;
+   // Parts sharing the material (refreshed twice a second, as assignments change from any pane)
+   if (m_usersFor != material || ImGui::GetFrameCount() - m_usersFrame > 30)
+   {
+      m_users.clear();
+      editor.m_table->ShowWhereMaterialUsed(m_users, material);
+      std::erase_if(m_users, [&editor](const WhereUsedInfo &w) { return w.whereUsedObjectname == editor.m_table->m_name; });
+      m_usersFor = material;
+      m_usersFrame = ImGui::GetFrameCount();
+   }
+
+   ImGui::PushID("##PartMaterialPane"); // Same fields as the material's own pane: keep the IDs apart from the part's
+   ImGui::Spacing();
+   const bool open = ImGui::CollapsingHeader(("Material  " + name + "###PartMaterial").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+   ImGui::SetItemTooltip("The material of this part, edited in place");
+   if (open)
+   {
+      const int users = static_cast<int>(m_users.size());
+      if (users > 1)
+         ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), ICON_FK_EXCLAMATION_TRIANGLE " Shared: used by %d parts", users);
+      else
+         ImGui::TextDisabled("Used by this part only");
+      if (users > 1)
+      {
+         ImGui::SameLine();
+         if (ImGui::SmallButton("List"))
+            ImGui::OpenPopup("##MaterialUsers");
+         ImGui::SetItemTooltip("Edits here change every part that uses this material");
+      }
+      if (ImGui::BeginPopup("##MaterialUsers"))
+      {
+         for (const WhereUsedInfo &where : m_users)
+         {
+            ImGui::PushID(&where);
+            IEditable *const editable = editor.m_table->GetElementByName(where.whereUsedObjectname.c_str());
+            if (ImGui::Selectable(where.whereUsedObjectname.c_str()) && editable != nullptr)
+               if (const auto it = editor.m_editableMap.find(editable); it != editor.m_editableMap.end())
+                  m_pendingPartSel = it->second;
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", where.whereUsedPropertyName.c_str());
+            ImGui::PopID();
+         }
+         ImGui::EndPopup();
+      }
+
+      PropertyPane props(editor.m_table);
+      ApplyUnits(props);
+      props.SetPinning(&editor.m_pinned, PropertyPane::PinMode::Panel);
+      if (editor.IsInspectMode())
+         props.SetShowStartup(showStartup);
+      props.SetAfterHeader([this](PropertyPane &p) { DrawCuration(p, m_materialCuration); });
+      m_inPartMaterialPane = true;
+      MaterialProperties(props, material);
+      m_inPartMaterialPane = false;
+      EndCuration(props, m_materialCuration);
+      if (props.GetModifiedField() > 0)
+      {
+         // Same tracking as the material's own pane ('Live' tab) and the pinned overlay
+         if (isLive)
+            editor.m_liveEditedMaterials.insert(material);
+         else if (!editor.IsInspectMode())
+            editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      }
+   }
+   ImGui::PopID();
 }
 
 PropertiesPanel::PropertiesPanel(EditorUI &editor)
@@ -258,15 +363,10 @@ void PropertiesPanel::Render(float topBarHeight)
       ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
 
    PropertyPane props(editor.m_table);
-   props.SetAfterHeader([this](PropertyPane &p) { DrawCuration(p); });
+   props.SetAfterHeader([this](PropertyPane &p) { DrawCuration(p, m_curation); });
    // Fields register their definition for the pinned properties overlay and offer the pin context menu
    props.SetPinning(&editor.m_pinned, PropertyPane::PinMode::Panel, editor.m_selection.GetType() == Selection::S_EDITABLE ? editor.m_selection.GetPart().get() : nullptr);
-   switch (editor.m_units)
-   {
-   case EditorUI::Units::VPX: props.SetLengthUnit(PropertyPane::Unit::VPLength); break;
-   case EditorUI::Units::Metric: props.SetLengthUnit(PropertyPane::Unit::Millimeters); break;
-   case EditorUI::Units::Imperial: props.SetLengthUnit(PropertyPane::Unit::Inches); break;
-   }
+   ApplyUnits(props);
    if (uniformPartSel)
    {
       vector<IEditable *> coParts;
@@ -306,7 +406,8 @@ void PropertiesPanel::Render(float topBarHeight)
                case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
                case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
                }
-               EndCuration(props);
+               EndCuration(props, m_curation);
+               PartMaterialPane(!is_live, is_live);
                // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
                if (is_live && props.GetModifiedField() > 0)
                {
@@ -365,7 +466,7 @@ void PropertiesPanel::Render(float topBarHeight)
                });
          }
          editor.m_selection.GetPart()->UpdatePropertyPane(props);
-         EndCuration(props);
+         EndCuration(props, m_curation);
          // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
          editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
          editor.m_undo.EndUndo();
@@ -390,10 +491,10 @@ void PropertiesPanel::Render(float topBarHeight)
       case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
       }
       if (editor.m_selection.GetType() != Selection::S_EDITABLE)
-         EndCuration(props);
+         EndCuration(props, m_curation);
+      else
+         PartMaterialPane(false, false);
    }
-   if (props.GetModifiedField() > 0)
-      m_reharvest = true;
 
    RenderPopups();
 
@@ -403,6 +504,11 @@ void PropertiesPanel::Render(float topBarHeight)
    {
       editor.SetSelection(Selection(m_pendingMaterialSel));
       m_pendingMaterialSel = nullptr;
+   }
+   if (m_pendingPartSel != nullptr)
+   {
+      editor.SetSelection(Selection(m_pendingPartSel));
+      m_pendingPartSel = nullptr;
    }
 }
 
@@ -940,9 +1046,12 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
    Material *editedMaterial = props.GetEditedPart<Material>(material);
    props.Header("Material"s, [editedMaterial]() { return editedMaterial->m_name; }, [editedMaterial](const string &v) { editedMaterial->m_name = v; });
 
-   ImGui::BeginDisabled(m_editor.m_table->m_liveBaseTable != nullptr); // Material list actions are not supported in inspection mode
-   MaterialActions(props);
-   ImGui::EndDisabled();
+   if (!m_inPartMaterialPane) // The material list actions act on the material selection, not on a part's material
+   {
+      ImGui::BeginDisabled(m_editor.m_table->m_liveBaseTable != nullptr); // Material list actions are not supported in inspection mode
+      MaterialActions(props);
+      ImGui::EndDisabled();
+   }
 
    if (props.BeginSection("Visuals"s))
    {

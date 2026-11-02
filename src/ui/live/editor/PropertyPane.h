@@ -92,6 +92,7 @@ public:
    void SetAfterHeader(std::function<void(PropertyPane &)> hook) { m_afterHeader = std::move(hook); }
    // While set, sections and fields are skipped (the full sheet is collapsed under the Advanced header)
    void SkipRest(bool skip) { m_skipRest = skip; }
+   bool IsHarvest() const { return m_pinMode == PinMode::Harvest; } // Drawn in the hidden window that registers the pin definitions
    bool IsSkippingRest() const { return m_skipRest; }
    // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
    void FlushRow();
