@@ -64,20 +64,24 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    m_undo.BeginUndo();
    m_undo.SetFieldLabel(label);
    // Undoable and redoable: undoing captures the state it replaces so that the step can be redone. The material may be deleted in between
-   const auto inTable = [table = m_table](const Material* material) { return std::ranges::find(table->m_materials, material) != table->m_materials.end(); };
+   // (a material created after a delete can reuse the freed address: the name must match too)
+   const auto inTable = [table = m_table](const Material* material, const string& name)
+   { return std::ranges::find(table->m_materials, material) != table->m_materials.end() && material->m_name == name; };
+   const string nameAfter = m_material->m_name; // The material as the undo finds it
+   const string nameBefore = m_before->m_name; // ... and as the redo finds it
    m_undo.MarkForAction(
-      [inTable, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
+      [inTable, nameAfter, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
       {
-         if (inTable(material))
+         if (inTable(material, nameAfter))
             *material = *before;
       },
-      [inTable, material = m_material]() -> std::function<void()>
+      [inTable, nameAfter, nameBefore, material = m_material]() -> std::function<void()>
       {
-         if (!inTable(material))
+         if (!inTable(material, nameAfter))
             return []() {};
-         return [inTable, material, after = std::make_shared<Material>(*material)]()
+         return [inTable, nameBefore, material, after = std::make_shared<Material>(*material)]()
          {
-            if (inTable(material))
+            if (inTable(material, nameBefore))
                *material = *after;
          };
       });

@@ -1988,8 +1988,12 @@ void EditorUI::RenderUI()
          }
       }
    }
-   if (m_boxSelectActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+   {
       m_boxSelectActive = false; // Canceled: button released outside of the playfield
+      m_pointDragPending = false; // Same for a point drag (it would keep undo / redo off until the mouse comes back to the viewport)
+      m_pointDragActive = false;
+   }
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();

@@ -244,7 +244,10 @@ void PinUndo::BeginUndo()
       if (m_undoRecords.size() > MAXUNDO)
       {
          m_undoRecords.erase(m_undoRecords.begin());
-         m_cleanpoint = (m_cleanpoint == 0 || m_cleanpoint == NoCleanPoint) ? NoCleanPoint : m_cleanpoint - 1;
+         const auto shift = [](const size_t point) { return (point == 0 || point == NoCleanPoint) ? NoCleanPoint : point - 1; };
+         m_cleanpoint = shift(m_cleanpoint);
+         for (const auto &remaining : m_undoRecords) // The clean points kept by the records to restore on cancel / discard shift too
+            remaining->m_cleanpointAtBegin = shift(remaining->m_cleanpointAtBegin);
       }
       m_undoRecords.push_back(std::make_unique<UndoRecord>());
       UndoRecord &record = *m_undoRecords.back();
