@@ -527,6 +527,7 @@ Renderer::~Renderer()
    delete m_desktopMotionBlur;
    delete m_desktopAO1;
    delete m_desktopAO2;
+   delete m_editorPreviewRT;
    for (int window = 0; window <= VPXWindowId::VPXWINDOW_Topper; window++)
       m_ancillaryWndHdrRT[window] = nullptr;
    #if defined(ENABLE_DX9) || defined(__OPENGLES__) || defined(__APPLE__) || defined(__EMSCRIPTEN__) || (defined(__ANDROID__) && defined(ENABLE_XR))
@@ -1251,7 +1252,7 @@ std::shared_ptr<BaseTexture> Renderer::EnvmapPrecalc(const std::shared_ptr<const
 
 void Renderer::DrawBackground()
 {
-   if (g_pplayer->m_liveUI->IsEditorViewMode())
+   if (g_pplayer->m_liveUI->IsEditorViewMode() && !m_editorPreviewPass) // The editor camera preview shows the player view
    {
       m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x000D0D0D);
       if (!g_pplayer->m_liveUI->IsEditorBackdropViewMode())
@@ -2389,13 +2390,15 @@ bool Renderer::IsUsingStaticPrepass() const
       && g_pplayer->GetInfoMode() != IF_DYNAMIC_ONLY // Dynamic inspection hides static parts (TODO remove embedded inspection as RenderDoc superseed this function and only DX9 still uses it)
       && !GetMSAABackBufferTexture()->IsMSAA() // Static prepass is not compatible with BGFX's MSAA (BGFX does not allow to blit between MSAA textures). OpenGL backend is able to support it, but it is disabled as the resource to maintain it are too low and it is EOL
       && m_shadeMode == ShadeMode::Default // TODO Wireframe rendering modes are not tested for prerendering optimization yet
-      && m_disableStaticPrepass <= 0; // Something resuested to disable static part accumulation (for example headtracking,...)
+      && m_disableStaticPrepass <= 0 // Something resuested to disable static part accumulation (for example headtracking,...)
+      && !m_editorPreviewPass; // The editor camera preview has its own render targets, the static prepass belongs to the main view
 }
 
 bool Renderer::IsUsingDepthPrepass() const
 {
    // The VR desktop mirror scene shares this renderer but its own render targets: keep it on the legacy path
-   return m_depthPrepassMode != 0 && !m_desktopScenePass;
+   // Same for the editor camera preview (the prepass targets are kept per main scene target)
+   return m_depthPrepassMode != 0 && !m_desktopScenePass && !m_editorPreviewPass;
 }
 
 bool Renderer::IsTemporalAccumulationInProgress() const
@@ -5158,9 +5161,23 @@ void Renderer::Render3DScene()
    // Apply stereo
    renderedRT = ApplyStereo(renderedRT, m_renderDevice->GetOutputBackBuffer());
 
+   // Editor camera preview requested by the UI of the previous frame: rendered before the UI pass which samples it (desktop, non stereo only)
+   bool editorPreview = false;
+   if (m_editorPreviewRequested)
+   {
+      m_editorPreviewRequested = false;
+      if (g_pplayer->m_vrDevice == nullptr && m_stereo3D == STEREO_OFF && !uiBeforeStero && xrUILayer == nullptr)
+      {
+         RenderEditorPreview();
+         editorPreview = true;
+      }
+   }
+
    if (!uiBeforeStero && xrUILayer == nullptr)
    {
       m_renderDevice->SetRenderTarget("LiveUI"s, renderedRT, true, true);
+      if (editorPreview)
+         m_renderDevice->AddRenderTargetDependency(m_editorPreviewRT);
       g_pplayer->m_liveUI->RenderUI();
    }
 
@@ -5323,6 +5340,212 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    m_renderDevice->m_ballShader->SetVector(
       ShaderUniform::w_h_disableLighting, 1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), 1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(), ballLighting.z, ballLighting.w);
    // The probes now hold renders for the cabinet view: mark them for re-rendering on next frame
+   for (auto probe : m_table->m_vrenderprobe)
+      probe->MarkDirty();
+   m_mvpSpaceReference = PartGroupData::SpaceReference::SR_PLAYFIELD;
+   UpdateBasicShaderMatrix();
+   UpdateBallShaderMatrix();
+}
+
+void Renderer::RequestEditorPreview(const int width, const int height)
+{
+   if (width <= 0 || height <= 0)
+      return;
+   m_editorPreviewRequested = true;
+   m_editorPreviewWidth = min(width, 4096);
+   m_editorPreviewHeight = min(height, 4096);
+}
+
+void Renderer::ReleaseEditorPreview()
+{
+   m_editorPreviewRequested = false;
+   m_editorPreviewRendered = false;
+   if (m_editorPreviewRT != nullptr)
+   {
+      RenderTarget* const rt = m_editorPreviewRT;
+      m_renderDevice->AddEndOfFrameCmd([rt]() { delete rt; });
+      m_editorPreviewRT = nullptr;
+   }
+   // The desktop scene targets are only used by the preview outside of VR
+   if (g_pplayer->m_vrDevice == nullptr && m_stereo3D != STEREO_VR && m_desktopBackBuffer1 != nullptr)
+   {
+      SwapDesktopTargets();
+      ReleaseSwappedInSceneTargets();
+      SwapDesktopTargets();
+   }
+}
+
+void Renderer::ReleaseSwappedInSceneTargets()
+{
+   // Frames already submitted may still reference them: release them at the end of the frame being prepared
+   vector<RenderTarget*> released { m_pOffscreenBackBufferTexture1, m_pOffscreenBackBufferTexture2, m_pOffscreenMSAABackBufferTexture, m_pBloomBufferTexture, m_pBloomTmpBufferTexture,
+      m_pPostProcessRenderTarget1, m_pPostProcessRenderTarget2, m_pPostProcessRenderTarget3, m_pReflectionBufferTexture, m_pMotionBlurBufferTexture, m_pAORenderTarget1, m_pAORenderTarget2 };
+   std::erase(released, nullptr);
+   if (!released.empty())
+      m_renderDevice->AddEndOfFrameCmd([released]() { for (RenderTarget* rt : released) delete rt; });
+   m_pOffscreenBackBufferTexture1 = nullptr;
+   m_pOffscreenBackBufferTexture2 = nullptr;
+   m_pOffscreenMSAABackBufferTexture = nullptr;
+   m_pBloomBufferTexture = nullptr;
+   m_pBloomTmpBufferTexture = nullptr;
+   m_pPostProcessRenderTarget1 = nullptr;
+   m_pPostProcessRenderTarget2 = nullptr;
+   m_pPostProcessRenderTarget3 = nullptr;
+   m_pReflectionBufferTexture = nullptr;
+   m_pMotionBlurBufferTexture = nullptr;
+   m_pAORenderTarget1 = nullptr;
+   m_pAORenderTarget2 = nullptr;
+   for (RenderProbe* probe : m_table->m_vrenderprobe)
+      probe->ReleaseRenderTargets();
+}
+
+// Editor camera preview: the scene rendered a second time with the table's view setup (the player view, as the editor's Preview
+// Camera shows it) into the desktop display targets (unused outside of VR), tonemapped into m_editorPreviewRT. Derived from
+// RenderDesktopScene; all the per frame state the second render touches is saved and restored, so the main view is unaffected.
+// Like the VR desktop display, it is rendered without the depth prepass, so the PBR specular resolve (planar probes, screen space
+// march) is not applied and PBR AO falls back to the post scene AO. Ancillary windows are not composited.
+void Renderer::RenderEditorPreview()
+{
+   const int width = m_editorPreviewWidth, height = m_editorPreviewHeight;
+   if (m_editorPreviewRT == nullptr || m_editorPreviewRT->GetWidth() != width || m_editorPreviewRT->GetHeight() != height)
+   {
+      if (m_editorPreviewRT != nullptr)
+      {
+         RenderTarget* const rt = m_editorPreviewRT;
+         m_renderDevice->AddEndOfFrameCmd([rt]() { delete rt; });
+      }
+      // LDR, same as the post process targets that the tonemapping writes to when post processing follows
+      m_editorPreviewRT = new RenderTarget(m_renderDevice, SurfaceType::RT_DEFAULT, "EditorPreview"s, width, height,
+         GetBackBufferTexture()->GetColorFormat() == RGBA10 ? colorFormat::RGBA10 : colorFormat::RGBA8, false, 1, "Fatal Error: unable to create editor preview target");
+   }
+
+   // Swap in the preview scene targets, (re)created at the preview size
+   RenderTarget* const mainBackBuffer = GetBackBufferTexture();
+   RenderTarget* const mainMSAABackBuffer = m_pOffscreenMSAABackBufferTexture;
+   SwapDesktopTargets();
+   if (m_pOffscreenBackBufferTexture1 == nullptr || m_pOffscreenBackBufferTexture1->GetWidth() != width || m_pOffscreenBackBufferTexture1->GetHeight() != height)
+   {
+      ReleaseSwappedInSceneTargets();
+      m_pOffscreenBackBufferTexture1 = new RenderTarget(m_renderDevice, mainBackBuffer->m_type, "PreviewBuffer1"s, width, height, mainBackBuffer->GetColorFormat(), true,
+         mainBackBuffer->GetMSAASamples(), "Fatal Error: unable to create editor preview back buffer");
+      m_pOffscreenBackBufferTexture2 = m_pOffscreenBackBufferTexture1->Duplicate("PreviewBuffer2"s, false);
+      if (m_renderDevice->m_pbrActive)
+      {
+         m_pOffscreenBackBufferTexture1->CreatePBRSideband();
+         m_pOffscreenBackBufferTexture2->CreatePBRSideband();
+      }
+      if (mainMSAABackBuffer != nullptr)
+         m_pOffscreenMSAABackBufferTexture = new RenderTarget(m_renderDevice, mainMSAABackBuffer->m_type, "PreviewMSAABackBuffer"s, width, height, mainMSAABackBuffer->GetColorFormat(), true,
+            mainMSAABackBuffer->GetMSAASamples(), "Fatal Error: unable to create editor preview MSAA back buffer");
+      m_pBloomBufferTexture = new RenderTarget(m_renderDevice, mainBackBuffer->m_type, "PreviewBloom"s, max(1, width / 4), max(1, height / 4), mainBackBuffer->GetColorFormat(), false, 1,
+         "Fatal Error: unable to create editor preview bloom buffer");
+      m_pBloomTmpBufferTexture = m_pBloomBufferTexture->Duplicate("PreviewBloomTmp"s);
+   }
+   m_renderWidth = width;
+   m_renderHeight = height;
+
+   // Save the main view state, restored at the end of this pass
+   ModelViewProj mainMVP = m_mvp; // Not const: ModelViewProj::operator= takes a non const reference
+   ModelViewProj mainInitialMVP = m_initialMVP;
+   const Matrix3D mainPlayfieldView[2] = { m_playfieldView[0], m_playfieldView[1] };
+   const bool mainNoBackdrop = m_noBackdrop;
+   const unsigned int mainVisibilityMask = m_visibilityMask;
+   const bool mainWasUsingStaticPrepass = m_wasUsingStaticPrepass;
+   const unsigned int mainCamViewProjMask = m_curFrameCamViewProjMask;
+   Matrix3D mainCamViewProj[4][2];
+   vec4 mainCamPos[4][2];
+   for (int i = 0; i < 4; i++)
+      for (int eye = 0; eye < 2; eye++)
+      {
+         mainCamViewProj[i][eye] = m_curFrameCamViewProj[i][eye];
+         mainCamPos[i][eye] = m_curFrameCamPos[i][eye];
+      }
+   vector<vec4> mainEmbeddedRegions;
+   mainEmbeddedRegions.swap(m_embeddedRegions);
+   const vec4 ballLighting = m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting); // Keep the 'disable lighting for balls' state (z)
+
+   const ShadeMode mainShadeMode = m_shadeMode;
+   m_shadeMode = ShadeMode::Default; // The player view is never wireframe (the editor view may be)
+   m_editorPreviewPass = true;
+
+   // The table's view setup (the player view), as the Preview Camera computes it (Renderer::InitLayout). m_initialMVP is set too, as
+   // the passes which change the camera (shadow map pages) restore it from there
+   m_table->GetViewSetup().ComputeMVP(m_table, (float)width / (float)height, false, m_mvp, vec3(m_cam.x, m_cam.y, m_cam.z), m_inc);
+   m_initialMVP = m_mvp;
+   for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
+      m_playfieldView[eye] = m_mvp.GetView(eye);
+   m_noBackdrop = m_table->GetViewMode() == BG_FULLSCREEN; // As in the Preview Camera (player view, not the editor view)
+   if (m_table->GetViewMode() == BG_FULLSCREEN)
+      m_visibilityMask = PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET;
+   else if (m_table->GetViewMode() == BG_FSS)
+      m_visibilityMask = PartGroupData::PlayerModeVisibilityMask::PMVM_FSS;
+   else
+      m_visibilityMask = PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
+   m_renderDevice->m_basicShader->SetVector(
+      ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
+
+   SwapBackBufferRenderTargets();
+   m_renderDevice->m_ballShader->SetVector(
+      ShaderUniform::w_h_disableLighting, 1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), 1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(), ballLighting.z, ballLighting.w);
+   SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true);
+   m_renderDevice->m_ballShader->SetTexture(ShaderUniform::tex_ball_playfield, GetPreviousBackBufferTexture()->GetColorSampler());
+   SetScreenOffset(0.f, 0.f);
+
+   for (auto probe : m_table->m_vrenderprobe)
+      probe->MarkDirty();
+   m_render_mask = Renderer::DEFAULT;
+   RenderStatics();
+   for (auto probe : m_table->m_vrenderprobe)
+      probe->MarkDirty();
+   m_renderDevice->m_noMovingBalls = true;
+   RenderDynamics();
+
+   // Resolve MSAA buffer to a normal one (noop if not using MSAA), allowing sampling it for postprocessing
+   if (GetMSAABackBufferTexture() != GetBackBufferTexture())
+   {
+      RenderPass* const initial_rt = m_renderDevice->GetCurrentPass();
+      m_renderDevice->SetRenderTarget("Resolve MSAA"s, GetBackBufferTexture());
+      m_renderDevice->BlitRenderTarget(GetMSAABackBufferTexture(), GetBackBufferTexture(), true, true);
+      m_renderDevice->SetRenderTarget(initial_rt->m_name, initial_rt->m_rt);
+      initial_rt->m_name += '-';
+   }
+
+   RenderTarget* renderedRT = GetBackBufferTexture();
+   renderedRT = ApplyPBRSpecularResolve(renderedRT); // No-op without the depth prepass
+   renderedRT = ApplyAdditiveScreenSpaceReflection(renderedRT);
+   if (GetAOMode() == 2 && !m_renderDevice->m_pbrAOEnabled) // Only process for dynamic AO
+      UpdateAmbientOcclusion(GetBackBufferTexture(), g_pplayer->m_overall_frames % 2048, m_renderDevice->m_depthPrepassNormals);
+   UpdateBloom(renderedRT);
+   // Post processed antialiasing as the main view (the preview targets are LDR as the main post process targets); no sharpening, no upscaling
+   if (m_FXAA != Disabled)
+      ApplyPostProcessedAntialiasing(ApplyTonemapping(renderedRT, GetPostProcessRenderTarget1()), m_editorPreviewRT);
+   else
+      ApplyTonemapping(renderedRT, m_editorPreviewRT);
+   m_editorPreviewRendered = true;
+
+   // Restore the main view state
+   m_editorPreviewPass = false;
+   m_shadeMode = mainShadeMode;
+   SwapDesktopTargets();
+   m_mvp = mainMVP;
+   m_initialMVP = mainInitialMVP;
+   m_playfieldView[0] = mainPlayfieldView[0];
+   m_playfieldView[1] = mainPlayfieldView[1];
+   m_noBackdrop = mainNoBackdrop;
+   m_visibilityMask = mainVisibilityMask;
+   m_wasUsingStaticPrepass = mainWasUsingStaticPrepass;
+   m_curFrameCamViewProjMask = mainCamViewProjMask;
+   for (int i = 0; i < 4; i++)
+      for (int eye = 0; eye < 2; eye++)
+      {
+         m_curFrameCamViewProj[i][eye] = mainCamViewProj[i][eye];
+         m_curFrameCamPos[i][eye] = mainCamPos[i][eye];
+      }
+   m_embeddedRegions.swap(mainEmbeddedRegions);
+   m_renderDevice->m_basicShader->SetVector(
+      ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
+   m_renderDevice->m_ballShader->SetVector(
+      ShaderUniform::w_h_disableLighting, 1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), 1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(), ballLighting.z, ballLighting.w);
    for (auto probe : m_table->m_vrenderprobe)
       probe->MarkDirty();
    m_mvpSpaceReference = PartGroupData::SpaceReference::SR_PLAYFIELD;
