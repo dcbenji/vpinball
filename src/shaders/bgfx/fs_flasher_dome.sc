@@ -39,6 +39,7 @@
 // [12] xyz the lamp's colour (linear, max channel 1), w unused
 // [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
 //      z dome_glint (the OFF sparkle's scale, 1 = as tuned), w dome_peak (white-hot peak, 0 = the red peak)
+// [15] x 1 = a baked glow map is bound (dome_glow_map), y its gain
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -53,7 +54,8 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 
 #include "common.sh"
 
-uniform vec4 domeParams[15];
+uniform vec4 domeParams[16];
+SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R glow (x2, gamma 2.2), G wall thickness (0..4 mm)
 
 #ifdef STEREO
 	uniform mat4 matView[2];
@@ -506,11 +508,23 @@ void main()
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
 		const float fallS = 8.0 / max(dist, 8.0);
-		const vec3 scatCol = mix(lampCol * trH, bb * mix(trH, vec3_splat(1.0), 0.5), domeParams[8].x * pk * fallS * fallS);
+		// Baked glow (dome_glow_map): the lamp's light scattered in the plastic, baked in Cycles on the dome's own UVs (white
+		// light, clear plastic): it replaces the procedural falloff and flute banding, and the wall thickness it carries
+		// tints it per texel (Beer-Lambert); outside the UV square (the inner faces) the procedural shape stays
+		float gMap = -1.0;
+		vec3 trG = trH;
+		if (domeParams[15].x > 0.5 && v_texcoord0.x >= 0.0 && v_texcoord0.x <= 1.0 && v_texcoord0.y >= 0.0 && v_texcoord0.y <= 1.0)
+		{
+			const vec4 gT = texture2D(tex_traced_env, v_texcoord0);
+			gMap = domeParams[15].y * 2.0 * pow(gT.r, 2.2);
+			trG = exp(-sigma * clamp(4.0 * gT.g, 0.8, 4.0) * 1.6);
+		}
+		const float shapeS = gMap >= 0.0 ? gMap : fallS * bandF * (1.0 + 0.5 * fallS);
+		const vec3 scatCol = mix(lampCol * trG, bb * mix(trH, vec3_splat(1.0), 0.5), domeParams[8].x * pk * fallS * fallS);
 		// Soft knee on the level: the scattered body saturates below the tonemapper's desaturation (a red body at full, not
 		// pink-white); the bars, core and cap carry the hot streaks
 		const float scatL = mix(1.35 * lvlG / (0.35 + lvlG), lvlG, coolK);
-		const vec3 lampScat = scatK * domeParams[11].w * 1.5 * scatL * scatCol * fallS * bandF * (1.0 + 0.5 * fallS) * mix(1.0, 1.0 + 0.2 * heatW, fallS) * (1.0 + 0.2 * (flash - 1.0));
+		const vec3 lampScat = scatK * domeParams[11].w * 1.5 * scatL * scatCol * shapeS * mix(1.0, 1.0 + 0.2 * heatW, fallS) * (1.0 + 0.2 * (flash - 1.0));
 		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
 		// piping the lamp's light out through its thin edge
 		const float dEdge = length(vec2(rxz - domeParams[13].x, P.y - H));
@@ -523,7 +537,7 @@ void main()
 		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
 		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
 		const vec3 hotCol = bb * vec3(1.0, 0.86, 0.68);
-		const vec3 peakScat = (1.0 - 0.8 * saturate(max(domeParams[14].z, 0.0))) * whiteK * scatK * 2.5 * mix(lampCol * trH, hotCol, saturate(0.55 + 0.45 * fallS)) * fallS * (0.85 + 0.3 * edge) * (1.0 + 0.2 * (flash - 1.0));
+		const vec3 peakScat = (1.0 - 0.8 * saturate(max(domeParams[14].z, 0.0))) * whiteK * scatK * 2.5 * mix(lampCol * trG, hotCol, saturate(0.55 + 0.45 * fallS)) * (gMap >= 0.0 ? 0.5 * gMap : fallS) * (0.85 + 0.3 * edge) * (1.0 + 0.2 * (flash - 1.0));
 		const float capHot = capW * exp(-(rxz / (0.5 * rootR)) * (rxz / (0.5 * rootR)));
 		const vec3 capSpot = scatK * capHot * lvlG * (1.2 * mix(lampCol * trN, hotCol, 0.3) + 2.5 * whiteK * hotCol);
 		// Depth (dome_depth, lamp off): the cavity ray, bent by the near flank it entered through, meets the far wall: its ridge

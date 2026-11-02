@@ -93,6 +93,7 @@ public:
    float m_domeDepth = 0.f; // lamp-off depth: the far wall's ridges seen through the cavity, each flute lensing its own slice (parallax; 0 = off)
    float m_domeOrb = 0.f; // the lit bulb seen through the flutes as a glowing ball with a halo (0 = off)
    float m_domeCooldown = 0.f; // white-hot parts follow the level as a continuous blackbody pulse (white, yellow, orange, red as it cools) instead of gating on near full (0 = off)
+   string m_domeGlowMap; // baked glow (the lamp's light scattered in a clear dome, on the mesh's UVs): R = glow (x2, gamma 2.2), G = wall thickness (0..4 mm); empty = the procedural falloff
    float m_domeBoost = 1.f; // gain on the lamp level the dome layer sees (a ROM flash peaking below full reads hotter); the lamp's own light is unchanged
    float m_domeGlint = 1.f; // OFF glints (facet glints, ridge glints, needles, the room seen in the plastic) scale (1 = as tuned)
 

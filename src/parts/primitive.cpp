@@ -1256,7 +1256,7 @@ void Primitive::Render(const unsigned int renderMask)
             lampColor = vec4(c.x / m, c.y / m, c.z / m, 0.f);
       }
       const float ridgeR = m_d.m_domeFluteDepth == 1.f ? d.ridgeR : d.rootR - m_d.m_domeFluteDepth * (d.rootR - d.ridgeR);
-      const vec4 p[15] = {
+      const vec4 p[16] = {
          vec4(base.x, base.y, base.z, mm),
          vec4(axis.x, axis.y, axis.z, d.radius * scale * mm),
          vec4(coil.x, coil.y, coil.z, d.height * scale * mm),
@@ -1271,8 +1271,9 @@ void Primitive::Render(const unsigned int renderMask)
          vec4(sigma.x, sigma.y, sigma.z, FlasherDomeTune("lscat=", 1.f)),
          vec4(lampColor.x, lampColor.y, lampColor.z, FlasherDomeTune("rim=", 1.f)),
          vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), max(m_d.m_domeGlint, 0.f), max(m_d.m_domePeak, 0.f)),
-         vec4(max(m_d.m_domeDepth, 0.f), clamp(m_d.m_domeCooldown, 0.f, 1.f), max(m_d.m_domeOrb, 0.f), FlasherDomeTune("orb=", 20000.f)) };
-      std::copy(p, p + 15, params);
+         vec4(max(m_d.m_domeDepth, 0.f), clamp(m_d.m_domeCooldown, 0.f, 1.f), max(m_d.m_domeOrb, 0.f), FlasherDomeTune("orb=", 20000.f)),
+         vec4(m_ptable->GetImage(m_d.m_domeGlowMap) ? 1.f : 0.f, FlasherDomeTune("gmap=", 2.5f), 0.f, 0.f) };
+      std::copy(p, p + 16, params);
    };
 
    // Traced insert prototype: an additive card whose image is a multi-view traced bake ('TRACED_' image name prefix). It is
@@ -1515,7 +1516,7 @@ void Primitive::Render(const unsigned int renderMask)
       // submitted after it)
       if (flasherDome && mat->m_bOpacityActive && isPBR && MeasureFlasherDome().valid)
       {
-         vec4 params[15];
+         vec4 params[16];
          flasherDomeParams(params, 1.f);
          const RenderState saved = m_renderer->m_renderDevice->GetRenderState();
          m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
@@ -1523,7 +1524,9 @@ void Primitive::Render(const unsigned int renderMask)
          m_renderer->m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_COLOR);
          m_renderer->m_renderDevice->SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_ADD);
          m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
-         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 15);
+         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 16);
+         if (Texture *const glowMap = m_ptable->GetImage(m_d.m_domeGlowMap))
+            m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_traced_env, glowMap, true, SamplerFilter::SF_TRILINEAR, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP);
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
          m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
          m_renderer->m_renderDevice->GetRenderState() = saved;
@@ -1647,13 +1650,15 @@ void Primitive::Render(const unsigned int renderMask)
    // Flasher dome layer: additive over the body just drawn (same sort key, submitted after it), outer skin only (depth equal)
    if (flasherDome && !is_reflection_only_pass && MeasureFlasherDome().valid)
    {
-      vec4 params[15];
+      vec4 params[16];
       flasherDomeParams(params, mat->m_bOpacityActive ? 2.f : 0.f);
       m_renderer->m_renderDevice->ResetRenderState();
       m_renderer->m_renderDevice->EnableAlphaBlend(true);
       m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, cullMode);
-      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 15);
+      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 16);
+         if (Texture *const glowMap = m_ptable->GetImage(m_d.m_domeGlowMap))
+            m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_traced_env, glowMap, true, SamplerFilter::SF_TRILINEAR, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP);
       m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
       m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
    }
@@ -1724,6 +1729,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteString(FID(NRMA), m_d.m_szNormalMap);
    writer.WriteString(FID(ORMA), m_d.m_szORMMap);
    writer.WriteString(FID(EMIS), m_d.m_szEmissionMap);
+   writer.WriteString(FID(DMGM), m_d.m_domeGlowMap);
    writer.WriteInt(FID(SIDS), m_d.m_Sides);
    writer.WriteWideString(FID(NAME), MakeWString(m_name));
    writer.WriteString(FID(MATR), m_d.m_szMaterial);
@@ -1898,6 +1904,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(NRMA): m_d.m_szNormalMap = reader.AsString(); break;
          case FID(ORMA): m_d.m_szORMMap = reader.AsString(); break;
          case FID(EMIS): m_d.m_szEmissionMap = reader.AsString(); break;
+         case FID(DMGM): m_d.m_domeGlowMap = reader.AsString(); break;
          case FID(SIDS): m_d.m_Sides = clamp(reader.AsInt(), 3, Max_Primitive_Sides); break;
          case FID(NAME): m_name = MakeString(reader.AsWideString()); break;
          case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
