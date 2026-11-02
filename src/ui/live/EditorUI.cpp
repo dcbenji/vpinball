@@ -2483,11 +2483,16 @@ bool EditorUI::IsNumpadPressed(int digit) const
 {
    if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit)))
       return true;
-   // The digits are game keys (start, coin...) while the table plays (inspect mode) and text for widgets: emulate only with the 3D view in edit mode focused
+   return IsDigitNavKey(digit) && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit));
+}
+
+// The digits are game keys (start, coin...) while the game runs and text for widgets: emulate only with the 3D view focused and the game not running (edit mode, or inspect mode while paused)
+bool EditorUI::IsDigitNavKey(int digit) const
+{
    const ImGuiIO &io = ImGui::GetIO();
-   if (!m_navEmulateNumpad || IsInspectMode() || io.WantTextInput || io.WantCaptureKeyboard)
+   if (digit < 0 || digit > 9 || !m_navEmulateNumpad || (IsInspectMode() && m_player->IsGameRunning()) || io.WantTextInput || io.WantCaptureKeyboard)
       return false;
-   return ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit)) && !io.KeyAlt;
+   return !io.KeyAlt;
 }
 
 namespace

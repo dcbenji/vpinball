@@ -80,6 +80,9 @@ public:
 
    bool IsInspectMode() const { return m_table->m_liveBaseTable != nullptr; }
 
+   // True if the top row digit (0..9) is a view navigation key (numpad emulation) rather than a game key: editor UI up and game not running (edit mode, or inspect mode while paused)
+   bool IsDigitNavKey(int digit) const;
+
 private:
    // UI Context
    LiveUI &m_liveUI;
