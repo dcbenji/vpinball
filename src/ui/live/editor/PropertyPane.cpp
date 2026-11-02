@@ -47,17 +47,37 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    }
    const int field = m_source | modifiedField;
    if (interacting && s_material == m_material && s_field == field)
+   {
+      if (PropertyPane::ConsumeEditCancel()) // Cancelled (Esc): the value is back, the step it started is dropped
+      {
+         m_undo.Discard();
+         s_material = nullptr;
+         s_field = 0;
+      }
       return false;
+   }
    s_material = m_material;
    s_field = field;
    // The material may be deleted before the step is undone: check it is still in the table
    m_undo.BeginUndo();
    m_undo.SetFieldLabel(label);
+   // Undoable and redoable: undoing captures the state it replaces so that the step can be redone. The material may be deleted in between
+   const auto inTable = [table = m_table](const Material* material) { return std::ranges::find(table->m_materials, material) != table->m_materials.end(); };
    m_undo.MarkForAction(
-      [table = m_table, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
+      [inTable, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
       {
-         if (std::ranges::find(table->m_materials, material) != table->m_materials.end())
+         if (inTable(material))
             *material = *before;
+      },
+      [inTable, material = m_material]() -> std::function<void()>
+      {
+         if (!inTable(material))
+            return []() {};
+         return [inTable, material, after = std::make_shared<Material>(*material)]()
+         {
+            if (inTable(material))
+               *material = *after;
+         };
       });
    m_undo.EndUndo();
    return true;
@@ -422,7 +442,9 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
             {
                *value = st.start;
                changed = true;
+               s_editCancelled = true;
             }
+            s_escConsumed = true;
             ImGui::ClearActiveID();
             st.id = 0;
          }
@@ -492,8 +514,17 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
       bool edited = ImGui::TempInputScalar(bb, fieldId, id, ImGuiDataType_Float, value, "%.6g", nullptr, nullptr);
       if (cancel)
       {
+         s_escConsumed = true;
          *value = st.editStart;
          edited = *value != before;
+         if (edited)
+            s_editCancelled = true;
+      }
+      else if (hovered && g.IO.MouseClickedCount[0] == 2)
+      {
+         // Double click types the whole number (the word selection of a double click stops at the decimal point)
+         if (ImGuiInputTextState* const state = ImGui::GetInputTextState(fieldId))
+            state->SelectAll();
       }
       return edited;
    }
@@ -526,6 +557,32 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
    ImGui::PushStyleColor(ImGuiCol_Text, mixed ? g.Style.Colors[ImGuiCol_TextMixedValue] : (fill ? ImVec4(1.f, 1.f, 1.f, 1.f) : g.Style.Colors[ImGuiCol_Text]));
    ImGui::RenderTextClipped(bb.Min, bb.Max, shown, nullptr, nullptr, ImVec2(0.5f, 0.5f));
    ImGui::PopStyleColor();
+   return changed;
+}
+
+bool PropertyPane::ConsumeEscape()
+{
+   if (!s_escConsumed)
+      return false;
+   if (!ImGui::IsKeyDown(ImGuiKey_Escape))
+      s_escConsumed = false; // Released: this is the frame of the release, still consumed
+   return true;
+}
+
+bool PropertyPane::DragFieldN(const char* id, float* values, int count, int decimals, const char* format)
+{
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float width = IM_TRUNC((ImGui::CalcItemWidth() - static_cast<float>(count - 1) * style.ItemInnerSpacing.x) / static_cast<float>(count));
+   bool changed = false;
+   ImGui::BeginGroup();
+   for (int i = 0; i < count; i++)
+   {
+      if (i > 0)
+         ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+      ImGui::SetNextItemWidth(width);
+      changed |= DragField((string(id) + std::to_string(i)).c_str(), &values[i], 0.f, 0.f, false, decimals, format);
+   }
+   ImGui::EndGroup();
    return changed;
 }
 

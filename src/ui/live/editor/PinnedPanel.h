@@ -99,7 +99,8 @@ public:
    // Copy to Selected (Blender's field context menu): writes the value of a part field to the other selected parts having the same field (same
    // field of a compatible part type), as one undo step. Not available in inspection sessions
    bool CanCopyToSelected(const PinKey &key) const;
-   bool CopyToSelected(const PinKey &key);
+   bool CopyToSelected(const PinKey &key); // Queues the copy (the menu is drawn inside the panels' undo records)
+   void FlushPendingCopy(); // Runs the queued copy, as one undo step: to be called outside of any undo record (after the areas are rendered)
    // Alt apply-to-all: a part field was just changed through its pane, copy its new value to the other selected parts. Only acts while armed by the
    // caller, which has begun an undo record and marked all selected parts in it (a snapshot is taken before the pane changes the field)
    void ArmApplyToSelected(bool armed) { m_applyArmed = armed; }
@@ -173,6 +174,8 @@ private:
    int m_shownTab = -1; // Sidebar tab shown last frame
    bool m_quickOpen = false; // Q popup open
    bool m_escPending = false;
+   PinKey m_pendingCopy;
+   bool m_hasPendingCopy = false;
    bool m_applyArmed = false; // ApplyToSelected may act (see ArmApplyToSelected)
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()

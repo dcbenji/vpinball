@@ -163,24 +163,38 @@ bool PinnedPanel::CanCopyToSelected(const PinKey &key) const
 
 bool PinnedPanel::CopyToSelected(const PinKey &key)
 {
+   // Called from a field's menu while a pane is drawn (inside the panel's per-frame undo record): runs later, see FlushPendingCopy
+   if (!CanCopyToSelected(key))
+      return false;
+   m_pendingCopy = key;
+   m_hasPendingCopy = true;
+   return true;
+}
+
+void PinnedPanel::FlushPendingCopy()
+{
+   if (!m_hasPendingCopy)
+      return;
+   m_hasPendingCopy = false;
+   const PinKey key = m_pendingCopy;
    EditorUI &editor = m_editor;
    const Def *const def = FindDef(key);
    const void *owner = nullptr;
    IEditable *const source = key.kind == PinKind::Part ? static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner)) : nullptr;
    if (def == nullptr || !def->copy || source == nullptr)
-      return false;
+      return;
    vector<std::shared_ptr<EditorUIPart>> targets;
    CollectCopyTargets(source, def->copy, targets);
    if (targets.empty())
-      return false;
+      return;
    // One undo step for all the parts: they are snapshotted before the value is written
    editor.m_undo.BeginUndo();
    for (const std::shared_ptr<EditorUIPart> &part : targets)
       editor.m_undo.MarkForUndo(part->GetEditable());
    for (const std::shared_ptr<EditorUIPart> &part : targets)
       def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
-   editor.m_undo.SetFieldLabel(key.prop);
-   editor.m_undo.EndUndo();
+   editor.m_undo.SetFieldLabel("Copy to Selected: " + key.prop);
+   editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
    editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
    editor.m_lastUndoId = 0;
    for (const std::shared_ptr<EditorUIPart> &part : targets)
@@ -190,7 +204,6 @@ bool PinnedPanel::CopyToSelected(const PinKey &key)
       part->SyncVisibilityOverrides();
    }
    editor.m_liveUI.PushNotification("Copied '"s + key.prop + "' to " + std::to_string(targets.size()) + (targets.size() == 1 ? " part"s : " parts"s), 2500);
-   return true;
 }
 
 void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
@@ -725,13 +738,29 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       if (modified > 0)
          editor.m_undo.SetFieldLabel(props.GetModifiedLabel());
       editor.m_undo.EndUndo();
-      if (modified > 0 && (editor.m_lastUndoPart != part || editor.m_lastUndoId != static_cast<unsigned int>(0x4000 | modified)))
+      // One step per drag / typed value (see PropertiesPanel); Alt editing has its own key, and the chain ends with the interaction
+      const unsigned int editId = (altApply ? 0x800000u : 0u) | 0x4000u | static_cast<unsigned int>(modified);
+      const bool continues = modified > 0 && editor.m_lastUndoPart == part && editor.m_lastUndoId == editId;
+      if (modified <= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+      {
+         editor.m_lastUndoPart = nullptr;
+         editor.m_lastUndoId = 0;
+      }
+      if (modified > 0 && !continues)
       {
          editor.m_lastUndoPart = part;
-         editor.m_lastUndoId = 0x4000 | modified;
+         editor.m_lastUndoId = editId;
       }
       else
+      {
          editor.m_undo.Discard();
+         if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo()) // Esc cancelled the edit: its step is dropped
+         {
+            editor.m_undo.Discard();
+            editor.m_lastUndoPart = nullptr;
+            editor.m_lastUndoId = 0;
+         }
+      }
    }
    if (modified > 0)
    {
@@ -754,7 +783,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
             for (IEditable *const other : props.GetBroadcastParts())
                editor.m_liveEditedParts.insert(other);
       }
-      else if (part == nullptr)
+      else if (part == nullptr && kind != PinKind::Material) // Material edits are undo steps, which mark the table dirty
          editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
    }
    ImGui::PopID();
@@ -870,6 +899,7 @@ void PinnedPanel::Render(float topBarHeight, float bottomInset)
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
       return;
+   PropertyPane::ConsumeEditCancel(); // A cancelled edit nobody handled
    SyncWithTable();
    ProcessGroupRequests(); // Quick sets added from the Properties editor, whether or not the favorites are shown
    const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Look;

@@ -220,6 +220,50 @@ private:
    void SelectAllAction(); // A key: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
    void InvertSelection();
 
+   // Snapping (magnet button of the toolbar), editor preferences: the increments apply to the gizmo and to the G / R / S modal transforms,
+   // Ctrl inverts the snapping while transforming
+   bool m_snapEnabled = false;
+   int m_snapTarget = 0; // 0 = increment (grid), 1 = points (G modal transform, unconstrained: centers and drag points of the unselected parts)
+   float m_snapMove = 10.f; // VP units
+   float m_snapRotate = 15.f; // Degrees
+   float m_snapScale = 0.1f;
+   bool m_snapAffectMove = true;
+   bool m_snapAffectRotate = true;
+   bool m_snapAffectScale = true;
+   enum class SnapKind { Move, Rotate, Scale };
+   void LoadSnapPreferences();
+   void SaveSnapPreferences() const;
+   bool IsSnapActive(SnapKind kind) const; // Snapping enabled (inverted while Ctrl is held) and applying to the kind of transform
+   void ToggleSnapping();
+
+   // Adjust Last Operation (Blender's redo panel, F9): the parameters of the last move / rotate / scale / duplicate / paste / add part,
+   // editable as long as nothing else happened (no new undo step, same selection). Adjusting re-evaluates the operation from the state it
+   // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
+   struct LastOperation
+   {
+      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale };
+      Type type = Type::None;
+      uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
+      vector<std::shared_ptr<EditorUIPart>> selection;
+      Matrix3D initial; // Transform of the selection before (move, rotate, scale) or after (placements) the operation
+      vec3 base { 0.f, 0.f, 0.f }; // Placements: position the offset is relative to (table coordinates)
+      vec3 offset { 0.f, 0.f, 0.f }; // Move: delta, placements: offset from the base (table coordinates)
+      vec3 axisView { 0.f, 0.f, 1.f }; // Rotation about the view axis: the axis when the operation was done (camera space)
+      int axis = -1; // Rotate / scale: -1 view axis (rotate) or all axes (scale), 0..2 for X / Y / Z
+      bool plane = false; // Scale: the axes perpendicular to the axis
+      float angle = 0.f; // Degrees
+      float factor = 1.f;
+      bool expanded = true;
+   } m_lastOp;
+   bool m_adjustPopupOpen = false; // F9
+   bool m_adjustPopupJustOpened = false;
+   ImVec2 m_adjustPopupPos {};
+   void SetLastOperation(LastOperation::Type type, const Matrix3D &initial);
+   void ApplyLastOperation();
+   bool RenderAdjustParameters(); // Widgets of the parameters, true if one changed
+   void RenderAdjustPanel(); // Panel at the bottom left of the viewport, and the F9 popup
+   static const char *LastOperationName(LastOperation::Type type);
+
    // Status bar report (see Report)
    string m_report;
    double m_reportTime = -1000.0;
@@ -376,7 +420,17 @@ private:
       ImVec2 startMouse;
       float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
       Matrix3D initial; // Selection transform when the operation began
+      vec3 duplicateOrigin { 0.f, 0.f, 0.f }; // Position of the duplicated selection
+      bool duplicate = false; // Grab following a duplicate: its undo record is folded into the one of the paste on confirmation
+      vec3 lastDelta { 0.f, 0.f, 0.f }; // Parameters of the last evaluation (kept as the adjustable parameters of the operation when confirmed)
+      vec3 lastAxis { 0.f, 0.f, 1.f }; // Rotation axis (in the editor camera space, see FlipZ)
+      float lastAngle = 0.f; // Degrees
+      float lastFactor = 1.f;
+      vector<Vertex2D> snapPoints; // Snap targets of the 'points' snapping (centers and drag points of the unselected parts), built on first use
+      bool snapPointsBuilt = false;
    } m_modal;
+   Matrix3D m_gizmoStartTransform; // Selection transform when the current gizmo drag began
+   bool m_gizmoDragTranslate = false; // The current gizmo drag is a translation
    void BeginModalTransform(ModalOp op);
    void UpdateModalTransform();
    void EndModalTransform(bool confirm);
@@ -467,6 +521,8 @@ private:
    void RenderAreaTypeButton(AreaEditor current); // Header button of the area hosting the given type, and its editor type popup
    bool ConsumedAreaEscape(); // The Esc that closed the editor type popup is not an editor Esc
    bool m_areaEscPending = false;
+   bool ConsumedPaneEscape(); // The Esc that cancelled a property pane field edit is not an editor Esc
+   bool m_paneEscPending = false;
    bool BeginAreaWindow(const char *name, const ImVec2 &pos, const ImVec2 &size); // Window filling an area rect (Script and Part Library), always pair with EndAreaWindow
    void EndAreaWindow();
    void ShowSidebar(SidebarTab tab);

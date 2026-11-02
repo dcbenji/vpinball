@@ -149,6 +149,15 @@ public:
    // Blender-like number field: the fill slider frame with the value centred and no fill; drag to change, ctrl+click or double-click to type
    static bool NumberField(const char *id, float *value, int decimals);
    static void RoundDragged(float *values, const float *before, int count, int decimals);
+   // Esc that cancelled a drag or a typed value: the editor must not treat it as its own Esc. True from the press until the key is released
+   static bool ConsumeEscape();
+   // A drag / typed edit was cancelled this frame and the value restored: the undo step it had started must be dropped. True once
+   static bool ConsumeEditCancel()
+   {
+      const bool cancelled = s_editCancelled;
+      s_editCancelled = false;
+      return cancelled;
+   }
    static float DragSpeed(int decimals, float magnitude) { return max(0.5f * powf(10.f, -static_cast<float>(decimals)), magnitude * 0.005f); }
    bool IsHarvest() const { return m_pinMode == PinMode::Harvest; } // Drawn in the hidden window that registers the pin definitions
    bool IsSkippingRest() const { return m_skipRest; }
@@ -304,6 +313,8 @@ private:
    // Blender-style number widget shared by FillSlider (fill = true, range vMin..vMax) and NumberField: press and drag changes the value
    // relative to the grab (shift: fine, ctrl: snapped to steps), a click without drag (or ctrl+click, double click, nav) types the value
    static bool DragField(const char *id, float *value, float vMin, float vMax, bool fill, int decimals, const char *format);
+   // Row of `count` number fields sharing the item width (vector fields)
+   static bool DragFieldN(const char *id, float *values, int count, int decimals, const char *format);
    // Name list combos (image, material, surface,...) register a definition that rebuilds their list when drawn
    template <class T>
    using NamedComboFn = void (PropertyPane::*)(T *, const string &, const std::function<string(const T *)> &, const std::function<void(T *, const string &)> &, const char *);
@@ -330,6 +341,8 @@ private:
    static inline bool s_focusPending = false;
    static inline int s_focusRequestFrame = 0;
    static inline double s_flashUntil = 0.0;
+   static inline bool s_escConsumed = false;
+   static inline bool s_editCancelled = false;
    static inline PinKey s_overlayKey;
    static inline bool s_overlayPending = false;
    static inline double s_overlayRequestTime = 0.0;
@@ -634,8 +647,10 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    int value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::DragInt(("##" + label).c_str(), &value, 0.25f, 0, 0, "%d")) // Same centred number look as the float fields
+   float valueF = static_cast<float>(value);
+   if (DragField(("##" + label).c_str(), &valueF, 0.f, 0.f, false, 0, "%.0f")) // Same number field as the float fields
    {
+      value = static_cast<int>(roundf(valueF));
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
          setter(target.display, value);
@@ -781,10 +796,8 @@ inline void PropertyPane::InputFloat2(
    ConvertUnit(unit, displayUnit, displayValue.x, nDecimalAdjust);
    ConvertUnit(unit, displayUnit, displayValue.y, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   const Vertex2D before2 = displayValue;
-   if (ImGui::DragFloat2(("##" + label).c_str(), &displayValue.x, DragSpeed(decimals, max(fabsf(displayValue.x), fabsf(displayValue.y))), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat))
+   if (DragFieldN(("##" + label).c_str(), &displayValue.x, 2, decimals, format.c_str()))
    {
-      RoundDragged(&displayValue.x, &before2.x, 2, decimals);
       value = displayValue;
       ConvertUnit(displayUnit, unit, value.x, nDecimalAdjust);
       ConvertUnit(displayUnit, unit, value.y, nDecimalAdjust);
@@ -833,10 +846,8 @@ inline void PropertyPane::InputFloat3(
    ConvertUnit(unit, displayUnit, displayValue.y, nDecimalAdjust);
    ConvertUnit(unit, displayUnit, displayValue.z, nDecimalAdjust);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   const vec3 before3 = displayValue;
-   if (ImGui::DragFloat3(("##" + label).c_str(), &displayValue.x, DragSpeed(decimals, max(fabsf(displayValue.x), max(fabsf(displayValue.y), fabsf(displayValue.z)))), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat))
+   if (DragFieldN(("##" + label).c_str(), &displayValue.x, 3, decimals, format.c_str()))
    {
-      RoundDragged(&displayValue.x, &before3.x, 3, decimals);
       value = displayValue;
       ConvertUnit(displayUnit, unit, value.x, nDecimalAdjust);
       ConvertUnit(displayUnit, unit, value.y, nDecimalAdjust);

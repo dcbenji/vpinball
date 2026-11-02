@@ -171,6 +171,14 @@ void SearchPalette::BuildOperators()
    add("Edit" + sep + "Select All", "A", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.SelectAllAction(); });
    add("Edit" + sep + "Deselect", "Alt+A", [&ed]() { return ed.CanSelect() && ed.m_selection.GetType() != Selection::S_NONE; }, [&ed]() { ed.ClearSelection(); });
    add("Edit" + sep + "Invert Selection", "Ctrl+I", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.InvertSelection(); });
+   add("Edit" + sep + "Adjust Last Operation", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None; },
+      [&ed]()
+      {
+         ed.m_adjustPopupOpen = true;
+         ed.m_adjustPopupJustOpened = true;
+         ed.m_adjustPopupPos = ImGui::GetMousePos();
+      });
+   add("Edit" + sep + "Toggle Snapping", "Shift+Tab", nullptr, [&ed]() { ed.ToggleSnapping(); });
    add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
    add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
    add("Object" + sep + "Edit Points", "Tab", editablePart, [&ed]() { ed.EnterPointEditMode(); });

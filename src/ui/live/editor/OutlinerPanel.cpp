@@ -423,10 +423,39 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    // mode as the inspected table is a live copy). The drag payload is just a marker: the moved parts
    // are the multi selection (the dragged part is selected first if it was not part of it). The move
    // is applied after the tree iteration since it mutates the ordering of the iterated part list.
+   // Part groups sorted by path (see EditorUI::UpdateEditableList) so rows have no user order: no insert-before/after, only into group / to the top level.
    const bool canReparent = editor.m_table->m_liveBaseTable == nullptr;
+   const ImGuiPayload *const dragPayload = ImGui::GetDragDropPayload();
+   const bool vpxDragging = canReparent && dragPayload != nullptr && dragPayload->IsDataType("VPX_PART");
+   const bool dragBlockedPrev = m_dragBlocked; // Drop refused under the mouse last frame (shown in the drag tooltip)
+   m_dragBlocked = false;
+   bool hoveredCollapsedGroup = false;
    PartGroup *dropGroup = nullptr;
    bool dropRequested = false;
-   const auto partDragSource = [&editor, canReparent](const std::shared_ptr<EditorUIPart> &uiPart)
+   ImVec2 scenePartsMin(0.f, 0.f), scenePartsMax(0.f, 0.f); // Row of the root node, highlighted when dropping on the empty space below the tree
+   // Number of selected parts that a drop on 'group' (nullptr = top level) would move; blocked is set when a part is refused (cycle, or a non group part to the top level)
+   // This mirrors the filter of EditorUI::MoveSelectionToPartGroup
+   const auto evalDrop = [&editor](const PartGroup *group, bool &blocked, string *firstName) -> int
+   {
+      int count = 0;
+      blocked = false;
+      for (const auto &uiPart : editor.m_multiSel)
+      {
+         const IEditable *const editable = uiPart->GetEditable();
+         if (editable == nullptr || editable == group || editable->GetPartGroup() == group)
+            continue;
+         if ((editable->GetItemType() == eItemPartGroup && group != nullptr && group->IsChild(static_cast<const PartGroup *>(editable))) || (group == nullptr && editable->GetItemType() != eItemPartGroup))
+         {
+            blocked = true;
+            continue;
+         }
+         if (count == 0 && firstName != nullptr)
+            *firstName = editable->GetName();
+         ++count;
+      }
+      return count;
+   };
+   const auto partDragSource = [&editor, canReparent, dragBlockedPrev](const std::shared_ptr<EditorUIPart> &uiPart)
    {
       if (!canReparent || !ImGui::BeginDragDropSource())
          return;
@@ -434,17 +463,46 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          editor.SetSelection(Selection(uiPart));
       const IEditable *editable = uiPart->GetEditable();
       ImGui::SetDragDropPayload("VPX_PART", &editable, sizeof(editable));
-      ImGui::Text("Move %d part%s", (int)editor.m_multiSel.size(), editor.m_multiSel.size() > 1 ? "s" : "");
+      const size_t count = editor.m_multiSel.size();
+      if (count > 1)
+         ImGui::Text("%s  Move %d parts", TypeIcon(editable->GetItemType()), (int)count);
+      else
+         ImGui::Text("%s  %s", TypeIcon(editable->GetItemType()), editable->GetName().c_str());
+      if (dragBlockedPrev)
+         ImGui::TextColored(EditorTheme::V(EditorTheme::TextDim), "Not allowed here");
       ImGui::EndDragDropSource();
    };
-   const auto partDropTarget = [&dropGroup, &dropRequested, canReparent](PartGroup *group)
+   // highlight: outline the target row (the last item, or the given rect). Parts rows target their group without highlight.
+   const auto partDropTarget = [this, &dropGroup, &dropRequested, &evalDrop, canReparent](PartGroup *group, bool highlight, const ImVec2 *rectMin = nullptr, const ImVec2 *rectMax = nullptr)
    {
       if (!canReparent || !ImGui::BeginDragDropTarget())
          return;
-      if (ImGui::AcceptDragDropPayload("VPX_PART") != nullptr)
+      const ImGuiPayload *const payload = ImGui::AcceptDragDropPayload("VPX_PART", ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+      if (payload != nullptr)
       {
-         dropGroup = group;
-         dropRequested = true;
+         bool blocked = false;
+         const int count = evalDrop(group, blocked, nullptr);
+         if (count == 0 && blocked)
+         {
+            m_dragBlocked = true;
+            ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+         }
+         else if (count > 0)
+         {
+            if (highlight)
+            {
+               const ImVec2 rMin = rectMin != nullptr ? *rectMin : ImGui::GetItemRectMin();
+               const ImVec2 rMax = rectMax != nullptr ? *rectMax : ImGui::GetItemRectMax();
+               ImDrawList *const drawList = ImGui::GetWindowDrawList();
+               drawList->AddRectFilled(rMin, rMax, (EditorTheme::Fill & ~IM_COL32_A_MASK) | (48u << IM_COL32_A_SHIFT), 2.f);
+               drawList->AddRect(rMin, rMax, EditorTheme::Fill, 2.f, 0, 2.f);
+            }
+            if (payload->IsDelivery())
+            {
+               dropGroup = group;
+               dropRequested = true;
+            }
+         }
       }
       ImGui::EndDragDropTarget();
    };
@@ -507,7 +565,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
       }
       partDragSource(edit);
-      partDropTarget(editable->GetPartGroup()); // Dropping on a part moves to its group (same as the Win32 layer dialog)
+      partDropTarget(editable->GetPartGroup(), false); // Dropping on a part moves to its group (same as the Win32 layer dialog)
       if (edit == revealPart && !ImGui::IsItemVisible())
          ImGui::SetScrollHereY();
       if (editor.m_table->m_liveBaseTable == nullptr)
@@ -533,7 +591,9 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       m_listedParts.clear();
       ImGui::PushID("parts");
       const bool scenePartsOpened = ImGui::TreeNodeEx("Scene Parts", ImGuiTreeNodeFlags_DefaultOpen);
-      partDropTarget(nullptr); // Dropping on the scene root ungroups part groups
+      scenePartsMin = ImGui::GetItemRectMin();
+      scenePartsMax = ImGui::GetItemRectMax();
+      partDropTarget(nullptr, true); // Dropping on the scene root ungroups part groups
       if (scenePartsOpened)
       {
          // Table definition parts
@@ -644,7 +704,23 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   ImGui::PopStyleColor(3);
                   const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
                   partDragSource(edit);
-                  partDropTarget(group);
+                  partDropTarget(group, true);
+                  if (vpxDragging && !opened && rowHovered)
+                  {
+                     // Blender opens a collapsed collection hovered while dragging
+                     hoveredCollapsedGroup = true;
+                     const ImGuiID groupId = ImGui::GetItemID();
+                     if (m_dragHoverGroup != groupId)
+                     {
+                        m_dragHoverGroup = groupId;
+                        m_dragHoverSince = ImGui::GetTime();
+                     }
+                     else if (ImGui::GetTime() - m_dragHoverSince > 0.7)
+                     {
+                        ImGui::GetStateStorage()->SetInt(groupId, 1);
+                        m_dragHoverGroup = 0;
+                     }
+                  }
                   if (ImGui::BeginPopupContextItem())
                   {
                      if (ImGui::MenuItem("Select"))
@@ -690,7 +766,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   if (revealPart && revealPart->GetEditable()->GetPartGroup() == nullptr)
                      ImGui::SetNextItemOpen(true);
                   stack.push_back({ nullptr, ImGui::TreeNodeEx("[Live Objects]", ImGuiTreeNodeFlags_AllowOverlap) });
-                  partDropTarget(nullptr);
+                  partDropTarget(nullptr, false);
                }
                if (!stack.empty() && stack.back().opened && show)
                   renderPartLeaf(edit, outlinerItem, revealPart, eyeX,
@@ -706,6 +782,33 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::TreePop();
       }
       ImGui::PopID();
+      if (!hoveredCollapsedGroup)
+         m_dragHoverGroup = 0;
+      if (vpxDragging)
+      {
+         // Empty space below the tree: drop target of the top level
+         const float freeHeight = ImGui::GetContentRegionAvail().y - style.ItemSpacing.y - 2.f;
+         if (freeHeight > 4.f)
+         {
+            ImGui::InvisibleButton("##OutlinerDropRoot", ImVec2(-FLT_MIN, freeHeight));
+            partDropTarget(nullptr, true, &scenePartsMin, &scenePartsMax);
+         }
+         // Scroll the tree when the mouse is near its top or bottom edge
+         const ImVec2 winPos = ImGui::GetWindowPos();
+         const ImVec2 winSize = ImGui::GetWindowSize();
+         const ImVec2 mouse = ImGui::GetIO().MousePos;
+         const float edge = ImGui::GetFontSize() * 2.f;
+         if (mouse.x >= winPos.x && mouse.x <= winPos.x + winSize.x)
+         {
+            float speed = 0.f; // -1..1
+            if (mouse.y >= winPos.y - edge && mouse.y < winPos.y + edge)
+               speed = -ImClamp(1.f - (mouse.y - winPos.y) / edge, 0.f, 1.f);
+            else if (mouse.y > winPos.y + winSize.y - edge && mouse.y <= winPos.y + winSize.y + edge)
+               speed = ImClamp(1.f - (winPos.y + winSize.y - mouse.y) / edge, 0.f, 1.f);
+            if (speed != 0.f)
+               ImGui::SetScrollY(ImGui::GetScrollY() + speed * 600.f * ImGui::GetIO().DeltaTime);
+         }
+      }
       if (rangeTarget)
       {
          // Range between the anchor and the clicked row, restricted to the rows listed (type filter, search, open groups)
@@ -819,7 +922,20 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    }
    ImGui::EndChild();
    if (dropRequested)
-      editor.MoveSelectionToPartGroup(dropGroup);
+   {
+      // Applied after the tree iteration as the move reorders the iterated part list. One undo record (made by MoveSelectionToPartGroup), relabelled here.
+      bool blocked = false;
+      string firstName;
+      const int count = evalDrop(dropGroup, blocked, &firstName);
+      if (count > 0)
+      {
+         const string what = count == 1 ? firstName : std::to_string(count) + " parts";
+         const string target = dropGroup != nullptr ? dropGroup->GetName() : "top level"s;
+         editor.MoveSelectionToPartGroup(dropGroup);
+         editor.m_undo.SetLabel("Move " + what + " to " + target);
+         editor.Report("Moved " + what + " to " + target);
+      }
+   }
 
    ImGui::End();
    ImGui::PopStyleVar(3);

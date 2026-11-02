@@ -546,8 +546,7 @@ void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
          // Same tracking as the material's own pane ('Live' tab) and the pinned overlay
          if (isLive)
             editor.m_liveEditedMaterials.insert(material);
-         else if (!editor.IsInspectMode())
-            editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+         // Outside of an inspection session the edit is an undo step, which marks the table dirty (and clean again when undone)
       }
    }
    ImGui::PopID();
@@ -717,11 +716,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       editor.SetSelection(m_lockedSel);
    }
    m_mouseOver = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), false);
-   {
-      const ImGuiIO &io = ImGui::GetIO();
-      if (m_mouseOver && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
-         FocusSearch();
-   }
+   PropertyPane::ConsumeEditCancel(); // A cancelled edit nobody handled last frame
    if (PropertyPane::IsFocusPending()) // A jump to a field (search palette) needs the normal tabs
    {
       m_search.clear();
@@ -862,7 +857,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          else
             editor.m_undo.MarkForUndo(editable);
          // Alt held while editing: the fields also write to the other selected parts, snapshotted in the same record
-         const bool altApply = ImGui::GetIO().KeyAlt && !props.IsMultiEdit() && editor.m_multiSel.size() > 1 && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive());
+         const bool areaActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+            || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
+         const bool altApply = areaActive && ImGui::GetIO().KeyAlt && !props.IsMultiEdit() && editor.m_multiSel.size() > 1
+            && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive());
          if (altApply)
             for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
                editor.m_undo.MarkForUndo(part->GetEditable());
@@ -882,6 +880,18 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   table->m_image = image;
                   table->m_winEditorBackdrop = showInEditor;
                   table->m_playfieldReflectionStrength = reflectionStrength;
+               },
+               // Redo: the same four fields as they are when the step is undone
+               [table]() -> std::function<void()>
+               {
+                  return [table, material = table->m_playfieldMaterial, image = table->m_image, showInEditor = table->m_winEditorBackdrop,
+                            reflectionStrength = table->m_playfieldReflectionStrength]()
+                  {
+                     table->m_playfieldMaterial = material;
+                     table->m_image = image;
+                     table->m_winEditorBackdrop = showInEditor;
+                     table->m_playfieldReflectionStrength = reflectionStrength;
+                  };
                });
          }
          editor.m_selection.GetPart()->UpdatePropertyPane(props);
@@ -892,14 +902,33 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (props.GetModifiedField() > 0)
             editor.m_undo.SetFieldLabel(props.GetModifiedLabel());
          editor.m_undo.EndUndo();
-         if (props.GetModifiedField() > 0 && (editor.m_lastUndoPart != editor.m_selection.GetPart()->GetEditable() || editor.m_lastUndoId != (0x2000 | props.GetModifiedField())))
          {
-            editor.m_lastUndoPart = editor.m_selection.GetPart()->GetEditable();
-            editor.m_lastUndoId = 0x2000 | props.GetModifiedField();
-         }
-         else
-         {
-            editor.m_undo.Discard();
+            // The edit of one field (a drag, a typed value) is one step: its first frame keeps the record, the next ones discard theirs. Alt editing
+            // (other parts in the record) has its own key, and the chain ends when the interaction does
+            const bool modified = props.GetModifiedField() > 0;
+            const unsigned int editId = (altApply ? 0x800000u : 0u) | 0x2000u | static_cast<unsigned int>(props.GetModifiedField());
+            const bool continues = modified && editor.m_lastUndoPart == editable && editor.m_lastUndoId == editId;
+            if (!modified && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+            {
+               editor.m_lastUndoPart = nullptr;
+               editor.m_lastUndoId = 0;
+            }
+            if (modified && !continues)
+            {
+               editor.m_lastUndoPart = editable;
+               editor.m_lastUndoId = editId;
+            }
+            else
+            {
+               editor.m_undo.Discard();
+               // Esc cancelled the drag / typed value (restored): the step it had started is dropped too
+               if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo())
+               {
+                  editor.m_undo.Discard();
+                  editor.m_lastUndoPart = nullptr;
+                  editor.m_lastUndoId = 0;
+               }
+            }
          }
          if (props.GetModifiedField() > 0)
             RefreshEditedParts(props);

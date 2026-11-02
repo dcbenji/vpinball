@@ -42,6 +42,21 @@ bool ToolButton(const char *icon, bool active = false)
    return pressed;
 }
 
+// Magnet icon (the Lucide subset has none): a U shaped bar with light tips, centered at c, radius r
+void DrawMagnet(ImDrawList *drawList, const ImVec2 &c, const float r, const ImU32 color)
+{
+   const float w = r * 0.5f; // Half width of the U (arc radius)
+   const float thickness = max(2.f, r * 0.28f);
+   const float top = c.y - r * 0.2f; // Where the arc starts
+   const float bottom = c.y + r * 0.2f; // Where the legs end
+   drawList->PathArcTo(ImVec2(c.x, top), w, IM_PI, IM_PI * 2.f, 16);
+   drawList->PathStroke(color, 0, thickness);
+   drawList->AddLine(ImVec2(c.x - w, top), ImVec2(c.x - w, bottom), color, thickness);
+   drawList->AddLine(ImVec2(c.x + w, top), ImVec2(c.x + w, bottom), color, thickness);
+   drawList->AddLine(ImVec2(c.x - w, bottom), ImVec2(c.x - w, bottom + r * 0.25f), EditorTheme::Rgb(230, 230, 230), thickness); // Tips
+   drawList->AddLine(ImVec2(c.x + w, bottom), ImVec2(c.x + w, bottom + r * 0.25f), EditorTheme::Rgb(230, 230, 230), thickness);
+}
+
 // Text drawn over the render (view name, tool name): 1 px drop shadow so that it stays readable on light renders
 void ShadowedText(const char *text)
 {
@@ -134,6 +149,14 @@ void EditorChrome::RenderMenuBar()
             editor.RedoSteps(1);
          if (ImGui::MenuItem("Undo History...", nullptr, false, editor.m_table->m_liveBaseTable == nullptr && (editor.m_undo.HasUndo() || editor.m_undo.HasRedo())))
             OpenUndoHistory();
+         if (ImGui::MenuItem("Adjust Last Operation...", "F9", false, editor.m_lastOp.type != EditorUI::LastOperation::Type::None))
+         {
+            editor.m_adjustPopupOpen = true;
+            editor.m_adjustPopupJustOpened = true;
+            editor.m_adjustPopupPos = ImGui::GetMousePos();
+         }
+         if (ImGui::MenuItem("Snapping", "Shift+Tab", editor.m_snapEnabled))
+            editor.ToggleSnapping();
          ImGui::Separator();
          if (ImGui::MenuItem("Copy", "Ctrl+C", false, editor.CanCopy()))
             editor.CopySelection();
@@ -518,6 +541,71 @@ void EditorChrome::RenderToolbar()
          if (&mode != std::end(editModes) - 1)
             ImGui::SameLine(0.f, toolGap);
       }
+
+      // Snapping: magnet toggle (Shift+Tab) and a small chevron button opening the snapping popover
+      ImGui::SameLine(0.f, toolGap);
+      {
+         const bool snapOn = editor.m_snapEnabled;
+         if (ToolButton("##Snap", snapOn))
+            editor.ToggleSnapping();
+         const ImVec2 bmin = ImGui::GetItemRectMin(), bmax = ImGui::GetItemRectMax();
+         DrawMagnet(ImGui::GetWindowDrawList(), ImVec2(0.5f * (bmin.x + bmax.x), 0.5f * (bmin.y + bmax.y)), (bmax.x - bmin.x) * 0.5f, snapOn ? EditorTheme::Accent : EditorTheme::Text);
+         ImGui::SetItemTooltip("Snapping: %s\n[Shift+Tab] Hold Ctrl to invert while transforming", snapOn ? "on" : "off");
+         ImGui::SameLine(0.f, 0.f);
+         ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(0u));
+         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
+         ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
+         const bool openPopover = ImGui::Button("##SnapOptions", ImVec2(0.5f * ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
+         ImGui::PopStyleColor(3);
+         {
+            const ImVec2 cmin = ImGui::GetItemRectMin(), cmax = ImGui::GetItemRectMax();
+            const float cx = 0.5f * (cmin.x + cmax.x), cy = 0.5f * (cmin.y + cmax.y), half = 3.f * s_toolDpi;
+            ImGui::GetWindowDrawList()->AddTriangleFilled(ImVec2(cx - half, cy - half * 0.5f), ImVec2(cx + half, cy - half * 0.5f), ImVec2(cx, cy + half * 0.5f), EditorTheme::TextDim);
+         }
+         ImGui::SetItemTooltip("Snapping options");
+         if (openPopover)
+            ImGui::OpenPopup("Snap Popover");
+         ImGui::SetNextWindowPos(ImVec2(bmin.x, bmax.y), ImGuiCond_Appearing);
+         if (ImGui::BeginPopup("Snap Popover"))
+         {
+            bool changed = false;
+            ImGui::TextUnformatted("Snap To");
+            ImGui::Separator();
+            if (ImGui::RadioButton("Increment", editor.m_snapTarget == 0))
+            {
+               editor.m_snapTarget = 0;
+               changed = true;
+            }
+            ImGui::SetItemTooltip("Snap to multiples of the increments");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Points", editor.m_snapTarget == 1))
+            {
+               editor.m_snapTarget = 1;
+               changed = true;
+            }
+            ImGui::SetItemTooltip("Snap to the centers and drag points of the other parts (G move, without axis constraint; the gizmo uses the increment)");
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Increments");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(120.f * s_toolDpi);
+            changed |= ImGui::DragFloat("Move (vpu)", &editor.m_snapMove, 0.5f, 0.01f, 1000.f, "%.2f");
+            ImGui::SetNextItemWidth(120.f * s_toolDpi);
+            changed |= ImGui::DragFloat("Rotate (deg)", &editor.m_snapRotate, 0.5f, 0.1f, 180.f, "%.1f");
+            ImGui::SetNextItemWidth(120.f * s_toolDpi);
+            changed |= ImGui::DragFloat("Scale", &editor.m_snapScale, 0.005f, 0.001f, 10.f, "%.3f");
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Affect");
+            ImGui::Separator();
+            changed |= ImGui::Checkbox("Move", &editor.m_snapAffectMove);
+            ImGui::SameLine();
+            changed |= ImGui::Checkbox("Rotate", &editor.m_snapAffectRotate);
+            ImGui::SameLine();
+            changed |= ImGui::Checkbox("Scale", &editor.m_snapAffectScale);
+            if (changed)
+               editor.SaveSnapPreferences();
+            ImGui::EndPopup();
+         }
+      }
       ToolSeparator();
 
       // Add part buttons (same parts and icons as the WinUI toolbar)
@@ -881,7 +969,8 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    else if (io.WantTextInput)
       hints = { { "Enter", "Confirm" }, { "Esc", "Cancel" }, { mod + "+A", "Select All Text" } };
    else if (editor.m_modal.active)
-      hints = { { "LMB / Enter", "Confirm" }, { "RMB / Esc", "Cancel" }, { "X Y Z", "Axis" }, { "Shift+X Y Z", "Plane" }, { "0-9", "Exact Value" } };
+      hints = { { "LMB / Enter", "Confirm" }, { "RMB / Esc", "Cancel" }, { "X Y Z", "Axis" }, { "Shift+X Y Z", "Plane" }, { "0-9", "Exact Value" },
+         { mod, editor.m_snapEnabled ? "Hold: Snap Off" : "Hold: Snap On" } };
    else if (editor.m_boxSelectActive && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !overArea)
       hints = { { "Release LMB", "Select" }, { "Shift", "Add to Selection" }, { "Esc", "Cancel" } };
    else if (overArea && sidebarUnderMouse)
@@ -920,6 +1009,9 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       hints.push_back({ "G", "Move" });
       hints.push_back({ "R", "Rotate" });
       hints.push_back({ "S", "Scale" });
+      hints.push_back({ "Shift+Tab", editor.m_snapEnabled ? "Snap: On" : "Snap: Off" });
+      if (editor.m_lastOp.type != EditorUI::LastOperation::Type::None)
+         hints.push_back({ "F9", "Adjust Last Operation" });
    }
 
    // Last operation report on the right, fading out

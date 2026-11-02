@@ -27,11 +27,22 @@ public:
    void MarkForCreate(IEditable *const pie);
    void MarkForDelete(IEditable *const pie);
 
-   vector<std::function<void()>> m_actions;
+   struct Action
+   {
+      std::function<void()> undo;
+      std::function<std::function<void()>()> snapshotForRedo; // Returns the function restoring the state as it is when called (empty if not redoable)
+   };
+   vector<Action> m_actions;
+   // Redo records set aside when the record was begun (a new edit invalidates them), restored if the record is discarded or canceled. Kept per record so
+   // that the records begun and discarded by other panels while this one is open do not clobber them
+   vector<std::unique_ptr<UndoRecord>> m_stashedRedo;
+   size_t m_cleanpointAtBegin = 0;
+   SaveDirtyState m_dirtyStateAtBegin = SaveDirtyState::Clean;
    vector<std::unique_ptr<InMemStream>> m_vstm;
    vector<IEditable *> m_vieCreate;
    vector<IEditable *> m_vieDelete;
    vector<IEditable *> m_vieMark;
+   uint64_t m_id = 0; // Unique id of the record (see PinUndo::TopRecordId)
    bool m_ownsCreateRefs = false; // The record holds the creation reference of its created parts (revert of an undelete), released if it is dropped without being applied
    std::any m_editorState; // Editor provided state (e.g. selection) captured when the record was begun
 
@@ -138,6 +149,38 @@ PinUndo::~PinUndo() { }
 
 bool PinUndo::HasUndo() const { return !m_undoRecords.empty(); }
 
+uint64_t PinUndo::TopRecordId() const { return m_undoRecords.empty() ? 0 : m_undoRecords.back()->m_id; }
+
+bool PinUndo::MergeLastIntoPrevious()
+{
+   if (m_nUndoLayer != 0 || m_undoRecords.size() < 2)
+      return false;
+   UndoRecord &last = *m_undoRecords.back();
+   UndoRecord &prev = *m_undoRecords[m_undoRecords.size() - 2];
+   // Only part edits can be folded in (the previous record keeps the older snapshot of the parts it already holds)
+   if (!last.m_vieCreate.empty() || !last.m_vieDelete.empty() || !last.m_actions.empty())
+      return false;
+   for (size_t i = 0; i < last.m_vieMark.size(); i++)
+   {
+      IEditable *const pie = last.m_vieMark[i];
+      if (FindIndexOf(prev.m_vieCreate, pie) != -1 || FindIndexOf(prev.m_vieMark, pie) != -1) // Undoing the previous record already handles the part
+         continue;
+      prev.m_vieMark.push_back(pie);
+      prev.m_vstm.push_back(std::move(last.m_vstm[i]));
+   }
+   m_undoRecords.pop_back();
+   if (m_cleanpoint != NoCleanPoint && m_cleanpoint > m_undoRecords.size())
+      m_cleanpoint = NoCleanPoint;
+   return true;
+}
+
+bool PinUndo::IsInvertible(const UndoRecord &record)
+{
+   return std::ranges::all_of(record.m_actions, [](const UndoRecord::Action &action) { return action.snapshotForRedo != nullptr; });
+}
+
+bool PinUndo::NextUndoClearsRedo() const { return !m_undoRecords.empty() && !IsInvertible(*m_undoRecords.back()); }
+
 bool PinUndo::HasRedo() const { return !m_redoRecords.empty(); }
 
 size_t PinUndo::UndoCount() const { return m_undoRecords.size(); }
@@ -163,7 +206,6 @@ void PinUndo::SetFieldLabel(const string &field)
 void PinUndo::ClearRedo()
 {
    m_redoRecords.clear();
-   m_redoStash.clear();
    if (m_cleanpoint != NoCleanPoint && m_cleanpoint > m_undoRecords.size()) // The clean state was in the dropped redo records
       m_cleanpoint = NoCleanPoint;
 }
@@ -204,19 +246,20 @@ void PinUndo::BeginUndo()
          m_undoRecords.erase(m_undoRecords.begin());
          m_cleanpoint = (m_cleanpoint == 0 || m_cleanpoint == NoCleanPoint) ? NoCleanPoint : m_cleanpoint - 1;
       }
-      // A new edit invalidates the redo records. They are only stashed until the record is ended: if it ends up discarded (see Discard, the editor
-      // begins and discards a record every frame while the mouse is over a property pane) they are restored
-      m_redoStash.clear();
-      m_cleanpointAtBegin = m_cleanpoint;
+      m_undoRecords.push_back(std::make_unique<UndoRecord>());
+      UndoRecord &record = *m_undoRecords.back();
+      record.m_id = ++m_lastRecordId;
+      record.m_dirtyStateAtBegin = m_dirtyState;
+      // A new edit invalidates the redo records. They are only set aside in the new record: if it ends up discarded or canceled (see Discard, the
+      // editor begins and discards a record every frame while the mouse is over a property pane) they are restored
+      record.m_cleanpointAtBegin = m_cleanpoint;
       if (!m_redoRecords.empty())
       {
-         m_redoStash = std::move(m_redoRecords);
+         record.m_stashedRedo = std::move(m_redoRecords);
          m_redoRecords.clear();
-         if (m_cleanpoint != NoCleanPoint && m_cleanpoint > m_undoRecords.size()) // The clean state was in the redo records: no longer reachable
+         if (m_cleanpoint != NoCleanPoint && m_cleanpoint + 1 > m_undoRecords.size()) // The clean state was in the redo records: no longer reachable (the new record counts)
             m_cleanpoint = NoCleanPoint;
       }
-      m_dirtyStateAtBegin = m_dirtyState;
-      m_undoRecords.push_back(std::make_unique<UndoRecord>());
       if (m_editorStateCapture)
          m_undoRecords.back()->m_editorState = m_editorStateCapture();
    }
@@ -258,7 +301,7 @@ void PinUndo::MarkForDelete(IEditable *const pie)
    m_undoRecords.back()->MarkForDelete(pie);
 }
 
-void PinUndo::MarkForAction(std::function<void()> undo)
+void PinUndo::MarkForAction(std::function<void()> undo, std::function<std::function<void()>()> snapshotForRedo)
 {
    assert(!m_undoRecords.empty());
    assert(m_nUndoLayer > 0);
@@ -267,7 +310,7 @@ void PinUndo::MarkForAction(std::function<void()> undo)
    if (m_nUndoLayer <= 0)
       BeginUndo();
 
-   m_undoRecords.back()->m_actions.push_back(std::move(undo));
+   m_undoRecords.back()->m_actions.push_back({ std::move(undo), std::move(snapshotForRedo) });
 }
 
 std::any PinUndo::Undo(const bool keepForRedo)
@@ -285,16 +328,13 @@ std::any PinUndo::Undo(const bool keepForRedo)
    std::unique_ptr<UndoRecord> inverse;
    std::any editorState = ApplyRecord(*record, keepForRedo, inverse);
    if (inverse)
+      m_redoRecords.push_back(std::move(inverse)); // The record's stashed redo records die with it: they were invalidated by its edit
+   else if (!keepForRedo && !record->m_stashedRedo.empty())
    {
-      m_redoStash.clear();
-      m_redoRecords.push_back(std::move(inverse));
-   }
-   else if (!keepForRedo && !m_redoStash.empty())
-   {
-      // Cancels the record that has just been begun (e.g. a canceled modal transform): the redo records it stashed are back
-      m_redoRecords = std::move(m_redoStash);
-      m_redoStash.clear();
-      m_cleanpoint = m_cleanpointAtBegin;
+      // Cancels the record that has just been begun (e.g. a canceled modal transform): the redo records it set aside are back
+      m_redoRecords = std::move(record->m_stashedRedo);
+      record->m_stashedRedo.clear();
+      m_cleanpoint = record->m_cleanpointAtBegin;
    }
    else
       ClearRedo(); // Not redoable (non part change): the redo records may depend on the state before it
@@ -313,7 +353,6 @@ std::any PinUndo::Redo()
    if (!HasRedo())
       return {};
 
-   m_redoStash.clear();
    std::unique_ptr<UndoRecord> record = std::move(m_redoRecords.back());
    m_redoRecords.pop_back();
 
@@ -331,12 +370,13 @@ std::any PinUndo::Redo()
 // Applies a record (restores the state it was started from) and builds the record that reverts this application (the redo record when undoing, the undo record when redoing)
 std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::unique_ptr<UndoRecord> &inverseOut)
 {
-   // Non part changes (actions) can not be reverted
-   const bool invertible = buildInverse && record.m_actions.empty();
+   // Non part changes (actions) can be reverted if all of them can snapshot their current state
+   const bool invertible = buildInverse && IsInvertible(record);
    std::unique_ptr<UndoRecord> inverse;
    if (invertible)
    {
       inverse = std::make_unique<UndoRecord>();
+      inverse->m_id = ++m_lastRecordId;
       inverse->m_ownsCreateRefs = true;
       if (m_editorStateCapture)
          inverse->m_editorState = m_editorStateCapture(); // Editor state before the revert, given back when the inverse is applied
@@ -348,7 +388,11 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
 
    // Non part changes first, most recent first: a part restored below may refer to an asset they bring back
    for (auto it = record.m_actions.rbegin(); it != record.m_actions.rend(); ++it)
-      (*it)();
+   {
+      if (inverse)
+         inverse->m_actions.push_back({ it->snapshotForRedo(), it->snapshotForRedo }); // Restores the state before this undo; symmetric when it is applied
+      it->undo();
+   }
 
    for (IEditable *editable : record.m_vieDelete)
    {
@@ -478,20 +522,21 @@ void PinUndo::Discard()
    if (!HasUndo())
       return;
 
+   std::unique_ptr<UndoRecord> record = std::move(m_undoRecords.back());
    m_undoRecords.pop_back();
 
-   // The redo records stashed when the record was begun are back
-   if (!m_redoStash.empty())
+   // The redo records set aside when the record was begun are back
+   if (!record->m_stashedRedo.empty())
    {
-      m_redoRecords = std::move(m_redoStash);
-      m_redoStash.clear();
-      m_cleanpoint = m_cleanpointAtBegin;
+      m_redoRecords = std::move(record->m_stashedRedo);
+      record->m_stashedRedo.clear();
+      m_cleanpoint = record->m_cleanpointAtBegin;
    }
 
    // A discarded record leaves no trace: restore the dirty state it changed when ended
-   if (m_dirtyState != m_dirtyStateAtBegin)
+   if (m_dirtyState != record->m_dirtyStateAtBegin)
    {
-      m_dirtyState = m_dirtyStateAtBegin;
+      m_dirtyState = record->m_dirtyStateAtBegin;
       m_table->SetDirty(m_dirtyState);
    }
 }
