@@ -30,7 +30,7 @@ private:
    static constexpr int kStableFrames = 10; // A new size is adopted after being stable this many frames (no target churn while a splitter is dragged)
 
    EditorUI &m_editor;
-   bool m_live = false;
+   bool m_live = true;
    bool m_refresh = true;
    bool m_wasDragging = false;
    bool m_requested = false; // A preview was requested since the last release

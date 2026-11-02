@@ -5431,6 +5431,7 @@ void Renderer::RenderEditorPreview()
    // Swap in the preview scene targets, (re)created at the preview size
    RenderTarget* const mainBackBuffer = GetBackBufferTexture();
    RenderTarget* const mainMSAABackBuffer = m_pOffscreenMSAABackBufferTexture;
+   const float playerAspect = GetDisplayAspectRatio(); // The player window's aspect: read before the preview targets are swapped in (it derives from the back buffer)
    SwapDesktopTargets();
    if (m_pOffscreenBackBufferTexture1 == nullptr || m_pOffscreenBackBufferTexture1->GetWidth() != width || m_pOffscreenBackBufferTexture1->GetHeight() != height)
    {
@@ -5486,7 +5487,8 @@ void Renderer::RenderEditorPreview()
 
    // The table's view setup (the player view), as the Preview Camera computes it (Renderer::InitLayout). m_initialMVP is set too, as
    // the passes which change the camera (shadow map pages) restore it from there
-   m_table->GetViewSetup().ComputeMVP(m_table, (float)width / (float)height, false, m_mvp, vec3(m_cam.x, m_cam.y, m_cam.z), m_inc);
+   // The player window's aspect (as InitLayout), captured before the swap, not the target's (the panel sizes the target at it, up to rounding)
+   m_table->GetViewSetup().ComputeMVP(m_table, playerAspect, false, m_mvp, vec3(m_cam.x, m_cam.y, m_cam.z), m_inc);
    m_initialMVP = m_mvp;
    for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       m_playfieldView[eye] = m_mvp.GetView(eye);

@@ -4,6 +4,7 @@
 #include "OutlinerPanel.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
+#include "EditorChrome.h"
 
 #include "fonts/IconsForkAwesome.h"
 #include "parts/Collection.h"
@@ -65,6 +66,43 @@ static void PushSelectionColor()
    ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::RowSelected));
    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::RowSelectedHover));
    ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::RowSelectedHover));
+}
+
+// Row colors of a tree row: selection blue for selected rows only, a neutral grey fill for the hovered rows (3 colors, pop with PopStyleColor(3))
+static void PushRowColors(const bool selected, const bool inactive)
+{
+   if (selected)
+   {
+      if (inactive)
+         PushInactiveSelectionColor();
+      else
+         PushSelectionColor();
+      return;
+   }
+   ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.f, 0.f, 0.f, 0.f));
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::Hover));
+}
+
+// Tree node with a line chevron instead of ImGui's filled triangle: the node is submitted with an invisible text (same ID, click, keyboard and
+// open state behaviour), then the chevron and the label are drawn over it
+static bool ChevronTreeNode(const char *label, const ImGuiTreeNodeFlags flags = 0)
+{
+   const ImGuiStyle &style = ImGui::GetStyle();
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   const float textOffsetY = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
+   const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
+   const bool opened = ImGui::TreeNodeEx(label, flags);
+   ImGui::PopStyleColor();
+   const ImVec2 itemMin = ImGui::GetItemRectMin(), itemMax = ImGui::GetItemRectMax();
+   const float fontSize = ImGui::GetFontSize();
+   ImDrawList *const drawList = ImGui::GetWindowDrawList();
+   if ((flags & ImGuiTreeNodeFlags_Leaf) == 0)
+      EditorChrome::DrawChevron(drawList, ImVec2(pos.x + style.FramePadding.x + fontSize * 0.5f, 0.5f * (itemMin.y + itemMax.y)),
+         opened ? EditorChrome::ChevronDir::Down : EditorChrome::ChevronDir::Right, fontSize * 0.25f, EditorTheme::TextDim);
+   drawList->AddText(ImVec2(pos.x + ImGui::GetTreeNodeToLabelSpacing(), pos.y + textOffsetY), textColor, label, ImGui::FindRenderedTextEnd(label));
+   return opened;
 }
 
 namespace
@@ -346,7 +384,14 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::SameLine();
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       static constexpr const char *modeNames[] = { "View Layer", "Table Data" };
-      if (ImGui::BeginCombo("##OutlinerMode", modeNames[m_displayMode]))
+      const bool modeOpen = ImGui::BeginCombo("##OutlinerMode", modeNames[m_displayMode], ImGuiComboFlags_NoArrowButton);
+      {
+         // Line chevron instead of ImGui's filled arrow
+         const ImVec2 comboMin = ImGui::GetItemRectMin(), comboMax = ImGui::GetItemRectMax();
+         EditorChrome::DrawChevron(ImGui::GetWindowDrawList(), ImVec2(comboMax.x - style.FramePadding.x - ImGui::GetFontSize() * 0.4f, 0.5f * (comboMin.y + comboMax.y)),
+            EditorChrome::ChevronDir::Down, ImGui::GetFontSize() * 0.25f, EditorTheme::TextDim);
+      }
+      if (modeOpen)
       {
          for (int mode = 0; mode < 2; ++mode)
             if (ImGui::Selectable(modeNames[mode], m_displayMode == mode))
@@ -513,10 +558,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       IEditable *const editable = edit->GetEditable();
       m_listedParts.push_back(edit);
       const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
-      if (inactiveSel)
-         PushInactiveSelectionColor();
-      else
-         PushSelectionColor();
+      PushRowColors(editor.IsPartSelected(edit), inactiveSel);
       const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(),
          editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
       ImGui::PopStyleColor(3);
@@ -526,7 +568,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
          if (rowSelected || rowHovered)
          {
-            ImVec4 color = rowSelected ? EditorTheme::V(rowHovered ? EditorTheme::RowSelectedHover : EditorTheme::RowSelected) : ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+            ImVec4 color = EditorTheme::V(rowSelected ? (rowHovered ? EditorTheme::RowSelectedHover : EditorTheme::RowSelected) : EditorTheme::Hover);
             if (inactiveSel)
                color.w *= 0.4f;
             const float rowMinX = ImGui::GetCurrentWindow()->WorkRect.Min.x;
@@ -543,8 +585,11 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          drawList->AddText(textPos, EditorTheme::TextDim, icon);
          const float nameX = textPos.x + ImGui::CalcTextSize(icon).x + 6.f;
          const float eyeScreenX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX; // Where the eye button is placed by SameLine(eyeX)
-         drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : EditorTheme::TextFaint,
-            EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX).c_str());
+         const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
+         const string shown = EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX);
+         drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : (hovered ? EditorTheme::TextDim : EditorTheme::TextFaint), shown.c_str());
+         if (hovered && shown != editable->GetName() && ImGui::GetDragDropPayload() == nullptr)
+            ImGui::SetTooltip("%s", editable->GetName().c_str()); // Full name of an ellipsized row
       }
       if (clicked)
       {
@@ -590,7 +635,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       m_openMatchesPending = false;
       m_listedParts.clear();
       ImGui::PushID("parts");
-      const bool scenePartsOpened = ImGui::TreeNodeEx("Scene Parts", ImGuiTreeNodeFlags_DefaultOpen);
+      const bool scenePartsOpened = ChevronTreeNode("Scene Parts", ImGuiTreeNodeFlags_DefaultOpen);
       scenePartsMin = ImGui::GetItemRectMin();
       scenePartsMax = ImGui::GetItemRectMax();
       partDropTarget(nullptr, true); // Dropping on the scene root ungroups part groups
@@ -679,10 +724,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      ImGui::SetNextItemOpen(true);
                   const bool isNewPartTarget = (group == newPartTarget);
                   const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
-                  if (inactiveSel)
-                     PushInactiveSelectionColor();
-                  else
-                     PushSelectionColor();
+                  PushRowColors(editor.IsPartSelected(edit), inactiveSel);
                   // Folder icon and count are outside the ID (after ###) so that the node keeps its open state when they change
                   const auto countIt = m_groupCounts.find(group);
                   const string &groupName = edit->GetEditable()->GetName();
@@ -698,11 +740,13 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   const bool groupHidden = !group->IsUIVisible(false);
                   if (groupHidden)
                      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextFaint));
-                  opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
+                  opened = ChevronTreeNode(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
                   if (groupHidden)
                      ImGui::PopStyleColor();
                   ImGui::PopStyleColor(3);
                   const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                  if (ImGui::IsItemHovered() && ImGui::GetDragDropPayload() == nullptr && groupLabel.substr(0, groupLabel.find("###")).find(groupName) == string::npos)
+                     ImGui::SetTooltip("%s", groupName.c_str()); // Full name of an ellipsized row
                   partDragSource(edit);
                   partDropTarget(group, true);
                   if (vpxDragging && !opened && rowHovered)
@@ -765,7 +809,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                {
                   if (revealPart && revealPart->GetEditable()->GetPartGroup() == nullptr)
                      ImGui::SetNextItemOpen(true);
-                  stack.push_back({ nullptr, ImGui::TreeNodeEx("[Live Objects]", ImGuiTreeNodeFlags_AllowOverlap) });
+                  stack.push_back({ nullptr, ChevronTreeNode("[Live Objects]", ImGuiTreeNodeFlags_AllowOverlap) });
                   partDropTarget(nullptr, false);
                }
                if (!stack.empty() && stack.back().opened && show)
@@ -849,7 +893,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       RenderResourceList(categoryLabel("Sounds", editor.m_table->m_vsound.size()), true, editor.m_table->m_vsound, editor.m_multiSelSounds, editor.m_outlinerSoundAnchor, soundName);
       if (m_revealResource && selType == Selection::S_RENDERPROBE)
          ImGui::SetNextItemOpen(true);
-      if (ImGui::TreeNode(categoryLabel("Render Probes", editor.m_table->m_vrenderprobe.size())))
+      if (ChevronTreeNode(categoryLabel("Render Probes", editor.m_table->m_vrenderprobe.size())))
       {
          int pos = 0;
          for (RenderProbe *probe : editor.m_table->m_vrenderprobe)
@@ -870,7 +914,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       const bool canEditCollections = editor.m_table->m_liveBaseTable == nullptr;
       if (m_revealResource && selType == Selection::S_COLLECTION)
          ImGui::SetNextItemOpen(true);
-      const bool collectionsOpened = ImGui::TreeNode(categoryLabel("Collections", editor.m_table->GetCollections().size()));
+      const bool collectionsOpened = ChevronTreeNode(categoryLabel("Collections", editor.m_table->GetCollections().size()));
       if (ImGui::BeginPopupContextItem())
       {
          ImGui::BeginDisabled(!canEditCollections);
@@ -902,7 +946,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       }
       if (m_revealResource && selType == Selection::S_CAMERA)
          ImGui::SetNextItemOpen(true);
-      if (ImGui::TreeNodeEx("View Setups"))
+      if (ChevronTreeNode("View Setups"))
       {
          if (ImGui::Selectable("Editor Camera"))
          {
@@ -944,7 +988,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 template <class T>
 void OutlinerPanel::RenderResourceList(const char *label, bool asTree, vector<T *> &items, vector<T *> &multiSel, T *&anchor, const std::function<string(T *)> &nameOf)
 {
-   if (asTree && !ImGui::TreeNode(label))
+   if (asTree && !ChevronTreeNode(label))
       return;
    EditorUI &editor = m_editor;
    const std::vector<T *> sorted = SortedCaseInsensitive(items, nameOf);

@@ -32,9 +32,9 @@ namespace
 constexpr const char *kSep = "\xE2\x80\xBA"; // Single right-pointing angle quotation mark
 constexpr const char *kDot = "\xC2\xB7"; // Middle dot
 #ifdef __APPLE__
-constexpr const char *kFooter = "Enter: go / run \xC2\xB7 Cmd+Enter: Add to Quick Favorites \xC2\xB7 Esc: close";
+constexpr const char *kFooter = "Enter Run \xC2\xB7 Cmd+Enter Add to Quick Favorites \xC2\xB7 Esc Close";
 #else
-constexpr const char *kFooter = "Enter: go / run \xC2\xB7 Ctrl+Enter: Add to Quick Favorites \xC2\xB7 Esc: close";
+constexpr const char *kFooter = "Enter Run \xC2\xB7 Ctrl+Enter Add to Quick Favorites \xC2\xB7 Esc Close";
 #endif
 constexpr size_t kMaxResults = 60;
 constexpr size_t kMaxRecent = 8;
@@ -101,6 +101,7 @@ void SearchPalette::BuildOperators()
    EditorUI &ed = m_editor;
    // Same guards as the menu bar: table edits are off for locked tables, and the File/Tools menus are hidden when inspecting
    const auto unlocked = [&ed]() { return !ed.m_table->IsLocked(); };
+   const auto notInspect = [&ed]() { return !ed.IsInspectMode(); };
    const auto editable = [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
    const auto editablePart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
    const auto hasPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE; };
@@ -118,24 +119,33 @@ void SearchPalette::BuildOperators()
       m_ops.push_back(std::move(op));
    };
    const string sep = string(" ") + kSep + " ";
+   // Labels and shortcuts below are copied from EditorChrome::RenderMenuBar: keep them identical
+   add("File" + sep + "New" + sep + "New Table", "Ctrl+N", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Blank); });
+   add("File" + sep + "New" + sep + "Completely Blank Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Stripped); });
+   add("File" + sep + "New" + sep + "Full Example Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Example); });
+   add("File" + sep + "New" + sep + "Light Sequence Demo Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::LightSeq); });
+   add("File" + sep + "Open...", "Ctrl+O", editable, [&ed]() { ed.LoadTable(); });
+   add("File" + sep + "Open Pack Folder...", "Ctrl+Shift+O", editable, [&ed]() { ed.LoadTableFolder(); });
    add("File" + sep + "Save", "Ctrl+S", editable, [&ed]() { ed.SaveTable(); });
-   add("File" + sep + "Play", "", editable, [&ed]() { ed.PlayTest(); });
+   add("File" + sep + "Save As...", "", editable, [&ed]() { ed.SaveTableAs(); });
+   add("File" + sep + "Save As Pack Folder...", "", editable, [&ed]() { ed.SaveTableAsPackFolder(); });
+   add("File" + sep + "Play", "F5", editable, [&ed]() { ed.PlayTest(); });
    add("File" + sep + "Part Library", "", unlocked, [&ed]() { ed.OpenPartLibrary(); });
-   // View menu: camera and view commands (same keys as the menu; digits are the numpad keys, also the top row with numpad emulation)
+   // View menu: camera and view commands (same keys as the menu; with numpad emulation the top row digits also work)
    using PV = EditorUI::PredefinedView;
-   add("View" + sep + "Top", "7", nullptr, [&ed]() { ed.SetView(PV::Top); });
-   add("View" + sep + "Bottom", "Ctrl+7", nullptr, [&ed]() { ed.SetView(PV::Bottom); });
-   add("View" + sep + "Front", "1", nullptr, [&ed]() { ed.SetView(PV::Front); });
-   add("View" + sep + "Back", "Ctrl+1", nullptr, [&ed]() { ed.SetView(PV::Back); });
-   add("View" + sep + "Left", "3", nullptr, [&ed]() { ed.SetView(PV::Left); });
-   add("View" + sep + "Right", "Ctrl+3", nullptr, [&ed]() { ed.SetView(PV::Right); });
-   add("View" + sep + "Perspective / Orthographic", "5", nullptr, [&ed]() { ed.m_camMode = ViewMode::EditorCam; ed.m_perspectiveCam = !ed.m_perspectiveCam; });
-   add("View" + sep + "Cycle Camera (Preview / Editor / Backdrop)", "0", nullptr, [&ed]() { ed.CycleCamera(); });
+   add("View" + sep + "Top", "Numpad 7", nullptr, [&ed]() { ed.SetView(PV::Top); });
+   add("View" + sep + "Bottom", "Ctrl+Numpad 7", nullptr, [&ed]() { ed.SetView(PV::Bottom); });
+   add("View" + sep + "Front", "Numpad 1", nullptr, [&ed]() { ed.SetView(PV::Front); });
+   add("View" + sep + "Back", "Ctrl+Numpad 1", nullptr, [&ed]() { ed.SetView(PV::Back); });
+   add("View" + sep + "Left", "Numpad 3", nullptr, [&ed]() { ed.SetView(PV::Left); });
+   add("View" + sep + "Right", "Ctrl+Numpad 3", nullptr, [&ed]() { ed.SetView(PV::Right); });
+   add("View" + sep + "Perspective / Orthographic", "Numpad 5", nullptr, [&ed]() { ed.m_camMode = ViewMode::EditorCam; ed.m_perspectiveCam = !ed.m_perspectiveCam; });
+   add("View" + sep + "Cycle Camera (Preview / Editor / Backdrop)", "Numpad 0", nullptr, [&ed]() { ed.CycleCamera(); });
    add("View" + sep + "Lock Orbit", "Numpad /", nullptr, [&ed]() { ed.m_orbitLock = !ed.m_orbitLock; });
-   add("View" + sep + "Orbit Left", "4", nullptr, [&ed]() { ed.OrbitStep(true, 1.f); });
-   add("View" + sep + "Orbit Right", "6", nullptr, [&ed]() { ed.OrbitStep(true, -1.f); });
-   add("View" + sep + "Orbit Up", "8", nullptr, [&ed]() { ed.OrbitStep(false, 1.f); });
-   add("View" + sep + "Orbit Down", "2", nullptr, [&ed]() { ed.OrbitStep(false, -1.f); });
+   add("View" + sep + "Orbit Left", "Numpad 4", nullptr, [&ed]() { ed.OrbitStep(true, 1.f); });
+   add("View" + sep + "Orbit Right", "Numpad 6", nullptr, [&ed]() { ed.OrbitStep(true, -1.f); });
+   add("View" + sep + "Orbit Up", "Numpad 8", nullptr, [&ed]() { ed.OrbitStep(false, 1.f); });
+   add("View" + sep + "Orbit Down", "Numpad 2", nullptr, [&ed]() { ed.OrbitStep(false, -1.f); });
    add("View" + sep + "Frame Selected", "F", hasPart, [&ed]() { ed.FrameSelection(); });
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
@@ -151,7 +161,8 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Toggle Maximize Area", "Ctrl+Space", nullptr, [&ed]() { ed.ToggleMaximizeArea(); });
    add("View" + sep + "Tool Shelf", "", nullptr, [&ed]() { ed.m_chrome.ToggleToolShelf(); });
    add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });
-   add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
+   add("View" + sep + "Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
+   add("View" + sep + "Menu Search...", "F3", nullptr, [&ed]() { ed.m_palette.Open(); });
    // Edit menu
    add("Edit" + sep + "Undo", "Ctrl+Z", [&ed]() { return ed.CanUndo(); }, [&ed]() { ed.UndoSteps(1); });
    add("Edit" + sep + "Redo", "Ctrl+Shift+Z", [&ed]() { return ed.CanRedo(); }, [&ed]() { ed.RedoSteps(1); });
@@ -162,25 +173,29 @@ void SearchPalette::BuildOperators()
       {
          ed.PasteSelection(ed.GetViewportContentCenter());
       });
-   add("Edit" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
-   add("Edit" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
    add("Edit" + sep + "Select All", "A", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.SelectAllAction(); });
    add("Edit" + sep + "Deselect", "Alt+A", [&ed]() { return ed.CanSelect() && ed.m_selection.GetType() != Selection::S_NONE; }, [&ed]() { ed.ClearSelection(); });
    add("Edit" + sep + "Invert Selection", "Ctrl+I", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.InvertSelection(); });
-   add("Edit" + sep + "Adjust Last Operation", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None; },
+   add("Edit" + sep + "Adjust Last Operation...", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None; },
       [&ed]()
       {
          ed.m_adjustPopupOpen = true;
          ed.m_adjustPopupJustOpened = true;
          ed.m_adjustPopupPos = ImGui::GetMousePos();
       });
-   add("Edit" + sep + "Toggle Snapping", "Shift+Tab", nullptr, [&ed]() { ed.ToggleSnapping(); });
+   add("Edit" + sep + "Snapping", "Shift+Tab", nullptr, [&ed]() { ed.ToggleSnapping(); });
    add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
+   add("Object" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
+   add("Object" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
+   add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
+   add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
+   add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
+   add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
    add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
-   add("Object" + sep + "Edit Points", "Tab", editablePart, [&ed]() { ed.EnterPointEditMode(); });
+   add("Object" + sep + "Edit Points", "Tab", [&ed]() { return ed.CanEnterPointEdit(); }, [&ed]() { ed.EnterPointEditMode(); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::Geometry); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry Bottom", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::GeometryBottom); });
-   add("Tools" + sep + "Convert to PBR", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });
+   add("Tools" + sep + "Convert to PBR...", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });
    add("Debug" + sep + "Renderer Inspection", "", unlocked, [&ed]() { ed.m_inspectionModal.Show(); });
    for (int i = 0; i < PinnedPanel::WorkspaceCount; ++i)
    {
@@ -248,6 +263,7 @@ void SearchPalette::RefreshCatalog()
    {
       int seq;
       string group;
+      string shown;
    };
    vector<std::unordered_map<string, Entry>> found(m_types.size());
    for (const auto &[id, def] : m_editor.m_pinned.GetDefs())
@@ -267,9 +283,9 @@ void SearchPalette::RefreshCatalog()
       }
       if (type < 0 || type >= static_cast<int>(found.size()))
          continue;
-      const auto [it, added] = found[type].try_emplace(def.key.prop, Entry { def.seq, def.group });
+      const auto [it, added] = found[type].try_emplace(def.key.prop, Entry { def.seq, def.group, def.label.empty() ? def.key.prop : def.label });
       if (!added && def.seq < it->second.seq)
-         it->second = Entry { def.seq, def.group };
+         it->second = Entry { def.seq, def.group, def.label.empty() ? def.key.prop : def.label };
    }
    for (size_t t = 0; t < found.size(); ++t)
    {
@@ -286,7 +302,8 @@ void SearchPalette::RefreshCatalog()
       for (const auto &o : order)
       {
          const string &group = found[t][*o.second].group;
-         fields.push_back({ *o.second, group, Lower(*o.second), Lower(group) });
+         const string &shown = found[t][*o.second].shown;
+         fields.push_back({ *o.second, group, Lower(*o.second), Lower(group), shown, Lower(shown) });
       }
    }
 }
@@ -335,7 +352,8 @@ void SearchPalette::MakeResult(Result &r) const
    {
       const Operator &op = m_ops[r.op];
       r.label = op.label;
-      r.right = op.path == op.label ? string() : op.path;
+      // Parent path only: the label is the last component of the path
+      r.right = op.path == op.label ? string() : op.path.substr(0, op.path.size() - op.label.size() - strlen(kSep) - 2);
       r.chip = op.shortcut;
       return;
    }
@@ -343,23 +361,26 @@ void SearchPalette::MakeResult(Result &r) const
    const TypeInfo &type = m_types[o.type];
    if (r.isField)
    {
+      string shown;
       if (r.field >= 0)
       {
          r.prop = type.fields[r.field].label;
          r.group = type.fields[r.field].group;
+         shown = type.fields[r.field].shown;
       }
       else
       {
          const PinnedPanel::Def *def = m_editor.m_pinned.FindDef(PinKey { o.kind, o.name, r.prop });
          r.group = def ? def->group : string();
+         if (def && !def->label.empty())
+            shown = def->label;
       }
-      r.label = o.display + " " + kSep + " " + r.prop;
+      r.label = o.display + " " + kSep + " " + (shown.empty() ? r.prop : shown);
       r.right = r.group.empty() ? type.name : r.group + " " + kDot + " " + type.name;
    }
    else
    {
-      r.label = o.display + "  (select)";
-      r.right = type.name;
+      r.label = o.display + " " + kDot + " " + type.name;
    }
 }
 
@@ -513,8 +534,8 @@ void SearchPalette::Recompute()
          {
             if (mask & (1u << w))
                continue;
-            if (const int m = MatchWord(field.labelLower, words[w]); m != 0)
-               total += (m == 2 ? 40 : 30) + (field.labelLower == words[w] ? 25 : 0); // Exact label first
+            if (const int m = std::max(MatchWord(field.shownLower, words[w]), MatchWord(field.labelLower, words[w])); m != 0)
+               total += (m == 2 ? 40 : 30) + (field.shownLower == words[w] ? 25 : 0); // Exact label first
             else if (const int g = MatchWord(field.groupLower, words[w]); g != 0)
                total += g == 2 ? 20 : 15;
             else
@@ -853,9 +874,17 @@ void SearchPalette::Render()
                const ImVec2 chipSize = ImGui::CalcTextSize(r.chip.c_str());
                const ImVec2 chipMax(itemMax.x - 8.f * dpi, itemMin.y + 0.5f * (rowH + chipSize.y) + chipPad);
                const ImVec2 chipMin(chipMax.x - chipSize.x - 2.f * chipPad, chipMax.y - chipSize.y - 2.f * chipPad);
-               draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
-               draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
-               draw->AddText(ImVec2(chipMin.x + chipPad, chipMin.y + chipPad), EditorTheme::TextDim, r.chip.c_str());
+               if (selected) // Dark chip on the blue row so that the keys stay readable
+               {
+                  draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(0, 0, 0, 90), 3.f * dpi);
+                  draw->AddText(ImVec2(chipMin.x + chipPad, chipMin.y + chipPad), EditorTheme::Text, r.chip.c_str());
+               }
+               else
+               {
+                  draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
+                  draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
+                  draw->AddText(ImVec2(chipMin.x + chipPad, chipMin.y + chipPad), EditorTheme::TextDim, r.chip.c_str());
+               }
                metaRight = chipMin.x - margin;
             }
             // Skip the meta column when it would overlap the label

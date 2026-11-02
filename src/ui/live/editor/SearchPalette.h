@@ -36,6 +36,7 @@ private:
    {
       string label, group;
       string labelLower, groupLower;
+      string shown, shownLower; // Label shown in the UI (label is the stable key)
    };
    // Object type (table, material or part item type) with the fields learned from the pin registry
    struct TypeInfo

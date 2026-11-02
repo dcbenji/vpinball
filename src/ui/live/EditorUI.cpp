@@ -1362,6 +1362,22 @@ void EditorUI::RenderAreaCorners()
             const bool anti = corner == 0 || corner == 3;
             ImGui::GetWindowDrawList()->AddLine(anti ? ImVec2(x + side, y) : ImVec2(x, y), anti ? ImVec2(x, y + side) : ImVec2(x + side, y + side), EditorTheme::TextDim, 1.f);
          }
+         else if (!m_areaDrag.active)
+         {
+            // Faint permanent diagonal hatch (two short strokes) so the zone can be found before it is hovered
+            const float len = 10.f * dpi, gap = 3.5f * dpi;
+            const float sx = (corner & 1) ? -1.f : 1.f, sy = (corner & 2) ? -1.f : 1.f;
+            const ImVec2 origin((corner & 1) ? leaf.rect.x1 : leaf.rect.x0, (corner & 2) ? leaf.rect.y1 : leaf.rect.y0);
+            ImDrawList *const dl = ImGui::GetWindowDrawList(); // The corner window's own list: windows above it (tooltips, floating panels) cover the hatch
+            dl->PushClipRect(ImVec2(leaf.rect.x0, leaf.rect.y0), ImVec2(leaf.rect.x1, leaf.rect.y1), false);
+            const ImU32 hatch = (EditorTheme::TextDim & ~IM_COL32_A_MASK) | (70u << IM_COL32_A_SHIFT);
+            for (int k = 1; k <= 2; k++)
+            {
+               const float d = len - gap * static_cast<float>(k - 1) * 2.f;
+               dl->AddLine(ImVec2(origin.x + sx * d, origin.y), ImVec2(origin.x, origin.y + sy * d), hatch, 1.f);
+            }
+            dl->PopClipRect();
+         }
          ImGui::End();
          ImGui::PopStyleVar(2);
          if (activated && !m_areaDrag.active)
@@ -1999,7 +2015,7 @@ void EditorUI::RenderUI()
       }
       ImGui::SameLine();
       ImGui::SetItemDefaultFocus();
-      if (ImGui::Button("Cancel"))
+      if (ImGui::Button("Cancel") || PropertyPane::ModalEscapePressed())
       {
          m_pendingNewTable.reset();
          m_pendingClose.reset();
@@ -2230,7 +2246,14 @@ void EditorUI::RenderUI()
       }
 
       if (m_modal.active && m_viewportVisible)
-         overlayDrawList->AddText(ImVec2(m_viewportContentRect.x0 + 16.f * m_liveUI.GetDPI(), m_viewportContentRect.y1 - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+      {
+         // Modal readout on the viewport header line (top centre, on a dark pill), like Blender's header text
+         const float dpi = m_liveUI.GetDPI();
+         const ImVec2 textSize = ImGui::CalcTextSize(m_modal.hud.c_str());
+         const float x = (m_viewportContentRect.x0 + m_viewportContentRect.x1 - textSize.x) * 0.5f, y = m_viewportContentRect.y0 + 8.f * dpi;
+         overlayDrawList->AddRectFilled(ImVec2(x - 10.f * dpi, y - 3.f * dpi), ImVec2(x + textSize.x + 10.f * dpi, y + textSize.y + 3.f * dpi), IM_COL32(20, 20, 22, 200), 4.f * dpi);
+         overlayDrawList->AddText(ImVec2(x, y), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+      }
 
       // In desktop backdrop mode, draw the bounds of the backdrop area
       if (m_camMode == ViewMode::DesktopBackdrop)
@@ -2984,7 +3007,7 @@ void EditorUI::PushUndo(IEditable *part, unsigned int undoId, const string &labe
 
 string EditorUI::CountLabel(const char *verb, const size_t count, const string &name)
 {
-   return count == 1 ? string(verb) + " " + name : string(verb) + " " + std::to_string(count) + " parts";
+   return count == 1 ? string(verb) + ": " + name : string(verb) + ": " + std::to_string(count) + " parts";
 }
 
 // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
@@ -4345,7 +4368,7 @@ void EditorUI::UpdateModalTransform()
       result._42 += delta.y;
       result._43 += delta.z;
       m_modal.lastDelta = delta;
-      snprintf(text, sizeof(text), "Grab%s  %.2f  %.2f  %.2f%s%s%s", axisText.c_str(), delta.x, delta.y, delta.z, snapText, hasValue ? "   [" : "", hasValue ? (m_modal.typed + "]").c_str() : "");
+      snprintf(text, sizeof(text), "Move%s  %.2f  %.2f  %.2f vpu%s%s%s", axisText.c_str(), delta.x, delta.y, delta.z, snapText, hasValue ? "   [" : "", hasValue ? (m_modal.typed + "]").c_str() : "");
       break;
    }
    case ModalOp::Rotate:
@@ -4726,12 +4749,15 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 // Entered/exited with Tab (or Escape). The selection is saved on entry and restored on exit.
 //
 
+bool EditorUI::CanEnterPointEdit() const
+{
+   return m_pointEditPart == nullptr && !IsInspectMode() && !m_table->IsLocked() && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart() != nullptr
+      && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter());
+}
+
 void EditorUI::EnterPointEditMode()
 {
-   if (m_pointEditPart || IsInspectMode() || m_table->IsLocked())
-      return;
-   if (m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr
-      || (m_selection.GetPart()->GetDragPointCurve() == nullptr && !m_selection.GetPart()->HasEditCenter()))
+   if (!CanEnterPointEdit())
       return;
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
@@ -5079,22 +5105,44 @@ bool EditorUI::RenderAdjustParameters()
       ImGui::PopStyleColor();
       ImGui::SameLine(84.f * dpi);
    };
+   // X / Y / Z drag fields with a letter cue; values that display as zero are shown as 0.00, never "-0.00" (the stored value is only written back when edited)
+   const auto dragVec = [width](const char *id, float *v, const int n)
+   {
+      bool edited = false;
+      ImGui::BeginGroup(); // One item for the tooltip
+      static constexpr const char *formats[] = { "X  %.2f", "Y  %.2f", "Z  %.2f" };
+      const float w = (width - ImGui::GetStyle().ItemSpacing.x * static_cast<float>(n - 1)) / static_cast<float>(n);
+      for (int i = 0; i < n; i++)
+      {
+         float shown = fabsf(v[i]) < 0.005f ? 0.f : v[i];
+         if (i > 0)
+            ImGui::SameLine();
+         ImGui::SetNextItemWidth(w);
+         if (ImGui::DragFloat((string(id) + std::to_string(i)).c_str(), &shown, 1.f, 0.f, 0.f, formats[i]))
+         {
+            v[i] = shown;
+            edited = true;
+         }
+      }
+      ImGui::EndGroup();
+      return edited;
+   };
    switch (m_lastOp.type)
    {
    case LastOperation::Type::Move:
       row("Delta");
-      changed |= ImGui::DragFloat3("##Delta", &m_lastOp.offset.x, 1.f, 0.f, 0.f, "%.2f");
+      changed |= dragVec("##Delta", &m_lastOp.offset.x, 3);
       ImGui::SetItemTooltip("X, Y, Z in VP units");
       break;
    case LastOperation::Type::Paste:
    case LastOperation::Type::Duplicate:
       row("Offset");
-      changed |= ImGui::DragFloat3("##Offset", &m_lastOp.offset.x, 1.f, 0.f, 0.f, "%.2f");
+      changed |= dragVec("##Offset", &m_lastOp.offset.x, 3);
       ImGui::SetItemTooltip("X, Y, Z in VP units, from the %s", m_lastOp.type == LastOperation::Type::Duplicate ? "duplicated parts" : "copied parts");
       break;
    case LastOperation::Type::Add:
       row("Position");
-      changed |= ImGui::DragFloat2("##Position", &m_lastOp.offset.x, 1.f, 0.f, 0.f, "%.2f");
+      changed |= dragVec("##Position", &m_lastOp.offset.x, 2);
       ImGui::SetItemTooltip("X, Y in VP units");
       break;
    case LastOperation::Type::Rotate:
@@ -5149,7 +5197,7 @@ void EditorUI::RenderAdjustPanel()
       return;
    }
    bool changed = false;
-   if (m_viewportVisible) // The floating panel belongs to the viewport area; the F9 popup below does not
+   if (m_viewportVisible && !m_adjustPopupOpen) // The floating panel belongs to the viewport area; the F9 popup below does not (and replaces the panel while open)
    {
       const float dpi = m_liveUI.GetDPI();
       const char *const name = LastOperationName(m_lastOp.type);
