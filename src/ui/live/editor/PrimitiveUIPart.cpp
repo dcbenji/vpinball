@@ -383,6 +383,16 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_domeFluteDepth; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeFluteDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2, "Flute depth scale (1 = measured from the mesh)");
       props.SliderFloat<Primitive>(
+         m_part, "Dome Peak White"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domePeak; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domePeak = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
+         "At full power the lit body and the top go white-hot like a real flash (0 = stays red at the peak); also a hot spot in the middle of the cap");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Depth"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeDepth; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
+         "Lamp off: the far wall's ridges seen through the cavity, each flute lensing its own slice, so something moves inside as you move (0 = off)");
+      props.SliderFloat<Primitive>(
          m_part, "Dome Glints"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeGlint; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeGlint = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
