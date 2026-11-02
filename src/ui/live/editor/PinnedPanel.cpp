@@ -1068,7 +1068,8 @@ void PinnedPanel::RenderViewTab()
    if (ImGui::Button("Frame Selected", ImVec2(width, 0.f)))
       editor.FrameSelection();
    ImGui::EndDisabled();
-   ImGui::SetItemTooltip(editor.CanFrameSelection() ? "F / Numpad ." : "Nothing selected");
+   if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("%s", editor.CanFrameSelection() ? "F / Numpad ." : "Nothing selected");
    if (ImGui::Button("Frame All", ImVec2(width, 0.f)))
       editor.FrameAll();
    ImGui::SetItemTooltip("Home");

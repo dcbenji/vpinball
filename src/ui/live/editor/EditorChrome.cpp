@@ -215,7 +215,13 @@ void EditorChrome::RenderMenuBar()
       {
          // Blender style: the menu names the step ("Undo Move: Part1"), cut at 40 characters
          const auto stepTitle = [](const char *verb, const string &step)
-         { return step.empty() ? string(verb) : string(verb) + ' ' + (step.size() > 40 ? step.substr(0, 37) + "..." : step); };
+         {
+            size_t n = 37; // Cut on a code point boundary
+            if (step.size() > 40)
+               while (n > 0 && (static_cast<unsigned char>(step[n]) & 0xC0) == 0x80)
+                  --n;
+            return step.empty() ? string(verb) : string(verb) + ' ' + (step.size() > 40 ? step.substr(0, n) + "..." : step);
+         };
          if (ImGui::MenuItem((stepTitle("Undo", editor.CanUndo() && editor.m_undo.UndoCount() > 0 ? editor.m_undo.UndoLabel(0) : string()) + "###EditUndo").c_str(), "Ctrl+Z", false, editor.CanUndo()))
             editor.UndoSteps(1);
          if (ImGui::MenuItem((stepTitle("Redo", editor.CanRedo() && editor.m_undo.RedoCount() > 0 ? editor.m_undo.RedoLabel(0) : string()) + "###EditRedo").c_str(), "Ctrl+Shift+Z", false, editor.CanRedo()))

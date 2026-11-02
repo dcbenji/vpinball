@@ -154,6 +154,8 @@ public:
    static void RoundDragged(float *values, const float *before, int count, int decimals);
    // Esc that cancelled a drag or a typed value: the editor must not treat it as its own Esc. True from the press until the key is released
    static bool ConsumeEscape();
+   // Esc press that closes a modal: latched so that its release is not taken as an editor Esc (deselect, cancel)
+   static bool ModalEscapePressed() { return ImGui::IsKeyPressed(ImGuiKey_Escape, false) && (s_escConsumed = true); }
    // A drag / typed edit was cancelled this frame and the value restored: the undo step it had started must be dropped. True once
    static bool ConsumeEditCancel()
    {

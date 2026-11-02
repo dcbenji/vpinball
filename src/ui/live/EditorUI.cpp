@@ -2015,7 +2015,7 @@ void EditorUI::RenderUI()
       }
       ImGui::SameLine();
       ImGui::SetItemDefaultFocus();
-      if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      if (ImGui::Button("Cancel") || PropertyPane::ModalEscapePressed())
       {
          m_pendingNewTable.reset();
          m_pendingClose.reset();

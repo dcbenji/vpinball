@@ -2095,7 +2095,7 @@ void PropertiesPanel::RenderPopups()
          ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      if (ImGui::Button("Cancel") || PropertyPane::ModalEscapePressed())
       {
          m_confirmAction = nullptr;
          ImGui::CloseCurrentPopup();
