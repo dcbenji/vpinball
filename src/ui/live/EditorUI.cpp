@@ -1232,7 +1232,7 @@ void EditorUI::RenderUI()
    if (panelsShown && ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       m_palette.Toggle();
    // Outliner filter (shows the outliner if a workspace hid it)
-   if (panelsShown && !m_table->IsLocked() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   if (panelsShown && !m_table->IsLocked() && (!io.WantTextInput || !m_palette.IsOpen()) && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
       m_showOutliner = true;
       m_outliner.FocusFilter();
