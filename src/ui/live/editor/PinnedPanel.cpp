@@ -300,10 +300,18 @@ void PinnedPanel::SaveTo(PinTable *table) const
       float outlinerWidth = AreaLayout::kDefaultOutlinerWidth, propertiesWidth = AreaLayout::kDefaultPropertiesWidth;
       int leftEditor = 0, rightEditor = 1;
       ws.layout.ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
-      list.push_back({ { "name", ws.name }, { "sidebar", ws.sidebar }, { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "sidebar_width", ws.sidebarWidth },
+      nlohmann::ordered_json entry = { { "name", ws.name }, { "sidebar", ws.sidebar }, { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "sidebar_width", ws.sidebarWidth },
          { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "layout", nlohmann::ordered_json::parse(ws.layout.ToJson().dump()) }, { "outliner", outliner },
          { "properties", properties }, { "outliner_width", outlinerWidth }, { "properties_width", propertiesWidth }, { "left_editor", leftEditor },
-         { "right_editor", rightEditor }, { "pins", pins } });
+         { "right_editor", rightEditor }, { "pins", pins } };
+      if (ws.presetSizes)
+      {
+         // Never visited: written without sizes (no tree, widths 0), so that it still follows the current sizes when it is first applied
+         entry.erase("layout");
+         entry["outliner_width"] = 0.f;
+         entry["properties_width"] = 0.f;
+      }
+      list.push_back(std::move(entry));
    }
    nlohmann::ordered_json doc = { { "active", workspaces[m_activeWorkspace].name }, { "workspaces", list } };
    table->m_editorWorkspaces = doc.dump();
@@ -316,6 +324,7 @@ void PinnedPanel::ResetWorkspaces()
    m_workspaces[1] = Workspace { "Look-dev"s, true, static_cast<int>(EditorUI::SidebarTab::Look) };
    m_workspaces[1].layout = AreaLayout::FromLegacy(false, true, 0.f, 0.f, static_cast<int>(AreaType::Outliner), static_cast<int>(AreaType::Properties));
    m_workspaces[2] = Workspace { "Wiring"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   // (the Wiring preset below, when it is a tree of its own, has sizes of its own)
    // Wiring: with kWiringBesideScript the script sits under the Properties editor, beside the fields being wired (Ben's call: the
    // recommended preset of the layout spec), otherwise it is Layout, as it was before the layout tree
    static constexpr bool kWiringBesideScript = false;
@@ -326,7 +335,10 @@ void PinnedPanel::ResetWorkspaces()
             { "split": "horizontal", "fixed": "second", "size": 380, "children": [ { "editor": "Properties" }, { "editor": "Script" } ] } ] } ] })");
       AreaLayout layout;
       if (layout.FromJson(wiring))
+      {
          m_workspaces[2].layout = layout;
+         m_workspaces[2].presetSizes = false;
+      }
    }
 }
 
@@ -339,6 +351,7 @@ void PinnedPanel::CaptureWorkspace(Workspace &ws) const
    ws.outlinerMode = editor.m_outliner.GetDisplayMode();
    ws.outlinerTypes = editor.m_outliner.GetTypeMask();
    ws.layout = editor.m_areas;
+   ws.presetSizes = false;
    ws.pins = m_pins;
 }
 
@@ -377,7 +390,19 @@ void PinnedPanel::ApplyWorkspace(int index)
       editor.m_outliner.SetDisplayMode(ws.outlinerMode);
    if (ws.outlinerTypes >= 0)
       editor.m_outliner.SetTypeMask(static_cast<uint32_t>(ws.outlinerTypes));
-   editor.SetAreaLayout(ws.layout); // A copy: the workspace keeps its own tree until it is captured again
+   if (ws.presetSizes)
+   {
+      // A preset that was never visited keeps the sizes the user has now (widening Properties in Layout must not snap back in Look-dev): the
+      // preset's visibility and editor types, on the current outliner and properties widths
+      bool outliner = true, properties = true, curOutliner = true, curProperties = true;
+      float outlinerWidth = 0.f, propertiesWidth = 0.f, curOutlinerWidth = 0.f, curPropertiesWidth = 0.f;
+      int leftEditor = 0, rightEditor = 1, curLeft = 0, curRight = 1;
+      ws.layout.ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+      editor.m_areas.ToLegacy(curOutliner, curProperties, curOutlinerWidth, curPropertiesWidth, curLeft, curRight);
+      m_workspaces[index].layout = AreaLayout::FromLegacy(outliner, properties, curOutlinerWidth, curPropertiesWidth, leftEditor, rightEditor);
+      m_workspaces[index].presetSizes = false;
+   }
+   editor.SetAreaLayout(m_workspaces[index].layout); // A copy: the workspace keeps its own tree until it is captured again
 }
 
 void PinnedPanel::LoadWorkspaces(const string &json)
@@ -419,6 +444,7 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                   if (parsed.FromJson(*layout) && parsed.Validate()) // Logs the reason when it is rejected
                   {
                      ws.layout = parsed;
+                     ws.presetSizes = false;
                      haveLayout = true;
                   }
                }
@@ -435,6 +461,8 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                   leftEditor = entry.value("left_editor", leftEditor); // Missing in tables saved before the editor types: the defaults
                   rightEditor = entry.value("right_editor", rightEditor);
                   ws.layout = AreaLayout::FromLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+                  // Legacy keys without widths (0 or missing): the sizes are still unset
+                  ws.presetSizes = outlinerWidth <= 0.f && propertiesWidth <= 0.f;
                }
                ws.pins.clear();
                if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())

@@ -664,7 +664,7 @@ void EditorUI::RenderSplitters()
    const ImGuiIO &io = ImGui::GetIO();
    // Returns whether the strip is being dragged. The strip is a window like the former fixed splitters (same flags and cursor), the highlight
    // is drawn on hover / drag, and the seam line only between areas that are not the 3D view (the areas have no border of their own)
-   const auto strip = [&](const char *id, const AreaRect &grab, const bool vertical, const bool seam, bool &activated) -> bool
+   const auto strip = [&](const char *id, const AreaRect &grab, const bool vertical, const bool seam, bool &activated, bool *rightClicked = nullptr) -> bool
    {
       ImGui::SetNextWindowPos(ImVec2(grab.x0, grab.y0));
       ImGui::SetNextWindowSize(ImVec2(grab.Width(), grab.Height()));
@@ -672,9 +672,13 @@ void EditorUI::RenderSplitters()
       ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f)); // The default 32 px minimum widened the grab strip over the areas' edges (the Properties tab strip got no clicks)
       ImGui::Begin(id, nullptr,
          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
-            | ImGuiWindowFlags_NoNav);
+            | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus); // Never raised by a click: the corner zones, created after the strips, stay above them
+      if (m_raiseAreaWindows)
+         ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow()); // After a layout change (new windows are created on top): strips, then corners
       ImGui::InvisibleButton("##grab", ImVec2(grab.Width(), grab.Height()));
       activated = ImGui::IsItemActivated();
+      if (rightClicked != nullptr)
+         *rightClicked = ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
       const bool active = ImGui::IsItemActive();
       const float mid = vertical ? 0.5f * (grab.x0 + grab.x1) : 0.5f * (grab.y0 + grab.y1);
       ImDrawList *const drawList = ImGui::GetWindowDrawList();
@@ -713,8 +717,15 @@ void EditorUI::RenderSplitters()
       const bool seam = !hasViewport(hasViewport, static_cast<int>(node - nodes.data()));
       char name[32];
       snprintf(name, sizeof(name), "##Split%d", split.nodeId);
-      bool activated = false;
-      const bool active = strip(name, split.grab, vertical, seam, activated);
+      bool activated = false, menuRequested = false;
+      const bool active = strip(name, split.grab, vertical, seam, activated, &menuRequested);
+      if (menuRequested && m_areaModal == AreaModalKind::None && CanUseAreaTools())
+      {
+         // Right click on a divider: Blender's area edge menu (Vertical / Horizontal Split, Join Areas, Swap Areas)
+         m_edgeMenuNode = split.nodeId;
+         m_edgeMenuRequest = true;
+         m_edgeMenuPos = io.MousePos;
+      }
       if (activated)
       {
          m_splitDragNode = split.nodeId;
@@ -747,6 +758,11 @@ void EditorUI::RenderSplitters()
       if (strip("##SplitSidebar", grab, true, false, activated))
          m_sidebarWidth = clamp(m_sidebarWidth - io.MouseDelta.x / dpi, 140.f, 0.45f * viewport->Size.x / dpi);
    }
+   // Corner zones above the strips, then the edge menu and the modes it starts (their input catcher is the last window)
+   RenderAreaCorners();
+   RenderAreaEdgeMenu();
+   RenderAreaModal();
+   m_raiseAreaWindows = false;
 }
 
 const char *EditorUI::AreaEditorName(const AreaEditor type)
@@ -796,6 +812,9 @@ void EditorUI::SetAreaLayout(const AreaLayout &layout)
    m_pendingAreaOps.clear();
    m_maximizedLeafId = -1;
    m_splitDragNode = -1;
+   CancelAreaInteraction(false);
+   m_hoverLeaf = -1;
+   m_raiseAreaWindows = true;
    if (m_areas.IsHosted(AreaEditor::PartLibrary))
       m_partLibrary.Show(); // Rescan the library folders
    ComputeAreaRects();
@@ -832,7 +851,24 @@ void EditorUI::ToggleAreaEditor(const AreaEditor type)
 
 void EditorUI::ToggleMaximizeArea()
 {
-   // Ctrl+Space: filled in by the split / join task
+   // Blender's Ctrl+Space: the area under the mouse fills the tree (the bars stay), a second press restores the layout. The View menu and the palette
+   // call it with the mouse over their own popup: m_hoverLeaf is the area hovered before it opened. Nothing hovered (nor a viewport): the viewport area
+   PendingAreaOp op;
+   op.kind = PendingAreaOp::Kind::Maximize;
+   if (m_maximizedLeafId < 0)
+   {
+      int leaf = m_hoverLeaf;
+      if (leaf < 0 || m_areas.Find(leaf) == nullptr)
+         leaf = m_areas.FindLeaf(AreaType::Viewport);
+      const AreaNode *const node = leaf >= 0 ? m_areas.Find(leaf) : nullptr;
+      if (node == nullptr || node->hidden)
+      {
+         Report("No area to maximize");
+         return;
+      }
+      op.leaf = leaf;
+   }
+   QueueAreaOp(op); // leaf -1 restores
 }
 
 ImVec2 EditorUI::GetViewportContentCenter() const
@@ -1009,9 +1045,26 @@ void EditorUI::UpdateAreaLayout()
       m_pendingAreaOps.clear();
       ComputeAreaRects(); // Widths and sides are evaluated on the current rects
       for (const PendingAreaOp &op : ops)
-         ApplyAreaOp(op);
+      {
+         const bool applied = ApplyAreaOp(op);
+         m_raiseAreaWindows |= applied;
+         if (!applied && op.kind == PendingAreaOp::Kind::Split)
+            Report("Cannot split this area");
+         else if (!applied && op.kind == PendingAreaOp::Kind::Join)
+            Report("Cannot join these areas");
+      }
    }
    ComputeAreaRects();
+   // Area under the mouse, for the maximize toggle: not while a popup (View menu, editor type) or the palette covers the areas
+   if (!ImGui::IsPopupOpen(static_cast<ImGuiID>(0), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) && !m_palette.IsOpen())
+   {
+      const ImVec2 mouse = ImGui::GetMousePos();
+      const int under = AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y);
+      if (under >= 0)
+         m_hoverLeaf = under;
+   }
+   if (m_hoverLeaf >= 0 && m_areas.Find(m_hoverLeaf) == nullptr)
+      m_hoverLeaf = -1;
 }
 
 void EditorUI::ComputeAreaRects() const
@@ -1063,6 +1116,481 @@ void EditorUI::ComputeAreaRects() const
          m_areaRectsLog = text;
          PLOGI << "AreaLayout: " << text;
       }
+   }
+}
+
+bool EditorUI::CanUseAreaTools() const
+{
+   // The corner zones, the edge menu and their modes only exist while nothing else owns the mouse
+   if (m_table->IsLocked() || m_flyMode || m_inspectionModal.IsVisible() || m_fileOp != nullptr)
+      return false;
+   if (m_modal.active || IsDragInProgress() || m_pointEditPart != nullptr)
+      return false;
+   if (IsInspectMode() && m_player->IsGameRunning())
+      return false; // The game owns the keys and the mouse
+   return m_maximizedLeafId < 0 && !m_palette.IsOpen();
+}
+
+const LeafRect *EditorUI::FindLeafRect(const int leafId) const
+{
+   for (const LeafRect &leaf : m_leafRects)
+      if (leaf.id == leafId && leaf.visible)
+         return &leaf;
+   return nullptr;
+}
+
+bool EditorUI::PlanAreaSplit(const int leafId, const SplitAxis axis, const bool newOnSecondSide, const ImVec2 &cursor, AreaSplitPlan &plan) const
+{
+   // Divider of a split of the area at the cursor: the new area is on the side of newOnSecondSide (right / bottom), both parts keep their minimum size
+   plan = AreaSplitPlan();
+   plan.axis = axis;
+   const LeafRect *const leaf = FindLeafRect(leafId);
+   if (leaf == nullptr)
+   {
+      plan.reason = "Area not found";
+      return false;
+   }
+   plan.leaf = leaf->rect;
+   const float dpi = m_liveUI.GetDPI();
+   const bool vertical = axis == SplitAxis::Vertical;
+   const float lo = vertical ? leaf->rect.x0 : leaf->rect.y0;
+   const float hi = vertical ? leaf->rect.x1 : leaf->rect.y1;
+   plan.line = clamp(roundf(vertical ? cursor.x : cursor.y), lo, hi);
+   for (int i = 0; i < kPanelTypeCount; ++i)
+      if (!m_areas.IsHosted(static_cast<AreaType>(i)))
+      {
+         plan.newType = static_cast<AreaType>(i); // Same order as AreaLayout::Split
+         break;
+      }
+   if (plan.newType == AreaType::Count)
+   {
+      plan.reason = "All editors are shown";
+      return false;
+   }
+   if (!m_areas.CanSplit(leafId))
+   {
+      plan.reason = "Cannot split this area";
+      return false;
+   }
+   const float newMin = (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH) * dpi;
+   const float keepMin = (leaf->type == AreaType::Viewport ? (vertical ? AreaLayout::kViewportMinW + (m_showSidebar ? m_sidebarWidth : 0.f) : AreaLayout::kViewportMinH)
+                                                           : (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH))
+      * dpi;
+   if (hi - lo < newMin + keepMin)
+   {
+      plan.reason = "Area too small to split";
+      return false;
+   }
+   plan.line = roundf(clamp(plan.line, newOnSecondSide ? lo + keepMin : lo + newMin, newOnSecondSide ? hi - newMin : hi - keepMin));
+   plan.size = (newOnSecondSide ? hi - plan.line : plan.line - lo) / dpi;
+   plan.newRect = leaf->rect;
+   if (vertical)
+   {
+      if (newOnSecondSide)
+         plan.newRect.x0 = plan.line;
+      else
+         plan.newRect.x1 = plan.line;
+   }
+   else if (newOnSecondSide)
+      plan.newRect.y0 = plan.line;
+   else
+      plan.newRect.y1 = plan.line;
+   plan.ok = true;
+   return true;
+}
+
+const char *EditorUI::AreaJoinRefusal(const int keepId, const int consumeId) const
+{
+   const AreaNode *const keep = m_areas.Find(keepId);
+   const AreaNode *const consume = m_areas.Find(consumeId);
+   if (keep == nullptr || consume == nullptr)
+      return "Area not found";
+   if (!consume->isSplit && consume->type == AreaType::Viewport)
+      return "The 3D Viewport cannot be joined away";
+   if (keep->isSplit || consume->isSplit)
+      return "Areas with sub-areas cannot be joined";
+   if (m_areas.ParentId(keepId) < 0 || m_areas.ParentId(keepId) != m_areas.ParentId(consumeId))
+      return "Areas must share a full edge to be joined";
+   return "Cannot join these areas";
+}
+
+void EditorUI::DrawAreaSplitPreview(const AreaSplitPlan &plan) const
+{
+   ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+   const bool vertical = plan.axis == SplitAxis::Vertical;
+   const ImVec2 a = vertical ? ImVec2(plan.line, plan.leaf.y0) : ImVec2(plan.leaf.x0, plan.line);
+   const ImVec2 b = vertical ? ImVec2(plan.line, plan.leaf.y1) : ImVec2(plan.leaf.x1, plan.line);
+   const auto centeredText = [&](const AreaRect &rect, const char *text, const ImU32 color)
+   {
+      const ImVec2 size = ImGui::CalcTextSize(text);
+      drawList->AddText(ImVec2(0.5f * (rect.x0 + rect.x1) - 0.5f * size.x, 0.5f * (rect.y0 + rect.y1) - 0.5f * size.y), color, text);
+   };
+   if (plan.ok)
+   {
+      // The new area is tinted and named, the divider is where the split will be
+      drawList->AddRectFilled(ImVec2(plan.newRect.x0, plan.newRect.y0), ImVec2(plan.newRect.x1, plan.newRect.y1), IM_COL32(237, 145, 62, 38));
+      centeredText(plan.newRect, AreaEditorName(plan.newType), EditorTheme::Text);
+      drawList->AddLine(a, b, EditorTheme::Accent, 2.f);
+   }
+   else
+   {
+      drawList->AddLine(a, b, IM_COL32(150, 150, 150, 220), 2.f);
+      centeredText(plan.leaf, plan.reason, EditorTheme::Text);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+   }
+}
+
+void EditorUI::DrawAreaJoinPreview(const int keepId, const int consumeId, const bool ok) const
+{
+   const LeafRect *const keep = FindLeafRect(keepId);
+   const LeafRect *const consume = FindLeafRect(consumeId);
+   if (keep == nullptr || consume == nullptr)
+      return;
+   ImDrawList *const drawList = ImGui::GetForegroundDrawList();
+   const float dpi = m_liveUI.GetDPI();
+   const ImVec2 cmin(consume->rect.x0, consume->rect.y0), cmax(consume->rect.x1, consume->rect.y1);
+   if (!ok)
+   {
+      drawList->AddRect(cmin, cmax, IM_COL32(220, 60, 60, 255), 0.f, 0, 2.f * dpi);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
+      return;
+   }
+   // The consumed area is darkened and an arrow points into it from the kept one, which gets an outline
+   drawList->AddRectFilled(cmin, cmax, IM_COL32(0, 0, 0, 115));
+   drawList->AddRect(ImVec2(keep->rect.x0 + dpi, keep->rect.y0 + dpi), ImVec2(keep->rect.x1 - dpi, keep->rect.y1 - dpi), EditorTheme::Accent, 0.f, 0, 2.f * dpi);
+   const ImVec2 from(0.5f * (keep->rect.x0 + keep->rect.x1), 0.5f * (keep->rect.y0 + keep->rect.y1));
+   const ImVec2 centre(0.5f * (cmin.x + cmax.x), 0.5f * (cmin.y + cmax.y));
+   ImVec2 dir(centre.x - from.x, centre.y - from.y);
+   const float dirLength = sqrtf(dir.x * dir.x + dir.y * dir.y);
+   if (dirLength < 1e-3f)
+      return;
+   dir = ImVec2(dir.x / dirLength, dir.y / dirLength);
+   const ImVec2 perp(-dir.y, dir.x);
+   const float length = 0.3f * min(consume->rect.Width(), consume->rect.Height());
+   const float head = 0.5f * length; // Length of the triangle
+   const float halfHead = 0.35f * length;
+   const ImVec2 tail(centre.x - dir.x * 0.5f * length, centre.y - dir.y * 0.5f * length);
+   const ImVec2 tip(centre.x + dir.x * 0.5f * length, centre.y + dir.y * 0.5f * length);
+   const ImVec2 base(tip.x - dir.x * head, tip.y - dir.y * head);
+   drawList->AddLine(tail, base, EditorTheme::Accent, max(3.f * dpi, 0.12f * length));
+   drawList->AddTriangleFilled(tip, ImVec2(base.x + perp.x * halfHead, base.y + perp.y * halfHead), ImVec2(base.x - perp.x * halfHead, base.y - perp.y * halfHead), EditorTheme::Accent);
+}
+
+void EditorUI::CancelAreaInteraction(const bool consumeEscape)
+{
+   const bool wasActive = m_areaDrag.active || m_areaModal != AreaModalKind::None;
+   m_areaDrag = AreaDrag();
+   m_areaModal = AreaModalKind::None;
+   m_areaModalNode = -1;
+   m_edgeMenuNode = -1; // The menu closes itself when its node is gone
+   m_edgeMenuRequest = false;
+   if (consumeEscape)
+      m_areaEscPending = true; // The Esc that cancelled is not an editor Esc (it would deselect)
+   if (wasActive)
+      ImGui::SetWindowFocus(nullptr); // The zone or catcher window must not keep the keyboard focus away from the viewport keys
+}
+
+void EditorUI::RenderAreaCorners()
+{
+   // Corner action zones (Blender): a small square flush in each corner of each visible area. Dragging from one into the same area splits it, into
+   // another one joins them. They are created after the splitter strips and kept above them, and give way to any open popup
+   if (!CanUseAreaTools() || m_areaModal != AreaModalKind::None)
+   {
+      if (m_areaDrag.active)
+         CancelAreaInteraction(false);
+      return;
+   }
+   if (!m_areaDrag.active && ImGui::IsPopupOpen(static_cast<ImGuiID>(0), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+      return;
+   const float dpi = m_liveUI.GetDPI();
+   const vector<LeafRect> leaves = m_leafRects;
+   for (const LeafRect &leaf : leaves)
+   {
+      if (!leaf.visible)
+         continue;
+      const float side = min(8.f * dpi, 0.5f * min(leaf.rect.Width(), leaf.rect.Height()));
+      if (side < 2.f)
+         continue;
+      for (int corner = 0; corner < 4; ++corner)
+      {
+         const float x = (corner & 1) ? leaf.rect.x1 - side : leaf.rect.x0;
+         const float y = (corner & 2) ? leaf.rect.y1 - side : leaf.rect.y0;
+         char name[40];
+         snprintf(name, sizeof(name), "##Corner%d_%d", leaf.id, corner); // Keyed by the stable node id
+         ImGui::SetNextWindowPos(ImVec2(x, y));
+         ImGui::SetNextWindowSize(ImVec2(side, side));
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f));
+         ImGui::Begin(name, nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+               | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus);
+         if (m_raiseAreaWindows)
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+         ImGui::InvisibleButton("##corner", ImVec2(side, side));
+         const bool activated = ImGui::IsItemActivated();
+         if (ImGui::IsItemHovered() && !m_areaDrag.active)
+         {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            // 1 px diagonal cutting the corner
+            const bool anti = corner == 0 || corner == 3;
+            ImGui::GetWindowDrawList()->AddLine(anti ? ImVec2(x + side, y) : ImVec2(x, y), anti ? ImVec2(x, y + side) : ImVec2(x + side, y + side), EditorTheme::TextDim, 1.f);
+         }
+         ImGui::End();
+         ImGui::PopStyleVar(2);
+         if (activated && !m_areaDrag.active)
+         {
+            m_areaDrag = AreaDrag();
+            m_areaDrag.active = true;
+            m_areaDrag.leaf = leaf.id;
+            m_areaDrag.corner = corner;
+            m_areaDrag.start = ImGui::GetMousePos();
+         }
+      }
+   }
+   UpdateAreaDrag();
+}
+
+void EditorUI::UpdateAreaDrag()
+{
+   if (!m_areaDrag.active)
+      return;
+   if (FindLeafRect(m_areaDrag.leaf) == nullptr)
+   {
+      CancelAreaInteraction(false); // The area is gone
+      return;
+   }
+   const bool escape = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+   if (escape || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+   {
+      CancelAreaInteraction(escape);
+      return;
+   }
+   const ImVec2 mouse = ImGui::GetIO().MousePos;
+   const float dx = mouse.x - m_areaDrag.start.x, dy = mouse.y - m_areaDrag.start.y;
+   const float threshold = 8.f * m_liveUI.GetDPI();
+   if (!m_areaDrag.decided && dx * dx + dy * dy >= threshold * threshold)
+      m_areaDrag.decided = true;
+   const bool released = !ImGui::IsMouseDown(ImGuiMouseButton_Left);
+   ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+   if (m_areaDrag.decided)
+   {
+      // Inside the area: split (the axis is locked at the first decision from the dominant movement). Inside another area: join, the source takes over
+      const int under = AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y);
+      if (under == m_areaDrag.leaf)
+      {
+         if (!m_areaDrag.axisChosen)
+         {
+            m_areaDrag.axis = fabsf(dx) > fabsf(dy) ? SplitAxis::Vertical : SplitAxis::Horizontal;
+            m_areaDrag.axisChosen = true;
+         }
+         const bool vertical = m_areaDrag.axis == SplitAxis::Vertical;
+         const bool newOnSecondSide = vertical ? (m_areaDrag.corner & 1) != 0 : (m_areaDrag.corner & 2) != 0; // The new area is on the side of the start corner
+         AreaSplitPlan plan;
+         PlanAreaSplit(m_areaDrag.leaf, m_areaDrag.axis, newOnSecondSide, mouse, plan);
+         DrawAreaSplitPreview(plan);
+         if (released)
+         {
+            if (plan.ok)
+            {
+               PendingAreaOp op;
+               op.kind = PendingAreaOp::Kind::Split;
+               op.leaf = m_areaDrag.leaf;
+               op.axis = m_areaDrag.axis;
+               op.newOnSecondSide = newOnSecondSide;
+               op.size = plan.size;
+               QueueAreaOp(op);
+            }
+            else
+               Report(plan.reason);
+         }
+      }
+      else if (under >= 0)
+      {
+         const bool ok = m_areas.CanJoin(m_areaDrag.leaf, under);
+         DrawAreaJoinPreview(m_areaDrag.leaf, under, ok);
+         if (released)
+         {
+            if (ok)
+            {
+               PendingAreaOp op;
+               op.kind = PendingAreaOp::Kind::Join;
+               op.leaf = m_areaDrag.leaf;
+               op.leaf2 = under;
+               QueueAreaOp(op);
+            }
+            else
+               Report(AreaJoinRefusal(m_areaDrag.leaf, under));
+         }
+      }
+   }
+   if (released)
+   {
+      m_areaDrag = AreaDrag();
+      ImGui::SetWindowFocus(nullptr);
+   }
+}
+
+void EditorUI::RenderAreaEdgeMenu()
+{
+   // Right click on a divider. The popup is opened and drawn from a window of its own (the strip windows are gone when the menu is shown)
+   ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+   ImGui::SetNextWindowSize(ImVec2(1.f, 1.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f));
+   ImGui::Begin("##AreaEdgeMenuHost", nullptr,
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+         | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus);
+   if (m_edgeMenuRequest)
+   {
+      m_edgeMenuRequest = false;
+      ImGui::OpenPopup("##AreaEdgeMenu");
+   }
+   ImGui::SetNextWindowPos(m_edgeMenuPos, ImGuiCond_Appearing);
+   if (ImGui::BeginPopup("##AreaEdgeMenu"))
+   {
+      const AreaNode *const split = m_areas.Find(m_edgeMenuNode);
+      if (split == nullptr || !split->isSplit || m_areaModal != AreaModalKind::None || !CanUseAreaTools())
+         ImGui::CloseCurrentPopup(); // The edge is gone (or something else took over)
+      else
+      {
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+         {
+            ImGui::CloseCurrentPopup();
+            m_areaEscPending = true;
+         }
+         const auto &nodes = m_areas.Nodes();
+         const AreaNode &first = nodes[split->child[0]], &second = nodes[split->child[1]];
+         const bool canJoin = !first.isSplit && !second.isSplit && !first.hidden && !second.hidden;
+         bool freeType = false;
+         for (int i = 0; i < kPanelTypeCount; ++i)
+            freeType |= !m_areas.IsHosted(static_cast<AreaType>(i));
+         const bool canSplit = freeType && m_areas.LeafCount() < AreaLayout::kMaxLeaves;
+         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+         ImGui::TextUnformatted("Area Options");
+         ImGui::PopStyleColor();
+         ImGui::Separator();
+         const auto startMode = [this](const AreaModalKind kind, const SplitAxis axis)
+         {
+            m_areaModal = kind;
+            m_areaModalAxis = axis;
+            m_areaModalNode = m_edgeMenuNode;
+            m_areaModalFocus = true;
+         };
+         if (ImGui::MenuItem("Vertical Split", nullptr, false, canSplit))
+            startMode(AreaModalKind::Split, SplitAxis::Vertical);
+         if (ImGui::MenuItem("Horizontal Split", nullptr, false, canSplit))
+            startMode(AreaModalKind::Split, SplitAxis::Horizontal);
+         if (ImGui::MenuItem("Join Areas", nullptr, false, canJoin))
+            startMode(AreaModalKind::Join, SplitAxis::Vertical);
+         if (ImGui::MenuItem("Swap Areas"))
+         {
+            PendingAreaOp op;
+            op.kind = PendingAreaOp::Kind::Swap;
+            op.leaf = m_edgeMenuNode;
+            QueueAreaOp(op);
+         }
+      }
+      ImGui::EndPopup();
+   }
+   ImGui::End();
+   ImGui::PopStyleVar(2);
+}
+
+void EditorUI::RenderAreaModal()
+{
+   // Interactive split / join started from the edge menu: a transparent window over the whole display takes the mouse (no click reaches a panel),
+   // the preview follows the mouse and a click confirms. Esc or right click cancels
+   if (m_areaModal == AreaModalKind::None)
+      return;
+   const AreaNode *const split = m_areas.Find(m_areaModalNode);
+   if (split == nullptr || !split->isSplit || !CanUseAreaTools())
+   {
+      CancelAreaInteraction(false);
+      return;
+   }
+   const bool escape = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+   if (escape || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+   {
+      CancelAreaInteraction(escape);
+      return;
+   }
+   const ImGuiIO &io = ImGui::GetIO();
+   if (m_areaModalFocus)
+   {
+      ImGui::SetNextWindowFocus(); // On top of everything for the length of the mode
+      m_areaModalFocus = false;
+   }
+   ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+   ImGui::SetNextWindowSize(io.DisplaySize);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f));
+   ImGui::Begin("##AreaModalCatcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+   ImGui::InvisibleButton("##catch", io.DisplaySize);
+   const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+   ImGui::End();
+   ImGui::PopStyleVar(2);
+   ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+   const ImVec2 mouse = io.MousePos;
+   const int under = AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y);
+   bool done = false;
+   if (m_areaModal == AreaModalKind::Split)
+   {
+      if (under >= 0)
+      {
+         AreaSplitPlan plan;
+         PlanAreaSplit(under, m_areaModalAxis, true, mouse, plan); // The new area is the right / bottom part
+         DrawAreaSplitPreview(plan);
+         if (clicked)
+         {
+            done = true;
+            if (plan.ok)
+            {
+               PendingAreaOp op;
+               op.kind = PendingAreaOp::Kind::Split;
+               op.leaf = under;
+               op.axis = m_areaModalAxis;
+               op.newOnSecondSide = true;
+               op.size = plan.size;
+               QueueAreaOp(op);
+            }
+            else
+               Report(plan.reason);
+         }
+      }
+   }
+   else
+   {
+      // The area not under the mouse is consumed by the other one
+      const auto &nodes = m_areas.Nodes();
+      const int id0 = static_cast<int>(nodes[split->child[0]].id), id1 = static_cast<int>(nodes[split->child[1]].id);
+      const int keep = under == id0 ? id0 : under == id1 ? id1 : -1;
+      if (keep >= 0)
+      {
+         const int consume = keep == id0 ? id1 : id0;
+         const bool ok = m_areas.CanJoin(keep, consume);
+         DrawAreaJoinPreview(keep, consume, ok);
+         if (clicked)
+         {
+            done = true;
+            if (ok)
+            {
+               PendingAreaOp op;
+               op.kind = PendingAreaOp::Kind::Join;
+               op.leaf = keep;
+               op.leaf2 = consume;
+               QueueAreaOp(op);
+            }
+            else
+               Report(AreaJoinRefusal(keep, consume));
+         }
+      }
+   }
+   if (done)
+   {
+      m_areaModal = AreaModalKind::None;
+      m_areaModalNode = -1;
+      ImGui::SetWindowFocus(nullptr);
    }
 }
 
@@ -2016,6 +2544,15 @@ void EditorUI::RenderUI()
          SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (ImGui::IsKeyPressed(ImGuiKey_PageDown, false) ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
       else if (!m_navEmulateNumpad && !io.WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
          SwitchWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Direct workspace keys (Cmd on macOS)
+   }
+   // Ctrl+Space (physical Ctrl: Cmd+Space is Spotlight on macOS): maximize the area under the mouse, again to restore. Like Ctrl+F it works while a panel has
+   // the keyboard focus, but not while text is edited, nor in the situations where the areas are off (G / R / S, running game inspection,...)
+   if (panelsShown && !m_table->IsLocked() && m_fileOp == nullptr && !m_palette.IsOpen() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false)
+      && (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && !io.KeyAlt && !io.KeyShift)
+   {
+      const ImVec2 mouse = io.MousePos;
+      if (m_maximizedLeafId >= 0 || AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y) >= 0) // Over an area (not the bars)
+         ToggleMaximizeArea();
    }
    // Ctrl+F: search field of the Properties area when the mouse is over it, otherwise the outliner filter. Not while a text field is being edited (script
    // editor, fields,...), and an area is never re-typed from here: the one already hosting the outliner is revealed

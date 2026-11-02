@@ -530,7 +530,7 @@ private:
    void ShowAreaEditor(AreaEditor type); // Make the type visible (queued): reveals the area hosting it, or hosts it in its preferred area (Script, Properties: rightmost, others: leftmost)
    bool GetAreaUnderMouse(AreaEditor &type, bool &sidebar) const; // Area editor under the mouse (or the N-panel), false over the viewport
    void ToggleAreaEditor(AreaEditor type); // View menu (queued): hide / show the area hosting the type, or host it
-   void ToggleMaximizeArea(); // Ctrl+Space (stub until the split / join task)
+   void ToggleMaximizeArea(); // Ctrl+Space and View menu (queued): maximize the area under the mouse (the last one hovered, for the menu), or restore
    ImVec2 GetViewportContentCenter() const; // Centre of the 3D view's visible part (paste position)
    void UpdateAreaLayout(); // Start of the UI frame: applies the pending ops, then computes the area rects
    void ComputeAreaRects() const; // Tree rect from the bar heights, then the cached leaf / splitter / viewport rects
@@ -550,6 +550,56 @@ private:
    mutable string m_areaRectsLog;
    int m_splitDragNode = -1; // Splitter drag: node id and unrounded divider position
    float m_splitDragPos = 0.f;
+   // Corner drags (Blender's area split / join), the edge menu and its interactive split / join modes. Everything is drawn on the foreground
+   // draw list, the tree is only changed through the queued ops. Nodes are kept by id and re-resolved every frame: a vanished node cancels
+   struct AreaSplitPlan
+   {
+      bool ok = false;
+      const char *reason = ""; // Why not, when !ok
+      SplitAxis axis = SplitAxis::Vertical;
+      AreaRect leaf; // Area to split
+      AreaRect newRect; // Where the new area would be (ok only)
+      float line = 0.f; // Divider coordinate (x for a Vertical split, y for a Horizontal one), whole pixels, inside the area
+      float size = 0.f; // Logical extent of the new area (ok only)
+      AreaType newType = AreaType::Count; // First editor type not shown yet
+   };
+   struct AreaDrag
+   {
+      bool active = false;
+      int leaf = -1; // Area the drag started in
+      int corner = 0; // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+      ImVec2 start = ImVec2(0.f, 0.f);
+      bool decided = false; // Moved far enough: split inside the area, join in another one
+      bool axisChosen = false; // The split axis stays locked once chosen
+      SplitAxis axis = SplitAxis::Vertical;
+   };
+   enum class AreaModalKind
+   {
+      None,
+      Split, // Edge menu 'Vertical / Horizontal Split': the preview follows the mouse, click confirms
+      Join // Edge menu 'Join Areas': the area not under the mouse is consumed, click confirms
+   };
+   AreaDrag m_areaDrag;
+   AreaModalKind m_areaModal = AreaModalKind::None;
+   int m_areaModalNode = -1; // Split node (edge) the mode was started from
+   SplitAxis m_areaModalAxis = SplitAxis::Vertical;
+   bool m_areaModalFocus = false; // Bring the input catcher window to the front (first frame of the mode)
+   int m_edgeMenuNode = -1;
+   bool m_edgeMenuRequest = false;
+   ImVec2 m_edgeMenuPos = ImVec2(0.f, 0.f);
+   int m_hoverLeaf = -1; // Area under the mouse at the start of the frame (not while a popup or the palette covers the areas)
+   bool m_raiseAreaWindows = false; // After a layout change: splitter strips and corner zones are brought to the front again, in that order (corners win)
+   bool CanUseAreaTools() const; // Corner zones, edge menu and their modes: off during G / R / S, gizmo / point drags, point edit, running game inspection, file ops, palette, maximize
+   const LeafRect *FindLeafRect(int leafId) const; // Visible leaf of the last ComputeAreaRects
+   bool PlanAreaSplit(int leafId, SplitAxis axis, bool newOnSecondSide, const ImVec2 &cursor, AreaSplitPlan &plan) const;
+   const char *AreaJoinRefusal(int keepId, int consumeId) const;
+   void DrawAreaSplitPreview(const AreaSplitPlan &plan) const;
+   void DrawAreaJoinPreview(int keepId, int consumeId, bool ok) const;
+   void RenderAreaCorners(); // Corner action zones of the visible areas, then the drag in progress
+   void UpdateAreaDrag();
+   void RenderAreaEdgeMenu(); // Right click menu of the splitters, and the modes it starts
+   void RenderAreaModal();
+   void CancelAreaInteraction(bool consumeEscape); // Drag, mode and menu
    bool ConsumedAreaEscape(); // The Esc that closed the editor type popup is not an editor Esc
    bool m_areaEscPending = false;
    bool ConsumedPaneEscape(); // The Esc that cancelled a property pane field edit is not an editor Esc

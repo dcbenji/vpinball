@@ -132,6 +132,7 @@ public:
       int64_t outlinerTypes = -1;
       AreaLayout layout; // Saved as "layout", and as the legacy outliner / properties / widths / left_editor / right_editor keys (see AreaLayout::ToLegacy)
       vector<PinKey> pins;
+      bool presetSizes = true; // The layout is still a preset of the legacy shape (never visited, nothing saved): its split sizes follow the current ones when it is applied
    };
    static constexpr int WorkspaceCount = 3;
    const Workspace &GetWorkspace(int index) const { return m_workspaces[index]; }
