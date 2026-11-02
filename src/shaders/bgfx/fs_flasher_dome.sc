@@ -73,6 +73,14 @@ SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R
 
 float domeHash(const float n) { return fract(sin(n) * 43758.5453); }
 
+// A thin line exp(-(e/w)^2) filtered over the pixel footprint fw (in e's units): it widens and dims as it gets thinner than a
+// pixel instead of aliasing into speckle (same energy)
+float domeLine(const float e, const float w, const float fw)
+{
+	const float w2 = sqrt(w * w + fw * fw);
+	return (w / w2) * exp(-(e / w2) * (e / w2));
+}
+
 // Smooth 1D value noise (breaks the bars into segments)
 float domeNoise(const float x, const float seed)
 {
@@ -211,6 +219,10 @@ void main()
 	const float nFlutes = domeParams[3].y;
 	const float period = 2.0 * DOME_PI / nFlutes;
 	float theta = atan2(Pin.z, Pin.x) - domeParams[3].z;
+	// pixel footprint (computed in uniform control flow, from continuous quantities): in flute periods around the axis and in
+	// mm across the radius, for the line filters below
+	const float fwRad = abs(dFdx(length(Pin.xz))) + abs(dFdy(length(Pin.xz)));
+	const float fwF = (abs(Pin.z) * (abs(dFdx(Pin.x)) + abs(dFdy(Pin.x))) + abs(Pin.x) * (abs(dFdx(Pin.z)) + abs(dFdy(Pin.z)))) / max(dot(Pin.xz, Pin.xz), 1e-3) * domeParams[3].y / (2.0 * DOME_PI);
 	const float fluteF = theta / period;
 	const float idx = floor(fluteF + 0.5);
 	const float eP = fluteF - idx;
@@ -218,7 +230,10 @@ void main()
 	const float flankId = idx * 2.0 + (s > 0.0 ? 1.0 : 0.0);
 	const float rIn = mix(rootR, ridgeR, 2.0 * abs(eP));
 	const float eRoot = abs(eP), eTip = 0.5 - abs(eP);
-	const float edge = max(exp(-(eRoot / 0.09) * (eRoot / 0.09)), exp(-(eTip / 0.09) * (eTip / 0.09)));
+	// the flute edges as lines; a milky body (dome_body) filters them over the pixel footprint: on the cap they run in to the
+	// centre as spokes, which from the player's distance get thinner than a pixel and speckle
+	const float edge = domeParams[10].x > 0.0 ? max(domeLine(eRoot, 0.09, fwF), domeLine(eTip, 0.09, fwF))
+		: max(exp(-(eRoot / 0.09) * (eRoot / 0.09)), exp(-(eTip / 0.09) * (eTip / 0.09)));
 	const float thN = mix(R - rIn, max(H - capY, 0.5), capW);    // wall thickness across the wall
 	const float thH = 1.6 * mix(wallB, max(H - capY, 0.5), capW); // hemispherical mean path
 	const vec3 trN = exp(-sigma * thN);
@@ -502,7 +517,9 @@ void main()
 		// and at the flute edges; it gives way to the lamp as it comes up
 		// OFF the ridges read as thin lines through the wall (the VPE look: dark deep red, fine ridge lines, glints), not soft bands
 		const float ridgeLine = exp(-(eTip / 0.035) * (eTip / 0.035)) * (1.0 - capW);
-		const float bandOff = mix(facet * (0.45 + 0.4 * edge) + 3.0 * ridgeLine, 0.6 + 1.0 * edge, capW);
+		// seen through the smooth skin the inner flutes only ripple the glow (a soft cosine per flute, faint ridge lines), with
+		// little flank-to-flank variation: the milky body evens it out
+		const float bandOff = mix(mix(facet, 1.0, 0.8) * (0.88 + 0.12 * cos(2.0 * DOME_PI * eP)) + 0.4 * ridgeLine, 0.6 + 1.0 * edge, capW);
 		const vec3 interior = bodyK * domeParams[10].w * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
 			+ 0.6 * domeParams[8].yzw * trH * bandOff * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
@@ -559,7 +576,7 @@ void main()
 					const float fF = (atan2(Pf.z, Pf.x) - domeParams[3].z) / period;
 					const float eF = fF - floor(fF + 0.5);
 					const float eTipF = 0.5 - abs(eF);
-					farL = (exp(-(eTipF / 0.11) * (eTipF / 0.11)) + 0.45 * exp(-(eF / 0.13) * (eF / 0.13))) * 0.55 // soft wide bands: the ridges are inside, seen through a smooth skin
+					farL = (domeLine(eTipF, 0.11, fwF) + 0.45 * domeLine(eF, 0.13, fwF)) * 0.55 // soft wide bands: the ridges are inside, seen through a smooth skin
 						* smoothstep(0.5, 3.0, Pf.y) * (1.0 - smoothstep(capY - 3.0, capY, Pf.y)) * (0.6 + 0.8 * domeHash(floor(fF + 0.5) * 7.77 + 3.1));
 				}
 			}
@@ -572,13 +589,13 @@ void main()
 				const vec3 Pd = Pin + d2 * (4.0 / max(-d2.y, 0.3));
 				const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
 				const float eC = fC - floor(fC + 0.5);
-				capL = exp(-(eC / 0.07) * (eC / 0.07)) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+				capL = domeLine(eC, 0.07, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
 				// finer lines between the ribs, running in to a small dot at the centre (the moulding's sprue point)
 				const float eC2 = 2.0 * eC - floor(2.0 * eC + 0.5);
-				capL += 0.55 * exp(-(eC2 / 0.06) * (eC2 / 0.06)) * smoothstep(0.06 * rootR, 0.3 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+				capL += 0.55 * domeLine(eC2, 0.06, 2.0 * fwF) * smoothstep(0.06 * rootR, 0.3 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
 				capL += 0.8 * exp(-(length(Pd.xz) / (0.035 * rootR)) * (length(Pd.xz) / (0.035 * rootR)));
 				// the zigzag ring: the flutes' sawtooth outline where they meet the cap, seen through it
-				capL += 1.1 * exp(-((length(Pin.xz) - rIn) / 0.3) * ((length(Pin.xz) - rIn) / 0.3));
+				capL += 1.1 * domeLine(length(Pin.xz) - rIn, 0.3, fwRad);
 			}
 			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
 			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (4.0 * farL * trH * trN + tirL * trN) + capW * 3.0 * capL * trH);
