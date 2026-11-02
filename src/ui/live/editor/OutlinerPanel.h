@@ -50,7 +50,9 @@ private:
 
    void ParseFilter();
    bool MatchesFilter(const string &name) const; // Name tokens only (non part lists)
-   bool MatchesPart(const IEditable *editable) const; // All tokens
+   bool MatchesPartCached(size_t index) const; // All tokens, for m_editables[index] (needs RefreshFilterCache)
+   void RefreshFilterCache();
+   void SelectViewSetup(int viewSetup); // Select a preview camera and switch the view to it
    void UpdateSelectionHistory();
    void RenderContextHeader(); // Breadcrumb and recent selections, drawn at the top of each tab
 
@@ -80,7 +82,17 @@ private:
    ankerl::unordered_dense::map<const PartGroup *, int> m_groupCounts;
    vector<const PartGroup *> m_groupStack;
    vector<uint8_t> m_showPart; // Per m_editables entry: part is listed (matches the filter or is in a matching group)
-   vector<std::shared_ptr<EditorUIPart>> m_lightList;
+   vector<std::shared_ptr<EditorUIPart>> m_lightList; // Name sorted lights and flashers matching the filter, rebuilt with the cache
+
+   // Lowercase names/materials of m_editables (only filled when a matching token exists), refreshed when the part count,
+   // filter or view mode changes, or every second to catch renames
+   vector<string> m_lowerNames;
+   vector<string> m_lowerMaterials;
+   size_t m_cacheSize = 0;
+   int m_filterGeneration = 0;
+   int m_cacheGeneration = -1;
+   bool m_cacheBackdrop = false;
+   double m_cacheTime = -10.0;
    vector<Crumb> m_crumbs;
 };
 

@@ -74,7 +74,9 @@ void PinnedPanel::Unpin(const PinKey &key) { std::erase(m_pins, key); }
 bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
 {
    const auto it = m_defs.find(id);
-   return it == m_defs.end() || it->second.owner != owner;
+   // Only part definitions depend on their owner (they may capture the part's EditorUIPart); table and material panes may be
+   // drawn on the startup copy or the live table of an inspection session with the same field definitions
+   return it == m_defs.end() || (it->second.key.kind == PinKind::Part && it->second.owner != owner);
 }
 
 void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw, bool common)

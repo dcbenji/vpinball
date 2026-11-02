@@ -79,7 +79,7 @@ private:
       bool active = false;
       bool reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
       bool advancedIndent = false;
-      int harvestFrame = 0;
+      double harvestTime = 0.0;
       string advancedLabel;
    };
    void PrepareCuration();

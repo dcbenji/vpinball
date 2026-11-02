@@ -80,6 +80,13 @@ public:
    void InvalidateHarvest(PinKind kind, const string &name);
    // Definitions registered by the given harvest of an object, in draw order
    void CollectDefs(PinKind kind, const string &name, unsigned stamp, vector<const Def *> &out) const;
+   // Every known definition (search palette index)
+   const std::map<string, Def> &GetDefs() const { return m_defs; }
+   const Def *FindDef(const PinKey &key) const
+   {
+      const auto it = m_defs.find(key.Id());
+      return it == m_defs.end() ? nullptr : &it->second;
+   }
 
    // "See-through set": a primitive's refraction fields and its material's See-Through Surface fields
    bool HasSeeThroughSet(const IEditable *part) const;

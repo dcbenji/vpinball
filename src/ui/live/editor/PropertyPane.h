@@ -57,6 +57,11 @@ public:
    // Apply-to-all broadcast: fields flagged with BroadcastFields(true) (in the panel; pinned rows remember the flag) also write
    // their new value to the broadcast parts (e.g. every other traced insert). Unlike multi-edit, the fields do not show a mixed
    // state, and the caller does the undo / live-edit bookkeeping of the parts when WasBroadcast() is true.
+   // Field focus (search palette): the next panel row drawing this field scrolls to it, then flashes for a moment. While the
+   // request is pending, the panel opens its sections and its Advanced header so that the field gets drawn
+   static void RequestFocus(const PinKey &key);
+   static bool IsFocusPending() { return s_focusPending; }
+   static const PinKey &GetFocusKey() { return s_focusKey; }
    static inline bool s_applyBulbToAll = false; // Session toggle ("Apply to all traced inserts"), not saved to the table
    void SetBroadcastParts(const vector<IEditable*>& parts) { m_broadcast = parts; }
    const vector<IEditable*>& GetBroadcastParts() const { return m_broadcast; }
@@ -242,6 +247,10 @@ private:
    std::function<void(PropertyPane &)> m_afterHeader;
    bool m_skipRest = false;
    bool m_pinCombo = true; // Combo registers its own definition (off while a name list combo registers its own)
+   static inline PinKey s_focusKey;
+   static inline bool s_focusPending = false;
+   static inline int s_focusRequestFrame = 0;
+   static inline double s_flashUntil = 0.0;
 
    static constexpr const char* ICON_SAVE = ICON_FK_FLOPPY_O;
 

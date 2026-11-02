@@ -182,6 +182,13 @@ bool PropertyPane::BeginSection(const string& name)
    if (m_skipRest)
       return false;
    FlushRow();
+   if (s_focusPending && m_pinMode == PinMode::Panel)
+   {
+      if (ImGui::GetFrameCount() - s_focusRequestFrame > 10)
+         s_focusPending = false; // Not found (field hidden for this object): give up
+      else
+         ImGui::SetNextItemOpen(true);
+   }
    const bool opened = ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
    // Add a white line above
@@ -211,6 +218,14 @@ void PropertyPane::EndSection()
    m_inSection = false;
 }
 
+void PropertyPane::RequestFocus(const PinKey& key)
+{
+   s_focusKey = key;
+   s_focusPending = true;
+   s_focusRequestFrame = ImGui::GetFrameCount();
+   s_flashUntil = 0.0;
+}
+
 void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Material* material)
 {
    // Right click anywhere on the field row (label or widget) opens the pin menu
@@ -218,6 +233,22 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    const float rowBottom = m_rowBottom > 0.f ? m_rowBottom - ImGui::GetStyle().ItemSpacing.y : 0.f;
    const ImVec2 rowMax(window->WorkRect.Max.x, max(ImGui::GetItemRectMax().y, rowBottom));
    const bool rowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(m_rowMin, rowMax, false);
+   // Search palette focus: scroll to the first panel row of the field, then flash it
+   if (m_pinMode == PinMode::Panel && (s_focusPending || s_flashUntil > ImGui::GetTime()) && key == s_focusKey)
+   {
+      if (s_focusPending)
+      {
+         s_focusPending = false;
+         s_flashUntil = ImGui::GetTime() + 1.2;
+         ImGui::SetScrollHereY(0.3f);
+      }
+      else
+      {
+         const float alpha = static_cast<float>((s_flashUntil - ImGui::GetTime()) / 1.2);
+         const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+         window->DrawList->AddRectFilled(m_rowMin, rowMax, ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, 0.35f * alpha)), 2.f);
+      }
+   }
    // Panel: a pin toggle at the left of the row, shown on hover (always when pinned)
    if (m_pinMode == PinMode::Panel)
    {

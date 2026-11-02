@@ -194,6 +194,7 @@ void OutlinerPanel::ParseFilter()
       target->push_back(std::move(token));
    }
    m_openMatchesPending = !m_tokens.empty();
+   ++m_filterGeneration;
 }
 
 bool OutlinerPanel::MatchesFilter(const string &name) const
@@ -204,27 +205,65 @@ bool OutlinerPanel::MatchesFilter(const string &name) const
    return std::ranges::all_of(m_tokens.names, [&name_lcase](const string &token) { return name_lcase.find(token) != std::string::npos; });
 }
 
-bool OutlinerPanel::MatchesPart(const IEditable *editable) const
+bool OutlinerPanel::MatchesPartCached(size_t index) const
 {
    if (m_tokens.empty())
       return true;
-   if (!MatchesFilter(editable->GetName()))
+   if (!std::ranges::all_of(m_tokens.names, [this, index](const string &token) { return m_lowerNames[index].find(token) != std::string::npos; }))
       return false;
    if (!m_tokens.types.empty())
    {
-      const TypeInfo *info = FindTypeInfo(editable->GetItemType());
+      const TypeInfo *info = FindTypeInfo(m_editor.m_editables[index]->GetEditable()->GetItemType());
       const char *name = info ? info->name : "Part";
       const char *alias = info ? info->alias : "";
       if (!std::ranges::all_of(m_tokens.types, [name, alias](const string &token) { return StartsWithNoCase(name, token) || StartsWithNoCase(alias, token); }))
          return false;
    }
-   if (!m_tokens.materials.empty())
+   return std::ranges::all_of(m_tokens.materials, [this, index](const string &token) { return m_lowerMaterials[index].find(token) != std::string::npos; });
+}
+
+void OutlinerPanel::RefreshFilterCache()
+{
+   const auto &editables = m_editor.m_editables;
+   const bool backdropView = m_editor.m_camMode == ViewMode::DesktopBackdrop;
+   const double now = ImGui::GetTime();
+   if (editables.size() == m_cacheSize && m_filterGeneration == m_cacheGeneration && backdropView == m_cacheBackdrop && now - m_cacheTime < 1.0)
+      return;
+   m_cacheSize = editables.size();
+   m_cacheGeneration = m_filterGeneration;
+   m_cacheBackdrop = backdropView;
+   m_cacheTime = now;
+   m_lowerNames.resize(editables.size());
+   m_lowerMaterials.resize(editables.size());
+   for (size_t i = 0; i < editables.size(); ++i)
    {
-      const string material = lowerCase(PropertiesPanel::PartMaterial(editable));
-      if (!std::ranges::all_of(m_tokens.materials, [&material](const string &token) { return material.find(token) != std::string::npos; }))
-         return false;
+      const IEditable *const editable = editables[i]->GetEditable();
+      if (m_tokens.names.empty())
+         m_lowerNames[i].clear();
+      else
+         m_lowerNames[i] = lowerCase(editable->GetName());
+      if (m_tokens.materials.empty())
+         m_lowerMaterials[i].clear();
+      else
+         m_lowerMaterials[i] = lowerCase(PropertiesPanel::PartMaterial(editable));
    }
-   return true;
+   m_lightList.clear();
+   for (size_t i = 0; i < editables.size(); ++i)
+   {
+      const IEditable *const editable = editables[i]->GetEditable();
+      if (IsLightLike(editable) && editable->m_desktopBackdrop == backdropView && MatchesPartCached(i))
+         m_lightList.push_back(editables[i]);
+   }
+   std::ranges::sort(m_lightList, [](const std::shared_ptr<EditorUIPart> &a, const std::shared_ptr<EditorUIPart> &b)
+      { return StrLessNoCase(a->GetEditable()->GetName(), b->GetEditable()->GetName()); });
+}
+
+void OutlinerPanel::SelectViewSetup(int viewSetup)
+{
+   EditorUI &editor = m_editor;
+   editor.SetSelection(Selection::Camera(viewSetup));
+   editor.m_camMode = ViewMode::PreviewCam;
+   editor.m_table->SetViewSetupOverride(viewSetup == 0 ? BG_DESKTOP : viewSetup == 1 ? BG_FULLSCREEN : BG_FSS);
 }
 
 void OutlinerPanel::UpdateSelectionHistory()
@@ -324,6 +363,7 @@ void OutlinerPanel::RenderContextHeader()
          ++start;
       }
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+      ImGui::PushID("##crumbs");
       bool first = true;
       if (start > 0)
       {
@@ -361,12 +401,14 @@ void OutlinerPanel::RenderContextHeader()
          }
          ImGui::PopID();
       }
+      ImGui::PopID();
       ImGui::PopStyleColor();
    }
 
    // Recent selections, as a wrapping row of buttons
    const float maxX = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
    int shown = 0;
+   ImGui::PushID("##recents");
    for (size_t i = 0; i < m_recentSelections.size() && shown < MaxRecentSelections; ++i)
    {
       const Selection &recent = m_recentSelections[i];
@@ -378,11 +420,17 @@ void OutlinerPanel::RenderContextHeader()
          ImGui::SameLine();
       ImGui::PushID((int)i);
       if (ImGui::SmallButton(name.c_str()))
-         editor.SetSelection(recent);
+      {
+         if (recent.GetType() == Selection::S_CAMERA)
+            SelectViewSetup(recent.GetCamera());
+         else
+            editor.SetSelection(recent);
+      }
       ImGui::PopID();
       ImGui::SetItemTooltip("%s", SelectionKind(recent));
       ++shown;
    }
+   ImGui::PopID();
    if (!m_crumbs.empty() || shown > 0)
       ImGui::Separator();
 }
@@ -431,6 +479,7 @@ void OutlinerPanel::Render(float topBarHeight)
       ImGui::EndDisabled();
    }
    ParseFilter();
+   RefreshFilterCache();
    UpdateSelectionHistory();
    const int forcedTab = m_pendingTab; // Requests made while drawing apply on next frame
    m_pendingTab = -1;
@@ -508,8 +557,12 @@ void OutlinerPanel::Render(float topBarHeight)
       }
    };
    // When 'sync tree with selection' is enabled, the newly selected part is revealed in the tree (taken once the list is actually drawn)
-   const auto takeRevealPart = [this, &editor]() -> std::shared_ptr<EditorUIPart>
+   // onlyLightLike: the drawn list only holds lights and flashers, other parts stay pending for the tab that shows them
+   const auto takeRevealPart = [this, &editor](bool onlyLightLike) -> std::shared_ptr<EditorUIPart>
    {
+      const std::shared_ptr<EditorUIPart> selected = editor.m_selection.GetPart();
+      if (onlyLightLike && selected && !IsLightLike(selected->GetEditable()))
+         return nullptr;
       std::shared_ptr<EditorUIPart> reveal = (m_syncToSelection && editor.m_selection.GetPart() != m_lastSyncedPart) ? editor.m_selection.GetPart() : nullptr;
       m_lastSyncedPart = editor.m_selection.GetPart();
       return reveal;
@@ -550,7 +603,7 @@ void OutlinerPanel::Render(float topBarHeight)
                while (!m_groupStack.empty() && (editable->GetPartGroup() == nullptr || !editable->IsChild(m_groupStack.back())))
                   m_groupStack.pop_back();
                const bool isGroup = editable->GetItemType() == eItemPartGroup;
-               const bool listed = MatchesPart(editable) || (!isGroup && std::ranges::any_of(m_groupStack, [this](const PartGroup *group) { return m_matchedGroups.contains(group); }));
+               const bool listed = MatchesPartCached(i) || (!isGroup && std::ranges::any_of(m_groupStack, [this](const PartGroup *group) { return m_matchedGroups.contains(group); }));
                if (listed)
                {
                   if (filterActive)
@@ -577,7 +630,7 @@ void OutlinerPanel::Render(float topBarHeight)
             // Highlight the group in which new and imported parts are added
             PartGroup *const newPartTarget = editor.GetPartGroupForNewPart();
             const ImVec4 newPartTargetColor(1.0f, 0.6f, 0.2f, 1.0f);
-            const std::shared_ptr<EditorUIPart> revealPart = takeRevealPart();
+            const std::shared_ptr<EditorUIPart> revealPart = takeRevealPart(false);
             for (size_t idx = 0; idx < editor.m_editables.size(); ++idx)
             {
                const auto &edit = editor.m_editables[idx];
@@ -686,18 +739,8 @@ void OutlinerPanel::Render(float topBarHeight)
          m_activeTab = TabLights;
          ImGui::PushID("lights");
          RenderContextHeader();
-         const bool backdropView = editor.m_camMode == ViewMode::DesktopBackdrop;
-         m_lightList.clear();
-         for (const auto &edit : editor.m_editables)
-         {
-            const IEditable *const editable = edit->GetEditable();
-            if (IsLightLike(editable) && editable->m_desktopBackdrop == backdropView && MatchesPart(editable))
-               m_lightList.push_back(edit);
-         }
-         std::ranges::sort(m_lightList, [](const std::shared_ptr<EditorUIPart> &a, const std::shared_ptr<EditorUIPart> &b)
-            { return StrLessNoCase(a->GetEditable()->GetName(), b->GetEditable()->GetName()); });
          const float eyeX = ImGui::GetContentRegionAvail().x;
-         const std::shared_ptr<EditorUIPart> revealPart = takeRevealPart();
+         const std::shared_ptr<EditorUIPart> revealPart = takeRevealPart(true);
          int outlinerItem = 0;
          for (const auto &edit : m_lightList)
          {
@@ -758,21 +801,22 @@ void OutlinerPanel::Render(float topBarHeight)
          return std::ranges::any_of(
             editor.m_multiSel, [](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable() != nullptr && part->GetEditable()->GetIScriptable() != nullptr; });
       };
-      if (ImGui::BeginPopupContextItem())
-      {
-         ImGui::BeginDisabled(!canEditCollections);
-         if (ImGui::MenuItem("New Collection"))
-            editor.CreateCollection(false);
-         ImGui::BeginDisabled(!hasScriptableSelection());
-         if (ImGui::MenuItem("New Collection From Selection"))
-            editor.CreateCollection(true);
-         ImGui::EndDisabled();
-         ImGui::EndDisabled();
-         ImGui::EndPopup();
-      }
       if (collectionsOpened)
       {
          m_activeTab = TabCollections;
+         // Attached to the tab item, which is the last item here
+         if (ImGui::BeginPopupContextItem("##CollectionsTabMenu"))
+         {
+            ImGui::BeginDisabled(!canEditCollections);
+            if (ImGui::MenuItem("New Collection"))
+               editor.CreateCollection(false);
+            ImGui::BeginDisabled(!hasScriptableSelection());
+            if (ImGui::MenuItem("New Collection From Selection"))
+               editor.CreateCollection(true);
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ImGui::EndPopup();
+         }
          ImGui::PushID("collections");
          RenderContextHeader();
          ImGui::BeginDisabled(!canEditCollections);
@@ -811,27 +855,10 @@ void OutlinerPanel::Render(float topBarHeight)
                editor.m_table->SetViewSetupOverride(BG_INVALID);
                editor.m_camMode = ViewMode::EditorCam;
             }
-            const Selection cam0 = Selection::Camera(0);
-            if (ImGui::Selectable("Preview: Desktop", editor.m_selection == cam0))
-            {
-               editor.SetSelection(cam0);
-               editor.m_camMode = ViewMode::PreviewCam;
-               editor.m_table->SetViewSetupOverride(BG_DESKTOP);
-            }
-            const Selection cam1 = Selection::Camera(1);
-            if (ImGui::Selectable("Preview: Cabinet", editor.m_selection == cam1))
-            {
-               editor.SetSelection(cam1);
-               editor.m_camMode = ViewMode::PreviewCam;
-               editor.m_table->SetViewSetupOverride(BG_FULLSCREEN);
-            }
-            const Selection cam2 = Selection::Camera(2);
-            if (ImGui::Selectable("Preview: Full Single Screen", editor.m_selection == cam2))
-            {
-               editor.SetSelection(cam2);
-               editor.m_camMode = ViewMode::PreviewCam;
-               editor.m_table->SetViewSetupOverride(BG_FSS);
-            }
+            static constexpr const char *previewNames[] = { "Preview: Desktop", "Preview: Cabinet", "Preview: Full Single Screen" };
+            for (int cam = 0; cam < 3; ++cam)
+               if (ImGui::Selectable(previewNames[cam], editor.m_selection == Selection::Camera(cam)))
+                  SelectViewSetup(cam);
             ImGui::TreePop();
          }
          const std::function<string(VPX::Sound *)> soundName = [](VPX::Sound *sound) -> string { return sound->GetName(); };

@@ -144,11 +144,11 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    }
    // Harvest again after an edit, and every 2 s for changes made elsewhere (undo, script, other panes) that can show or hide
    // fields (material type, render mode,...); never while a field is being dragged or typed in
-   const int frame = ImGui::GetFrameCount();
-   if ((cur.reharvest || frame - cur.harvestFrame > 120) && !ImGui::IsAnyItemActive())
+   const double now = ImGui::GetTime();
+   if ((cur.reharvest || now - cur.harvestTime > 2.0) && !ImGui::IsAnyItemActive())
    {
       cur.reharvest = false;
-      cur.harvestFrame = frame;
+      cur.harvestTime = now;
       editor.m_pinned.InvalidateHarvest(kind, name);
    }
    void *obj = nullptr;
@@ -215,6 +215,9 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    if (props.GetModifiedField() != modifiedBefore)
       cur.reharvest = true;
    ImGui::Spacing();
+   // Search palette focus on a field of this object: still pending here means it is not curated, so open the full sheet
+   if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == cur.kind && PropertyPane::GetFocusKey().name == cur.name)
+      ImGui::SetNextItemOpen(true);
    const bool open = ImGui::CollapsingHeader(cur.advancedLabel.c_str());
    ImGui::SetItemTooltip("Every field of this object, in the full sheet layout");
    props.SkipRest(!open);
@@ -263,6 +266,16 @@ void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
       m_users.clear();
       editor.m_table->ShowWhereMaterialUsed(m_users, material);
       std::erase_if(m_users, [&editor](const WhereUsedInfo &w) { return w.whereUsedObjectname == editor.m_table->m_name; });
+      // One entry per part (a bumper or wall can use the material for several of its surfaces)
+      for (size_t i = 0; i < m_users.size(); i++)
+         for (size_t j = i + 1; j < m_users.size();)
+            if (m_users[j].whereUsedObjectname == m_users[i].whereUsedObjectname)
+            {
+               m_users[i].whereUsedPropertyName += ", " + m_users[j].whereUsedPropertyName;
+               m_users.erase(m_users.begin() + j);
+            }
+            else
+               j++;
       m_usersFor = material;
       m_usersFrame = ImGui::GetFrameCount();
    }

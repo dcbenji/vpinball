@@ -70,6 +70,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_partLibrary(*this)
    , m_scriptPanel(*this)
    , m_pinned(*this)
+   , m_palette(*this)
    , m_undo(m_player->m_ptable)
 {
    m_table = m_player->m_ptable;
@@ -702,6 +703,8 @@ void EditorUI::RenderUI()
    }
    if (!m_inspectionModal.IsVisible())
       m_pinned.Render(m_chrome.GetTopBarHeight());
+   if (showFullUI)
+      m_palette.Render();
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
    m_partLibrary.Render();
@@ -1221,6 +1224,9 @@ void EditorUI::RenderUI()
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
+   // Search to field palette (Cmd+K on macOS, where ImGui maps Cmd to Ctrl)
+   if (ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (!io.WantTextInput || m_palette.IsOpen()))
+      m_palette.Toggle();
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape))
