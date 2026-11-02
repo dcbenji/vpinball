@@ -281,6 +281,7 @@ void PinnedPanel::SaveTo(PinTable *table) const
       const EditorUI &editor = m_editor;
       const bool untouched = now.outliner && now.properties && !now.sidebar && now.sidebarTab == static_cast<int>(EditorUI::SidebarTab::Item)
          && now.leftEditor == static_cast<int>(EditorUI::AreaEditor::Outliner) && now.rightEditor == static_cast<int>(EditorUI::AreaEditor::Properties)
+         && now.outlinerMode == 0 && now.outlinerTypes == static_cast<int64_t>(OutlinerPanel::AllTypesMask)
          && now.outlinerWidth == OutlinerPanel::PaneWidth && now.propertiesWidth == PropertiesPanel::PaneWidth && now.sidebarWidth == 300.f;
       (void)editor;
       if (untouched)

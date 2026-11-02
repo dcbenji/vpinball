@@ -214,6 +214,8 @@ void EditorUI::Close()
       return;
    m_isOpened = false;
    m_flyMode = false;
+   if (ImGuiContext *const context = ImGui::GetCurrentContext())
+      context->ConfigNavEnableTabbing = true; // Overridden each frame while the editor is open (see RenderUI)
    ExitPointEditMode(false);
    RestorePartsVisibility();
    m_inspectionModal.Close();
@@ -724,7 +726,9 @@ void EditorUI::SetAreaEditor(const bool right, const AreaEditor type)
    {
       const float minimum = editorType == AreaEditor::Properties ? 300.f : editorType == AreaEditor::Script ? 400.f : 0.f;
       float &width = rightSide ? m_propertiesWidth : m_outlinerWidth;
-      const float limit = 0.5f * ImGui::GetIO().DisplaySize.x / m_liveUI.GetDPI(); // Never more than half of the window
+      // Same limit as the splitters (45% of the window), and what the other area and the sidebar take is kept for the viewport
+      const float taken = (rightSide ? (m_showOutliner ? m_outlinerWidth : 0.f) : (m_showProperties ? m_propertiesWidth : 0.f)) + (m_showSidebar ? m_sidebarWidth : 0.f);
+      const float limit = max(0.f, 0.45f * ImGui::GetIO().DisplaySize.x / m_liveUI.GetDPI() - taken);
       if (minimum > 0.f && width < min(minimum, limit))
          width = min(minimum, limit);
    };
@@ -1172,7 +1176,15 @@ void EditorUI::RenderUI()
    if (isSelectionTransformValid && !m_hadSelectionTransform && m_gizmoOperation == ImGuizmo::OPERATION(0) && !m_modal.active)
       m_gizmoOperation = ImGuizmo::TRANSLATE; // A new selection shows the move gizmo (Esc hides it)
    m_hadSelectionTransform = isSelectionTransformValid;
-   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active)
+   // A gizmo drag whose selection changed under the mouse (outliner click, undo,...) is over: the new selection must not follow it without an undo record
+   bool gizmoLost = m_gizmoDragActive && m_multiSel != m_gizmoDragSelection;
+   if (gizmoLost)
+   {
+      ImGuizmo::Enable(false); // Clears ImGuizmo's using state
+      ImGuizmo::Enable(true);
+   }
+   bool gizmoManipulated = false; // Manipulate called this frame with an operation
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost)
    {
       float camViewLH[16];
       memcpy(camViewLH, &m_camView.m[0][0], sizeof(float) * 4 * 4);
@@ -1250,12 +1262,14 @@ void EditorUI::RenderUI()
          snapPtr = snapValues;
       }
       ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
+      gizmoManipulated = gizmoOperation != ImGuizmo::OPERATION(0);
       if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {
          // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
          if (!m_gizmoDragActive && m_table->m_liveBaseTable == nullptr)
          {
             m_gizmoDragActive = true;
+            m_gizmoDragSelection = m_multiSel;
             m_undo.BeginUndo();
             for (const auto &part : m_multiSel)
                m_undo.MarkForUndo(part->GetEditable());
@@ -1270,15 +1284,24 @@ void EditorUI::RenderUI()
          SetSelectionTransform(transform);
       }
    }
+   // A drag interrupted with the mouse still held (Alt+A, Esc hiding the gizmo, a modal transform starting, the table getting locked,...) is not manipulated
+   // anymore, so ImGuizmo would stay in its using state: reset it
+   if (m_gizmoDragActive && !gizmoManipulated && !gizmoLost)
+   {
+      gizmoLost = true;
+      ImGuizmo::Enable(false);
+      ImGuizmo::Enable(true);
+   }
    // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
-   if (!ImGuizmo::IsUsing() && m_gizmoDragActive)
+   if (m_gizmoDragActive && (gizmoLost || !ImGuizmo::IsUsing()))
    {
       m_gizmoDragActive = false;
+      m_gizmoDragSelection.clear();
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
       // A finished translation can be adjusted (the rotation and scale gizmos are not: their axes can not be recovered from the matrices)
       Matrix3D released;
-      if (m_gizmoDragTranslate && !m_multiSel.empty() && GetSelectionTransform(released))
+      if (!gizmoLost && m_gizmoDragTranslate && !m_multiSel.empty() && GetSelectionTransform(released)) // No adjustable operation for an interrupted drag
       {
          SetLastOperation(LastOperation::Type::Move, m_gizmoStartTransform);
          m_lastOp.offset = vec3(released._41 - m_gizmoStartTransform._41, released._42 - m_gizmoStartTransform._42, released._43 - m_gizmoStartTransform._43);
@@ -4106,13 +4129,16 @@ void EditorUI::ApplyLastOperation()
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
-   m_table->SetNonUndoableDirty(SaveDirtyState::Dirty); // The undo record was begun before the edit: make sure the table is dirty
 }
 
 bool EditorUI::RenderAdjustParameters()
 {
    bool changed = false;
    const float width = 220.f * m_liveUI.GetDPI();
+   // Esc while one of the fields is being edited cancels the edit (a typed field clears its own active id on Esc, so it is tested before the widgets),
+   // it must not reach the editor (deselect)
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsAnyItemActive())
+      m_paneEscPending = true;
    // Same colors as the editor fields
    ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::V(EditorTheme::Inactive));
    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, EditorTheme::V(EditorTheme::Hover));
@@ -4183,9 +4209,6 @@ bool EditorUI::RenderAdjustParameters()
    }
    ImGui::PopItemWidth();
    ImGui::PopStyleColor(5);
-   // Esc while one of the fields is being edited cancels the edit, it must not reach the editor (deselect)
-   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsAnyItemActive())
-      m_paneEscPending = true;
    return changed;
 }
 
