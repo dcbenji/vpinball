@@ -78,8 +78,19 @@ void EditorChrome::RenderMenuBar()
       }
       if (ImGui::BeginMenu("View"))
       {
+         static constexpr const char *workspaceKeys[PinnedPanel::WorkspaceCount] = { "Ctrl+1", "Ctrl+2", "Ctrl+3" };
+         for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
+            if (ImGui::MenuItem(("Workspace: " + editor.m_pinned.GetWorkspace(i).name).c_str(), workspaceKeys[i], editor.m_pinned.GetActiveWorkspace() == i))
+               editor.m_pinned.ApplyWorkspace(i);
+         ImGui::Separator();
+         if (ImGui::MenuItem("Outliner", nullptr, editor.m_showOutliner))
+            editor.m_showOutliner = !editor.m_showOutliner;
+         if (ImGui::MenuItem("Properties", nullptr, editor.m_showProperties))
+            editor.m_showProperties = !editor.m_showProperties;
          if (ImGui::MenuItem("Pinned Properties", "P", editor.m_pinned.IsVisible()))
             editor.m_pinned.ToggleVisible();
+         if (ImGui::MenuItem("Search Fields...", "Ctrl+K"))
+            editor.m_palette.Open();
          if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
             editor.m_showNavCube = !editor.m_showNavCube;
          ImGui::EndMenu();

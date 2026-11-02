@@ -12,6 +12,8 @@
 
 #include "PropertyPane.h"
 
+#include <nlohmann/json.hpp>
+
 namespace VPX::EditorUI
 {
 
@@ -181,6 +183,96 @@ void PinnedPanel::SaveTo(PinTable *table) const
    table->m_editorPins.clear();
    for (const PinKey &pin : m_pins)
       table->m_editorPins.push_back({ PinKindName(pin.kind), pin.name, pin.prop });
+   if (m_activeWorkspace < 0)
+      return; // Workspaces never used with this table: leave its data as it is
+   std::array<Workspace, WorkspaceCount> workspaces = m_workspaces;
+   CaptureWorkspace(workspaces[m_activeWorkspace]);
+   nlohmann::ordered_json list = nlohmann::ordered_json::array();
+   for (const Workspace &ws : workspaces)
+   {
+      nlohmann::ordered_json pins = nlohmann::ordered_json::array();
+      for (const PinKey &pin : ws.pins)
+         pins.push_back({ { "kind", PinKindName(pin.kind) }, { "name", pin.name }, { "prop", pin.prop } });
+      list.push_back({ { "name", ws.name }, { "outliner", ws.outliner }, { "properties", ws.properties }, { "pinned", ws.pinned },
+         { "overlay", ws.overlayLeft ? "left" : "right" }, { "pins", pins } });
+   }
+   nlohmann::ordered_json doc = { { "active", workspaces[m_activeWorkspace].name }, { "workspaces", list } };
+   table->m_editorWorkspaces = doc.dump();
+}
+
+void PinnedPanel::ResetWorkspaces()
+{
+   m_workspaces[0] = { "Layout"s, true, true, false, false, {} };
+   m_workspaces[1] = { "Look-dev"s, false, true, true, true, {} };
+   m_workspaces[2] = { "Wiring"s, true, true, false, false, {} };
+}
+
+void PinnedPanel::CaptureWorkspace(Workspace &ws) const
+{
+   ws.outliner = m_editor.m_showOutliner;
+   ws.properties = m_editor.m_showProperties;
+   ws.pinned = m_visible;
+   ws.pins = m_pins;
+}
+
+void PinnedPanel::ApplyWorkspace(int index)
+{
+   if (index < 0 || index >= WorkspaceCount)
+      return;
+   if (m_activeWorkspace >= 0)
+      CaptureWorkspace(m_workspaces[m_activeWorkspace]);
+   m_activeWorkspace = index;
+   const Workspace &ws = m_workspaces[index];
+   m_pins = ws.pins;
+   m_visible = ws.pinned;
+   m_collapsed = false;
+   m_editor.m_showOutliner = ws.outliner;
+   m_editor.m_showProperties = ws.properties;
+   m_placeOverlay = true;
+   m_editor.m_liveUI.PushNotification("Workspace: "s + ws.name, 1500);
+}
+
+void PinnedPanel::LoadWorkspaces(const string &json)
+{
+   ResetWorkspaces();
+   m_activeWorkspace = -1;
+   if (json.empty())
+      return;
+   const nlohmann::json doc = nlohmann::json::parse(json, nullptr, false);
+   if (!doc.is_object())
+      return;
+   const string active = doc.value("active", ""s);
+   if (const auto list = doc.find("workspaces"); list != doc.end() && list->is_array())
+      for (const auto &entry : *list)
+      {
+         if (!entry.is_object())
+            continue;
+         const string name = entry.value("name", ""s);
+         for (int i = 0; i < WorkspaceCount; i++)
+         {
+            Workspace &ws = m_workspaces[i];
+            if (ws.name != name)
+               continue;
+            ws.outliner = entry.value("outliner", ws.outliner);
+            ws.properties = entry.value("properties", ws.properties);
+            ws.pinned = entry.value("pinned", ws.pinned);
+            ws.overlayLeft = entry.value("overlay", ws.overlayLeft ? "left"s : "right"s) == "left";
+            ws.pins.clear();
+            if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())
+               for (const auto &pin : *pins)
+               {
+                  PinKey key;
+                  if (!pin.is_object() || !PinKindFromName(pin.value("kind", ""s), key.kind))
+                     continue;
+                  key.name = pin.value("name", ""s);
+                  key.prop = pin.value("prop", ""s);
+                  if (!key.prop.empty() && std::ranges::find(ws.pins, key) == ws.pins.end())
+                     ws.pins.push_back(key);
+               }
+            if (name == active)
+               m_activeWorkspace = i;
+         }
+      }
 }
 
 void PinnedPanel::SyncWithTable()
@@ -206,6 +298,16 @@ void PinnedPanel::SyncWithTable()
    }
    if (!m_pins.empty())
       m_visible = true;
+   // The active workspace's panels (its pins are the table's current pin list loaded above)
+   LoadWorkspaces(base->m_editorWorkspaces);
+   if (m_activeWorkspace >= 0)
+   {
+      const Workspace &ws = m_workspaces[m_activeWorkspace];
+      m_visible = ws.pinned;
+      m_editor.m_showOutliner = ws.outliner;
+      m_editor.m_showProperties = ws.properties;
+      m_placeOverlay = true;
+   }
 }
 
 // Resolves a pinned object by name on the displayed table (the live copy in an inspection session, like the panel's 'Live' tab)
@@ -397,8 +499,13 @@ void PinnedPanel::Render(float topBarHeight)
    const float dpi = editor.m_liveUI.GetDPI();
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
    const float width = 300.f * dpi;
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - (PropertiesPanel::PaneWidth + 8.f) * dpi, viewport->Pos.y + topBarHeight + (8.f + 128.f + 16.f) * dpi), ImGuiCond_FirstUseEver,
-      ImVec2(1.f, 0.f));
+   // Default place: left of the properties panel; a workspace switch moves it to the workspace's side
+   const bool left = m_activeWorkspace >= 0 && m_workspaces[m_activeWorkspace].overlayLeft;
+   const float leftX = viewport->Pos.x + ((m_editor.m_showOutliner ? OutlinerPanel::PaneWidth : 0.f) + 8.f) * dpi;
+   const float rightX = viewport->Pos.x + viewport->Size.x - ((m_editor.m_showProperties ? PropertiesPanel::PaneWidth : 0.f) + 8.f) * dpi;
+   ImGui::SetNextWindowPos(ImVec2(left ? leftX : rightX, viewport->Pos.y + topBarHeight + (left ? 8.f : 8.f + 128.f + 16.f) * dpi), m_placeOverlay ? ImGuiCond_Always : ImGuiCond_FirstUseEver,
+      ImVec2(left ? 0.f : 1.f, 0.f));
+   m_placeOverlay = false;
    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.f), ImVec2(width, viewport->Size.y * 0.8f));
    ImGui::SetNextWindowSize(ImVec2(width, 0.f)); // Fixed width, height fitted to the rows
    ImGui::SetNextWindowBgAlpha(m_hovered ? 0.92f : 0.6f);

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <array>
 #include <functional>
 #include <map>
 
@@ -99,6 +100,23 @@ public:
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;
 
+   // Workspaces: Layout, Look-dev and Wiring presets of the panels (outliner, properties, pinned overlay and its side) with their
+   // own pin set, saved with the table ("editor_workspaces" in table.json, beside "editor_pins" which stays the current pin list)
+   struct Workspace
+   {
+      string name;
+      bool outliner = true;
+      bool properties = true;
+      bool pinned = false;
+      bool overlayLeft = false;
+      vector<PinKey> pins;
+   };
+   static constexpr int WorkspaceCount = 3;
+   const Workspace &GetWorkspace(int index) const { return m_workspaces[index]; }
+   int GetActiveWorkspace() const { return m_activeWorkspace; }
+   // Stores the current panels and pins in the active workspace, then switches to the given one
+   void ApplyWorkspace(int index);
+
 private:
    struct GroupRequest
    {
@@ -114,6 +132,9 @@ private:
    void RenderHeader();
    void ApplyUnits(PropertyPane &props) const;
    void PinSelectionSeeThrough();
+   void ResetWorkspaces();
+   void CaptureWorkspace(Workspace &ws) const;
+   void LoadWorkspaces(const string &json);
 
    EditorUI &m_editor;
    bool m_visible = false;
@@ -128,6 +149,9 @@ private:
    unsigned m_harvestStamp = 0; // Stamp of the harvest in progress (0 when not harvesting)
    int m_harvestSeq = 0;
    const PinTable *m_sourceTable = nullptr; // Base table the pin list was loaded from
+   std::array<Workspace, WorkspaceCount> m_workspaces;
+   int m_activeWorkspace = -1; // None until one is picked or the table has saved workspaces (the table data stays untouched until then)
+   bool m_placeOverlay = false; // Move the overlay to the active workspace's side on next render
 };
 
 }

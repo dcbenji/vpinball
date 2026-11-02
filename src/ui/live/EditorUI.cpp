@@ -698,8 +698,10 @@ void EditorUI::RenderUI()
    if (showFullUI)
    {
       // Side panels
-      m_outliner.Render(m_chrome.GetTopBarHeight());
-      m_properties.Render(m_chrome.GetTopBarHeight());
+      if (m_showOutliner)
+         m_outliner.Render(m_chrome.GetTopBarHeight());
+      if (m_showProperties)
+         m_properties.Render(m_chrome.GetTopBarHeight());
    }
    if (!m_inspectionModal.IsVisible())
       m_pinned.Render(m_chrome.GetTopBarHeight());
@@ -1242,6 +1244,8 @@ void EditorUI::RenderUI()
          else if (m_selection.GetType() != Selection::S_NONE)
             ClearSelection(); // Cancel current selection
       }
+      else if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
+         m_pinned.ApplyWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Workspaces (Cmd on macOS)
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
          // Play a shallow copy of the edited table
