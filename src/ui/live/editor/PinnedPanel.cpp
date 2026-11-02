@@ -12,6 +12,8 @@
 
 #include "PropertyPane.h"
 
+#include <set>
+
 namespace VPX::EditorUI
 {
 
@@ -310,6 +312,14 @@ void PinnedPanel::RenderHeader()
    }
 }
 
+// One log line per pin and reason, so an unresolved pin is diagnosable without flooding the log every frame
+static void LogUnresolved(const PinKey &pin, const string &reason)
+{
+   static std::set<string> logged;
+   if (logged.insert(pin.Id() + '\x1e' + reason).second)
+      PLOGI << "Pinned property '" << pin.prop << "' of " << PinKindName(pin.kind) << " '" << pin.name << "' unresolved: " << reason;
+}
+
 void PinnedPanel::Render(float topBarHeight)
 {
    EditorUI &editor = m_editor;
@@ -412,9 +422,18 @@ void PinnedPanel::Render(float topBarHeight)
             ImGui::SameLine();
             const auto it = m_defs.find(pin.Id());
             if (obj == nullptr)
+            {
+               LogUnresolved(pin, "object not found on the displayed table"s);
                ImGui::TextDisabled("%s (object not found)", pin.prop.c_str());
+            }
             else if (it == m_defs.end() || !it->second.draw || (kind == PinKind::Part && it->second.owner != owner))
+            {
+               LogUnresolved(pin,
+                  owner == nullptr ? "object found but has no editor UI part (a part without a part group is a live object in full edit mode)"s
+                  : it == m_defs.end() ? "object found, field not found in its harvested property pane (label mismatch or field not drawn for this part)"s
+                                       : "field definition is stale (owner changed)"s);
                ImGui::TextDisabled("%s (not available)", pin.prop.c_str());
+            }
             else
                it->second.draw(props, obj);
             ImGui::PopID();
