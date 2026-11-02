@@ -71,6 +71,10 @@ private:
    FilterTokens m_tokens;
    bool m_openMatchesPending = false; // Filter changed: open the groups containing matches once the tree is drawn
 
+   Selection m_lastSeenSelection; // To detect selection changes made elsewhere
+   bool m_revealResource = false; // The selection changed to a table data item: open its category and scroll to it
+   vector<std::shared_ptr<EditorUIPart>> m_listedParts; // Rows drawn in the parts tree this frame, in order (for shift+click range selection)
+
    uint32_t m_typeMask = AllTypesMask;
    bool m_selectedOnly = false;
    int m_displayMode = 0;

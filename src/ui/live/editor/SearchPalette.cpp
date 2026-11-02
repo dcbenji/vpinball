@@ -95,6 +95,11 @@ void SearchPalette::BuildOperators()
 {
    m_ops.clear();
    EditorUI &ed = m_editor;
+   // Same guards as the menu bar: table edits are off for locked tables, and the File/Tools menus are hidden when inspecting
+   const auto unlocked = [&ed]() { return !ed.m_table->IsLocked(); };
+   const auto editable = [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
+   const auto editablePart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
+   const auto unlockedPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked(); };
    const auto hasPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE; };
    const auto add = [this](const string &path, const char *shortcut, std::function<bool()> enabled, std::function<void()> action)
    {
@@ -110,9 +115,9 @@ void SearchPalette::BuildOperators()
       m_ops.push_back(std::move(op));
    };
    const string sep = string(" ") + kSep + " ";
-   add("File" + sep + "Save", "Ctrl+S", nullptr, [&ed]() { ed.SaveTable(); });
-   add("File" + sep + "Play", "", [&ed]() { return !ed.IsInspectMode() && !ed.m_table->IsLocked(); }, [&ed]() { ed.PlayTest(); });
-   add("File" + sep + "Part Library", "", nullptr, [&ed]() { ed.OpenPartLibrary(); });
+   add("File" + sep + "Save", "Ctrl+S", editable, [&ed]() { ed.SaveTable(); });
+   add("File" + sep + "Play", "", editable, [&ed]() { ed.PlayTest(); });
+   add("File" + sep + "Part Library", "", unlocked, [&ed]() { ed.OpenPartLibrary(); });
    add("View" + sep + "Frame Selected", "Numpad .", hasPart, [&ed]() { ed.FrameSelection(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
@@ -122,12 +127,12 @@ void SearchPalette::BuildOperators()
    add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
    add("Select" + sep + "All", "A", nullptr, [&ed]() { ed.SelectAllParts(); });
    add("Select" + sep + "None", "Alt+A", nullptr, [&ed]() { ed.ClearSelection(); });
-   add("Object" + sep + "Delete", "Del", hasPart, [&ed]() { ed.DeleteSelection(); });
-   add("Object" + sep + "Copy", "Ctrl+C", hasPart, [&ed]() { ed.CopySelection(); });
-   add("Object" + sep + "New Collection from Selection", "", hasPart, [&ed]() { ed.CreateCollection(true); });
-   add("Object" + sep + "Edit Points", "Tab", hasPart, [&ed]() { ed.EnterPointEditMode(); });
-   add("Tools" + sep + "Convert to PBR", "", nullptr, [&ed]() { ed.m_pbrConvertModal.Show(); });
-   add("Debug" + sep + "Renderer Inspection", "", nullptr, [&ed]() { ed.m_inspectionModal.Show(); });
+   add("Object" + sep + "Delete", "Del", editablePart, [&ed]() { ed.DeleteSelection(); });
+   add("Object" + sep + "Copy", "Ctrl+C", unlockedPart, [&ed]() { ed.CopySelection(); });
+   add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
+   add("Object" + sep + "Edit Points", "Tab", editablePart, [&ed]() { ed.EnterPointEditMode(); });
+   add("Tools" + sep + "Convert to PBR", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });
+   add("Debug" + sep + "Renderer Inspection", "", unlocked, [&ed]() { ed.m_inspectionModal.Show(); });
    for (int i = 0; i < PinnedPanel::WorkspaceCount; ++i)
    {
       const string &name = ed.m_pinned.GetWorkspace(i).name;
@@ -545,7 +550,7 @@ void SearchPalette::Activate(const Result &r, bool pin)
          return;
       Close();
       Remember(r);
-      op.action();
+      m_pendingOp = r.op;
       return;
    }
    if (r.obj < 0 || r.obj >= static_cast<int>(m_objects.size()))
@@ -620,6 +625,18 @@ bool SearchPalette::ConsumedEscape()
 
 void SearchPalette::Render()
 {
+   if (m_pendingOp >= 0)
+   {
+      // Chosen last frame: run it before anything else, outside any window, since it may swap the table
+      const int idx = m_pendingOp;
+      m_pendingOp = -1;
+      if (idx < static_cast<int>(m_ops.size()))
+      {
+         const Operator op = m_ops[idx];
+         if (!op.enabled || op.enabled())
+            op.action();
+      }
+   }
    // The Esc that closed the palette is forgotten once released, even if the editor did not ask (e.g. its key handling was skipped)
    if (m_escPending && !ImGui::IsKeyDown(ImGuiKey_Escape) && !ImGui::IsKeyReleased(ImGuiKey_Escape))
       m_escPending = false;

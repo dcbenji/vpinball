@@ -297,8 +297,10 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    {
       return prim != nullptr && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome()));
    };
+   // Types without curation rules: the visual sections make their Look tab
+   static constexpr const char *visualSections[] = { "Visuals", "Render Mode", "Light Settings", "Bulb", "Transparency", "Ball Reflections & Shadows" };
    const auto isLook = [&](const PinnedPanel::Def *def)
-   { return rules == nullptr || def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop); };
+   { return (rules == nullptr && std::ranges::any_of(visualSections, [def](const char *section) { return def->section == section; })) || def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop); };
    const auto isTransform = [&](const PinnedPanel::Def *def)
    { return def->section == "Position" || def->section == "Center" || (rules != nullptr && Listed(rules->transformLabels, def->key.prop)); };
    for (auto &list : cur.tabs)
@@ -515,6 +517,9 @@ void PropertiesPanel::Render(float topBarHeight)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
    // Pin ID: draw the locked object as if it were selected (the real selection is restored once the panel is drawn)
+   // A search jump goes to its object: unpin (the pinned object would hide it)
+   if (m_locked && PropertyPane::IsFocusPending())
+      m_locked = false;
    const bool locked = m_locked && IsSelectionAlive(m_lockedSel);
    m_locked = locked;
    Selection realSel;
@@ -707,10 +712,9 @@ void PropertiesPanel::Render(float topBarHeight)
       else if (!tabbed || m_tab == Tab::Material)
          PartMaterialPane(false, false);
    }
+   RenderPopups(); // In the content child when tabbed: the pane code opens its popups there
    if (tabbed)
       ImGui::EndChild();
-
-   RenderPopups();
 
    ImGui::End();
    ImGui::PopStyleVar(3);

@@ -271,6 +271,26 @@ void OutlinerPanel::Render(float topBarHeight)
    ImGui::Begin("OUTLINER", nullptr, window_flags);
    const ImGuiStyle &style = ImGui::GetStyle();
 
+   // Show the selection made elsewhere (viewport, property pane, search): resources live in Table Data and parts in View Layer
+   if (editor.m_selection != m_lastSeenSelection)
+   {
+      m_lastSeenSelection = editor.m_selection;
+      switch (editor.m_selection.GetType())
+      {
+      case Selection::S_MATERIAL:
+      case Selection::S_IMAGE:
+      case Selection::S_SOUND:
+      case Selection::S_RENDERPROBE:
+      case Selection::S_COLLECTION:
+      case Selection::S_CAMERA:
+         m_revealResource = m_syncToSelection || m_displayMode != 1;
+         m_displayMode = 1;
+         break;
+      case Selection::S_EDITABLE: m_displayMode = 0; break;
+      default: break;
+      }
+   }
+
    // Header, first row: display mode (Blender's display mode combo) and sync button
    {
       const bool popStyle = m_syncToSelection;
@@ -381,9 +401,11 @@ void OutlinerPanel::Render(float topBarHeight)
       ImGui::EndDragDropTarget();
    };
    // Part row: type icon, selectable with ctrl/shift multi selection (double click frames the part), drag source, drop target and eye toggle
-   const auto renderPartLeaf = [&editor, &partDragSource, &partDropTarget](const std::shared_ptr<EditorUIPart> &edit, int &itemCounter, const std::shared_ptr<EditorUIPart> &revealPart, float eyeX)
+   std::shared_ptr<EditorUIPart> rangeTarget; // Shift+click: applied once all the rows are known
+   const auto renderPartLeaf = [this, &editor, &partDragSource, &partDropTarget, &rangeTarget](const std::shared_ptr<EditorUIPart> &edit, int &itemCounter, const std::shared_ptr<EditorUIPart> &revealPart, float eyeX)
    {
       IEditable *const editable = edit->GetEditable();
+      m_listedParts.push_back(edit);
       const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
       if (inactiveSel)
          PushInactiveSelectionColor();
@@ -400,7 +422,7 @@ void OutlinerPanel::Render(float topBarHeight)
             editor.m_outlinerAnchor = edit;
          }
          else if (selIO.KeyShift)
-            editor.SelectOutlinerRange(edit);
+            rangeTarget = edit;
          else
          {
             editor.SetSelection(Selection(edit));
@@ -432,6 +454,7 @@ void OutlinerPanel::Render(float topBarHeight)
       const bool filterActive = !m_tokens.empty() || m_typeMask != AllTypesMask || m_selectedOnly;
       const bool openMatches = m_openMatchesPending && filterActive;
       m_openMatchesPending = false;
+      m_listedParts.clear();
       ImGui::PushID("parts");
       const bool scenePartsOpened = ImGui::TreeNodeEx("Scene Parts", ImGuiTreeNodeFlags_DefaultOpen);
       partDropTarget(nullptr); // Dropping on the scene root ungroups part groups
@@ -470,7 +493,7 @@ void OutlinerPanel::Render(float topBarHeight)
                m_groupStack.push_back(static_cast<const PartGroup *>(editable));
                continue;
             }
-            const bool listed = (m_typeMask & (1u << CategoryOf(editable->GetItemType()))) != 0 && (!m_selectedOnly || editor.IsPartSelected(uiPart))
+            const bool listed = editable->m_desktopBackdrop == backdropView && (m_typeMask & (1u << CategoryOf(editable->GetItemType()))) != 0 && (!m_selectedOnly || editor.IsPartSelected(uiPart))
                && (!hasTokens || MatchesPartCached(i) || std::ranges::any_of(m_groupStack, [this](const PartGroup *group) { return m_matchedGroups.contains(group); }));
             m_showPart[i] = listed;
             if (!listed)
@@ -478,8 +501,7 @@ void OutlinerPanel::Render(float topBarHeight)
             for (const PartGroup *ancestor : m_groupStack)
             {
                m_visibleGroups.insert(ancestor);
-               if (editable->m_desktopBackdrop == backdropView)
-                  ++m_groupCounts[ancestor];
+               ++m_groupCounts[ancestor];
             }
          }
          vector<Node> stack;
@@ -593,6 +615,19 @@ void OutlinerPanel::Render(float topBarHeight)
          ImGui::TreePop();
       }
       ImGui::PopID();
+      if (rangeTarget)
+      {
+         // Range between the anchor and the clicked row, restricted to the rows listed (type filter, search, open groups)
+         const auto anchorIt = std::ranges::find(m_listedParts, editor.m_outlinerAnchor);
+         const auto targetIt = std::ranges::find(m_listedParts, rangeTarget);
+         if (editor.m_outlinerAnchor == nullptr || anchorIt == m_listedParts.end() || targetIt == m_listedParts.end())
+            editor.SetSelection(Selection(rangeTarget));
+         else
+         {
+            editor.m_multiSel.assign(std::min(anchorIt, targetIt), std::max(anchorIt, targetIt) + 1);
+            editor.m_selection = Selection(rangeTarget);
+         }
+      }
    }
    else
    {
@@ -606,11 +641,20 @@ void OutlinerPanel::Render(float topBarHeight)
          return label;
       };
       const std::function<string(Material *)> materialName = [](Material *material) -> string { return material->m_name; };
+      const Selection::SelectionType selType = editor.m_selection.GetType();
+      if (m_revealResource && selType == Selection::S_MATERIAL)
+         ImGui::SetNextItemOpen(true);
       RenderResourceList(categoryLabel("Materials", editor.m_table->m_materials.size()), true, editor.m_table->m_materials, editor.m_multiSelMaterials, editor.m_outlinerMaterialAnchor, materialName);
       const std::function<string(Texture *)> imageName = [](Texture *image) -> string { return image->m_name; };
+      if (m_revealResource && selType == Selection::S_IMAGE)
+         ImGui::SetNextItemOpen(true);
       RenderResourceList(categoryLabel("Images", editor.m_table->m_vimage.size()), true, editor.m_table->m_vimage, editor.m_multiSelImages, editor.m_outlinerImageAnchor, imageName);
       const std::function<string(VPX::Sound *)> soundName = [](VPX::Sound *sound) -> string { return sound->GetName(); };
+      if (m_revealResource && selType == Selection::S_SOUND)
+         ImGui::SetNextItemOpen(true);
       RenderResourceList(categoryLabel("Sounds", editor.m_table->m_vsound.size()), true, editor.m_table->m_vsound, editor.m_multiSelSounds, editor.m_outlinerSoundAnchor, soundName);
+      if (m_revealResource && selType == Selection::S_RENDERPROBE)
+         ImGui::SetNextItemOpen(true);
       if (ImGui::TreeNode(categoryLabel("Render Probes", editor.m_table->m_vrenderprobe.size())))
       {
          int pos = 0;
@@ -622,12 +666,16 @@ void OutlinerPanel::Render(float topBarHeight)
             Selection sel(probe);
             if (ImGui::Selectable(probe->GetName().c_str(), editor.m_selection == sel))
                editor.SetSelection(sel);
+            if (m_revealResource && editor.m_selection == sel && !ImGui::IsItemVisible())
+               ImGui::SetScrollHereY();
             ImGui::PopID();
          }
          ImGui::TreePop();
       }
       // Collections can only be edited on the base table (the inspected table is a live copy)
       const bool canEditCollections = editor.m_table->m_liveBaseTable == nullptr;
+      if (m_revealResource && selType == Selection::S_COLLECTION)
+         ImGui::SetNextItemOpen(true);
       const bool collectionsOpened = ImGui::TreeNode(categoryLabel("Collections", editor.m_table->GetCollections().size()));
       if (ImGui::BeginPopupContextItem())
       {
@@ -653,9 +701,13 @@ void OutlinerPanel::Render(float topBarHeight)
             const Selection sel(collection);
             if (ImGui::Selectable((collection->m_name + "##collection"s).c_str(), editor.m_selection == sel))
                editor.SetSelection(sel);
+            if (m_revealResource && editor.m_selection == sel && !ImGui::IsItemVisible())
+               ImGui::SetScrollHereY();
          }
          ImGui::TreePop();
       }
+      if (m_revealResource && selType == Selection::S_CAMERA)
+         ImGui::SetNextItemOpen(true);
       if (ImGui::TreeNodeEx("View Setups"))
       {
          if (ImGui::Selectable("Editor Camera"))
@@ -671,6 +723,7 @@ void OutlinerPanel::Render(float topBarHeight)
                SelectViewSetup(cam);
          ImGui::TreePop();
       }
+      m_revealResource = false;
       ImGui::PopID();
    }
    if (dropRequested)
@@ -700,6 +753,8 @@ void OutlinerPanel::RenderResourceList(const char *label, bool asTree, vector<T 
       const bool clicked = ImGui::Selectable(nameOf(item).c_str(), selected);
       if (inactiveSel)
          ImGui::PopStyleColor();
+      if (m_revealResource && editor.m_selection == Selection(item) && !ImGui::IsItemVisible())
+         ImGui::SetScrollHereY();
       ImGui::PopID();
       if (!clicked)
          continue;
