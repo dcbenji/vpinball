@@ -64,6 +64,7 @@ class EditorUI final
    friend class ScriptPanel;
    friend class PinnedPanel;
    friend class SearchPalette;
+   friend class SetOrigin;
 
 public:
    EditorUI(LiveUI &liveUI);
