@@ -51,6 +51,7 @@ public:
 
    void Render(float topBarHeight); // The N-panel sidebar, when shown
    void RenderQuickFavorites(); // The Q popup, when opened
+   bool ConsumedEscape(); // The Esc that closed the Q popup is not an editor Esc
 
    bool IsPinned(const PinKey &key) const;
    void Pin(const PinKey &key);
@@ -151,6 +152,7 @@ private:
    vector<PinKey> m_itemKeys;
    int m_shownTab = -1; // Sidebar tab shown last frame
    bool m_quickOpen = false; // Q popup open
+   bool m_escPending = false;
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()
    vector<GroupRequest> m_groupRequests; // Quick set requests, applied once the object's definitions are known

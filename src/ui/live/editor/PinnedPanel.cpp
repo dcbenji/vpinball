@@ -719,23 +719,23 @@ void PinnedPanel::Render(float topBarHeight)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
    ImGui::Begin("SIDEBAR", nullptr,
-      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
+      ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
          | ImGuiWindowFlags_NoNavFocus);
    const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_AllowWhenBlockedByPopup)
       || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
    if (ImGui::BeginTabBar("##SidebarTabs"))
    {
       static constexpr const char *names[] = { "Item", "Look", "View" };
+      // A tab picked from elsewhere (search, workspace) is brought to front (ImGui applies it on the next frame); otherwise the
+      // tab shown is the user's pick
+      const bool external = m_shownTab != static_cast<int>(editor.m_sidebarTab);
+      int shown = -1;
       for (int t = 0; t < 3; t++)
       {
          const EditorUI::SidebarTab tab = static_cast<EditorUI::SidebarTab>(t);
-         // A tab picked from elsewhere (Q menu, search, workspace) is brought to front once
-         const bool select = m_shownTab != static_cast<int>(editor.m_sidebarTab) && editor.m_sidebarTab == tab;
-         if (ImGui::BeginTabItem(names[t], nullptr, select ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+         if (ImGui::BeginTabItem(names[t], nullptr, (external && editor.m_sidebarTab == tab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
          {
-            if (!select && m_shownTab == static_cast<int>(editor.m_sidebarTab))
-               editor.m_sidebarTab = tab; // Clicked
-            m_shownTab = static_cast<int>(editor.m_sidebarTab);
+            shown = t;
             ImGui::BeginChild("##SidebarContent");
             switch (tab)
             {
@@ -751,9 +751,22 @@ void PinnedPanel::Render(float topBarHeight)
          }
       }
       ImGui::EndTabBar();
+      if (!external && shown >= 0)
+         editor.m_sidebarTab = static_cast<EditorUI::SidebarTab>(shown);
+      if (shown == static_cast<int>(editor.m_sidebarTab))
+         m_shownTab = shown;
    }
    ImGui::End();
    ImGui::PopStyleVar(3);
+}
+
+bool PinnedPanel::ConsumedEscape()
+{
+   if (!m_escPending)
+      return false;
+   if (!ImGui::IsKeyDown(ImGuiKey_Escape))
+      m_escPending = false; // Released: this is the frame of the release, still consumed
+   return true;
 }
 
 void PinnedPanel::RenderQuickFavorites()
@@ -771,6 +784,11 @@ void PinnedPanel::RenderQuickFavorites()
       return;
    ImGui::TextUnformatted("Quick Favorites");
    ImGui::Separator();
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+   {
+      ImGui::CloseCurrentPopup();
+      m_escPending = true;
+   }
    // Undo snapshots only while interacting with the popup (as the sidebar)
    RenderFavoriteRows(ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive()));
    ImGui::EndPopup();

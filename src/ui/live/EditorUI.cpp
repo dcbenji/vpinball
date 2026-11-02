@@ -1327,7 +1327,7 @@ void EditorUI::RenderUI()
       m_showOutliner = true;
       m_outliner.FocusFilter();
    }
-   const bool paletteEsc = m_palette.ConsumedEscape(); // The Esc that closed the search palette is not an editor Esc
+   const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape(); // The Esc that closed a popup is not an editor Esc
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
