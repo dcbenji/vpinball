@@ -41,6 +41,11 @@ public:
 
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (header with the editor type button, then the content)
 
+   // Search field of the header (Blender's Properties search): focuses it. Ctrl+F over the area calls this
+   void FocusSearch() { m_focusSearch = true; }
+   // The mouse was over the area when it was last drawn
+   bool IsMouseOver() const { return m_mouseOver; }
+
    // Width of the panel in logical pixels (scaled by the UI DPI)
    static constexpr float PaneWidth = 360.f;
 
@@ -92,6 +97,7 @@ private:
       unsigned stamp = 0; // Harvest the lists below were built from
       vector<const PinnedPanel::Def *> look;
       vector<const PinnedPanel::Def *> transform;
+      vector<const PinnedPanel::Def *> all; // Every field of the latest harvest, in draw order (search)
       int advancedCount = 0; // Fields of the full sheet not in the curated sections
       bool active = false;
       bool reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
@@ -101,6 +107,18 @@ private:
       vector<const PinnedPanel::Def *> tabs[static_cast<int>(Tab::Count)]; // Tabbed curation (the selection)
       bool tabbed = false;
    };
+   // Search across all the tabs: the matching fields of the object (and of its material), grouped by tab and section
+   void DrawSearchField();
+   void UpdateSearchTerms();
+   bool IsSearching() const { return !m_searchTerms.empty() && m_curation.active && m_curation.tabbed; }
+   bool MatchesSearch(const PinnedPanel::Def &def) const;
+   int CountSearchMatches(const Curation &cur) const;
+   int DrawSearchResults(PropertyPane &props, Curation &cur, const char *titlePrefix);
+   string m_search;
+   string m_searchTermsFor;
+   vector<string> m_searchTerms; // Lower case words of m_search
+   bool m_focusSearch = false;
+   bool m_mouseOver = false;
    void DrawTabStrip();
    void DrawTabContent(PropertyPane &props);
    bool HasTab(Tab tab) const;

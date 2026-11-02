@@ -41,4 +41,7 @@ namespace EditorTheme
    constexpr ImU32 RowHover = Rgb(255, 255, 255, 18);     // faint row hover highlight (favourite rows)
    constexpr ImU32 OverlayGrey = Rgb(120, 120, 124);      // neutral overlay lines (nav square)
    constexpr ImU32 TextShadow = Rgb(0, 0, 0, 200);        // shadow of text drawn over the render
+
+   // Properties search: highlight behind the matched part of a field label
+   constexpr ImU32 SearchMatch = Rgb(237, 145, 62, 110);
 }

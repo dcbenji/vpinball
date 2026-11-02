@@ -22,6 +22,12 @@ namespace
 constexpr float ToolButtonSize = 28.f; // Toolbar button (square), in pixels at 100% DPI
 constexpr float ToolGroupGap = 8.f; // Gap between button groups (holds the 1 px separator)
 constexpr float ToolSeparatorHeight = 16.f;
+constexpr float StatusBarHeight = 22.f; // Bottom status bar, in pixels at 100% DPI
+#ifdef __APPLE__
+constexpr const char *ModKey = "Cmd"; // ImGui maps Cmd to Ctrl on macOS
+#else
+constexpr const char *ModKey = "Ctrl";
+#endif
 float s_toolDpi = 1.f;
 
 // Toolbar icon button: transparent, hovered = Hover, active (mode on) = Raised background with Accent icon
@@ -65,6 +71,7 @@ void EditorChrome::Render(bool showFullUI)
 
    m_menuBarHeight = 0.0f;
    m_toolBarHeight = showFullUI ? (ToolButtonSize + 4.f) * m_editor.m_liveUI.GetDPI() + 1.f : 0.f; // + 1 px separator at the bottom, panels start below it
+   m_statusBarHeight = (showFullUI && m_showStatusBar) ? StatusBarHeight * m_editor.m_liveUI.GetDPI() : 0.f;
 
    if (!showFullUI)
       return;
@@ -72,6 +79,7 @@ void EditorChrome::Render(bool showFullUI)
    RenderMenuBar();
    RenderToolbar();
    RenderStatusOverlay();
+   RenderUndoHistory();
 }
 
 void EditorChrome::RenderMenuBar()
@@ -116,6 +124,35 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::MenuItem("Quit"))
             editor.RequestClose(Player::CS_CLOSE_APP);
+         ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("Edit"))
+      {
+         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editor.CanUndo()))
+            editor.UndoSteps(1);
+         if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, editor.CanRedo()))
+            editor.RedoSteps(1);
+         if (ImGui::MenuItem("Undo History...", nullptr, false, editor.m_table->m_liveBaseTable == nullptr && (editor.m_undo.HasUndo() || editor.m_undo.HasRedo())))
+            OpenUndoHistory();
+         ImGui::Separator();
+         if (ImGui::MenuItem("Copy", "Ctrl+C", false, editor.CanCopy()))
+            editor.CopySelection();
+         if (ImGui::MenuItem("Paste", "Ctrl+V", false, editor.CanPaste()))
+         {
+            const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+            editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
+         }
+         if (ImGui::MenuItem("Duplicate", "Shift+D", false, editor.CanDuplicate()))
+            editor.DuplicateSelection();
+         if (ImGui::MenuItem("Delete", "Del", false, editor.CanDelete()))
+            editor.DeleteAction();
+         ImGui::Separator();
+         if (ImGui::MenuItem("Select All", "A", false, editor.CanSelect()))
+            editor.SelectAllAction();
+         if (ImGui::MenuItem("Deselect", "Alt+A", false, editor.CanSelect() && editor.m_selection.GetType() != Selection::S_NONE))
+            editor.ClearSelection();
+         if (ImGui::MenuItem("Invert Selection", "Ctrl+I", false, editor.CanSelect()))
+            editor.InvertSelection();
          ImGui::EndMenu();
       }
       if (!editor.IsInspectMode() && ImGui::BeginMenu("Tools"))
@@ -241,7 +278,7 @@ void EditorChrome::RenderMenuBar()
          static constexpr const char *workspaceKeys[PinnedPanel::WorkspaceCount] = { "Ctrl+1", "Ctrl+2", "Ctrl+3" };
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
             if (ImGui::MenuItem(("Workspace: " + editor.m_pinned.GetWorkspace(i).name).c_str(), workspaceKeys[i], editor.m_pinned.GetActiveWorkspace() == i))
-               editor.m_pinned.ApplyWorkspace(i);
+               editor.SwitchWorkspace(i);
          ImGui::Separator();
          if (ImGui::MenuItem("Outliner", nullptr, editor.IsAreaEditorShown(EditorUI::AreaEditor::Outliner)))
             editor.ToggleAreaEditor(EditorUI::AreaEditor::Outliner);
@@ -278,6 +315,8 @@ void EditorChrome::RenderMenuBar()
             editor.m_palette.Open();
          if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
             editor.m_showNavCube = !editor.m_showNavCube;
+         if (ImGui::MenuItem("Status Bar", nullptr, m_showStatusBar))
+            m_showStatusBar = !m_showStatusBar;
          ImGui::EndMenu();
       }
       if (editor.IsInspectMode() && !editor.m_table->IsLocked() && ImGui::BeginMenu("Debug"))
@@ -320,7 +359,7 @@ void EditorChrome::RenderMenuBar()
             const ImVec2 tabSize(textSize.x + tabPadding * 2.f, tabHeight * dpi);
             ImGui::SetCursorScreenPos(ImVec2(x, barBottom - tabSize.y));
             if (ImGui::InvisibleButton((name + "##Workspace").c_str(), tabSize))
-               editor.m_pinned.ApplyWorkspace(i);
+               editor.SwitchWorkspace(i);
             const bool hovered = ImGui::IsItemHovered();
             const ImVec2 tabMin = ImGui::GetItemRectMin();
             const ImVec2 tabMax = ImGui::GetItemRectMax();
@@ -528,19 +567,14 @@ void EditorChrome::RenderToolbar()
 
       // Copy/Paste buttons (same actions as the Ctrl+C and Ctrl+V keyboard shortcuts)
       ImGui::SameLine(0.f, toolGap);
-      const bool canCopy
-         = editor.m_pointEditPart ? (editor.m_pointEditCenter ? editor.m_centerSelected : editor.m_pointSel.size() == 1) : (editor.m_selection.GetType() == Selection::S_EDITABLE);
-      ImGui::BeginDisabled(!canCopy || editor.m_table->IsLocked());
+      ImGui::BeginDisabled(!editor.CanCopy());
       if (ToolButton(ICON_LC_COPY))
          editor.CopySelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Copy selection\n[Ctrl+C]");
       ImGui::EndDisabled();
       ImGui::SameLine(0.f, toolGap);
-      const bool canPaste = editor.m_pointEditPart
-         ? (editor.m_pointEditCenter ? editor.m_centerSelected && VPX::EditorClipboard::HasPoint() : editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
-         : VPX::EditorClipboard::HasParts();
-      ImGui::BeginDisabled(!canPaste || editor.m_table->IsLocked());
+      ImGui::BeginDisabled(!editor.CanPaste());
       if (ToolButton(ICON_LC_CLIPBOARD_PASTE))
          editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
       if (ImGui::IsItemHovered())
@@ -750,6 +784,196 @@ void EditorChrome::RenderStatusOverlay()
    }
    if (editor.m_pointEditPart)
       ShadowedText(editor.m_pointEditCenter ? "Center Edit (Tab to exit)" : "Drag Point Edit (Tab to exit)");
+   ImGui::End();
+}
+
+void EditorChrome::RenderUndoHistory()
+{
+   if (!m_undoHistoryOpen)
+      return;
+   EditorUI &editor = m_editor;
+   const float dpi = editor.m_liveUI.GetDPI();
+   // The history can not change under the window: it is closed with the editor state it lists
+   if (editor.m_table->m_liveBaseTable != nullptr || editor.m_modal.active)
+   {
+      m_undoHistoryOpen = false;
+      return;
+   }
+   ImGui::SetNextWindowPos(m_undoHistoryPos, ImGuiCond_Appearing);
+   ImGui::SetNextWindowSizeConstraints(ImVec2(260.f * dpi, 0.f), ImVec2(420.f * dpi, 420.f * dpi));
+   bool open = true;
+   int undoSteps = 0, redoSteps = 0; // Requested move in the history, applied once the window is done
+   if (ImGui::Begin("Undo History", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
+   {
+      const size_t undoCount = editor.m_undo.UndoCount();
+      const size_t redoCount = editor.m_undo.RedoCount();
+      if (undoCount == 0 && redoCount == 0)
+         ImGui::TextDisabled("No history");
+      // Steps that can be redone, dimmed, the furthest first (so that the list reads newest first)
+      for (size_t i = redoCount; i-- > 0;)
+      {
+         ImGui::PushID(static_cast<int>(i) + 1000);
+         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextFaint));
+         if (ImGui::Selectable(editor.m_undo.RedoLabel(i).c_str()))
+            redoSteps = static_cast<int>(i) + 1;
+         ImGui::PopStyleColor();
+         ImGui::PopID();
+      }
+      // Done steps, the newest first: the first one is the current state, picking an older one undoes down to the state it left
+      for (size_t i = 0; i < undoCount; i++)
+      {
+         ImGui::PushID(static_cast<int>(i));
+         if (ImGui::Selectable(editor.m_undo.UndoLabel(i).c_str(), i == 0))
+            undoSteps = static_cast<int>(i);
+         ImGui::PopID();
+      }
+      if (undoCount > 0 || redoCount > 0)
+      {
+         ImGui::PushID("original");
+         ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+         if (ImGui::Selectable("Original", undoCount == 0))
+            undoSteps = static_cast<int>(undoCount);
+         ImGui::PopStyleColor();
+         ImGui::PopID();
+      }
+      // Clicking outside of the window dismisses it (not on the frame it opened, as the click that opened it may be still pending)
+      if (!m_undoHistoryJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+         open = false;
+   }
+   ImGui::End();
+   m_undoHistoryJustOpened = false;
+   if (redoSteps > 0)
+   {
+      editor.RedoSteps(static_cast<size_t>(redoSteps));
+      open = false;
+   }
+   else if (undoSteps > 0)
+   {
+      editor.UndoSteps(static_cast<size_t>(undoSteps));
+      open = false;
+   }
+   if (!open)
+      m_undoHistoryOpen = false;
+}
+
+void EditorChrome::RenderStatusBar(const bool showFullUI)
+{
+   if (!showFullUI || m_statusBarHeight <= 0.f)
+      return;
+   EditorUI &editor = m_editor;
+   const ImGuiIO &io = ImGui::GetIO();
+   const float dpi = editor.m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float height = m_statusBarHeight;
+
+   // Key hints of the current context: [key chip] label
+   struct Hint
+   {
+      string key, label;
+   };
+   vector<Hint> hints;
+   const string mod = ModKey;
+   EditorUI::AreaEditor areaUnderMouse = EditorUI::AreaEditor::Count;
+   bool sidebarUnderMouse = false;
+   const bool overArea = editor.GetAreaUnderMouse(areaUnderMouse, sidebarUnderMouse);
+   if (editor.m_palette.IsOpen())
+      hints = { { "Type", "Search" }, { "Enter", "Run" }, { mod + "+Enter", "Add to Quick Favorites" }, { "Esc", "Close" } };
+   else if (io.WantTextInput)
+      hints = { { "Enter", "Confirm" }, { "Esc", "Cancel" }, { mod + "+A", "Select All Text" } };
+   else if (editor.m_modal.active)
+      hints = { { "LMB / Enter", "Confirm" }, { "RMB / Esc", "Cancel" }, { "X Y Z", "Axis" }, { "Shift+X Y Z", "Plane" }, { "0-9", "Exact Value" } };
+   else if (editor.m_boxSelectActive && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !overArea)
+      hints = { { "Release LMB", "Select" }, { "Shift", "Add to Selection" }, { "Esc", "Cancel" } };
+   else if (overArea && sidebarUnderMouse)
+      hints = { { "Drag", "Adjust" }, { "Double-click", "Type Value" }, { "N", "Hide Sidebar" } };
+   else if (overArea)
+   {
+      switch (areaUnderMouse)
+      {
+      case EditorUI::AreaEditor::Outliner:
+         hints = { { "LMB", "Select" }, { mod + "+LMB", "Toggle" }, { "Shift+LMB", "Range" }, { "Double-click", "Frame" }, { mod + "+F", "Filter" } };
+         break;
+      case EditorUI::AreaEditor::Properties:
+         hints = { { "Wheel", "Scroll" }, { "Double-click", "Type Value" }, { mod + "+F", "Search Fields" }, { mod + "+K", "Search to Field" } };
+         break;
+      case EditorUI::AreaEditor::Script: hints = { { mod + "+S", "Save Table" }, { "F3", "Menu Search" } }; break;
+      default: hints = { { "LMB", "Select" }, { "Wheel", "Scroll" } }; break;
+      }
+   }
+   else if (editor.m_addPartType != eItemInvalid)
+      hints = { { "LMB", "Place Part" }, { "Esc", "Cancel" } };
+   else if (editor.m_pointEditPart)
+      hints = { { "LMB", "Select Point" }, { "Shift+LMB", "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
+   else
+   {
+      // Navigation hints follow the navigation preferences
+      hints.push_back({ "LMB", "Select" });
+      hints.push_back({ editor.m_navAltMiddleButton ? "MMB / Alt+LMB" : "MMB", "Orbit" });
+      hints.push_back({ "Shift+MMB", "Pan" });
+      if (editor.m_navTrackpad)
+      {
+         hints.push_back({ "Scroll", "Pan" });
+         hints.push_back({ mod + "+Scroll", "Zoom" });
+      }
+      else
+         hints.push_back({ "Wheel", "Zoom" });
+      hints.push_back({ "G", "Move" });
+      hints.push_back({ "R", "Rotate" });
+      hints.push_back({ "S", "Scale" });
+   }
+
+   // Last operation report on the right, fading out
+   const double age = ImGui::GetTime() - editor.m_reportTime;
+   const float reportAlpha = age < 3.5 ? 1.f : age < 4.5 ? static_cast<float>(4.5 - age) : 0.f;
+   const bool hasReport = reportAlpha > 0.f && !editor.m_report.empty();
+
+   const float pad = 8.f * dpi;
+   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - height));
+   ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, height));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::Begin("STATUSBAR", nullptr,
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav
+         | ImGuiWindowFlags_NoFocusOnAppearing);
+   ImGui::PopStyleColor();
+   ImGui::PopStyleVar(3);
+   ImDrawList *const draw = ImGui::GetWindowDrawList();
+   const ImVec2 barMin = ImGui::GetWindowPos();
+   const ImVec2 barMax(barMin.x + viewport->Size.x, barMin.y + height);
+   draw->AddLine(barMin, ImVec2(barMax.x, barMin.y), EditorTheme::Border, 1.f); // 1 px top border
+
+   const float textH = ImGui::GetFontSize();
+   const float textY = barMin.y + 0.5f * (height - textH);
+   float rightLimit = barMax.x - pad;
+   if (hasReport)
+   {
+      const ImVec2 size = ImGui::CalcTextSize(editor.m_report.c_str());
+      const float x = barMax.x - pad - size.x;
+      const auto fade = [reportAlpha](ImU32 color) { return (color & 0x00FFFFFFu) | (static_cast<ImU32>(static_cast<float>((color >> 24) & 0xFFu) * reportAlpha) << 24); };
+      draw->AddText(ImVec2(x, textY), fade(EditorTheme::Text), editor.m_report.c_str());
+      rightLimit = x - 2.f * pad;
+   }
+
+   // Hints from the left, as many as fit before the report
+   const float chipPadX = 4.f * dpi, chipPadY = 1.f * dpi, gap = 4.f * dpi, hintGap = 12.f * dpi;
+   float x = barMin.x + pad;
+   for (const Hint &hint : hints)
+   {
+      const ImVec2 keySize = ImGui::CalcTextSize(hint.key.c_str());
+      const ImVec2 labelSize = ImGui::CalcTextSize(hint.label.c_str());
+      const float width = keySize.x + 2.f * chipPadX + gap + labelSize.x;
+      if (x + width > rightLimit)
+         break;
+      const ImVec2 chipMin(x, barMin.y + 0.5f * (height - (keySize.y + 2.f * chipPadY)));
+      const ImVec2 chipMax(x + keySize.x + 2.f * chipPadX, chipMin.y + keySize.y + 2.f * chipPadY);
+      draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
+      draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
+      draw->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), EditorTheme::TextDim, hint.key.c_str());
+      draw->AddText(ImVec2(chipMax.x + gap, textY), EditorTheme::TextDim, hint.label.c_str());
+      x += width + hintGap;
+   }
    ImGui::End();
 }
 

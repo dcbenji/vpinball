@@ -521,6 +521,7 @@ void EditorUI::FinishFileOp()
       else
       {
          PLOGI << "Save done: " << op->displayPath;
+         Report("Saved " + PathToUTF8(op->filename.filename()));
          if (!IsInspectMode()) // inspect mode already reported when starting the save
             m_liveUI.PushNotification("Saved " + op->displayPath, 5000);
       }
@@ -596,13 +597,14 @@ void EditorUI::RenderSplitters()
    const float dpi = m_liveUI.GetDPI();
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
    const float top = viewport->Pos.y + m_chrome.GetTopBarHeight();
-   const float height = viewport->Size.y - m_chrome.GetTopBarHeight();
+   const float height = viewport->Size.y - m_chrome.GetTopBarHeight() - m_chrome.GetStatusBarHeight();
    const float grab = 6.f * dpi;
    const auto splitter = [&](const char *id, float x, float &width, float sign)
    {
       ImGui::SetNextWindowPos(ImVec2(x - grab * 0.5f, top));
       ImGui::SetNextWindowSize(ImVec2(grab, height));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f)); // The default 32 px minimum widened the grab strip over the areas' edges (the Properties tab strip got no clicks)
       ImGui::Begin(id, nullptr,
          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
             | ImGuiWindowFlags_NoNav);
@@ -615,7 +617,7 @@ void EditorUI::RenderSplitters()
       if (ImGui::IsItemActive())
          width = clamp(width + sign * ImGui::GetIO().MouseDelta.x / dpi, 140.f, 0.45f * viewport->Size.x / dpi);
       ImGui::End();
-      ImGui::PopStyleVar();
+      ImGui::PopStyleVar(2);
    };
    if (m_showOutliner)
       splitter("##SplitOutliner", viewport->Pos.x + m_outlinerWidth * dpi, m_outlinerWidth, 1.f);
@@ -733,7 +735,7 @@ void EditorUI::RenderAreas(const float topBarHeight)
       return;
    const float dpi = m_liveUI.GetDPI();
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float height = viewport->Size.y - topBarHeight;
+   const float height = viewport->Size.y - topBarHeight - m_chrome.GetStatusBarHeight();
    // The editor types are read once: picking a type in the header of an area swaps them, which takes effect on the next frame
    const AreaEditor leftEditor = m_leftEditor;
    const AreaEditor rightEditor = m_rightEditor;
@@ -952,7 +954,7 @@ void EditorUI::RenderUI()
       RenderAreas(m_chrome.GetTopBarHeight()); // Left and right areas
    }
    if (!m_inspectionModal.IsVisible())
-      m_pinned.Render(m_chrome.GetTopBarHeight()); // N-panel
+      m_pinned.Render(m_chrome.GetTopBarHeight(), m_chrome.GetStatusBarHeight()); // N-panel
    if (!showFullUI)
       m_openQuickFavorites = false;
    if (showFullUI)
@@ -962,6 +964,7 @@ void EditorUI::RenderUI()
    }
    if (showFullUI)
       m_palette.Render();
+   m_chrome.RenderStatusBar(showFullUI);
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
    m_partLibrary.Update();
@@ -1149,6 +1152,8 @@ void EditorUI::RenderUI()
             m_undo.BeginUndo();
             for (const auto &part : m_multiSel)
                m_undo.MarkForUndo(part->GetEditable());
+            m_undo.SetLabel(CountLabel(((static_cast<int>(m_gizmoOperation) & ImGuizmo::ROTATE) != 0) ? "Rotate" : ((static_cast<int>(m_gizmoOperation) & ImGuizmo::SCALE) != 0) ? "Scale" : "Move",
+               m_multiSel.size(), m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
             m_undo.EndUndo();
             m_lastUndoPart = nullptr;
             m_lastUndoId = 0x1000;
@@ -1190,7 +1195,7 @@ void EditorUI::RenderUI()
       }
 
       if (m_modal.active)
-         overlayDrawList->AddText(ImVec2(((m_showOutliner && !m_table->IsLocked() ? m_outlinerWidth : 0.f) + 16.f) * m_liveUI.GetDPI(), io.DisplaySize.y - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+         overlayDrawList->AddText(ImVec2(((m_showOutliner && !m_table->IsLocked() ? m_outlinerWidth : 0.f) + 16.f) * m_liveUI.GetDPI(), io.DisplaySize.y - m_chrome.GetStatusBarHeight() - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
 
       // In desktop backdrop mode, draw the bounds of the backdrop area
       if (m_camMode == ViewMode::DesktopBackdrop)
@@ -1510,6 +1515,7 @@ void EditorUI::RenderUI()
                   {
                      m_undo.BeginUndo();
                      m_undo.MarkForUndo(m_pointEditPart->GetEditable());
+                     m_undo.SetFieldLabel("Move Points");
                      m_undo.EndUndo();
                   }
                }
@@ -1551,11 +1557,27 @@ void EditorUI::RenderUI()
    // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
    if (panelsShown && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
       m_palette.Toggle();
-   // Outliner filter (shows the area hosting the outliner if a workspace hid it, or switches the left area to the outliner)
+   // Workspaces: Ctrl+PgUp / PgDn cycle them (wrapping), Ctrl+1..3 pick one unless the digits emulate the numpad views. Handled before the keyboard capture
+   // check: the workspaces showing a text editor (script) would otherwise never receive the keys, as the editor consumes them
+   if (panelsShown && m_fileOp == nullptr && !m_palette.IsOpen() && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   {
+      if (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))
+         SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (ImGui::IsKeyPressed(ImGuiKey_PageDown, false) ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
+      else if (!m_navEmulateNumpad && !io.WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
+         SwitchWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Direct workspace keys (Cmd on macOS)
+   }
+   // Ctrl+F: search field of the Properties area when the mouse is over it, otherwise the outliner filter (shows the area hosting the outliner if a workspace hid it, or switches the left area to the outliner)
    if (panelsShown && !m_table->IsLocked() && (!io.WantTextInput || !m_palette.IsOpen()) && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
-      ShowAreaEditor(AreaEditor::Outliner);
-      m_outliner.FocusFilter();
+      AreaEditor hovered = AreaEditor::Count;
+      bool hoveredSidebar = false;
+      if (GetAreaUnderMouse(hovered, hoveredSidebar) && !hoveredSidebar && hovered == AreaEditor::Properties)
+         m_properties.FocusSearch();
+      else
+      {
+         ShowAreaEditor(AreaEditor::Outliner);
+         m_outliner.FocusFilter();
+      }
    }
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape(); // The Esc that closed a popup is not an editor Esc
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive)
@@ -1573,10 +1595,6 @@ void EditorUI::RenderUI()
          else if (m_selection.GetType() != Selection::S_NONE)
             ClearSelection(); // Cancel current selection
       }
-      else if (panelsShown && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)))
-         m_pinned.ApplyWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (ImGui::IsKeyPressed(ImGuiKey_PageDown, false) ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
-      else if (panelsShown && !m_navEmulateNumpad && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
-         m_pinned.ApplyWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Direct workspace keys (Cmd on macOS), unless the digits emulate the numpad views
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
          // Play a shallow copy of the edited table
@@ -1645,22 +1663,11 @@ void EditorUI::RenderUI()
          }
          else if (!io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
          {
-            // Select all: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
-            if (m_pointEditPart)
-            {
-               if (m_pointEditCenter)
-                  m_centerSelected = true;
-               else
-               {
-                  m_pointSel.clear();
-                  for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
-                     m_pointSel.push_back(point.get());
-               }
-            }
-            else
-               SelectAllParts();
+            SelectAllAction(); // Select all: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
          }
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_I, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         InvertSelection(); // Blender's Select > Invert (Ctrl+I)
       else if (ImGui::IsKeyPressed(ImGuiKey_C))
       {
          // Copy the selected parts (or the coordinates of the selected drag point in point edit mode)
@@ -1676,25 +1683,11 @@ void EditorUI::RenderUI()
       else if (ImGui::IsKeyPressed(ImGuiKey_Delete))
       {
          if (!io.KeyAlt && !io.KeyCtrl && !io.KeyShift)
-         {
-            if (m_pointEditPart)
-               DeleteSelectedPoints();
-            else
-               DeleteSelection();
-         }
+            DeleteAction();
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
       {
-         // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
-         if (!m_pointEditPart && !m_multiSel.empty() && !IsInspectMode() && !m_table->IsLocked())
-         {
-            CopySelection();
-            PasteSelection(ImGui::GetMousePos());
-            if (m_navBlenderTransform)
-               BeginModalTransform(ModalOp::Grab);
-            else
-               SetGizmoOperation(ImGuizmo::TRANSLATE);
-         }
+         DuplicateSelection(); // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_H))
       {
@@ -1792,19 +1785,18 @@ void EditorUI::RenderUI()
          else if (!io.KeyCtrl)
             SetGizmoOperation(ImGuizmo::ROTATE);
       }
+#ifndef __APPLE__
+      else if (ImGui::IsKeyPressed(ImGuiKey_Y) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         RedoSteps(1); // Ctrl+Y (on macOS ImGui maps Cmd to Ctrl and Cmd+Shift+Z is the redo)
+#endif
       else if (ImGui::IsKeyPressed(ImGuiKey_Z))
       {
          if (io.KeyCtrl)
-         { // Undo
-            m_lastUndoPart = nullptr;
-            m_lastUndoId = 0;
-            if (m_table->m_liveBaseTable == nullptr)
-            {
-               // TODO handle IsUndoPastCleanPoint
-               const std::any state = m_undo.Undo();
-               if (state.has_value())
-                  RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
-            }
+         { // Undo (Ctrl+Z), Redo (Ctrl+Shift+Z)
+            if (io.KeyShift)
+               RedoSteps(1);
+            else
+               UndoSteps(1);
          }
          else if (io.KeyAlt && !io.KeyShift)
             m_selectionOverlay = !m_selectionOverlay; // Alt+Z: show / hide the selection overlay
@@ -1886,7 +1878,7 @@ void EditorUI::RenderUI()
    }
 }
 
-void EditorUI::PushUndo(IEditable *part, unsigned int undoId)
+void EditorUI::PushUndo(IEditable *part, unsigned int undoId, const string &label)
 {
    // No undo support in inspection mode (not implemented as it needs to handle both version of the table)
    if (m_table->m_liveBaseTable)
@@ -1900,7 +1892,191 @@ void EditorUI::PushUndo(IEditable *part, unsigned int undoId)
    m_lastUndoId = undoId;
    m_undo.BeginUndo();
    m_undo.MarkForUndo(part);
+   if (!label.empty())
+      m_undo.SetFieldLabel(label);
    m_undo.EndUndo();
+}
+
+string EditorUI::CountLabel(const char *verb, const size_t count, const string &name)
+{
+   return count == 1 ? string(verb) + " " + name : string(verb) + " " + std::to_string(count) + " parts";
+}
+
+bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !m_modal.active && m_fileOp == nullptr; }
+
+bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !m_modal.active && m_fileOp == nullptr; }
+
+void EditorUI::RestoreUndoState(const std::any &state)
+{
+   if (state.has_value())
+      RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
+}
+
+void EditorUI::UndoSteps(const size_t count)
+{
+   if (!CanUndo() || count == 0)
+      return;
+   m_lastUndoPart = nullptr;
+   m_lastUndoId = 0;
+   const string label = m_undo.UndoLabel(count - 1);
+   std::any state;
+   size_t done = 0;
+   // TODO handle IsUndoPastCleanPoint
+   for (; done < count && m_undo.HasUndo(); ++done)
+      if (std::any step = m_undo.Undo(); step.has_value())
+         state = std::move(step);
+   RestoreUndoState(state);
+   Report(done == 1 ? "Undo: " + label : "Undo: " + std::to_string(done) + " steps (" + label + ")");
+}
+
+void EditorUI::RedoSteps(const size_t count)
+{
+   if (!CanRedo() || count == 0)
+      return;
+   m_lastUndoPart = nullptr;
+   m_lastUndoId = 0;
+   const string label = m_undo.RedoLabel(count - 1);
+   std::any state;
+   size_t done = 0;
+   for (; done < count && m_undo.HasRedo(); ++done)
+      if (std::any step = m_undo.Redo(); step.has_value())
+         state = std::move(step);
+   RestoreUndoState(state);
+   Report(done == 1 ? "Redo: " + label : "Redo: " + std::to_string(done) + " steps (" + label + ")");
+}
+
+void EditorUI::SwitchWorkspace(const int index)
+{
+   if (index < 0 || index >= PinnedPanel::WorkspaceCount)
+      return;
+   const bool changed = index != m_pinned.GetActiveWorkspace();
+   m_pinned.ApplyWorkspace(index);
+   if (changed)
+      Report("Workspace: " + m_pinned.GetWorkspace(index).name);
+}
+
+void EditorUI::Report(const string &message)
+{
+   m_report = message;
+   m_reportTime = ImGui::GetTime();
+}
+
+bool EditorUI::CanCopy() const
+{
+   const bool can = m_pointEditPart ? (m_pointEditCenter ? m_centerSelected : m_pointSel.size() == 1) : (m_selection.GetType() == Selection::S_EDITABLE);
+   return can && !m_table->IsLocked();
+}
+
+bool EditorUI::CanPaste() const
+{
+   const bool can = m_pointEditPart ? (m_pointEditCenter ? m_centerSelected && VPX::EditorClipboard::HasPoint() : m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
+                                    : VPX::EditorClipboard::HasParts();
+   return can && !m_table->IsLocked() && !IsInspectMode();
+}
+
+bool EditorUI::CanDuplicate() const { return !m_pointEditPart && !m_multiSel.empty() && !IsInspectMode() && !m_table->IsLocked(); }
+
+bool EditorUI::CanDelete() const
+{
+   if (m_table->IsLocked())
+      return false;
+   return m_pointEditPart ? !m_pointSel.empty() : m_selection.GetType() == Selection::S_EDITABLE;
+}
+
+bool EditorUI::CanSelect() const { return !m_table->IsLocked() && m_fileOp == nullptr; }
+
+void EditorUI::DuplicateSelection()
+{
+   // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
+   if (!CanDuplicate())
+      return;
+   const size_t count = m_multiSel.size();
+   CopySelection();
+   PasteSelection(ImGui::GetMousePos());
+   Report(CountLabel("Duplicated", count, m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
+   if (m_navBlenderTransform)
+      BeginModalTransform(ModalOp::Grab);
+   else
+      SetGizmoOperation(ImGuizmo::TRANSLATE);
+}
+
+void EditorUI::DeleteAction()
+{
+   if (m_pointEditPart)
+      DeleteSelectedPoints();
+   else
+      DeleteSelection();
+}
+
+void EditorUI::SelectAllAction()
+{
+   if (m_pointEditPart)
+   {
+      if (m_pointEditCenter)
+         m_centerSelected = true;
+      else
+      {
+         m_pointSel.clear();
+         for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
+            m_pointSel.push_back(point.get());
+      }
+   }
+   else
+      SelectAllParts();
+}
+
+void EditorUI::InvertSelection()
+{
+   if (m_pointEditPart)
+   {
+      if (m_pointEditCenter)
+         m_centerSelected = !m_centerSelected;
+      else
+      {
+         vector<DragPoint *> inverted;
+         for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
+            if (!IsPointSelected(point.get()))
+               inverted.push_back(point.get());
+         m_pointSel = std::move(inverted);
+      }
+      return;
+   }
+   // Same set as the select all: the pickable parts that are not selected
+   const vector<std::shared_ptr<EditorUIPart>> previous = m_multiSel;
+   SelectAllParts();
+   std::erase_if(m_multiSel, [&previous](const auto &part) { return std::ranges::find(previous, part) != previous.end(); });
+   m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
+   m_outlinerAnchor.reset();
+}
+
+bool EditorUI::GetAreaUnderMouse(AreaEditor &type, bool &sidebar) const
+{
+   // Area geometry of RenderAreas / PinnedPanel::Render: left area, viewport (with the N-panel at its right edge), right area
+   sidebar = false;
+   if (m_table->IsLocked() || m_flyMode || m_inspectionModal.IsVisible())
+      return false;
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const ImVec2 mouse = ImGui::GetMousePos();
+   const float dpi = m_liveUI.GetDPI();
+   if (mouse.y < viewport->Pos.y + m_chrome.GetTopBarHeight() || mouse.y > viewport->Pos.y + viewport->Size.y - m_chrome.GetStatusBarHeight())
+      return false;
+   if (m_showOutliner && mouse.x < viewport->Pos.x + m_outlinerWidth * dpi)
+   {
+      type = m_leftEditor;
+      return true;
+   }
+   const float propertiesLeft = viewport->Pos.x + viewport->Size.x - (m_showProperties ? m_propertiesWidth * dpi : 0.f);
+   if (m_showProperties && mouse.x >= propertiesLeft)
+   {
+      type = m_rightEditor;
+      return true;
+   }
+   if (m_showSidebar && mouse.x >= propertiesLeft - m_sidebarWidth * dpi)
+   {
+      sidebar = true;
+      return true;
+   }
+   return false;
 }
 
 bool EditorUI::IsPartSelected(const std::shared_ptr<EditorUIPart> &part) const { return part != nullptr && std::ranges::find(m_multiSel, part) != m_multiSel.end(); }
@@ -2120,6 +2296,7 @@ void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
       m_undo.MarkForUndo(editable);
       editable->SetPartGroup(group);
    }
+   m_undo.SetFieldLabel("Move to Part Group");
    m_undo.EndUndo();
    UpdateEditableList(); // Refresh the outliner paths and ordering
 }
@@ -2250,7 +2427,9 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
 
    m_undo.BeginUndo();
    m_undo.MarkForCreate(pie);
+   m_undo.SetLabel("Add " + pie->GetName());
    m_undo.EndUndo();
+   Report("Added " + pie->GetName());
 
    // Create the UI part now (it would otherwise be lazily added on next frame) and select the new part
    UpdateEditableList();
@@ -2345,6 +2524,8 @@ void EditorUI::CopySelection()
          parts.push_back(editable);
    RestorePartsVisibility(); // Copy the authored visibility, not the editor display state
    VPX::EditorClipboard::CopyParts(parts);
+   if (!parts.empty())
+      Report(CountLabel("Copied", parts.size(), parts.front()->GetName()));
 }
 
 void EditorUI::PasteSelection(const ImVec2 &pos)
@@ -2413,6 +2594,8 @@ void EditorUI::PasteSelection(const ImVec2 &pos)
       pasteMax.x = max(pasteMax.x, center.x);
       pasteMax.y = max(pasteMax.y, center.y);
    }
+   if (!pasted.empty())
+      m_undo.SetLabel(CountLabel("Paste", pasted.size(), pasted.front()->GetName()));
    m_undo.EndUndo();
    if (pasted.empty())
    {
@@ -2499,7 +2682,9 @@ void EditorUI::DeleteSelection()
          collection->RemovePart(edit);
       m_table->RemovePart(edit);
    }
+   m_undo.SetLabel(CountLabel("Delete", partsToDelete.size(), partsToDelete.front()->GetName()));
    m_undo.EndUndo();
+   Report(CountLabel("Deleted", partsToDelete.size(), partsToDelete.front()->GetName()));
    m_lastUndoPart = nullptr; // Start a new record on next edit (a deleted part's address may be reused)
    m_lastUndoId = 0;
 
@@ -2662,18 +2847,7 @@ void EditorUI::RenderNavCube()
       io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
       io.MouseDown[0] = false;
    }
-   // The cube faces are tinted with the gizmo's axis colors (saturated red / green / blue): mute them halfway to grey for the cube only (axes stay
-   // identifiable, as in Blender's navigation gizmo), and restore the axis colors of the selection gizmo right after
-   ImGuizmo::Style &gizmoStyle = ImGuizmo::GetStyle();
-   const ImVec4 savedAxisColors[3] = { gizmoStyle.Colors[ImGuizmo::DIRECTION_X], gizmoStyle.Colors[ImGuizmo::DIRECTION_Y], gizmoStyle.Colors[ImGuizmo::DIRECTION_Z] };
-   for (int axis = 0; axis < 3; axis++)
-   {
-      const ImVec4 grey = EditorTheme::V(EditorTheme::OverlayGrey), c = savedAxisColors[axis];
-      gizmoStyle.Colors[ImGuizmo::DIRECTION_X + axis] = ImVec4((c.x + grey.x) * 0.5f, (c.y + grey.y) * 0.5f, (c.z + grey.z) * 0.5f, c.w);
-   }
    ImGuizmo::ViewManipulate(viewG, proj.m[0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD, const_cast<float *>(identity), m_camDistance, pos, ImVec2(size, size), 0x40101010);
-   for (int axis = 0; axis < 3; axis++)
-      gizmoStyle.Colors[ImGuizmo::DIRECTION_X + axis] = savedAxisColors[axis];
    if (gizmoBusy)
    {
       io.MousePos = savedMousePos;
@@ -2800,6 +2974,7 @@ void EditorUI::BeginModalTransform(ModalOp op)
       m_undo.BeginUndo();
       for (const auto &part : m_multiSel)
          m_undo.MarkForUndo(part->GetEditable());
+      m_undo.SetLabel(CountLabel(op == ModalOp::Rotate ? "Rotate" : op == ModalOp::Scale ? "Scale" : "Move", m_multiSel.size(), m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
       m_undo.EndUndo();
       m_modal.hasUndo = true;
    }
@@ -2815,11 +2990,7 @@ void EditorUI::EndModalTransform(const bool confirm)
    if (!confirm)
    {
       if (m_modal.hasUndo)
-      {
-         const std::any state = m_undo.Undo();
-         if (state.has_value())
-            RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
-      }
+         RestoreUndoState(m_undo.Undo(false)); // Canceled: nothing to redo
       else
          SetSelectionTransform(m_modal.initial);
    }
@@ -3360,6 +3531,7 @@ void EditorUI::BeginPointEdit()
       return;
    m_undo.BeginUndo();
    m_undo.MarkForUndo(m_pointEditPart->GetEditable());
+   m_undo.SetFieldLabel("Edit Points");
    m_undo.EndUndo();
 }
 
@@ -3387,6 +3559,7 @@ void EditorUI::AddPointOnNearestSegment()
    const Vertex2D pos = UnprojectToPlane(ImGui::GetMousePos(), z);
    m_undo.BeginUndo();
    m_undo.MarkForUndo(m_pointEditPart->GetEditable());
+   m_undo.SetFieldLabel("Add Point");
    m_undo.EndUndo();
    DragPoint *const point = m_pointEditPart->AddPointOnCurve(pos);
    if (point == nullptr)
@@ -3493,6 +3666,7 @@ void EditorUI::DeleteSelectedPoints()
    if (deletable.empty())
       return;
    BeginPointEdit();
+   m_undo.SetFieldLabel("Delete Points");
    for (DragPoint *point : deletable)
    {
       m_pointSel.erase(std::ranges::find(m_pointSel, point));
@@ -3544,6 +3718,7 @@ void EditorUI::ImportUnityPrefab(const std::filesystem::path &path)
       part->AddRef(); // Created parts keep a creation reference, released by the undo record (see PinTable::Uncreate)
       m_undo.MarkForCreate(part);
    }
+   m_undo.SetLabel("Import Unity Prefab");
    m_undo.EndUndo();
 
    // Player side setup, same as part creation

@@ -5,6 +5,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <memory>
 
 class IEditable;
 class PinTable;
@@ -13,6 +14,7 @@ namespace VPX::EditorUI
 {
 
 class EditorUI;
+class EditorUIPart;
 class PropertyPane;
 
 // Object a pinned property belongs to
@@ -38,6 +40,10 @@ struct PinKey
 // Draws a pinned field with a property pane on the resolved object (Material*, PinTable* or IEditable*)
 using PinDrawFn = std::function<void(PropertyPane &, void *)>;
 
+// Copies a field value between two parts (IEditable* passed as void*): tells whether the destination has the field (it is of the type the field
+// belongs to) and, when `apply` is set, writes the source value to it. Used by "Copy to Selected" and the Alt apply-to-all
+using PinCopyFn = std::function<bool(void *src, void *dst, bool apply)>;
+
 // Quick Favorites (Blender's Q menu, here favorite fields) and the N-panel sidebar (Item / Look / View) that shows them in its
 // Look tab. Favorites are added from the Properties editor (right click on a field), and drawn with the same property pane
 // widgets and getter/setter definitions as the panel. The definitions are registered by the
@@ -49,7 +55,7 @@ public:
    explicit PinnedPanel(EditorUI &editor);
    ~PinnedPanel();
 
-   void Render(float topBarHeight); // The N-panel sidebar, when shown
+   void Render(float topBarHeight, float bottomInset); // The N-panel sidebar, when shown (between the top bar and the status bar)
    void RenderQuickFavorites(); // The Q popup, when opened
    bool ConsumedEscape(); // The Esc that closed the Q popup is not an editor Esc
 
@@ -67,12 +73,13 @@ public:
       string section; // Section (collapsing header) of the field in the full sheet
       const void *owner = nullptr; // Part: its EditorUIPart (definitions may capture it), otherwise the object itself
       PinDrawFn draw;
+      PinCopyFn copy; // Part fields: copy of the value to another part (null for the fields that cannot be copied)
       bool common = false; // Registered while the pane's tier was Common (PropertyPane::SetTier)
       int seq = 0; // Draw order in the harvest that registered it
       unsigned stamp = 0; // Harvest that registered it (0: registered by the panel outside of a harvest)
    };
    bool NeedsDef(const string &id, const void *owner) const;
-   void SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, bool common);
+   void SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common);
    bool IsHarvesting() const { return m_harvestStamp != 0; }
 
    // Curated (Look / Transform) sections of the properties panel: the fields of an object, as registered by its latest harvest
@@ -88,6 +95,15 @@ public:
       const auto it = m_defs.find(key.Id());
       return it == m_defs.end() ? nullptr : &it->second;
    }
+
+   // Copy to Selected (Blender's field context menu): writes the value of a part field to the other selected parts having the same field (same
+   // field of a compatible part type), as one undo step. Not available in inspection sessions
+   bool CanCopyToSelected(const PinKey &key) const;
+   bool CopyToSelected(const PinKey &key);
+   // Alt apply-to-all: a part field was just changed through its pane, copy its new value to the other selected parts. Only acts while armed by the
+   // caller, which has begun an undo record and marked all selected parts in it (a snapshot is taken before the pane changes the field)
+   void ArmApplyToSelected(bool armed) { m_applyArmed = armed; }
+   void ApplyToSelected(IEditable *source, const PinCopyFn &copy);
 
    // "See-through set": a primitive's refraction fields and its material's See-Through Surface fields
    bool HasSeeThroughSet(const IEditable *part) const;
@@ -145,6 +161,8 @@ private:
    void RenderViewTab();
    void ApplyUnits(PropertyPane &props) const;
    void PinSelectionSeeThrough();
+   // Selected parts (other than the source) that have the field the copy function handles
+   void CollectCopyTargets(IEditable *source, const PinCopyFn &copy, vector<std::shared_ptr<EditorUIPart>> &out) const;
    void ResetWorkspaces();
    void CaptureWorkspace(Workspace &ws) const;
    void LoadWorkspaces(const string &json);
@@ -155,6 +173,7 @@ private:
    int m_shownTab = -1; // Sidebar tab shown last frame
    bool m_quickOpen = false; // Q popup open
    bool m_escPending = false;
+   bool m_applyArmed = false; // ApplyToSelected may act (see ArmApplyToSelected)
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()
    vector<GroupRequest> m_groupRequests; // Quick set requests, applied once the object's definitions are known

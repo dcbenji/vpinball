@@ -102,7 +102,6 @@ void SearchPalette::BuildOperators()
    const auto unlocked = [&ed]() { return !ed.m_table->IsLocked(); };
    const auto editable = [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
    const auto editablePart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
-   const auto unlockedPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked(); };
    const auto hasPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE; };
    const auto add = [this](const string &path, const char *shortcut, std::function<bool()> enabled, std::function<void()> action)
    {
@@ -156,10 +155,23 @@ void SearchPalette::BuildOperators()
       }
    add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });
    add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
-   add("Select" + sep + "All", "A", nullptr, [&ed]() { ed.SelectAllParts(); });
-   add("Select" + sep + "None", "Alt+A", nullptr, [&ed]() { ed.ClearSelection(); });
-   add("Object" + sep + "Delete", "Del", editablePart, [&ed]() { ed.DeleteSelection(); });
-   add("Object" + sep + "Copy", "Ctrl+C", unlockedPart, [&ed]() { ed.CopySelection(); });
+   // Edit menu
+   add("Edit" + sep + "Undo", "Ctrl+Z", [&ed]() { return ed.CanUndo(); }, [&ed]() { ed.UndoSteps(1); });
+   add("Edit" + sep + "Redo", "Ctrl+Shift+Z", [&ed]() { return ed.CanRedo(); }, [&ed]() { ed.RedoSteps(1); });
+   add("Edit" + sep + "Undo History...", "", [&ed]() { return ed.m_table->m_liveBaseTable == nullptr && (ed.m_undo.HasUndo() || ed.m_undo.HasRedo()); }, [&ed]() { ed.m_chrome.OpenUndoHistory(); });
+   add("Edit" + sep + "Copy", "Ctrl+C", [&ed]() { return ed.CanCopy(); }, [&ed]() { ed.CopySelection(); });
+   add("Edit" + sep + "Paste", "Ctrl+V", [&ed]() { return ed.CanPaste(); },
+      [&ed]()
+      {
+         const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+         ed.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
+      });
+   add("Edit" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
+   add("Edit" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
+   add("Edit" + sep + "Select All", "A", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.SelectAllAction(); });
+   add("Edit" + sep + "Deselect", "Alt+A", [&ed]() { return ed.CanSelect() && ed.m_selection.GetType() != Selection::S_NONE; }, [&ed]() { ed.ClearSelection(); });
+   add("Edit" + sep + "Invert Selection", "Ctrl+I", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.InvertSelection(); });
+   add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
    add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
    add("Object" + sep + "Edit Points", "Tab", editablePart, [&ed]() { ed.EnterPointEditMode(); });
    add("Tools" + sep + "Convert to PBR", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });
@@ -168,7 +180,7 @@ void SearchPalette::BuildOperators()
    {
       const string &name = ed.m_pinned.GetWorkspace(i).name;
       add("Workspace" + sep + (name.empty() ? "Workspace " + std::to_string(i + 1) : name), i == 0 ? "Ctrl+1" : i == 1 ? "Ctrl+2" : "Ctrl+3", nullptr,
-         [&ed, i]() { ed.m_pinned.ApplyWorkspace(i); });
+         [&ed, i]() { ed.SwitchWorkspace(i); });
    }
 }
 
@@ -440,6 +452,14 @@ void SearchPalette::Recompute()
       }
    }
    const string selName = selMat ? selMat->m_name : (selPart ? selPart->GetName() : string());
+   const string selNameLower = Lower(selName);
+   // The material of the selected part ranks right after it: parts do not expose their material generically, so it is recognized by name
+   // (a material named after the part, or the part named after it)
+   const auto relatedToSelectedPart = [&](const string &materialLower)
+   {
+      return selPart != nullptr && materialLower.size() >= 3 && selNameLower.size() >= 3
+         && (materialLower == selNameLower || selNameLower.find(materialLower) != string::npos || materialLower.find(selNameLower) != string::npos);
+   };
 
    const unsigned full = (1u << words.size()) - 1u;
    vector<Candidate> cands;
@@ -459,6 +479,8 @@ void SearchPalette::Recompute()
             anyName = true;
             mask |= 1u << w;
             base += nameMatch == 2 ? 30 : 20;
+            if (o.lower == words[w])
+               base += 20; // Exact name
          }
          else if (MatchWord(type.lower, words[w]) != 0)
          {
@@ -468,7 +490,7 @@ void SearchPalette::Recompute()
       }
       const bool isSel = (o.kind == PinKind::Table && selIsTable) || (o.kind == PinKind::Material && selMat != nullptr && o.name == selName)
          || (o.kind == PinKind::Part && selPart != nullptr && o.name == selName);
-      base += (isSel ? 100000 : 0) - static_cast<int>(std::min<size_t>(o.name.size(), 100));
+      base += (isSel ? 100000 : 0) + (o.kind == PinKind::Material && relatedToSelectedPart(o.lower) ? 50000 : 0) - static_cast<int>(std::min<size_t>(o.name.size(), 100));
 
       if (mask == full)
       {
@@ -486,7 +508,7 @@ void SearchPalette::Recompute()
             if (mask & (1u << w))
                continue;
             if (const int m = MatchWord(field.labelLower, words[w]); m != 0)
-               total += m == 2 ? 40 : 30;
+               total += (m == 2 ? 40 : 30) + (field.labelLower == words[w] ? 25 : 0); // Exact label first
             else if (const int g = MatchWord(field.groupLower, words[w]); g != 0)
                total += g == 2 ? 20 : 15;
             else
@@ -507,7 +529,7 @@ void SearchPalette::Recompute()
       for (size_t w = 0; w < words.size() && ok; ++w)
       {
          if (const int m = MatchWord(op.labelLower, words[w]); m != 0)
-            total += m == 2 ? 40 : 30;
+            total += (m == 2 ? 40 : 30) + (op.labelLower == words[w] ? 25 : 0); // Exact label first
          else if (const int p = MatchWord(op.pathLower, words[w]); p != 0)
             total += p == 2 ? 20 : 15;
          else

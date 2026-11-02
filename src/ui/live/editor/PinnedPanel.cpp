@@ -83,7 +83,7 @@ bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
    return it == m_defs.end() || (it->second.key.kind == PinKind::Part && it->second.owner != owner);
 }
 
-void PinnedPanel::SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, bool common)
+void PinnedPanel::SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common)
 {
    Def &def = m_defs[key.Id()];
    def.key = key;
@@ -91,6 +91,7 @@ void PinnedPanel::SetDef(const PinKey &key, const string &group, const string &s
    def.section = section;
    def.owner = owner;
    def.draw = std::move(draw);
+   def.copy = std::move(copy);
    def.common = common;
    // Only a harvest records which fields an object shows: a panel registration (e.g. from the startup copy in an inspection
    // session, whose owner differs) keeps the def in the object's curated sections
@@ -132,6 +133,81 @@ void PinnedPanel::CollectDefs(PinKind kind, const string &name, unsigned stamp, 
 }
 
 bool PinnedPanel::HasBulbSet(const IEditable *part) const { return IsTracedInsert(part); }
+
+void PinnedPanel::CollectCopyTargets(IEditable *source, const PinCopyFn &copy, vector<std::shared_ptr<EditorUIPart>> &out) const
+{
+   out.clear();
+   if (source == nullptr || !copy || m_editor.IsInspectMode())
+      return;
+   for (const std::shared_ptr<EditorUIPart> &part : m_editor.m_multiSel)
+   {
+      IEditable *const target = part->GetEditable();
+      if (target != source && copy(static_cast<void *>(source), static_cast<void *>(target), false))
+         out.push_back(part);
+   }
+}
+
+bool PinnedPanel::CanCopyToSelected(const PinKey &key) const
+{
+   if (key.kind != PinKind::Part || m_editor.m_multiSel.size() < 2)
+      return false;
+   const Def *const def = FindDef(key);
+   const void *owner = nullptr;
+   IEditable *const source = static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner));
+   if (def == nullptr || !def->copy || source == nullptr)
+      return false;
+   vector<std::shared_ptr<EditorUIPart>> targets;
+   CollectCopyTargets(source, def->copy, targets);
+   return !targets.empty();
+}
+
+bool PinnedPanel::CopyToSelected(const PinKey &key)
+{
+   EditorUI &editor = m_editor;
+   const Def *const def = FindDef(key);
+   const void *owner = nullptr;
+   IEditable *const source = key.kind == PinKind::Part ? static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner)) : nullptr;
+   if (def == nullptr || !def->copy || source == nullptr)
+      return false;
+   vector<std::shared_ptr<EditorUIPart>> targets;
+   CollectCopyTargets(source, def->copy, targets);
+   if (targets.empty())
+      return false;
+   // One undo step for all the parts: they are snapshotted before the value is written
+   editor.m_undo.BeginUndo();
+   for (const std::shared_ptr<EditorUIPart> &part : targets)
+      editor.m_undo.MarkForUndo(part->GetEditable());
+   for (const std::shared_ptr<EditorUIPart> &part : targets)
+      def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
+   editor.m_undo.SetFieldLabel(key.prop);
+   editor.m_undo.EndUndo();
+   editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
+   editor.m_lastUndoId = 0;
+   for (const std::shared_ptr<EditorUIPart> &part : targets)
+   {
+      editor.m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
+      editor.m_player->m_physics->Update(part->GetEditable());
+      part->SyncVisibilityOverrides();
+   }
+   editor.m_liveUI.PushNotification("Copied '"s + key.prop + "' to " + std::to_string(targets.size()) + (targets.size() == 1 ? " part"s : " parts"s), 2500);
+   return true;
+}
+
+void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
+{
+   EditorUI &editor = m_editor;
+   if (!m_applyArmed || source == nullptr || !copy || editor.m_multiSel.size() < 2 || editor.IsInspectMode())
+      return;
+   vector<std::shared_ptr<EditorUIPart>> targets;
+   CollectCopyTargets(source, copy, targets);
+   for (const std::shared_ptr<EditorUIPart> &part : targets)
+   {
+      copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
+      editor.m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
+      editor.m_player->m_physics->Update(part->GetEditable());
+      part->SyncVisibilityOverrides();
+   }
+}
 
 bool PinnedPanel::HasSeeThroughSet(const IEditable *part) const
 {
@@ -344,6 +420,7 @@ void PinnedPanel::SyncWithTable()
       list.clear();
    curation.look.clear();
    curation.transform.clear();
+   curation.all.clear();
    m_editor.m_properties.m_materialCuration = PropertiesPanel::Curation();
    m_defs.clear();
    m_harvested.clear();
@@ -572,13 +649,21 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
    props.ArmBulbBroadcast(part);
    // Undo of part edits outside of an inspection session, recorded like the properties panel (only while interacting, as it snapshots the part)
    const bool withUndo = part != nullptr && !inspect && hovered;
+   // Alt held while editing: the fields also write to the other selected parts, which are snapshotted with the edited one
+   const bool altApply = withUndo && ImGui::GetIO().KeyAlt && editor.m_multiSel.size() > 1 && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive());
    if (withUndo)
    {
       editor.m_undo.BeginUndo();
       editor.m_undo.MarkForUndo(part);
       for (IEditable *const other : props.GetBroadcastParts())
          editor.m_undo.MarkForUndo(other);
+      if (altApply)
+         for (const std::shared_ptr<EditorUIPart> &selected : editor.m_multiSel)
+            editor.m_undo.MarkForUndo(selected->GetEditable());
    }
+   m_applyArmed = altApply;
+   // Material edits are undoable too (outside of an inspection session): the material is snapshotted before the rows are drawn
+   MaterialEditUndo materialUndo(editor.m_undo, editor.m_table, (kind == PinKind::Material && !inspect) ? static_cast<Material *>(obj) : nullptr, MaterialEditUndo::SourceNPanel);
    props.SetPinOwner(owner);
    const int modifiedBefore = props.GetModifiedField();
    for (const PinKey &pin : keys)
@@ -628,9 +713,17 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       ImGui::PopID();
    }
    props.EndSection();
+   m_applyArmed = false;
    const int modified = props.GetModifiedField() != modifiedBefore ? props.GetModifiedField() : 0;
+   if (materialUndo.Commit(modified, props.GetModifiedLabel()))
+   {
+      editor.m_lastUndoPart = nullptr; // The next part edit is a step of its own
+      editor.m_lastUndoId = 0;
+   }
    if (withUndo)
    {
+      if (modified > 0)
+         editor.m_undo.SetFieldLabel(props.GetModifiedLabel());
       editor.m_undo.EndUndo();
       if (modified > 0 && (editor.m_lastUndoPart != part || editor.m_lastUndoId != static_cast<unsigned int>(0x4000 | modified)))
       {
@@ -772,7 +865,7 @@ void PinnedPanel::RenderViewTab()
    ImGui::SetItemTooltip("F / Numpad .");
 }
 
-void PinnedPanel::Render(float topBarHeight)
+void PinnedPanel::Render(float topBarHeight, float bottomInset)
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
@@ -794,7 +887,7 @@ void PinnedPanel::Render(float topBarHeight)
    const float width = editor.m_sidebarWidth * dpi;
    const float right = viewport->Pos.x + viewport->Size.x - (editor.m_showProperties ? editor.m_propertiesWidth * dpi : 0.f);
    ImGui::SetNextWindowPos(ImVec2(right - width, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(width, viewport->Size.y - topBarHeight));
+   ImGui::SetNextWindowSize(ImVec2(width, viewport->Size.y - topBarHeight - bottomInset));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 4.f * dpi));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);

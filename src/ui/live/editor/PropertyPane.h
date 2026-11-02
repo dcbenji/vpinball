@@ -14,8 +14,35 @@
 #include "ResURIPicker.h"
 #include "PinnedPanel.h"
 
+class PinUndo;
+
 namespace VPX::EditorUI
 {
+
+// Undo of the edits made to a material through a property pane (materials are not IEditable parts, so PinUndo cannot snapshot them): the
+// material is copied before the pane is drawn, and the copy is recorded as an undo step when the pane reports a modified field. A drag
+// (or a typed value) on one field is a single step. Inactive when the material is null (e.g. in an inspection session)
+class MaterialEditUndo
+{
+public:
+   enum Source : int // Panes number their fields differently: edits from different panes never merge into one step
+   {
+      SourceProperties = 0x1000,
+      SourcePartMaterial = 0x2000,
+      SourceNPanel = 0x3000
+   };
+   MaterialEditUndo(PinUndo &undo, PinTable *table, Material *material, Source source);
+   // Called once the pane is drawn: `modifiedField` is the id of the field edited this frame (0 if none)
+   // Returns true when a new undo step was recorded (the caller then breaks the part edit coalescing)
+   bool Commit(int modifiedField, const string &label);
+
+private:
+   PinUndo &m_undo;
+   PinTable *const m_table;
+   Material *const m_material;
+   const int m_source;
+   std::unique_ptr<Material> m_before; // The material as it was before the pane was drawn
+};
 
 // Resolves to a part's data class (the type of its m_d member); member pointers to fields declared on a data class base also convert
 template <class T> using PartData = std::remove_cv_t<std::remove_reference_t<decltype(std::declval<T&>().m_d)>>;
@@ -61,6 +88,11 @@ public:
    // Field focus (search palette): the next panel row drawing this field scrolls to it, then flashes for a moment. While the
    // request is pending, the panel opens its sections and its Advanced header so that the field gets drawn
    static void RequestFocus(const PinKey &key);
+   // Same scroll and flash for a row of the N-panel / Q popup (a favorite was just added): kept pending for a few seconds
+   // until the row is drawn, so it also works when the N-panel is opened right after
+   static void RequestOverlayFlash(const PinKey &key);
+   // Properties search: lower case terms whose first occurrence in the labels of the fields drawn next is highlighted (null: none)
+   void SetHighlight(const vector<string> *terms) { m_highlight = terms; }
    static bool IsFocusPending() { return s_focusPending; }
    static const PinKey &GetFocusKey() { return s_focusKey; }
    static inline bool s_applyBulbToAll = false; // Session toggle ("Apply to all traced inserts"), not saved to the table
@@ -211,6 +243,8 @@ public:
    void PropertyLabel(const string& label, const char* tooltip = nullptr);
 
    int GetModifiedField() const { return m_modified; }
+   // Label of the field modified last (for the undo history); set by the pinnable fields
+   const string &GetModifiedLabel() const { return m_modifiedLabel; }
 
    // Pinned properties overlay support. Panel: fields register their definition and offer the pin context menu;
    // Harvest: fields only register their definition (pane drawn in a hidden window); Overlay: fields only offer the
@@ -248,7 +282,28 @@ public:
    }
 
 private:
-   template <class T, class MakeDraw> void PinField(T *obj, const string &label, const MakeDraw &makeDraw);
+   template <class T, class MakeDraw, class CopyMaker> void PinField(T *obj, const string &label, const MakeDraw &makeDraw, const CopyMaker &makeCopy);
+   template <class T, class MakeDraw> void PinField(T *obj, const string &label, const MakeDraw &makeDraw)
+   {
+      PinField<T>(obj, label, makeDraw, []() { return PinCopyFn(); });
+   }
+   // Value copy between two parts of a field: the destination must be of the type the field belongs to
+   template <class T, class Getter, class Setter> static PinCopyFn MakeCopy(const Getter &getter, const Setter &setter)
+   {
+      return [getter, setter](void *src, void *dst, bool apply) -> bool
+      {
+         T *const from = PinCast<T>(src);
+         T *const to = PinCast<T>(dst);
+         if (from == nullptr || to == nullptr)
+            return false;
+         if (apply)
+            setter(to, getter(from));
+         return true;
+      };
+   }
+   // Blender-style number widget shared by FillSlider (fill = true, range vMin..vMax) and NumberField: press and drag changes the value
+   // relative to the grab (shift: fine, ctrl: snapped to steps), a click without drag (or ctrl+click, double click, nav) types the value
+   static bool DragField(const char *id, float *value, float vMin, float vMax, bool fill, int decimals, const char *format);
    // Name list combos (image, material, surface,...) register a definition that rebuilds their list when drawn
    template <class T>
    using NamedComboFn = void (PropertyPane::*)(T *, const string &, const std::function<string(const T *)> &, const std::function<void(T *, const string &)> &, const char *);
@@ -275,6 +330,11 @@ private:
    static inline bool s_focusPending = false;
    static inline int s_focusRequestFrame = 0;
    static inline double s_flashUntil = 0.0;
+   static inline PinKey s_overlayKey;
+   static inline bool s_overlayPending = false;
+   static inline double s_overlayRequestTime = 0.0;
+   static inline double s_overlayFlashUntil = 0.0;
+   const vector<string> *m_highlight = nullptr;
 
    static constexpr const char* ICON_SAVE = ICON_LC_SAVE;
 
@@ -313,6 +373,7 @@ private:
    }
 
    int m_modified = 0;
+   string m_modifiedLabel;
    int m_modifyFieldId = 1;
 
    Unit m_lengthUnit = Unit::None;
@@ -354,7 +415,7 @@ template <class T> T* PropertyPane::GetEditedPart(T* obj) const
    return obj;
 }
 
-template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const string &label, const MakeDraw &makeDraw)
+template <class T, class MakeDraw, class CopyMaker> void PropertyPane::PinField(T *obj, const string &label, const MakeDraw &makeDraw, const CopyMaker &makeCopy)
 {
    if constexpr (IsPinnable<T>)
    {
@@ -363,6 +424,7 @@ template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const str
       PinKey key;
       key.prop = label;
       const IEditable *part = nullptr;
+      IEditable *editablePart = nullptr;
       const Material *material = nullptr;
       if constexpr (std::is_base_of_v<PinTable, T>)
          key.kind = PinKind::Table;
@@ -376,6 +438,7 @@ template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const str
       {
          key.kind = PinKind::Part;
          part = obj;
+         editablePart = obj;
          key.name = part->GetName();
       }
       if (key.kind != PinKind::Table && key.name.empty())
@@ -385,10 +448,17 @@ template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const str
          const void *const owner = (key.kind == PinKind::Part && m_pinOwner) ? m_pinOwner : static_cast<const void *>(obj);
          // A harvest always refreshes the definitions: it records which fields the object shows now, and in which order
          if (m_pinMode == PinMode::Harvest || m_pins->NeedsDef(key.Id(), owner))
-            m_pins->SetDef(key, m_pinGroup, m_pinSection, owner, makeDraw(), m_tier == Tier::Common);
+            m_pins->SetDef(key, m_pinGroup, m_pinSection, owner, makeDraw(), makeCopy(), m_tier == Tier::Common);
       }
+      if (m_modified == m_modifyFieldId)
+         m_modifiedLabel = label;
       if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Overlay)
+      {
+         // Alt held while this field was edited: the new value also goes to the other selected parts (a uniform multi-edit already writes to all)
+         if (editablePart != nullptr && m_coEdited.empty() && m_modified == m_modifyFieldId && ImGui::GetIO().KeyAlt)
+            m_pins->ApplyToSelected(editablePart, makeCopy());
          PinContext(key, part, material);
+      }
    }
 }
 
@@ -523,7 +593,8 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
             if (T *t = PinCast<T>(o))
                p.Checkbox<T>(t, label, getter, setter, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -581,7 +652,8 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
             if (T *t = PinCast<T>(o))
                p.InputInt<T>(t, label, getter, setter, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -631,7 +703,8 @@ inline void PropertyPane::InputFloat(
             if (T *t = PinCast<T>(o))
                p.InputFloat<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -680,7 +753,8 @@ inline void PropertyPane::SliderFloat(
                p.m_broadcastField = false;
             }
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -730,7 +804,8 @@ inline void PropertyPane::InputFloat2(
             if (T *t = PinCast<T>(o))
                p.InputFloat2<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -782,7 +857,8 @@ inline void PropertyPane::InputFloat3(
             if (T *t = PinCast<T>(o))
                p.InputFloat3<T>(t, label, getter, setter, unit, nDecimals, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -847,7 +923,8 @@ inline void PropertyPane::InputRGB(T* obj, const string& label, const std::funct
             if (T *t = PinCast<T>(o))
                p.InputRGB<T>(t, label, getter, setter, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -963,7 +1040,8 @@ inline void PropertyPane::Combo(
                if (T *t = PinCast<T>(o))
                   p.Combo<T>(t, label, values, getter, setter, PinTipPtr(tip));
             };
-         });
+         },
+         [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 
@@ -980,7 +1058,8 @@ inline void PropertyPane::PinNamedCombo(
             if (T *t = PinCast<T>(o))
                (p.*combo)(t, label, getter, setter, PinTipPtr(tip));
          };
-      });
+      },
+      [&]() { return MakeCopy<T>(getter, setter); });
    ImGui::PopID();
 }
 

@@ -23,6 +23,7 @@
 #include "unordered_dense.h"
 #include "ui/VPXFileFeedback.h"
 
+#include <any>
 #include <atomic>
 #include <optional>
 #include <thread>
@@ -81,6 +82,9 @@ public:
    bool IsBackdropEditMode() const { return m_camMode == ViewMode::DesktopBackdrop; }
 
    bool IsInspectMode() const { return m_table->m_liveBaseTable != nullptr; }
+
+   // Posts a message in the status bar (last operation report, fades after a few seconds)
+   void Report(const string &message);
 
    // True if the top row digit (0..9) is a view navigation key (numpad emulation) rather than a game key: editor UI up and game not running (edit mode, or inspect mode while paused)
    bool IsDigitNavKey(int digit) const;
@@ -195,8 +199,30 @@ private:
    Vertex2D GetUIVisibleFraction() const;
 
    // Undo support
-   void PushUndo(IEditable *part, unsigned int editId);
+   void PushUndo(IEditable *part, unsigned int editId, const string &label = string());
    PinUndo m_undo;
+   static string CountLabel(const char *verb, size_t count, const string &name); // "Move PartName" / "Move 3 parts"
+   bool CanUndo() const;
+   bool CanRedo() const;
+   void UndoSteps(size_t count); // Edit > Undo (Ctrl+Z), count > 1 for the undo history
+   void RedoSteps(size_t count); // Edit > Redo (Ctrl+Shift+Z / Ctrl+Y)
+   void RestoreUndoState(const std::any &state);
+   void SwitchWorkspace(int index); // Applies a workspace and reports it in the status bar
+
+   // Edit menu actions (also the keyboard shortcuts and the F3 operators)
+   bool CanCopy() const;
+   bool CanPaste() const;
+   bool CanDuplicate() const;
+   bool CanDelete() const;
+   bool CanSelect() const; // Select all / invert
+   void DuplicateSelection();
+   void DeleteAction(); // Delete key: the selected drag points in point edit mode, the selected parts otherwise
+   void SelectAllAction(); // A key: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
+   void InvertSelection();
+
+   // Status bar report (see Report)
+   string m_report;
+   double m_reportTime = -1000.0;
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
 
@@ -435,6 +461,7 @@ private:
    bool IsAreaEditorHosted(AreaEditor type) const { return m_leftEditor == type || m_rightEditor == type; }
    bool IsAreaEditorShown(AreaEditor type) const; // Hosted by a visible area
    void ShowAreaEditor(AreaEditor type); // Make the type visible: reveals the area hosting it, or hosts it in its preferred area (Script: right, others: left)
+   bool GetAreaUnderMouse(AreaEditor &type, bool &sidebar) const; // Area editor under the mouse (or the N-panel), false over the viewport
    void ToggleAreaEditor(AreaEditor type); // View menu: hide / show the area hosting the type, or host it
    void RenderAreas(float topBarHeight); // Hosts the panels of the left and right areas
    void RenderAreaTypeButton(AreaEditor current); // Header button of the area hosting the given type, and its editor type popup

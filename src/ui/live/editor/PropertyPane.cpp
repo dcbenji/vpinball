@@ -3,6 +3,7 @@
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 
+#include "core/pinundo.h"
 #include "imgui/imgui_stdlib.h"
 #include "parts/primitive.h"
 #include "ui/live/LiveUI.h"
@@ -16,6 +17,51 @@ PropertyPane::PropertyPane(PinTable* table)
 }
 
 PropertyPane::~PropertyPane() { }
+
+MaterialEditUndo::MaterialEditUndo(PinUndo &undo, PinTable *table, Material *material, Source source)
+   : m_undo(undo)
+   , m_table(table)
+   , m_material(material)
+   , m_source(source)
+{
+   if (m_material != nullptr)
+      m_before = std::make_unique<Material>(*m_material);
+}
+
+bool MaterialEditUndo::Commit(int modifiedField, const string &label)
+{
+   // The step being dragged / typed (same material, pane and field): only its first frame records a step
+   static const Material *s_material = nullptr;
+   static int s_field = 0;
+   if (m_material == nullptr)
+      return false;
+   const bool interacting = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left);
+   if (modifiedField <= 0)
+   {
+      if (!interacting) // Released: the next edit is a step of its own
+      {
+         s_material = nullptr;
+         s_field = 0;
+      }
+      return false;
+   }
+   const int field = m_source | modifiedField;
+   if (interacting && s_material == m_material && s_field == field)
+      return false;
+   s_material = m_material;
+   s_field = field;
+   // The material may be deleted before the step is undone: check it is still in the table
+   m_undo.BeginUndo();
+   m_undo.SetFieldLabel(label);
+   m_undo.MarkForAction(
+      [table = m_table, material = m_material, before = std::shared_ptr<Material>(std::move(m_before))]()
+      {
+         if (std::ranges::find(table->m_materials, material) != table->m_materials.end())
+            *material = *before;
+      });
+   m_undo.EndUndo();
+   return true;
+}
 
 void PropertyPane::ArmBulbBroadcast(const IEditable* part)
 {
@@ -140,13 +186,9 @@ int PropertyPane::FloatDecimals(Unit displayUnit, int requested, float shown)
 
 bool PropertyPane::NumberField(const char* id, float* value, int decimals)
 {
-   // Same frame as the fill sliders, value centred, no fill; drag to change, ctrl+click or double-click to type
+   // Same frame as the fill sliders, value centred, no fill; press and drag changes the value, a click (or ctrl+click, double click) types it
    const string format = "%." + std::to_string(decimals) + 'f';
-   const float before = *value;
-   const bool changed = ImGui::DragFloat(id, value, DragSpeed(decimals, fabsf(*value)), 0.f, 0.f, format.c_str(), ImGuiSliderFlags_NoRoundToFormat);
-   if (changed)
-      RoundDragged(value, &before, 1, decimals);
-   return changed;
+   return DragField(id, value, 0.f, 0.f, false, decimals, format.c_str());
 }
 
 void PropertyPane::RoundDragged(float* values, const float* before, int count, int decimals)
@@ -183,6 +225,22 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    const float width = ImGui::CalcTextSize(shown.c_str()).x;
    ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - width - xSpacing), pos.y + style.FramePadding.y));
    ImGui::TextUnformatted(shown.c_str());
+   if (m_highlight != nullptr && !m_highlight->empty())
+   {
+      // Search: a tint over the first occurrence of each term (the text stays readable under it)
+      const ImVec2 textMin = ImGui::GetItemRectMin();
+      string lower = shown;
+      std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      for (const string &term : *m_highlight)
+      {
+         const size_t at = term.empty() ? string::npos : lower.find(term);
+         if (at == string::npos)
+            continue;
+         const float x0 = textMin.x + ImGui::CalcTextSize(shown.c_str(), shown.c_str() + at).x;
+         const float x1 = x0 + ImGui::CalcTextSize(shown.c_str() + at, shown.c_str() + at + term.size()).x;
+         ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0 - 1.f, textMin.y), ImVec2(x1 + 1.f, textMin.y + ImGui::GetTextLineHeight()), EditorTheme::SearchMatch, 2.f);
+      }
+   }
    if (truncated && tooltip != nullptr)
       ImGui::SetItemTooltip("%s\n%s", label.c_str(), tooltip);
    else if (truncated)
@@ -297,45 +355,186 @@ void PropertyPane::EndSection()
    m_inSection = false;
 }
 
+namespace
+{
+// State of the field being pressed or typed in (only one field has the mouse at a time)
+struct DragFieldState
+{
+   ImGuiID id = 0; // Field pressed or dragged
+   ImVec2 press; // Mouse position at the press
+   float start = 0.f; // Value at the press
+   float acc = 0.f; // Value change accumulated since the drag started
+   float speed = 0.f; // Value per pixel of a number field
+   bool moved = false; // The mouse went past the click slop: this is a drag
+   ImGuiID editId = 0; // Field in text edit mode
+   float editStart = 0.f; // Value when the text edit started (Esc restores it exactly, not its rounded text)
+};
+DragFieldState s_dragField;
+}
+
+bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMax, bool fill, int decimals, const char* format)
+{
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   if (window->SkipItems)
+      return false;
+   ImGuiContext& g = *ImGui::GetCurrentContext();
+   const ImGuiStyle& style = g.Style;
+   const ImGuiID fieldId = window->GetID(id);
+   const ImRect bb(window->DC.CursorPos, window->DC.CursorPos + ImVec2(ImGui::CalcItemWidth(), ImGui::GetFrameHeight()));
+   ImGui::ItemSize(bb, style.FramePadding.y);
+   if (!ImGui::ItemAdd(bb, fieldId, &bb, ImGuiItemFlags_Inputable))
+      return false;
+   const bool mixed = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
+   const bool hovered = ImGui::ItemHoverable(bb, fieldId, g.LastItemData.ItemFlags);
+   DragFieldState& st = s_dragField;
+   bool changed = false;
+   bool textMode = ImGui::TempInputIsActive(fieldId);
+   if (!textMode && st.editId == fieldId)
+      st.editId = 0;
+   if (st.id == fieldId && g.ActiveId != fieldId)
+      st.id = 0; // The press was cancelled from elsewhere
+   if (!textMode)
+   {
+      const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, ImGuiInputFlags_None, fieldId);
+      const bool doubleClicked = hovered && g.IO.MouseClickedCount[0] == 2 && ImGui::TestKeyOwner(ImGuiKey_MouseLeft, fieldId);
+      if (clicked || doubleClicked)
+         ImGui::SetKeyOwner(ImGuiKey_MouseLeft, fieldId);
+      if ((clicked && g.IO.KeyCtrl) || doubleClicked || g.NavActivateId == fieldId)
+         textMode = true;
+      else if (clicked)
+      {
+         // Press: nothing changes yet (no jump to the cursor, unlike ImGui sliders), the value is edited relative to the grab
+         ImGui::SetActiveID(fieldId, window);
+         ImGui::SetFocusID(fieldId, window);
+         ImGui::FocusWindow(window);
+         g.ActiveIdUsingNavDirMask = (1 << ImGuiDir_Left) | (1 << ImGuiDir_Right);
+         st = DragFieldState();
+         st.id = fieldId;
+         st.press = g.IO.MousePos;
+         st.start = *value;
+         st.speed = DragSpeed(decimals, fabsf(*value));
+      }
+      if (!textMode && st.id == fieldId && g.ActiveId == fieldId)
+      {
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) // Cancels the drag
+         {
+            if (st.moved && *value != st.start)
+            {
+               *value = st.start;
+               changed = true;
+            }
+            ImGui::ClearActiveID();
+            st.id = 0;
+         }
+         else if (g.IO.MouseDown[0])
+         {
+            if (!st.moved)
+               st.moved = fabsf(g.IO.MousePos.x - st.press.x) >= 3.f; // Click slop; the drag starts from here, without a jump
+            else
+            {
+               const bool fine = g.IO.KeyShift;
+               float speed = fill ? (vMax - vMin) / max(bb.GetWidth(), 1.f) : st.speed;
+               if (fine)
+                  speed *= 0.1f;
+               st.acc += g.IO.MouseDelta.x * speed;
+               if (fill)
+                  st.acc = clamp(st.start + st.acc, vMin, vMax) - st.start; // Soft range: the drag stays inside it
+               float v = st.start + st.acc;
+               if (g.IO.KeyCtrl)
+               {
+                  // Snap to tenths of the range (number fields: ten units of the last displayed digit)
+                  const float base = fill ? vMin : 0.f;
+                  const float step = fill ? (vMax - vMin) * 0.1f : powf(10.f, 1.f - static_cast<float>(decimals));
+                  if (step > 0.f)
+                     v = base + roundf((v - base) / step) * step;
+                  if (fill)
+                     v = clamp(v, vMin, vMax);
+               }
+               else
+               {
+                  const float scale = powf(10.f, static_cast<float>(decimals + (fine ? 1 : 0)));
+                  v = roundf(v * scale) / scale;
+               }
+               if (v != *value)
+               {
+                  *value = v;
+                  changed = true;
+               }
+            }
+         }
+         else
+         {
+            // Released: a click that did not drag types the value (the text field takes the activation over on its first frame)
+            const bool click = !st.moved;
+            st.id = 0;
+            if (click)
+            {
+               g.NavActivateId = fieldId;
+               g.NavActivateFlags = ImGuiActivateFlags_PreferInput;
+               textMode = true;
+            }
+            else
+               ImGui::ClearActiveID();
+         }
+      }
+   }
+
+   if (textMode)
+   {
+      // Typing: the value follows the text; Enter or a click away keeps it, Esc puts the exact value back
+      if (st.editId != fieldId)
+      {
+         st.editId = fieldId;
+         st.editStart = *value;
+      }
+      const bool cancel = ImGui::TempInputIsActive(fieldId) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+      const float before = *value;
+      bool edited = ImGui::TempInputScalar(bb, fieldId, id, ImGuiDataType_Float, value, "%.6g", nullptr, nullptr);
+      if (cancel)
+      {
+         *value = st.editStart;
+         edited = *value != before;
+      }
+      return edited;
+   }
+
+   if (changed)
+      ImGui::MarkItemEdited(fieldId);
+   const bool active = g.ActiveId == fieldId;
+   if (hovered || active)
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+   // Frame (neutral grey on hover), then the value bar (Blender style, brighter while dragged; only the left corners are rounded unless full), then the number
+   ImDrawList* const drawList = window->DrawList;
+   const float rounding = style.FrameRounding;
+   ImGui::RenderNavCursor(bb, fieldId);
+   drawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(active ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
+   if (fill && vMax > vMin)
+   {
+      const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
+      if (t > 0.f)
+      {
+         const ImU32 color = active ? EditorTheme::FillActive : hovered ? EditorTheme::FillHovered : EditorTheme::Fill;
+         drawList->AddRectFilled(bb.Min, ImVec2(bb.Min.x + bb.GetWidth() * t, bb.Max.y), color, rounding, t >= 1.f ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
+      }
+   }
+   char text[64];
+   const char* shown = text;
+   if (mixed && g.MixedValueLabel != nullptr)
+      shown = g.MixedValueLabel;
+   else
+      ImFormatString(text, IM_COUNTOF(text), format, *value);
+   ImGui::PushStyleColor(ImGuiCol_Text, mixed ? g.Style.Colors[ImGuiCol_TextMixedValue] : (fill ? ImVec4(1.f, 1.f, 1.f, 1.f) : g.Style.Colors[ImGuiCol_Text]));
+   ImGui::RenderTextClipped(bb.Min, bb.Max, shown, nullptr, nullptr, ImVec2(0.5f, 0.5f));
+   ImGui::PopStyleColor();
+   return changed;
+}
+
 bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vMax, const char* format)
 {
    // Soft range: a value beyond it extends the displayed range instead of being pinned at the end
    vMin = min(vMin, *value);
    vMax = max(vMax, *value);
-   // The widget draws in the upper channel with a transparent frame and grab; the frame and the fill go in the lower one
-   ImDrawList* const drawList = ImGui::GetWindowDrawList();
-   drawList->ChannelsSplit(2);
-   drawList->ChannelsSetCurrent(1);
-   const ImVec4 clear(0.f, 0.f, 0.f, 0.f);
-   ImGui::PushStyleColor(ImGuiCol_FrameBg, clear);
-   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, clear);
-   ImGui::PushStyleColor(ImGuiCol_FrameBgActive, clear);
-   ImGui::PushStyleColor(ImGuiCol_SliderGrab, clear);
-   ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, clear);
-   ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_WHITE);
-   const bool changed = ImGui::SliderFloat(id, value, vMin, vMax, format);
-   ImGui::PopStyleColor(6);
-   const ImVec2 min = ImGui::GetItemRectMin();
-   const ImVec2 max = ImGui::GetItemRectMax();
-   const bool active = ImGui::IsItemActive();
-   const bool hovered = ImGui::IsItemHovered();
-   const bool editingText = active && ImGui::GetIO().WantTextInput; // Ctrl+click turns the slider into a text field
-   drawList->ChannelsSetCurrent(0);
-   const float rounding = ImGui::GetStyle().FrameRounding;
-   // Neutral grey on hover; the dark editing field only while typing a value
-   drawList->AddRectFilled(min, max, ImGui::GetColorU32(editingText ? ImGuiCol_FrameBgActive : (hovered || active) ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
-   if (!editingText && vMax > vMin)
-   {
-      const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
-      if (t > 0.f)
-      {
-         // Opaque value bar (Blender style), brighter while dragged; only the left corners are rounded unless full
-         const ImU32 fill = active ? EditorTheme::FillActive : hovered ? EditorTheme::FillHovered : EditorTheme::Fill;
-         drawList->AddRectFilled(min, ImVec2(min.x + (max.x - min.x) * t, max.y), fill, rounding, t >= 1.f ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
-      }
-   }
-   drawList->ChannelsMerge();
-   return changed;
+   return DragField(id, value, vMin, vMax, true, ImParseFormatPrecision(format, 3), format);
 }
 
 bool PropertyPane::LookSliderRange(const string& label, Unit displayUnit, float& vMin, float& vMax)
@@ -379,6 +578,14 @@ void PropertyPane::RequestFocus(const PinKey& key)
    s_flashUntil = 0.0;
 }
 
+void PropertyPane::RequestOverlayFlash(const PinKey& key)
+{
+   s_overlayKey = key;
+   s_overlayPending = true;
+   s_overlayRequestTime = ImGui::GetTime();
+   s_overlayFlashUntil = 0.0;
+}
+
 void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Material* material)
 {
    // Right click anywhere on the field row (label or widget) opens the pin menu
@@ -406,6 +613,26 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          window->DrawList->AddRectFilled(m_rowMin, rowMax, ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, 0.35f * alpha)), 2.f);
       }
    }
+   // A favorite was just added: its row in the N-panel / Q popup scrolls into view and flashes
+   if (m_pinMode == PinMode::Overlay && (s_overlayPending || s_overlayFlashUntil > ImGui::GetTime()) && key == s_overlayKey)
+   {
+      const double now = ImGui::GetTime();
+      if (s_overlayPending)
+      {
+         s_overlayPending = false;
+         if (now - s_overlayRequestTime < 6.0) // Not drawn within a few seconds (panel hidden): forget it
+         {
+            s_overlayFlashUntil = now + 1.2;
+            ImGui::SetScrollHereY(0.3f);
+         }
+      }
+      else
+      {
+         const float alpha = static_cast<float>((s_overlayFlashUntil - now) / 1.2);
+         const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+         window->DrawList->AddRectFilled(m_rowMin, rowMax, ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, 0.35f * alpha)), 2.f);
+      }
+   }
    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && rowHovered)
       ImGui::OpenPopup("##PinMenu");
    if (!ImGui::BeginPopup("##PinMenu"))
@@ -416,7 +643,10 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          m_pins->Unpin(key);
    }
    else if (ImGui::MenuItem(ICON_LC_STAR " Add to Quick Favorites"))
+   {
       m_pins->Pin(key);
+      RequestOverlayFlash(key);
+   }
    if (part != nullptr && m_pins->HasSeeThroughSet(part))
    {
       if (ImGui::MenuItem("Add see-through set to Quick Favorites"))
@@ -437,6 +667,17 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          m_pins->PinMaterialSeeThrough(material->m_name);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add the See-Through Surface fields of this material");
+   }
+   if (part != nullptr)
+   {
+      // Blender's "Copy to Selected": this field's value goes to the other selected parts that have the same field (Alt while editing does it live)
+      ImGui::Separator();
+      const bool canCopy = m_pins->CanCopyToSelected(key);
+      if (ImGui::MenuItem(ICON_LC_COPY " Copy to Selected", nullptr, false, canCopy))
+         m_pins->CopyToSelected(key);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", canCopy ? "Write this value to the other selected parts that have the same field (hold Alt while editing a field to do it live)"
+                                         : "Select other parts that have this field (Ctrl+click in the outliner or viewport)");
    }
    ImGui::EndPopup();
 }
