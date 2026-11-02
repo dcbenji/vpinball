@@ -105,7 +105,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             }
          }
          ImGui::SameLine();
-         if (ImGui::Button("Cancel"))
+         if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
          {
             m_meshImportFileName.clear();
             ImGui::CloseCurrentPopup();
@@ -138,7 +138,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             }
          }
          ImGui::SameLine();
-         if (ImGui::Button("Cancel"))
+         if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
          {
             m_meshExportFileName.clear();
             ImGui::CloseCurrentPopup();

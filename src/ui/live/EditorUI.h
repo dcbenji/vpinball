@@ -217,6 +217,7 @@ private:
    void SwitchWorkspace(int index); // Applies a workspace and reports it in the status bar
 
    // Edit menu actions (also the keyboard shortcuts and the F3 operators)
+   bool CanFrameSelection() const { return m_selection.GetType() == Selection::S_EDITABLE; }
    bool CanCopy() const;
    bool CanPaste() const;
    bool CanDuplicate() const;

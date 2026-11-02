@@ -85,7 +85,22 @@ void EditorChrome::DrawChevron(ImDrawList *drawList, const ImVec2 &c, const Chev
 
 void EditorChrome::Tip(const char *title, const char *shortcut, const char *description)
 {
-   if (!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+   // Own hover delay: ImGui's delay timers do not run on disabled items, which made their tooltips appear much later than the enabled ones
+   static ImGuiID s_hoverId = 0;
+   static double s_hoverSince = 0.0;
+   const ImGuiID id = ImGui::GetItemID();
+   if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_Stationary))
+   {
+      if (s_hoverId == id)
+         s_hoverId = 0;
+      return;
+   }
+   if (s_hoverId != id)
+   {
+      s_hoverId = id;
+      s_hoverSince = ImGui::GetTime();
+   }
+   if (ImGui::GetTime() - s_hoverSince < ImGui::GetStyle().HoverDelayShort)
       return;
    if (!ImGui::BeginTooltip())
       return;
@@ -198,9 +213,12 @@ void EditorChrome::RenderMenuBar()
       }
       if (ImGui::BeginMenu("Edit"))
       {
-         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editor.CanUndo()))
+         // Blender style: the menu names the step ("Undo Move: Part1"), cut at 40 characters
+         const auto stepTitle = [](const char *verb, const string &step)
+         { return step.empty() ? string(verb) : string(verb) + ' ' + (step.size() > 40 ? step.substr(0, 37) + "..." : step); };
+         if (ImGui::MenuItem((stepTitle("Undo", editor.CanUndo() && editor.m_undo.UndoCount() > 0 ? editor.m_undo.UndoLabel(0) : string()) + "###EditUndo").c_str(), "Ctrl+Z", false, editor.CanUndo()))
             editor.UndoSteps(1);
-         if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, editor.CanRedo()))
+         if (ImGui::MenuItem((stepTitle("Redo", editor.CanRedo() && editor.m_undo.RedoCount() > 0 ? editor.m_undo.RedoLabel(0) : string()) + "###EditRedo").c_str(), "Ctrl+Shift+Z", false, editor.CanRedo()))
             editor.RedoSteps(1);
          if (ImGui::MenuItem("Undo History...", nullptr, false, editor.m_table->m_liveBaseTable == nullptr && (editor.m_undo.HasUndo() || editor.m_undo.HasRedo())))
             OpenUndoHistory();
@@ -374,7 +392,7 @@ void EditorChrome::RenderMenuBar()
          if (ImGui::MenuItem("Orbit Down", "Numpad 2"))
             editor.OrbitStep(false, -1.f);
          ImGui::Separator();
-         if (ImGui::MenuItem("Frame Selected", "F"))
+         if (ImGui::MenuItem("Frame Selected", "F", false, editor.CanFrameSelection()))
             editor.FrameSelection();
          if (ImGui::MenuItem("Frame All", "Home"))
             editor.FrameAll();

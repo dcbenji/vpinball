@@ -213,7 +213,7 @@ void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
    const string label = "Apply bulb to " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s);
    if (!inspect)
    {
-      editor.m_undo.SetLabel(label);
+      editor.m_undo.SetLabel("Apply Bulb: " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s));
       editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
       editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
       editor.m_lastUndoId = 0;
@@ -1064,9 +1064,11 @@ void PinnedPanel::RenderViewTab()
    PropertyPane::FlatCheckbox("##ViewNavCube", &editor.m_showNavCube);
    ImGui::Dummy(ImVec2(0.f, 4.f));
    const float width = ImGui::GetContentRegionAvail().x;
+   ImGui::BeginDisabled(!editor.CanFrameSelection());
    if (ImGui::Button("Frame Selected", ImVec2(width, 0.f)))
       editor.FrameSelection();
-   ImGui::SetItemTooltip("F / Numpad .");
+   ImGui::EndDisabled();
+   ImGui::SetItemTooltip(editor.CanFrameSelection() ? "F / Numpad ." : "Nothing selected");
    if (ImGui::Button("Frame All", ImVec2(width, 0.f)))
       editor.FrameAll();
    ImGui::SetItemTooltip("Home");
