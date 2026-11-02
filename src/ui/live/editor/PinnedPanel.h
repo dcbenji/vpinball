@@ -46,8 +46,8 @@ using PinDrawFn = std::function<void(PropertyPane &, void *)>;
 // belongs to) and, when `apply` is set, writes the source value to it. Used by "Copy to Selected" and the Alt apply-to-all
 using PinCopyFn = std::function<bool(void *src, void *dst, bool apply)>;
 
-// Quick Favorites (Blender's Q menu, here favorite fields) and the N-panel sidebar (Item / Look / View) that shows them in its
-// Look tab. Favorites are added from the Properties editor (right click on a field), and drawn with the same property pane
+// Quick Favorites (Blender's Q menu, here favorite fields) and the N-panel sidebar (Item / Favorites / View) that shows them in its
+// Favorites tab. Favorites are added from the Properties editor (right click on a field), and drawn with the same property pane
 // widgets and getter/setter definitions as the panel. The definitions are registered by the
 // property pane when it draws a field (and cached by key); for objects never shown in the panel this session (pins
 // loaded with the table, quick sets), they are harvested by running the object's pane in a hidden window.
@@ -155,7 +155,7 @@ private:
    void LoadFavoriteDefs();
    void RenderFavoriteRows(bool hovered);
    void RenderObjectRows(PropertyPane &props, PinKind kind, const string &name, const vector<PinKey> &keys, bool removable, bool hovered);
-   void RenderLookToolbar();
+   void RenderFavoritesToolbar();
    void RenderItemTab(bool hovered);
    void RenderViewTab();
    void ApplyUnits(PropertyPane &props) const;

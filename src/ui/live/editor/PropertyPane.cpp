@@ -246,8 +246,9 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    // Label column: ~42% of the pane, at least 120 px, while keeping a sane minimum for the value column
    const float availWidth = ImGui::GetContentRegionAvail().x;
    const float valueMin = 100.f;
-   const float xWidth = max(60.f, min(max(availWidth * 0.5f, 120.f), availWidth - 2.f * m_syncWidth - valueMin));
-   const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - 2.f * m_syncWidth);
+   // m_syncWidth reserves the whole sync button (frame padding + gap) so it never runs past the pane edge or under the scrollbar
+   const float xWidth = max(60.f, min(max(availWidth * 0.5f, 120.f), availWidth - m_syncWidth - valueMin));
+   const float valueWidth = max(valueMin * 0.5f, availWidth - xWidth - m_syncWidth);
    const float pinWidth = 0.f;
    const float fieldDy = 0.f;
    const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
@@ -283,7 +284,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 
    ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y + fieldDy));
    ImGui::SetNextItemWidth(valueWidth);
-   m_syncPos = ImVec2(pos.x + xWidth + valueWidth, pos.y + fieldDy);
+   m_syncPos = ImVec2(pos.x + xWidth + valueWidth + (m_syncWidth > 0.f ? style.ItemInnerSpacing.x : 0.f), pos.y + fieldDy);
 }
 
 void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName)
@@ -375,9 +376,8 @@ bool PropertyPane::BeginSection(const string& name)
    m_pinGroup = name;
    m_pinSection = name;
    m_sectionHasSync = m_table->m_liveBaseTable;
-   // for some reason I don't really get, the computed size is too large
-   //m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + ImGui::GetStyle().ItemSpacing.x) : 0.f;
-   m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x * 0.5f) : 0.f;
+   // Full button width (icon + frame padding) plus the gap before it
+   m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + 2.f * ImGui::GetStyle().FramePadding.x + ImGui::GetStyle().ItemInnerSpacing.x) : 0.f;
    return true;
 }
 

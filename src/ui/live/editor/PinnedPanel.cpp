@@ -294,7 +294,7 @@ void PinnedPanel::SaveTo(PinTable *table) const
       nlohmann::ordered_json pins = nlohmann::ordered_json::array();
       for (const PinKey &pin : ws.pins)
          pins.push_back({ { "kind", PinKindName(pin.kind) }, { "name", pin.name }, { "prop", pin.prop } });
-      static constexpr const char *tabs[] = { "Item", "Look", "View" };
+      static constexpr const char *tabs[] = { "Item", "Favorites", "View" };
       // The layout tree, then the legacy keys derived from it for the older builds (they only know a left and a right area)
       bool outliner = true, properties = true;
       float outlinerWidth = AreaLayout::kDefaultOutlinerWidth, propertiesWidth = AreaLayout::kDefaultPropertiesWidth;
@@ -319,9 +319,9 @@ void PinnedPanel::SaveTo(PinTable *table) const
 
 void PinnedPanel::ResetWorkspaces()
 {
-   // Look-dev is the default tree without the Outliner (hidden), with the N-panel on its Look tab
+   // Look-dev is the default tree without the Outliner (hidden), with the N-panel on its Favorites tab
    m_workspaces[0] = Workspace { "Layout"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
-   m_workspaces[1] = Workspace { "Look-dev"s, true, static_cast<int>(EditorUI::SidebarTab::Look) };
+   m_workspaces[1] = Workspace { "Look-dev"s, true, static_cast<int>(EditorUI::SidebarTab::Favorites) };
    m_workspaces[1].layout = AreaLayout::FromLegacy(false, true, 0.f, 0.f, static_cast<int>(AreaType::Outliner), static_cast<int>(AreaType::Properties));
    m_workspaces[2] = Workspace { "Wiring"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
    // (the Wiring preset below, when it is a tree of its own, has sizes of its own)
@@ -431,7 +431,7 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                ws.sidebar = entry.value("sidebar", entry.value("pinned", ws.sidebar));
                const string tab = entry.value("sidebar_tab", ""s);
                if (!tab.empty())
-                  ws.sidebarTab = tab == "Look" ? 1 : tab == "View" ? 2 : 0;
+                  ws.sidebarTab = (tab == "Favorites" || tab == "Look") ? 1 : tab == "View" ? 2 : 0; // "Look": the tab's name before 11-02
                ws.sidebarWidth = entry.value("sidebar_width", ws.sidebarWidth);
                ws.outlinerMode = entry.value("outliner_mode", ws.outlinerMode);
                ws.outlinerTypes = entry.value("outliner_types", ws.outlinerTypes);
@@ -867,7 +867,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
    ImGui::PopID();
 }
 
-void PinnedPanel::RenderLookToolbar()
+void PinnedPanel::RenderFavoritesToolbar()
 {
    const Selection &sel = m_editor.m_selection;
    const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
@@ -980,7 +980,7 @@ void PinnedPanel::Render()
    PropertyPane::ConsumeEditCancel(); // A cancelled edit nobody handled
    SyncWithTable();
    ProcessGroupRequests(); // Quick sets added from the Properties editor, whether or not the favorites are shown
-   const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Look;
+   const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Favorites;
    if (lookShown || m_quickOpen || editor.m_openQuickFavorites)
       LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun
    if (!editor.m_showSidebar || !editor.IsViewportVisible())
@@ -1017,7 +1017,7 @@ void PinnedPanel::Render()
    const bool tabBar = ImGui::BeginTabBar("##SidebarTabs");
    if (tabBar)
    {
-      static constexpr const char *names[] = { "Item", "Look", "View" };
+      static constexpr const char *names[] = { "Item", "Favorites", "View" };
       // A tab picked from elsewhere (search, workspace) is brought to front (ImGui applies it on the next frame); otherwise the
       // tab shown is the user's pick
       const bool external = m_shownTab != static_cast<int>(editor.m_sidebarTab);
@@ -1036,8 +1036,8 @@ void PinnedPanel::Render()
             switch (tab)
             {
             case EditorUI::SidebarTab::Item: RenderItemTab(hovered); break;
-            case EditorUI::SidebarTab::Look:
-               RenderLookToolbar();
+            case EditorUI::SidebarTab::Favorites:
+               RenderFavoritesToolbar();
                RenderFavoriteRows(hovered);
                break;
             case EditorUI::SidebarTab::View: RenderViewTab(); break;

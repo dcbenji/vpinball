@@ -138,7 +138,7 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Frame Selected", "F", hasPart, [&ed]() { ed.FrameSelection(); });
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
-   add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
+   add("View" + sep + "Sidebar" + sep + "Favorites", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Favorites); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });
    add("View" + sep + "Properties", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Properties); });
    // Reveals an editor, hosting it in its preferred area if no area shows it

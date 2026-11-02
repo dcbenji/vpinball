@@ -482,11 +482,11 @@ private:
    // Areas: Blender-style split tree (see editor/AreaLayout.h): Outliner | Viewport + N-panel | Properties by default. Hidden leaves are the
    // View menu show / hide toggles. Widths are logical pixels stored in the tree, resized by the splitters, saved per workspace.
    float m_sidebarWidth = 300.f;
-   // N-panel (Blender's sidebar at the viewport's right edge): tabs Item (selection transform), Look (the Quick Favorites set), View
+   // N-panel (Blender's sidebar at the viewport's right edge): tabs Item (selection transform), Favorites (the Quick Favorites set), View
    enum class SidebarTab
    {
       Item,
-      Look,
+      Favorites,
       View
    };
    bool m_showSidebar = false;
