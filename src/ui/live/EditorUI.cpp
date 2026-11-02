@@ -1388,8 +1388,10 @@ void EditorUI::RenderUI()
          else if (m_selection.GetType() != Selection::S_NONE)
             ClearSelection(); // Cancel current selection
       }
-      else if (panelsShown && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
-         m_pinned.ApplyWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Workspaces (Cmd on macOS)
+      else if (panelsShown && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)))
+         m_pinned.ApplyWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (ImGui::IsKeyPressed(ImGuiKey_PageDown, false) ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
+      else if (panelsShown && !m_navEmulateNumpad && io.KeyCtrl && !io.KeyAlt && !io.KeyShift && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
+         m_pinned.ApplyWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Direct workspace keys (Cmd on macOS), unless the digits emulate the numpad views
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
          // Play a shallow copy of the edited table
