@@ -2916,7 +2916,7 @@ void EditorUI::RenderUI()
                m_outlinerAnchor = part;
                open = false;
             }
-         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows))
+         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
             open = false;
       }
       ImGui::End();
@@ -5178,7 +5178,7 @@ void EditorUI::RenderAdjustPanel()
       if (ImGui::Begin("Adjust Last Operation##Popup", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
       {
          changed |= RenderAdjustParameters();
-         if (!m_adjustPopupJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+         if (!m_adjustPopupJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
             open = false;
       }
       ImGui::End();
