@@ -54,13 +54,12 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::SetItemTooltip("Refresh");
       ImGui::Separator();
 
-      // Letterboxed at the main window's aspect: the framing the player view has on the playfield window
+      // Always the player window's aspect, letterboxed in the area (top-anchored): the view setup frames (and, in window mode, rotates)
+      // the table after the aspect, so any other aspect (e.g. a portrait one for a tall area) is not what the player shows and crops the table
       const ImGuiIO &io = ImGui::GetIO();
       ImVec2 avail = ImGui::GetContentRegionAvail();
       avail.y -= 4.f * dpi; // The image starts 4 px down: keep it inside the area
-      float aspect = (io.DisplaySize.y > 0.f) ? io.DisplaySize.x / io.DisplaySize.y : 16.f / 9.f;
-      if (avail.y > avail.x * 1.2f && avail.y > 0.f)
-         aspect = avail.x / avail.y; // Portrait area: a portrait player view filling it, not a thumbnail
+      const float aspect = m_editor.m_renderer->GetDisplayAspectRatio();
       float imgW = avail.x, imgH = avail.x / aspect;
       if (imgH > avail.y)
       {
