@@ -2600,11 +2600,9 @@ void EditorUI::RenderUI()
       PLOGI << "Workspace key ignored: panelsShown=" << panelsShown << " fileOp=" << (m_fileOp != nullptr) << " palette=" << m_palette.IsOpen() << " modal=" << modalWasActive;
    if (workspaceKeysAllowed && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
-      // PageUp / PageDown are also ImGui navigation keys (scrolling of the focused window, popups): routed as global shortcuts so that no focused window,
-      // popup or active item (nor a key owner) can take the chord from the editor
-      constexpr ImGuiInputFlags route = ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverFocused | ImGuiInputFlags_RouteOverActive;
-      const bool nextWorkspace = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_PageDown, route);
-      const bool previousWorkspace = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_PageUp, route);
+      // Plain key test (owner Any): ImGui::Shortcut would lose the chord to a multiline text field (the script editor), which owns PageUp / PageDown
+      const bool nextWorkspace = ImGui::IsKeyPressed(ImGuiKey_PageDown, false);
+      const bool previousWorkspace = ImGui::IsKeyPressed(ImGuiKey_PageUp, false);
       if (nextWorkspace || previousWorkspace)
          SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (nextWorkspace ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
       else if (!m_navEmulateNumpad && !io.WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
