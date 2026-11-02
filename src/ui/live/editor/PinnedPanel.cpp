@@ -485,6 +485,8 @@ void PinnedPanel::SyncWithTable()
    m_editor.m_outlinerWidth = OutlinerPanel::PaneWidth;
    m_editor.m_propertiesWidth = PropertiesPanel::PaneWidth;
    m_editor.m_sidebarWidth = 300.f;
+   m_editor.m_outliner.SetDisplayMode(0); // Outliner display mode and type filter of a table without saved workspaces: the defaults
+   m_editor.m_outliner.SetTypeMask(OutlinerPanel::AllTypesMask);
    m_workspacesPristine = false;
    if (m_activeWorkspace == -1)
    {

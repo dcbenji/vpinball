@@ -246,16 +246,14 @@ void PinUndo::BeginUndo()
          m_undoRecords.erase(m_undoRecords.begin());
          m_cleanpoint = (m_cleanpoint == 0 || m_cleanpoint == NoCleanPoint) ? NoCleanPoint : m_cleanpoint - 1;
       }
-      // Only the top record can still be canceled or discarded (restoring what it set aside): the one below it is committed, release its stash. The
-      // records begun and discarded every frame by other panels leave the top one alone
-      if (m_undoRecords.size() >= 2)
-         m_undoRecords[m_undoRecords.size() - 2]->m_stashedRedo.clear();
       m_undoRecords.push_back(std::make_unique<UndoRecord>());
       UndoRecord &record = *m_undoRecords.back();
       record.m_id = ++m_lastRecordId;
       record.m_dirtyStateAtBegin = m_dirtyState;
-      // A new edit invalidates the redo records. They are only set aside in the new record: if it ends up discarded or canceled (see Discard, the
-      // editor begins and discards a record every frame while the mouse is over a property pane) they are restored
+      // A new edit invalidates the redo records. They are set aside in the new record, which restores them if it ends up discarded or canceled (see
+      // Discard, and Undo(false) for a canceled modal transform: the editor also begins and discards a record every frame while the mouse is over a
+      // property pane, so the stash of a record can not be released while other records come and go on top of it). A stash is released with its record
+      // (undone, truncated or dropped)
       record.m_cleanpointAtBegin = m_cleanpoint;
       if (!m_redoRecords.empty())
       {

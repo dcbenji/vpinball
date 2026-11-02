@@ -153,10 +153,26 @@ void ConvertToPBRModal::Apply()
       if (it.convert)
          m_editor.m_undo.MarkForUndo(it.light);
    m_editor.m_undo.MarkForAction(
-      [snapshots]()
+      [table, snapshots]()
       {
+         // A material deleted since (not undoable) is gone: skip it
          for (const auto &[mat, snapshot] : snapshots)
-            *mat = snapshot;
+            if (std::ranges::find(table->m_materials, mat) != table->m_materials.end())
+               *mat = snapshot;
+      },
+      // Redo: the converted state of the materials, captured when the step is undone
+      [table, snapshots]() -> std::function<void()>
+      {
+         vector<std::pair<Material *, Material>> converted;
+         for (const auto &[mat, snapshot] : snapshots)
+            if (std::ranges::find(table->m_materials, mat) != table->m_materials.end())
+               converted.emplace_back(mat, *mat);
+         return [table, converted]()
+         {
+            for (const auto &[mat, state] : converted)
+               if (std::ranges::find(table->m_materials, mat) != table->m_materials.end())
+                  *mat = state;
+         };
       });
    for (MaterialItem &it : m_materials)
       if (it.convert)

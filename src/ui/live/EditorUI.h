@@ -202,6 +202,7 @@ private:
    void PushUndo(IEditable *part, unsigned int editId, const string &label = string());
    PinUndo m_undo;
    static string CountLabel(const char *verb, size_t count, const string &name); // "Move PartName" / "Move 3 parts"
+   bool IsDragInProgress() const; // Gizmo, point or modal drag: undo and redo are off
    bool CanUndo() const;
    bool CanRedo() const;
    void UndoSteps(size_t count); // Edit > Undo (Ctrl+Z), count > 1 for the undo history
@@ -430,6 +431,7 @@ private:
       bool snapPointsBuilt = false;
    } m_modal;
    vector<std::shared_ptr<EditorUIPart>> m_gizmoDragSelection; // Selection the current gizmo drag started on
+   uint64_t m_gizmoDragRecordId = 0; // Undo record pushed when the current gizmo drag began
    bool m_gizmoDragActive = false; // A gizmo drag is in progress (its undo record was pushed)
    Matrix3D m_gizmoStartTransform; // Selection transform when the current gizmo drag began
    bool m_gizmoDragTranslate = false; // The current gizmo drag is a translation

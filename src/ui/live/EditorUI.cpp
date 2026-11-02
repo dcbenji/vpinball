@@ -216,6 +216,10 @@ void EditorUI::Close()
    m_flyMode = false;
    if (ImGuiContext *const context = ImGui::GetCurrentContext())
       context->ConfigNavEnableTabbing = true; // Overridden each frame while the editor is open (see RenderUI)
+   ImGuizmo::Enable(false); // Clears a gizmo state left by a drag in progress
+   ImGuizmo::Enable(true);
+   m_gizmoDragActive = false;
+   m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
    RestorePartsVisibility();
    m_inspectionModal.Close();
@@ -1177,7 +1181,7 @@ void EditorUI::RenderUI()
       m_gizmoOperation = ImGuizmo::TRANSLATE; // A new selection shows the move gizmo (Esc hides it)
    m_hadSelectionTransform = isSelectionTransformValid;
    // A gizmo drag whose selection changed under the mouse (outliner click, undo,...) is over: the new selection must not follow it without an undo record
-   bool gizmoLost = m_gizmoDragActive && m_multiSel != m_gizmoDragSelection;
+   bool gizmoLost = m_gizmoDragActive && (m_multiSel != m_gizmoDragSelection || m_undo.TopRecordId() != m_gizmoDragRecordId); // Selection or history changed under the drag
    if (gizmoLost)
    {
       ImGuizmo::Enable(false); // Clears ImGuizmo's using state
@@ -1276,6 +1280,7 @@ void EditorUI::RenderUI()
             m_undo.SetLabel(CountLabel(((static_cast<int>(m_gizmoOperation) & ImGuizmo::ROTATE) != 0) ? "Rotate" : ((static_cast<int>(m_gizmoOperation) & ImGuizmo::SCALE) != 0) ? "Scale" : "Move",
                m_multiSel.size(), m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
             m_undo.EndUndo();
+            m_gizmoDragRecordId = m_undo.TopRecordId();
             m_lastUndoPart = nullptr;
             m_lastUndoId = 0x1000;
             m_gizmoStartTransform = prevTransform;
@@ -1286,9 +1291,10 @@ void EditorUI::RenderUI()
    }
    // A drag interrupted with the mouse still held (Alt+A, Esc hiding the gizmo, a modal transform starting, the table getting locked,...) is not manipulated
    // anymore, so ImGuizmo would stay in its using state: reset it
-   if (m_gizmoDragActive && !gizmoManipulated && !gizmoLost)
+   // Also when the handle was only pressed (no change yet, so no drag record): IsOver() would stay true and the viewport clicks would die
+   if (!gizmoManipulated && ImGuizmo::IsUsingAny())
    {
-      gizmoLost = true;
+      gizmoLost |= m_gizmoDragActive;
       ImGuizmo::Enable(false);
       ImGuizmo::Enable(true);
    }
@@ -1697,9 +1703,12 @@ void EditorUI::RenderUI()
    // Tab and Shift+Tab belong to the editor (drag point edit, snapping) while the mouse is over the viewport and no text is edited: ImGui must not use them
    // to tab into a field of a panel that kept the navigation focus. The setting is read by ImGui at the start of the next frame.
    ImGui::GetCurrentContext()->ConfigNavEnableTabbing = io.WantCaptureMouse || io.WantTextInput;
-   const bool panelsShown = !m_inspectionModal.IsVisible() && !m_flyMode && !modalWasActive; // The palette and workspaces need the editor panels (and not during a G / R / S modal transform)
+   // Inspecting a running game: the keys belong to the game (flippers, plunger, nudge,...), only Ctrl+S and the palette stay editor keys
+   const bool gameKeys = IsInspectMode() && m_player->IsGameRunning();
+   const bool editorPanels = !m_inspectionModal.IsVisible() && !m_flyMode && !modalWasActive; // The palette and workspaces need the editor panels (and not during a G / R / S modal transform)
+   const bool panelsShown = editorPanels && !gameKeys;
    // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
-   if (panelsShown && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
+   if (editorPanels && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
       m_palette.Toggle();
    // Workspaces: Ctrl+PgUp / PgDn cycle them (wrapping), Ctrl+1..3 pick one unless the digits emulate the numpad views. Handled before the keyboard capture
    // check: the workspaces showing a text editor (script) would otherwise never receive the keys, as the editor consumes them
@@ -1732,7 +1741,7 @@ void EditorUI::RenderUI()
          Report("Outliner not shown");
    }
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape() | ConsumedPaneEscape(); // The Esc that closed a popup is not an editor Esc
-   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive)
+   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive && !gameKeys)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
       {
@@ -2066,9 +2075,12 @@ string EditorUI::CountLabel(const char *verb, const size_t count, const string &
    return count == 1 ? string(verb) + " " + name : string(verb) + " " + std::to_string(count) + " parts";
 }
 
-bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !m_modal.active && m_fileOp == nullptr; }
+// Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
+bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending; }
 
-bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !m_modal.active && m_fileOp == nullptr; }
+bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
+
+bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
 void EditorUI::RestoreUndoState(const std::any &state)
 {
