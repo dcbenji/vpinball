@@ -364,7 +364,7 @@ private:
 
    // Clipboard (copy/paste of parts through the OS clipboard, and of drag point coordinates in point edit mode)
    void CopySelection();
-   void PasteSelection(const ImVec2 &pos);
+   void PasteSelection(const ImVec2 &pos, bool inPlace = false); // inPlace: the parts keep their coordinates (Duplicate), pos is ignored
 
    // Rendering
    enum class PhysicOverlay

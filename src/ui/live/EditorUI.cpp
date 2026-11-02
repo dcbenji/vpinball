@@ -2595,10 +2595,18 @@ void EditorUI::RenderUI()
       m_palette.Toggle();
    // Workspaces: Ctrl+PgUp / PgDn cycle them (wrapping), Ctrl+1..3 pick one unless the digits emulate the numpad views. Handled before the keyboard capture
    // check: the workspaces showing a text editor (script) would otherwise never receive the keys, as the editor consumes them
-   if (panelsShown && m_fileOp == nullptr && !m_palette.IsOpen() && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   const bool workspaceKeysAllowed = panelsShown && m_fileOp == nullptr && !m_palette.IsOpen();
+   if (!workspaceKeysAllowed && io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false)))
+      PLOGI << "Workspace key ignored: panelsShown=" << panelsShown << " fileOp=" << (m_fileOp != nullptr) << " palette=" << m_palette.IsOpen() << " modal=" << modalWasActive;
+   if (workspaceKeysAllowed && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
-      if (ImGui::IsKeyPressed(ImGuiKey_PageUp, false) || ImGui::IsKeyPressed(ImGuiKey_PageDown, false))
-         SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (ImGui::IsKeyPressed(ImGuiKey_PageDown, false) ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
+      // PageUp / PageDown are also ImGui navigation keys (scrolling of the focused window, popups): routed as global shortcuts so that no focused window,
+      // popup or active item (nor a key owner) can take the chord from the editor
+      constexpr ImGuiInputFlags route = ImGuiInputFlags_RouteGlobal | ImGuiInputFlags_RouteOverFocused | ImGuiInputFlags_RouteOverActive;
+      const bool nextWorkspace = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_PageDown, route);
+      const bool previousWorkspace = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_PageUp, route);
+      if (nextWorkspace || previousWorkspace)
+         SwitchWorkspace((max(m_pinned.GetActiveWorkspace(), 0) + (nextWorkspace ? 1 : PinnedPanel::WorkspaceCount - 1)) % PinnedPanel::WorkspaceCount); // Blender: Ctrl+PgUp/PgDn cycle workspaces
       else if (!m_navEmulateNumpad && !io.WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_1, false) || ImGui::IsKeyPressed(ImGuiKey_2, false) || ImGui::IsKeyPressed(ImGuiKey_3, false)))
          SwitchWorkspace(ImGui::IsKeyPressed(ImGuiKey_1, false) ? 0 : ImGui::IsKeyPressed(ImGuiKey_2, false) ? 1 : 2); // Direct workspace keys (Cmd on macOS)
    }
@@ -3077,12 +3085,13 @@ void EditorUI::DuplicateSelection()
    const bool hasOrigin = GetSelectionTransform(origin);
    CopySelection();
    const uint64_t topBefore = m_undo.TopRecordId();
-   PasteSelection(ImGui::GetMousePos());
+   PasteSelection(ImGui::GetMousePos(), true);
    if (m_undo.TopRecordId() == topBefore) // Nothing was pasted: the grab would fold into an unrelated step
    {
       Report("Nothing to duplicate");
       return;
    }
+   m_undo.SetLabel(CountLabel("Duplicate", m_multiSel.size(), m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName())); // Not "Paste" (kept by the merge with the grab)
    Report(CountLabel("Duplicated", count, m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
    if (m_navBlenderTransform)
    {
@@ -3627,7 +3636,7 @@ void EditorUI::CopySelection()
       Report(CountLabel("Copied", parts.size(), parts.front()->GetName()));
 }
 
-void EditorUI::PasteSelection(const ImVec2 &pos)
+void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
 {
    if (m_table->IsLocked() || IsInspectMode())
       return;
@@ -3702,11 +3711,13 @@ void EditorUI::PasteSelection(const ImVec2 &pos)
       return;
    }
    // Move the pasted parts so that their combined center lands at the given position (in the table XY plane, keeping their Z)
-   const Vertex2D target = UnprojectToPlane(pos, 0.f);
-   const Vertex2D offset(target.x - 0.5f * (pasteMin.x + pasteMax.x), target.y - 0.5f * (pasteMin.y + pasteMax.y));
+   // (a duplicate stays exactly on the original, its grab then follows the mouse movement from there)
+   const Vertex2D target = inPlace ? Vertex2D(0.f, 0.f) : UnprojectToPlane(pos, 0.f);
+   const Vertex2D offset = inPlace ? Vertex2D(0.f, 0.f) : Vertex2D(target.x - 0.5f * (pasteMin.x + pasteMax.x), target.y - 0.5f * (pasteMin.y + pasteMax.y));
    for (IEditable *const editable : pasted)
    {
-      editable->Translate(offset);
+      if (!inPlace)
+         editable->Translate(offset);
       // Player side setup, same as part creation
       if (editable->GetItemType() == eItemBall)
          m_player->m_vball.push_back(static_cast<Ball *>(editable));
