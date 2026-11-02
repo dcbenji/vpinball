@@ -68,8 +68,6 @@ void PinnedPanel::Pin(const PinKey &key)
 {
    if (!IsPinned(key))
       m_pins.push_back(key);
-   m_visible = true;
-   m_collapsed = false;
 }
 
 void PinnedPanel::Unpin(const PinKey &key) { std::erase(m_pins, key); }
@@ -155,8 +153,6 @@ void PinnedPanel::PinSeeThroughSet(const IEditable *part)
       m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
    if (!prim->m_d.m_szMaterial.empty())
       PinMaterialSeeThrough(prim->m_d.m_szMaterial);
-   m_visible = true;
-   m_collapsed = false;
 }
 
 void PinnedPanel::PinBulbSet(const IEditable *part)
@@ -164,8 +160,6 @@ void PinnedPanel::PinBulbSet(const IEditable *part)
    if (!HasBulbSet(part))
       return;
    m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
-   m_visible = true;
-   m_collapsed = false;
 }
 
 void PinnedPanel::PinMaterialSeeThrough(const string &materialName)
@@ -174,8 +168,6 @@ void PinnedPanel::PinMaterialSeeThrough(const string &materialName)
    if (mat == nullptr || m_editor.m_table->IsDummyMaterial(mat) || mat->m_type != Material::PBR)
       return;
    m_groupRequests.push_back({ PinKind::Material, materialName, kSeeThroughGroup });
-   m_visible = true;
-   m_collapsed = false;
 }
 
 void PinnedPanel::SaveTo(PinTable *table) const
@@ -195,8 +187,10 @@ void PinnedPanel::SaveTo(PinTable *table) const
       nlohmann::ordered_json pins = nlohmann::ordered_json::array();
       for (const PinKey &pin : ws.pins)
          pins.push_back({ { "kind", PinKindName(pin.kind) }, { "name", pin.name }, { "prop", pin.prop } });
-      list.push_back({ { "name", ws.name }, { "outliner", ws.outliner }, { "properties", ws.properties }, { "pinned", ws.pinned },
-         { "overlay", ws.overlayLeft ? "left" : "right" }, { "pins", pins } });
+      static constexpr const char *tabs[] = { "Item", "Look", "View" };
+      list.push_back({ { "name", ws.name }, { "outliner", ws.outliner }, { "properties", ws.properties }, { "sidebar", ws.sidebar },
+         { "sidebar_tab", tabs[clamp(ws.sidebarTab, 0, 2)] }, { "outliner_width", ws.outlinerWidth }, { "properties_width", ws.propertiesWidth },
+         { "sidebar_width", ws.sidebarWidth }, { "outliner_mode", ws.outlinerMode }, { "outliner_types", ws.outlinerTypes }, { "pins", pins } });
    }
    nlohmann::ordered_json doc = { { "active", workspaces[m_activeWorkspace].name }, { "workspaces", list } };
    table->m_editorWorkspaces = doc.dump();
@@ -204,16 +198,23 @@ void PinnedPanel::SaveTo(PinTable *table) const
 
 void PinnedPanel::ResetWorkspaces()
 {
-   m_workspaces[0] = { "Layout"s, true, true, false, false, {} };
-   m_workspaces[1] = { "Look-dev"s, false, true, true, true, {} };
-   m_workspaces[2] = { "Wiring"s, true, true, false, false, {} };
+   m_workspaces[0] = Workspace { "Layout"s, true, true, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   m_workspaces[1] = Workspace { "Look-dev"s, false, true, true, static_cast<int>(EditorUI::SidebarTab::Look) };
+   m_workspaces[2] = Workspace { "Wiring"s, true, true, false, static_cast<int>(EditorUI::SidebarTab::Item) };
 }
 
 void PinnedPanel::CaptureWorkspace(Workspace &ws) const
 {
-   ws.outliner = m_editor.m_showOutliner;
-   ws.properties = m_editor.m_showProperties;
-   ws.pinned = m_visible;
+   const EditorUI &editor = m_editor;
+   ws.outliner = editor.m_showOutliner;
+   ws.properties = editor.m_showProperties;
+   ws.sidebar = editor.m_showSidebar;
+   ws.sidebarTab = static_cast<int>(editor.m_sidebarTab);
+   ws.outlinerWidth = editor.m_outlinerWidth;
+   ws.propertiesWidth = editor.m_propertiesWidth;
+   ws.sidebarWidth = editor.m_sidebarWidth;
+   ws.outlinerMode = editor.m_outliner.GetDisplayMode();
+   ws.outlinerTypes = editor.m_outliner.GetTypeMask();
    ws.pins = m_pins;
 }
 
@@ -223,23 +224,32 @@ void PinnedPanel::ApplyWorkspace(int index)
       return;
    if (m_activeWorkspace >= 0)
       CaptureWorkspace(m_workspaces[m_activeWorkspace]);
-   else
+   else if (m_activeWorkspace == -1)
    {
-      // First use with this table: the current panels and pins become the Layout workspace, and a target without its own
-      // pins starts from them (nothing pinned so far is lost)
+      // First use with this table: the current areas and favorites become the Layout workspace, and a target without its own
+      // favorites starts from them (nothing added so far is lost)
       CaptureWorkspace(m_workspaces[0]);
       if (m_workspaces[index].pins.empty())
          m_workspaces[index].pins = m_pins;
    }
    m_activeWorkspace = index;
    const Workspace &ws = m_workspaces[index];
+   EditorUI &editor = m_editor;
    m_pins = ws.pins;
-   m_visible = ws.pinned;
-   m_collapsed = false;
-   m_editor.m_showOutliner = ws.outliner;
-   m_editor.m_showProperties = ws.properties;
-   m_placeOverlay = true;
-   m_editor.m_liveUI.PushNotification("Workspace: "s + ws.name, 1500);
+   editor.m_showOutliner = ws.outliner;
+   editor.m_showProperties = ws.properties;
+   editor.m_showSidebar = ws.sidebar;
+   editor.m_sidebarTab = static_cast<EditorUI::SidebarTab>(clamp(ws.sidebarTab, 0, 2));
+   if (ws.outlinerWidth > 0.f)
+      editor.m_outlinerWidth = ws.outlinerWidth;
+   if (ws.propertiesWidth > 0.f)
+      editor.m_propertiesWidth = ws.propertiesWidth;
+   if (ws.sidebarWidth > 0.f)
+      editor.m_sidebarWidth = ws.sidebarWidth;
+   if (ws.outlinerMode >= 0)
+      editor.m_outliner.SetDisplayMode(ws.outlinerMode);
+   if (ws.outlinerTypes >= 0)
+      editor.m_outliner.SetTypeMask(static_cast<uint32_t>(ws.outlinerTypes));
 }
 
 void PinnedPanel::LoadWorkspaces(const string &json)
@@ -253,38 +263,45 @@ void PinnedPanel::LoadWorkspaces(const string &json)
       return;
    try // Hand edited files may hold values of the wrong type (nlohmann's value() throws then)
    {
-   const string active = doc.value("active", ""s);
-   if (const auto list = doc.find("workspaces"); list != doc.end() && list->is_array())
-      for (const auto &entry : *list)
-      {
-         if (!entry.is_object())
-            continue;
-         const string name = entry.value("name", ""s);
-         for (int i = 0; i < WorkspaceCount; i++)
+      const string active = doc.value("active", ""s);
+      if (const auto list = doc.find("workspaces"); list != doc.end() && list->is_array())
+         for (const auto &entry : *list)
          {
-            Workspace &ws = m_workspaces[i];
-            if (ws.name != name)
+            if (!entry.is_object())
                continue;
-            ws.outliner = entry.value("outliner", ws.outliner);
-            ws.properties = entry.value("properties", ws.properties);
-            ws.pinned = entry.value("pinned", ws.pinned);
-            ws.overlayLeft = entry.value("overlay", ws.overlayLeft ? "left"s : "right"s) == "left";
-            ws.pins.clear();
-            if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())
-               for (const auto &pin : *pins)
-               {
-                  PinKey key;
-                  if (!pin.is_object() || !PinKindFromName(pin.value("kind", ""s), key.kind))
-                     continue;
-                  key.name = pin.value("name", ""s);
-                  key.prop = pin.value("prop", ""s);
-                  if (!key.prop.empty() && std::ranges::find(ws.pins, key) == ws.pins.end())
-                     ws.pins.push_back(key);
-               }
-            if (name == active)
-               m_activeWorkspace = i;
+            const string name = entry.value("name", ""s);
+            for (int i = 0; i < WorkspaceCount; i++)
+            {
+               Workspace &ws = m_workspaces[i];
+               if (ws.name != name)
+                  continue;
+               ws.outliner = entry.value("outliner", ws.outliner);
+               ws.properties = entry.value("properties", ws.properties);
+               ws.sidebar = entry.value("sidebar", entry.value("pinned", ws.sidebar));
+               const string tab = entry.value("sidebar_tab", ""s);
+               if (!tab.empty())
+                  ws.sidebarTab = tab == "Look" ? 1 : tab == "View" ? 2 : 0;
+               ws.outlinerWidth = entry.value("outliner_width", ws.outlinerWidth);
+               ws.propertiesWidth = entry.value("properties_width", ws.propertiesWidth);
+               ws.sidebarWidth = entry.value("sidebar_width", ws.sidebarWidth);
+               ws.outlinerMode = entry.value("outliner_mode", ws.outlinerMode);
+               ws.outlinerTypes = entry.value("outliner_types", ws.outlinerTypes);
+               ws.pins.clear();
+               if (const auto pins = entry.find("pins"); pins != entry.end() && pins->is_array())
+                  for (const auto &pin : *pins)
+                  {
+                     PinKey key;
+                     if (!pin.is_object() || !PinKindFromName(pin.value("kind", ""s), key.kind))
+                        continue;
+                     key.name = pin.value("name", ""s);
+                     key.prop = pin.value("prop", ""s);
+                     if (!key.prop.empty() && std::ranges::find(ws.pins, key) == ws.pins.end())
+                        ws.pins.push_back(key);
+                  }
+               if (name == active)
+                  m_activeWorkspace = i;
+            }
          }
-      }
    }
    catch (const nlohmann::json::exception &)
    {
@@ -314,19 +331,19 @@ void PinnedPanel::SyncWithTable()
       if (!IsPinned(key))
          m_pins.push_back(key);
    }
-   if (!m_pins.empty())
-      m_visible = true;
    // The active workspace's panels (its pins are the table's current pin list loaded above)
    LoadWorkspaces(base->m_editorWorkspaces);
-   m_editor.m_showOutliner = true; // Panels of a table without workspaces: all shown
+   // Areas of a table without workspaces: the defaults; with workspaces: the active one's (its favorites are the current list
+   // loaded above)
+   m_editor.m_showOutliner = true;
    m_editor.m_showProperties = true;
    if (m_activeWorkspace >= 0)
    {
-      const Workspace &ws = m_workspaces[m_activeWorkspace];
-      m_visible = ws.pinned;
-      m_editor.m_showOutliner = ws.outliner;
-      m_editor.m_showProperties = ws.properties;
-      m_placeOverlay = true;
+      const vector<PinKey> pins = m_pins;
+      const int active = m_activeWorkspace;
+      m_activeWorkspace = -2; // Apply without capturing the previous table's areas
+      m_workspaces[active].pins = pins;
+      ApplyWorkspace(active);
    }
 }
 
@@ -431,64 +448,12 @@ void PinnedPanel::PinSelectionSeeThrough()
       PinMaterialSeeThrough(sel.GetMaterial()->m_name);
 }
 
-void PinnedPanel::RenderHeader()
+void PinnedPanel::LoadFavoriteDefs()
 {
-   const ImGuiStyle &style = ImGui::GetStyle();
-   if (ImGui::SmallButton(m_collapsed ? ICON_FK_CARET_RIGHT : ICON_FK_CARET_DOWN))
-      m_collapsed = !m_collapsed;
-   ImGui::SameLine();
-   ImGui::TextUnformatted(ICON_FK_THUMB_TACK " Pinned");
-
-   const auto buttonWidth = [&style](const char *label) { return ImGui::CalcTextSize(label, nullptr, true).x + style.FramePadding.x * 2.f; };
-   const float buttonsWidth = buttonWidth(ICON_FK_TINT) + buttonWidth(ICON_FK_TRASH) + buttonWidth(ICON_FK_TIMES) + style.ItemSpacing.x * 2.f;
-   ImGui::SameLine(max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - buttonsWidth));
-
-   const Selection &sel = m_editor.m_selection;
-   const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
-      || (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr && sel.GetMaterial()->m_type == Material::PBR);
-   ImGui::BeginDisabled(!canPinSel);
-   if (ImGui::SmallButton(ICON_FK_TINT))
-      PinSelectionSeeThrough();
-   ImGui::EndDisabled();
-   ImGui::SetItemTooltip("Pin see-through set for selection (refraction fields of the selected part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
-   ImGui::SameLine();
-   ImGui::BeginDisabled(m_pins.empty());
-   if (ImGui::SmallButton(ICON_FK_TRASH))
-      ImGui::OpenPopup("##PinClearAll");
-   ImGui::EndDisabled();
-   ImGui::SetItemTooltip("Unpin all");
-   ImGui::SameLine();
-   if (ImGui::SmallButton(ICON_FK_TIMES))
-      m_visible = false;
-   ImGui::SetItemTooltip("Hide the overlay (View > Pinned Properties, or P)");
-   if (ImGui::BeginPopup("##PinClearAll"))
-   {
-      ImGui::Text("Unpin all %d properties?", static_cast<int>(m_pins.size()));
-      if (ImGui::Button("Unpin all"))
-      {
-         ClearPins();
-         ImGui::CloseCurrentPopup();
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel"))
-         ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-   }
-}
-
-void PinnedPanel::Render(float topBarHeight)
-{
-   EditorUI &editor = m_editor;
-   if (editor.m_table->IsLocked())
-      return;
-   SyncWithTable();
-   if (!m_visible)
-      return;
-
    ProcessGroupRequests();
-
    // Objects of the pinned fields, in order of first appearance
-   vector<std::pair<PinKind, string>> objects;
+   vector<std::pair<PinKind, string>> &objects = m_objects;
+   objects.clear();
    for (const PinKey &pin : m_pins)
       if (std::ranges::find(objects, std::make_pair(pin.kind, pin.name)) == objects.end())
          objects.emplace_back(pin.kind, pin.name);
@@ -516,125 +481,280 @@ void PinnedPanel::Render(float topBarHeight)
       break;
    }
 
-   const float dpi = editor.m_liveUI.GetDPI();
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float width = 300.f * dpi;
-   // Default place: left of the properties panel; a workspace switch moves it to the workspace's side
-   const bool left = m_activeWorkspace >= 0 && m_workspaces[m_activeWorkspace].overlayLeft;
-   const float leftX = viewport->Pos.x + ((m_editor.m_showOutliner ? OutlinerPanel::PaneWidth : 0.f) + 8.f) * dpi;
-   const float rightX = viewport->Pos.x + viewport->Size.x - ((m_editor.m_showProperties ? PropertiesPanel::PaneWidth : 0.f) + 8.f) * dpi;
-   ImGui::SetNextWindowPos(ImVec2(left ? leftX : rightX, viewport->Pos.y + topBarHeight + (left ? 40.f : 8.f + 128.f + 16.f) * dpi), m_placeOverlay ? ImGuiCond_Always : ImGuiCond_FirstUseEver,
-      ImVec2(left ? 0.f : 1.f, 0.f));
-   m_placeOverlay = false;
-   ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.f), ImVec2(width, viewport->Size.y * 0.8f));
-   ImGui::SetNextWindowSize(ImVec2(width, 0.f)); // Fixed width, height fitted to the rows
-   ImGui::SetNextWindowBgAlpha(m_hovered ? 0.92f : 0.6f);
-   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, m_hovered ? 1.f : 0.85f);
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * dpi, 4.f * dpi));
-   ImGui::Begin("Pinned###PinnedOverlay", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-   m_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_AllowWhenBlockedByPopup)
-      || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
+}
 
-   RenderHeader();
+void PinnedPanel::RenderFavoriteRows(bool hovered)
+{
+   EditorUI &editor = m_editor;
+   const vector<std::pair<PinKind, string>> &objects = m_objects;
+   if (m_pins.empty())
+      ImGui::TextDisabled("Right-click a field in the Properties editor\nand pick 'Add to Quick Favorites'");
 
-   if (!m_collapsed)
+   PropertyPane props(editor.m_table);
+   ApplyUnits(props);
+   props.SetPinning(this, PropertyPane::PinMode::Overlay);
+   props.SetLookSliders(true); // The overlay is a dial surface
+   const vector<PinKey> pins = m_pins; // Rows may be removed while drawn
+   vector<PinKey> &keys = m_itemKeys;
+   for (const auto &[kind, name] : objects)
    {
-      if (m_pins.empty())
-         ImGui::TextDisabled("Right click a property in the Properties\npanel and pick 'Pin to overlay'");
+      keys.clear();
+      for (const PinKey &pin : pins)
+         if (pin.kind == kind && pin.name == name)
+            keys.push_back(pin);
+      RenderObjectRows(props, kind, name, keys, true, hovered);
+   }
+}
 
-      PropertyPane props(editor.m_table);
-      ApplyUnits(props);
-      props.SetPinning(this, PropertyPane::PinMode::Overlay);
-      props.SetLookSliders(true); // The overlay is a dial surface
-      const bool inspect = editor.IsInspectMode();
-      const vector<PinKey> pins = m_pins; // Rows may unpin while drawn
-      for (const auto &[kind, name] : objects)
+void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const string &name, const vector<PinKey> &keys, bool removable, bool hovered)
+{
+   EditorUI &editor = m_editor;
+   const bool inspect = editor.IsInspectMode();
+   const void *owner = nullptr;
+   void *const obj = Resolve(kind, name, &owner);
+   ImGui::PushID(ObjectId(kind, name).c_str());
+   const string header = (kind == PinKind::Table ? "Table"s : name) + (kind == PinKind::Material ? " (material)"s : string()) + "###obj";
+   if (!props.BeginSection(header))
+   {
+      ImGui::PopID();
+      return;
+   }
+   IEditable *const part = (kind == PinKind::Part && obj != nullptr) ? static_cast<IEditable *>(obj) : nullptr;
+   // "Apply to all traced inserts": the pinned bulb sliders of a traced insert also write to the other traced inserts
+   props.ArmBulbBroadcast(part);
+   // Undo of part edits outside of an inspection session, recorded like the properties panel (only while interacting, as it snapshots the part)
+   const bool withUndo = part != nullptr && !inspect && hovered;
+   if (withUndo)
+   {
+      editor.m_undo.BeginUndo();
+      editor.m_undo.MarkForUndo(part);
+      for (IEditable *const other : props.GetBroadcastParts())
+         editor.m_undo.MarkForUndo(other);
+   }
+   props.SetPinOwner(owner);
+   const int modifiedBefore = props.GetModifiedField();
+   for (const PinKey &pin : keys)
+   {
+      props.FlushRow(); // Below the previous row when its label wrapped
+      ImGui::PushID(pin.prop.c_str());
+      if (removable)
       {
-         const void *owner = nullptr;
-         void *const obj = Resolve(kind, name, &owner);
-         ImGui::PushID(ObjectId(kind, name).c_str());
-         const string header = (kind == PinKind::Table ? "Table"s : name) + (kind == PinKind::Material ? " (material)"s : string()) + "###obj";
-         if (!props.BeginSection(header))
-         {
-            ImGui::PopID();
-            continue;
-         }
-         IEditable *const part = (kind == PinKind::Part && obj != nullptr) ? static_cast<IEditable *>(obj) : nullptr;
-         // "Apply to all traced inserts": the pinned bulb sliders of a traced insert also write to the other traced inserts
-         props.ArmBulbBroadcast(part);
-         // Undo of part edits outside of an inspection session, recorded like the properties panel (only while interacting, as it snapshots the part)
-         const bool withUndo = part != nullptr && !inspect && m_hovered;
-         if (withUndo)
-         {
-            editor.m_undo.BeginUndo();
-            editor.m_undo.MarkForUndo(part);
+         if (ImGui::SmallButton(ICON_FK_TIMES))
+            Unpin(pin);
+         ImGui::SetItemTooltip("Remove from Quick Favorites");
+         ImGui::SameLine();
+      }
+      const auto it = m_defs.find(pin.Id());
+      if (obj == nullptr)
+         ImGui::TextDisabled("%s (object not found)", pin.prop.c_str());
+      else if (it == m_defs.end() || !it->second.draw || (kind == PinKind::Part && it->second.owner != owner))
+         ImGui::TextDisabled("%s (not available)", pin.prop.c_str());
+      else
+         it->second.draw(props, obj);
+      ImGui::PopID();
+   }
+   props.EndSection();
+   const int modified = props.GetModifiedField() != modifiedBefore ? props.GetModifiedField() : 0;
+   if (withUndo)
+   {
+      editor.m_undo.EndUndo();
+      if (modified > 0 && (editor.m_lastUndoPart != part || editor.m_lastUndoId != static_cast<unsigned int>(0x4000 | modified)))
+      {
+         editor.m_lastUndoPart = part;
+         editor.m_lastUndoId = 0x4000 | modified;
+      }
+      else
+         editor.m_undo.Discard();
+   }
+   if (modified > 0)
+   {
+      if (part != nullptr)
+      {
+         editor.m_renderer->ReinitRenderable(part->GetIRenderable());
+         editor.m_player->m_physics->Update(part);
+      }
+      if (props.WasBroadcast())
+         for (IEditable *const other : props.GetBroadcastParts())
+            editor.m_renderer->ReinitRenderable(other->GetIRenderable());
+      if (inspect)
+      {
+         // Same tracking as the panel's 'Live' tab: 'Save' copies these edits back to the startup table
+         if (kind == PinKind::Material)
+            editor.m_liveEditedMaterials.insert(static_cast<Material *>(obj));
+         else if (part != nullptr)
+            editor.m_liveEditedParts.insert(part);
+         if (props.WasBroadcast())
             for (IEditable *const other : props.GetBroadcastParts())
-               editor.m_undo.MarkForUndo(other);
-         }
-         props.SetPinOwner(owner);
-         const int modifiedBefore = props.GetModifiedField();
-         for (const PinKey &pin : pins)
-         {
-            if (pin.kind != kind || pin.name != name)
-               continue;
-            props.FlushRow(); // Below the previous row when its label wrapped
-            ImGui::PushID(pin.prop.c_str());
-            if (ImGui::SmallButton(ICON_FK_TIMES))
-               Unpin(pin);
-            ImGui::SetItemTooltip("Unpin");
-            ImGui::SameLine();
-            const auto it = m_defs.find(pin.Id());
-            if (obj == nullptr)
-               ImGui::TextDisabled("%s (object not found)", pin.prop.c_str());
-            else if (it == m_defs.end() || !it->second.draw || (kind == PinKind::Part && it->second.owner != owner))
-               ImGui::TextDisabled("%s (not available)", pin.prop.c_str());
-            else
-               it->second.draw(props, obj);
-            ImGui::PopID();
-         }
-         props.EndSection();
-         const int modified = props.GetModifiedField() != modifiedBefore ? props.GetModifiedField() : 0;
-         if (withUndo)
-         {
-            editor.m_undo.EndUndo();
-            if (modified > 0 && (editor.m_lastUndoPart != part || editor.m_lastUndoId != static_cast<unsigned int>(0x4000 | modified)))
-            {
-               editor.m_lastUndoPart = part;
-               editor.m_lastUndoId = 0x4000 | modified;
-            }
-            else
-               editor.m_undo.Discard();
-         }
-         if (modified > 0)
-         {
-            if (part != nullptr)
-            {
-               editor.m_renderer->ReinitRenderable(part->GetIRenderable());
-               editor.m_player->m_physics->Update(part);
-            }
-            if (props.WasBroadcast())
-               for (IEditable *const other : props.GetBroadcastParts())
-                  editor.m_renderer->ReinitRenderable(other->GetIRenderable());
-            if (inspect)
-            {
-               // Same tracking as the panel's 'Live' tab: 'Save' copies these edits back to the startup table
-               if (kind == PinKind::Material)
-                  editor.m_liveEditedMaterials.insert(static_cast<Material *>(obj));
-               else if (part != nullptr)
-                  editor.m_liveEditedParts.insert(part);
-               if (props.WasBroadcast())
-                  for (IEditable *const other : props.GetBroadcastParts())
-                     editor.m_liveEditedParts.insert(other);
-            }
-            else if (part == nullptr)
-               editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
-         }
-         ImGui::PopID();
+               editor.m_liveEditedParts.insert(other);
+      }
+      else if (part == nullptr)
+         editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   }
+   ImGui::PopID();
+}
+
+void PinnedPanel::RenderLookToolbar()
+{
+   const Selection &sel = m_editor.m_selection;
+   const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
+      || (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr && sel.GetMaterial()->m_type == Material::PBR);
+   ImGui::BeginDisabled(!canPinSel);
+   if (ImGui::SmallButton(ICON_FK_TINT " Add see-through set"))
+      PinSelectionSeeThrough();
+   ImGui::EndDisabled();
+   ImGui::SetItemTooltip("Add the selection's see-through set to Quick Favorites (refraction fields of the part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
+   ImGui::SameLine();
+   ImGui::BeginDisabled(m_pins.empty());
+   if (ImGui::SmallButton(ICON_FK_TRASH "##FavClear"))
+      ImGui::OpenPopup("##PinClearAll");
+   ImGui::EndDisabled();
+   ImGui::SetItemTooltip("Remove all Quick Favorites");
+   if (ImGui::BeginPopup("##PinClearAll"))
+   {
+      ImGui::Text("Remove all %d Quick Favorites?", static_cast<int>(m_pins.size()));
+      if (ImGui::Button("Remove all"))
+      {
+         ClearPins();
+         ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel"))
+         ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+   }
+   ImGui::Separator();
+}
+
+void PinnedPanel::RenderItemTab()
+{
+   // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
+   EditorUI &editor = m_editor;
+   const PropertiesPanel &properties = editor.m_properties;
+   const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
+   if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
+   {
+      ImGui::TextDisabled(editor.m_selection.GetType() == Selection::S_NONE ? "Nothing selected" : "No transform for this selection");
+      return;
+   }
+   ImGui::TextUnformatted(properties.m_curation.kind == PinKind::Table ? "Table" : properties.m_curation.name.c_str());
+   vector<PinKey> &keys = m_itemKeys;
+   keys.clear();
+   for (const Def *def : defs)
+      keys.push_back(def->key);
+   PropertyPane props(editor.m_table);
+   ApplyUnits(props);
+   props.SetPinning(this, PropertyPane::PinMode::Overlay);
+   props.SetLookSliders(true);
+   RenderObjectRows(props, properties.m_curation.kind, properties.m_curation.name, keys, false, ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows));
+}
+
+void PinnedPanel::RenderViewTab()
+{
+   EditorUI &editor = m_editor;
+   ImGui::SeparatorText("View");
+   if (ImGui::Selectable("Editor Camera", editor.m_camMode == ViewMode::EditorCam))
+   {
+      editor.m_table->SetViewSetupOverride(BG_DESKTOP);
+      editor.m_table->SetViewSetupOverride(BG_INVALID);
+      editor.m_camMode = ViewMode::EditorCam;
+   }
+   static constexpr const char *setups[] = { "Preview: Desktop", "Preview: Cabinet", "Preview: Full Single Screen" };
+   static constexpr int overrides[] = { BG_DESKTOP, BG_FULLSCREEN, BG_FSS };
+   for (int i = 0; i < 3; i++)
+   {
+      const Selection cam = Selection::Camera(i);
+      if (ImGui::Selectable(setups[i], editor.m_camMode == ViewMode::PreviewCam && editor.m_selection == cam))
+      {
+         editor.SetSelection(cam);
+         editor.m_camMode = ViewMode::PreviewCam;
+         editor.m_table->SetViewSetupOverride(static_cast<ViewSetupID>(overrides[i]));
       }
    }
+   ImGui::Checkbox("Perspective", &editor.m_perspectiveCam);
+   ImGui::SetItemTooltip("Numpad 5");
+   ImGui::Checkbox("Navigation Cube", &editor.m_showNavCube);
+   if (ImGui::Button("Frame Selected"))
+      editor.FrameSelection();
+   ImGui::SetItemTooltip("Numpad .");
+}
 
+void PinnedPanel::Render(float topBarHeight)
+{
+   EditorUI &editor = m_editor;
+   if (editor.m_table->IsLocked())
+      return;
+   SyncWithTable();
+   const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Look;
+   if (lookShown || m_quickOpen)
+      LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun
+   if (!editor.m_showSidebar)
+      return;
+
+   // N-panel: a fixed area along the viewport's right edge (left of the Properties editor), resized by its splitter
+   const float dpi = editor.m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float width = editor.m_sidebarWidth * dpi;
+   const float right = viewport->Pos.x + viewport->Size.x - (editor.m_showProperties ? editor.m_propertiesWidth * dpi : 0.f);
+   ImGui::SetNextWindowPos(ImVec2(right - width, viewport->Pos.y + topBarHeight));
+   ImGui::SetNextWindowSize(ImVec2(width, viewport->Size.y - topBarHeight));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * dpi, 4.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+   ImGui::Begin("SIDEBAR", nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
+         | ImGuiWindowFlags_NoNavFocus);
+   const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem | ImGuiHoveredFlags_AllowWhenBlockedByPopup)
+      || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
+   if (ImGui::BeginTabBar("##SidebarTabs"))
+   {
+      static constexpr const char *names[] = { "Item", "Look", "View" };
+      for (int t = 0; t < 3; t++)
+      {
+         const EditorUI::SidebarTab tab = static_cast<EditorUI::SidebarTab>(t);
+         // A tab picked from elsewhere (Q menu, search, workspace) is brought to front once
+         const bool select = m_shownTab != static_cast<int>(editor.m_sidebarTab) && editor.m_sidebarTab == tab;
+         if (ImGui::BeginTabItem(names[t], nullptr, select ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+         {
+            if (!select && m_shownTab == static_cast<int>(editor.m_sidebarTab))
+               editor.m_sidebarTab = tab; // Clicked
+            m_shownTab = static_cast<int>(editor.m_sidebarTab);
+            ImGui::BeginChild("##SidebarContent");
+            switch (tab)
+            {
+            case EditorUI::SidebarTab::Item: RenderItemTab(); break;
+            case EditorUI::SidebarTab::Look:
+               RenderLookToolbar();
+               RenderFavoriteRows(hovered);
+               break;
+            case EditorUI::SidebarTab::View: RenderViewTab(); break;
+            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+         }
+      }
+      ImGui::EndTabBar();
+   }
    ImGui::End();
-   ImGui::PopStyleVar(2);
+   ImGui::PopStyleVar(3);
+}
+
+void PinnedPanel::RenderQuickFavorites()
+{
+   // Q: Blender's Quick Favorites, here the favorite fields themselves, editable in the popup
+   EditorUI &editor = m_editor;
+   if (editor.m_openQuickFavorites)
+   {
+      editor.m_openQuickFavorites = false;
+      ImGui::OpenPopup("Quick Favorites##QuickFavorites");
+   }
+   ImGui::SetNextWindowSizeConstraints(ImVec2(320.f * editor.m_liveUI.GetDPI(), 0.f), ImVec2(420.f * editor.m_liveUI.GetDPI(), ImGui::GetMainViewport()->Size.y * 0.8f));
+   m_quickOpen = ImGui::BeginPopup("Quick Favorites##QuickFavorites");
+   if (!m_quickOpen)
+      return;
+   ImGui::TextUnformatted("Quick Favorites");
+   ImGui::Separator();
+   RenderFavoriteRows(true);
+   ImGui::EndPopup();
 }
 
 }

@@ -38,8 +38,9 @@ struct PinKey
 // Draws a pinned field with a property pane on the resolved object (Material*, PinTable* or IEditable*)
 using PinDrawFn = std::function<void(PropertyPane &, void *)>;
 
-// "Pinned" floating overlay: properties pinned from the properties panel (right click on a field), drawn with the
-// same property pane widgets and getter/setter definitions as the panel. The definitions are registered by the
+// Quick Favorites (Blender's Q menu, here favorite fields) and the N-panel sidebar (Item / Look / View) that shows them in its
+// Look tab. Favorites are added from the Properties editor (right click on a field), and drawn with the same property pane
+// widgets and getter/setter definitions as the panel. The definitions are registered by the
 // property pane when it draws a field (and cached by key); for objects never shown in the panel this session (pins
 // loaded with the table, quick sets), they are harvested by running the object's pane in a hidden window.
 class PinnedPanel
@@ -48,11 +49,8 @@ public:
    explicit PinnedPanel(EditorUI &editor);
    ~PinnedPanel();
 
-   void Render(float topBarHeight);
-
-   bool IsVisible() const { return m_visible; }
-   void SetVisible(bool visible) { m_visible = visible; }
-   void ToggleVisible() { m_visible = !m_visible; }
+   void Render(float topBarHeight); // The N-panel sidebar, when shown
+   void RenderQuickFavorites(); // The Q popup, when opened
 
    bool IsPinned(const PinKey &key) const;
    void Pin(const PinKey &key);
@@ -101,15 +99,21 @@ public:
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;
 
-   // Workspaces: Layout, Look-dev and Wiring presets of the panels (outliner, properties, pinned overlay and its side) with their
-   // own pin set, saved with the table ("editor_workspaces" in table.json, beside "editor_pins" which stays the current pin list)
+   // Workspaces (Blender's top bar tabs): Layout, Look-dev and Wiring presets of the areas (outliner, properties, N-panel and its
+   // tab, area widths, outliner display mode and type filter) with their own Quick Favorites, saved with the table
+   // ("editor_workspaces" in table.json, beside "editor_pins" which stays the current favorites list)
    struct Workspace
    {
       string name;
       bool outliner = true;
       bool properties = true;
-      bool pinned = false;
-      bool overlayLeft = false;
+      bool sidebar = false;
+      int sidebarTab = 0; // EditorUI::SidebarTab
+      float outlinerWidth = 0.f; // 0: keep the current width
+      float propertiesWidth = 0.f;
+      float sidebarWidth = 0.f;
+      int outlinerMode = -1; // -1: keep the current one
+      int64_t outlinerTypes = -1;
       vector<PinKey> pins;
    };
    static constexpr int WorkspaceCount = 3;
@@ -130,7 +134,12 @@ private:
    void *Resolve(PinKind kind, const string &name, const void **owner) const;
    bool Harvest(PinKind kind, const string &name);
    void ProcessGroupRequests();
-   void RenderHeader();
+   void LoadFavoriteDefs();
+   void RenderFavoriteRows(bool hovered);
+   void RenderObjectRows(PropertyPane &props, PinKind kind, const string &name, const vector<PinKey> &keys, bool removable, bool hovered);
+   void RenderLookToolbar();
+   void RenderItemTab();
+   void RenderViewTab();
    void ApplyUnits(PropertyPane &props) const;
    void PinSelectionSeeThrough();
    void ResetWorkspaces();
@@ -138,9 +147,10 @@ private:
    void LoadWorkspaces(const string &json);
 
    EditorUI &m_editor;
-   bool m_visible = false;
-   bool m_collapsed = false;
-   bool m_hovered = false;
+   vector<std::pair<PinKind, string>> m_objects; // Objects of the favorites, in order of first appearance
+   vector<PinKey> m_itemKeys;
+   int m_shownTab = -1; // Sidebar tab shown last frame
+   bool m_quickOpen = false; // Q popup open
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()
    vector<GroupRequest> m_groupRequests; // Quick set requests, applied once the object's definitions are known
@@ -152,7 +162,6 @@ private:
    const PinTable *m_sourceTable = nullptr; // Base table the pin list was loaded from
    std::array<Workspace, WorkspaceCount> m_workspaces;
    int m_activeWorkspace = -1; // None until one is picked or the table has saved workspaces (the table data stays untouched until then)
-   bool m_placeOverlay = false; // Move the overlay to the active workspace's side on next render
 };
 
 }

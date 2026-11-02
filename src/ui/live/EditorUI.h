@@ -359,6 +359,7 @@ private:
    bool m_showSidebar = false;
    SidebarTab m_sidebarTab = SidebarTab::Item;
    void ToggleSidebar(); // N
+   void RenderSplitters();
    void ShowSidebar(SidebarTab tab);
    void OpenQuickFavorites() { m_openQuickFavorites = true; } // Q: popup of the Quick Favorites at the mouse
    bool m_openQuickFavorites = false;

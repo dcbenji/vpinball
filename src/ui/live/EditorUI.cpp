@@ -572,6 +572,44 @@ void EditorUI::SetBackdropCamera()
 
 void EditorUI::ToggleSidebar() { m_showSidebar = !m_showSidebar; }
 
+void EditorUI::RenderSplitters()
+{
+   // Draggable borders between the fixed areas (Blender's area splitters): outliner | viewport + N-panel | properties
+   if (m_table->IsLocked())
+      return;
+   const float dpi = m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float top = viewport->Pos.y + m_chrome.GetTopBarHeight();
+   const float height = viewport->Size.y - m_chrome.GetTopBarHeight();
+   const float grab = 6.f * dpi;
+   const auto splitter = [&](const char *id, float x, float &width, float sign)
+   {
+      ImGui::SetNextWindowPos(ImVec2(x - grab * 0.5f, top));
+      ImGui::SetNextWindowSize(ImVec2(grab, height));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+      ImGui::Begin(id, nullptr,
+         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+            | ImGuiWindowFlags_NoNav);
+      ImGui::InvisibleButton("##grab", ImVec2(grab, height));
+      if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+      {
+         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+         ImGui::GetWindowDrawList()->AddLine(ImVec2(x, top), ImVec2(x, top + height), ImGui::GetColorU32(ImGuiCol_SeparatorHovered), 2.f);
+      }
+      if (ImGui::IsItemActive())
+         width = clamp(width + sign * ImGui::GetIO().MouseDelta.x / dpi, 140.f, 0.45f * viewport->Size.x / dpi);
+      ImGui::End();
+      ImGui::PopStyleVar();
+   };
+   if (m_showOutliner)
+      splitter("##SplitOutliner", viewport->Pos.x + m_outlinerWidth * dpi, m_outlinerWidth, 1.f);
+   const float propertiesX = viewport->Pos.x + viewport->Size.x - (m_showProperties ? m_propertiesWidth * dpi : 0.f);
+   if (m_showProperties)
+      splitter("##SplitProperties", propertiesX, m_propertiesWidth, -1.f);
+   if (m_showSidebar)
+      splitter("##SplitSidebar", propertiesX - m_sidebarWidth * dpi, m_sidebarWidth, -1.f);
+}
+
 void EditorUI::ShowSidebar(SidebarTab tab)
 {
    m_showSidebar = true;
@@ -622,7 +660,8 @@ Vertex2D EditorUI::GetUIVisibleFraction() const
    // Otherwise, the top chrome (and the side panes, unless the table is locked) are drawn over the render:
    // evaluate the remaining visible fraction, applied as a symmetric margin so that fitted content stays centered
    const ImGuiIO &io = ImGui::GetIO();
-   const float marginX = m_table->IsLocked() ? 0.f : max(OutlinerPanel::PaneWidth, PropertiesPanel::PaneWidth) * m_liveUI.GetDPI();
+   const float rightWidth = (m_showProperties ? m_propertiesWidth : 0.f) + (m_showSidebar ? m_sidebarWidth : 0.f);
+   const float marginX = m_table->IsLocked() ? 0.f : max(m_showOutliner ? m_outlinerWidth : 0.f, rightWidth) * m_liveUI.GetDPI();
    const float marginY = m_chrome.GetTopBarHeight();
    return Vertex2D(max(0.1f, 1.f - 2.f * marginX / io.DisplaySize.x), max(0.1f, 1.f - 2.f * marginY / io.DisplaySize.y));
 }
@@ -748,7 +787,12 @@ void EditorUI::RenderUI()
          m_properties.Render(m_chrome.GetTopBarHeight());
    }
    if (!m_inspectionModal.IsVisible())
-      m_pinned.Render(m_chrome.GetTopBarHeight());
+      m_pinned.Render(m_chrome.GetTopBarHeight()); // N-panel
+   if (showFullUI)
+   {
+      m_pinned.RenderQuickFavorites(); // Q
+      RenderSplitters();
+   }
    if (showFullUI)
       m_palette.Render();
    m_inspectionModal.Render();
@@ -1273,7 +1317,7 @@ void EditorUI::RenderUI()
    // Search to field palette (Cmd+K on macOS, where ImGui maps Cmd to Ctrl)
    const bool panelsShown = !m_inspectionModal.IsVisible() && !m_flyMode; // The palette and workspaces need the editor panels
    // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
-   if (panelsShown && ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   if (panelsShown && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
       m_palette.Toggle();
    // Outliner filter (shows the outliner if a workspace hid it)
    if (panelsShown && !m_table->IsLocked() && (!io.WantTextInput || !m_palette.IsOpen()) && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -1340,10 +1384,10 @@ void EditorUI::RenderUI()
          else
             EnterPointEditMode();
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_P, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
-      {
-         m_pinned.ToggleVisible(); // Pinned properties overlay
-      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_N, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         ToggleSidebar(); // Blender's N-panel
+      else if (ImGui::IsKeyPressed(ImGuiKey_Q, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         OpenQuickFavorites(); // Blender's Quick Favorites
       else if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl)
       {
          m_flyMode = !m_flyMode;
@@ -2344,7 +2388,7 @@ void EditorUI::RenderNavCube()
    ImGuiIO &io = ImGui::GetIO();
    const float dpi = m_liveUI.GetDPI();
    const float size = 128.f * dpi;
-   const ImVec2 pos(io.DisplaySize.x - PropertiesPanel::PaneWidth * dpi - size - 16.f * dpi, m_chrome.GetTopBarHeight() + 8.f * dpi);
+   const ImVec2 pos(io.DisplaySize.x - ((m_showProperties ? m_propertiesWidth : 0.f) + (m_showSidebar ? m_sidebarWidth : 0.f)) * dpi - size - 16.f * dpi, m_chrome.GetTopBarHeight() + 8.f * dpi);
 
    // The cube is computed in a right handed, Y up world, while the editor world is X right, Y down the table, Z down (height is -Z):
    // R (row vector convention) maps editor Z (down) to -Y and editor Y to Z, a pure rotation about X. viewG = R^-1 * viewV, viewV = R * viewG

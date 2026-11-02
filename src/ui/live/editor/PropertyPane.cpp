@@ -56,8 +56,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    const ImGuiStyle& style = ImGui::GetStyle();
    const float xSpacing = style.ItemSpacing.x;
    const float xWidth = ImGui::GetContentRegionAvail().x * 0.5f - m_syncWidth;
-   // The panel keeps room for the hover pin toggle at the left of the label column
-   const float pinWidth = m_pinMode == PinMode::Panel ? ImGui::GetFontSize() + xSpacing * 0.5f : 0.f;
+   const float pinWidth = 0.f;
    const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
 
    const char* const text = label.c_str();
@@ -284,60 +283,37 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          window->DrawList->AddRectFilled(m_rowMin, rowMax, ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, 0.35f * alpha)), 2.f);
       }
    }
-   // Panel: a pin toggle at the left of the row, shown on hover (always when pinned)
-   if (m_pinMode == PinMode::Panel)
-   {
-      const bool pinned = m_pins->IsPinned(key);
-      if (pinned || rowHovered)
-      {
-         const float size = ImGui::GetFontSize();
-         const ImVec2 iconMin(m_rowMin.x, m_rowMin.y + ImGui::GetStyle().FramePadding.y);
-         const bool iconHovered = rowHovered && ImGui::IsMouseHoveringRect(iconMin, ImVec2(iconMin.x + size, iconMin.y + size), false);
-         window->DrawList->AddText(iconMin, ImGui::GetColorU32(pinned ? ImGuiCol_CheckMark : iconHovered ? ImGuiCol_Text : ImGuiCol_TextDisabled), ICON_FK_THUMB_TACK);
-         if (iconHovered)
-         {
-            ImGui::SetTooltip(pinned ? "Unpin from overlay" : "Pin to overlay");
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            {
-               if (pinned)
-                  m_pins->Unpin(key);
-               else
-                  m_pins->Pin(key);
-            }
-         }
-      }
-   }
    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && rowHovered)
       ImGui::OpenPopup("##PinMenu");
    if (!ImGui::BeginPopup("##PinMenu"))
       return;
    if (m_pins->IsPinned(key))
    {
-      if (ImGui::MenuItem(ICON_FK_THUMB_TACK " Unpin from overlay"))
+      if (ImGui::MenuItem(ICON_FK_STAR " Remove from Quick Favorites"))
          m_pins->Unpin(key);
    }
-   else if (ImGui::MenuItem(ICON_FK_THUMB_TACK " Pin to overlay"))
+   else if (ImGui::MenuItem(ICON_FK_STAR " Add to Quick Favorites"))
       m_pins->Pin(key);
    if (part != nullptr && m_pins->HasSeeThroughSet(part))
    {
-      if (ImGui::MenuItem("Pin see-through set"))
+      if (ImGui::MenuItem("Add see-through set to Quick Favorites"))
          m_pins->PinSeeThroughSet(part);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Pin the refraction fields of this part and the See-Through Surface fields of its material");
+         ImGui::SetTooltip("Add the refraction fields of this part and the See-Through Surface fields of its material");
    }
    if (part != nullptr && m_pins->HasBulbSet(part))
    {
-      if (ImGui::MenuItem("Pin bulb set"))
+      if (ImGui::MenuItem("Add bulb set to Quick Favorites"))
          m_pins->PinBulbSet(part);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Pin the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset, apply to all)");
+         ImGui::SetTooltip("Add the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset, apply to all)");
    }
    if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == Material::PBR)
    {
-      if (ImGui::MenuItem("Pin see-through set"))
+      if (ImGui::MenuItem("Add see-through set to Quick Favorites"))
          m_pins->PinMaterialSeeThrough(material->m_name);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Pin the See-Through Surface fields of this material");
+         ImGui::SetTooltip("Add the See-Through Surface fields of this material");
    }
    ImGui::EndPopup();
 }
