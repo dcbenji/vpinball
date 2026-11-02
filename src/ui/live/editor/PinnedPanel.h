@@ -102,7 +102,13 @@ public:
    // field of a compatible part type), as one undo step. Not available in inspection sessions
    bool CanCopyToSelected(const PinKey &key) const;
    bool CopyToSelected(const PinKey &key); // Queues the copy (the menu is drawn inside the panels' undo records)
-   void FlushPendingCopy(); // Runs the queued copy, as one undo step: to be called outside of any undo record (after the areas are rendered)
+   void FlushPendingCopy(); // Runs the queued copy (and bulb apply), as one undo step: to be called outside of any undo record (after the areas are rendered)
+   // "Apply to all traced inserts" button: queues the copy of the traced insert's bulb values to the other traced inserts (run by FlushPendingCopy)
+   void RequestApplyBulb(IEditable *source, bool startup)
+   {
+      m_bulbSource = source;
+      m_bulbStartup = startup;
+   }
    // Alt apply-to-all: a part field was just changed through its pane, copy its new value to the other selected parts. Only acts while armed by the
    // caller, which has begun an undo record and marked all selected parts in it (a snapshot is taken before the pane changes the field)
    void ArmApplyToSelected(bool armed) { m_applyArmed = armed; }
@@ -112,7 +118,7 @@ public:
    bool HasSeeThroughSet(const IEditable *part) const;
    void PinSeeThroughSet(const IEditable *part);
    void PinMaterialSeeThrough(const string &materialName);
-   // "Bulb set": the Traced Insert Bulb fields (sliders and the apply-to-all toggle) of a traced insert; also part of its see-through set
+   // "Bulb set": the Traced Insert Bulb fields (sliders) of a traced insert; also part of its see-through set
    bool HasBulbSet(const IEditable *part) const;
    void PinBulbSet(const IEditable *part);
 
@@ -174,6 +180,9 @@ private:
    bool m_escPending = false;
    PinKey m_pendingCopy;
    bool m_hasPendingCopy = false;
+   void ApplyBulbToAllTraced(Primitive *source, bool startup);
+   bool m_bulbStartup = false; // The pane showed the startup table (inspection Startup tab): the values go to the startup inserts
+   IEditable *m_bulbSource = nullptr; // Traced insert whose bulb values are to be applied to all the others
    uint64_t m_editRecordId = 0; // Undo record kept for the field edit in progress (see TopRecordId)
    unsigned int m_prevActiveId = 0;
    bool m_applyArmed = false; // ApplyToSelected may act (see ArmApplyToSelected)

@@ -1,0 +1,120 @@
+// license:GPLv3+
+
+#include "core/stdafx.h"
+#include "CameraPreviewPanel.h"
+
+#include "IconsLucide.h"
+#include "renderer/Renderer.h"
+#include "renderer/RenderTarget.h"
+#include "ui/live/EditorUI.h"
+#include "ui/live/LiveUI.h"
+
+namespace VPX::EditorUI
+{
+
+CameraPreviewPanel::CameraPreviewPanel(EditorUI &editor)
+   : m_editor(editor)
+{
+}
+
+void CameraPreviewPanel::NotHosted()
+{
+   if (!m_requested)
+      return;
+   m_requested = false;
+   m_refresh = true;
+   m_width = m_height = 0;
+   m_pendingWidth = m_pendingHeight = m_pendingFrames = 0;
+   if (m_editor.m_renderer)
+      m_editor.m_renderer->ReleaseEditorPreview();
+}
+
+void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
+{
+   m_frame++;
+   if (m_editor.BeginAreaWindow("CAMERAPREVIEW", pos, size))
+   {
+      // Header: editor type button, title, Live toggle and Refresh
+      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::CameraPreview);
+      ImGui::SameLine();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextDisabled("Camera Preview");
+      ImGui::SameLine();
+      ImGui::Checkbox("Live", &m_live);
+      ImGui::SetItemTooltip("Render the player view continuously (every 2nd frame). Off: only after a change.");
+      ImGui::SameLine();
+      if (ImGui::Button(ICON_LC_REFRESH_CW "##CameraPreviewRefresh"))
+         m_refresh = true;
+      ImGui::SetItemTooltip("Refresh");
+      if (m_width > 0)
+      {
+         ImGui::SameLine();
+         ImGui::TextDisabled("%dx%d", m_width, m_height);
+      }
+      ImGui::Separator();
+
+      // Letterboxed at the main window's aspect: the framing the player view has on the playfield window
+      const ImGuiIO &io = ImGui::GetIO();
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      const float aspect = (io.DisplaySize.y > 0.f) ? io.DisplaySize.x / io.DisplaySize.y : 16.f / 9.f;
+      float imgW = avail.x, imgH = avail.x / aspect;
+      if (imgH > avail.y)
+      {
+         imgH = avail.y;
+         imgW = imgH * aspect;
+      }
+      if (imgW >= 8.f && imgH >= 8.f)
+      {
+         // Render size: the image size in framebuffer pixels, capped
+         int w = static_cast<int>(roundf(imgW * io.DisplayFramebufferScale.x));
+         int h = static_cast<int>(roundf(imgH * io.DisplayFramebufferScale.y));
+         if (w > kMaxWidth)
+         {
+            h = static_cast<int>(roundf(static_cast<float>(h) * static_cast<float>(kMaxWidth) / static_cast<float>(w)));
+            w = kMaxWidth;
+         }
+         if (w != m_pendingWidth || h != m_pendingHeight)
+         {
+            m_pendingWidth = w;
+            m_pendingHeight = h;
+            m_pendingFrames = 0;
+         }
+         else
+            m_pendingFrames++;
+         if ((m_pendingWidth != m_width || m_pendingHeight != m_height) && (m_width == 0 || m_pendingFrames >= kStableFrames))
+         {
+            m_width = m_pendingWidth;
+            m_height = m_pendingHeight;
+            m_refresh = true;
+         }
+
+         // Re-render on changes: any new undo step (part edits, view setup edits), and at half rate while something is being dragged
+         const uint64_t undoId = m_editor.m_undo.TopRecordId();
+         if (undoId != m_lastUndoId)
+         {
+            m_lastUndoId = undoId;
+            m_refresh = true;
+         }
+         // An interactive edit (gizmo drag, G/R/S modal transform, field drag; not a focused text field) keeps one undo record from its start: render while it runs, and once when it ends
+         const bool dragging = ImGuizmo::IsUsingAny() || m_editor.m_modal.active || (ImGui::IsAnyItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left));
+         if (m_wasDragging && !dragging)
+            m_refresh = true;
+         m_wasDragging = dragging;
+         if (m_refresh || ((m_live || dragging) && (m_frame & 1u) == 0))
+         {
+            m_editor.m_renderer->RequestEditorPreview(m_width, m_height);
+            m_requested = true;
+            m_refresh = false;
+         }
+
+         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (avail.x - imgW) * 0.5f, ImGui::GetCursorPosY() + (avail.y - imgH) * 0.5f));
+         if (RenderTarget *const rt = m_editor.m_renderer->GetEditorPreview(); rt != nullptr)
+            ImGui::Image(rt->GetColorSampler(), ImVec2(imgW, imgH));
+         else
+            ImGui::Dummy(ImVec2(imgW, imgH));
+      }
+   }
+   m_editor.EndAreaWindow();
+}
+
+}

@@ -325,7 +325,6 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 
       // Traced insert (an additive card with a TRACED_ image): the lit insert's hot spot over the bulb, parallaxing with the view
       props.Separator("Traced Insert Bulb"s);
-      props.BroadcastFields(true); // The bulb sliders also write to every other traced insert while "Apply to all traced inserts" is on
       props.SliderFloat<Primitive>(
          m_part, "Bulb Depth (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbDepth; }, //
@@ -354,10 +353,8 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Bulb Offset Y (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbOffsetY; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetY = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's Y");
-      props.BroadcastFields(false);
-      props.SessionToggle<Primitive>(
-         m_part, "Apply to all traced inserts"s, PropertyPane::s_applyBulbToAll,
-         "While on, changing a bulb slider here (or in the Pinned overlay) sets the same value on every other traced insert of the table. Session setting, not saved");
+      if (!props.IsSkippingRest() && props.GetEditedPart<Primitive>(m_part)->IsTracedInsert())
+         props.ApplyBulbToAllButton(m_part);
 
       props.Separator("Flasher Dome"s);
       props.SliderFloat<Primitive>(

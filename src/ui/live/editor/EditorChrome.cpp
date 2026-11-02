@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "EditorChrome.h"
+#include "SetOrigin.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 
@@ -191,6 +192,19 @@ void EditorChrome::RenderMenuBar()
             editor.ClearSelection();
          if (ImGui::MenuItem("Invert Selection", "Ctrl+I", false, editor.CanSelect()))
             editor.InvertSelection();
+         ImGui::EndMenu();
+      }
+      if (!editor.IsInspectMode() && ImGui::BeginMenu("Object"))
+      {
+         if (ImGui::BeginMenu("Set Origin"))
+         {
+            const bool canSetOrigin = SetOrigin::CanApply(editor);
+            if (ImGui::MenuItem("Origin to Geometry", nullptr, false, canSetOrigin))
+               SetOrigin::Apply(editor, SetOrigin::Mode::Geometry);
+            if (ImGui::MenuItem("Origin to Geometry Bottom", nullptr, false, canSetOrigin))
+               SetOrigin::Apply(editor, SetOrigin::Mode::GeometryBottom);
+            ImGui::EndMenu();
+         }
          ImGui::EndMenu();
       }
       if (!editor.IsInspectMode() && ImGui::BeginMenu("Tools"))

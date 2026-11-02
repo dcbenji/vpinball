@@ -121,6 +121,13 @@ public:
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
    void Render3DScene(); // Records the passes of a full frame rendering the 3D scene to the output backbuffer
+
+   // Live editor camera preview: the table's player view rendered into an offscreen target shown by an editor area.
+   // A request made while recording the UI of frame N is rendered by the Render3DScene of frame N+1, before its UI
+   // pass, so the UI of frame N+1 samples a finished target. Nothing is rendered (and nothing costs) without a request.
+   void RequestEditorPreview(int width, int height);
+   RenderTarget* GetEditorPreview() const { return m_editorPreviewRendered ? m_editorPreviewRT : nullptr; } // Last rendered preview, null before the first one
+   void ReleaseEditorPreview(); // Releases the preview targets (the area was closed), recreated on the next request
    void RenderUIScene(); // Records a frame containing only the LiveUI (used while the initial table content is being loaded)
 
    enum ColorSpace
@@ -463,7 +470,15 @@ private:
    // in/out to avoid interfering with the VR render targets
    void RenderDesktopScene(RenderTarget* outputRT);
    void SwapDesktopTargets();
-   bool m_desktopScenePass = false; // True while recording the scene render passes for the desktop display
+   bool m_desktopScenePass = false; // True while recording the scene render passes for the desktop display (VR desktop mirror or editor camera preview)
+   // Editor camera preview (see RequestEditorPreview): reuses the desktop display targets, never in VR
+   void RenderEditorPreview();
+   void ReleaseSwappedInSceneTargets(); // Deferred release of the scene targets currently swapped in (lazily recreated)
+   bool m_editorPreviewPass = false; // True while recording the editor camera preview (renders as the player view, not the editor view)
+   bool m_editorPreviewRequested = false;
+   bool m_editorPreviewRendered = false;
+   int m_editorPreviewWidth = 0, m_editorPreviewHeight = 0;
+   RenderTarget* m_editorPreviewRT = nullptr;
    int m_desktopRenderWidth = 0, m_desktopRenderHeight = 0;
    RenderTarget* m_desktopMSAABackBuffer = nullptr;
    RenderTarget* m_desktopBackBuffer1 = nullptr;

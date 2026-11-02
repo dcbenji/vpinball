@@ -83,6 +83,16 @@ static bool Listed(std::initializer_list<const char *> list, const string &value
    return std::ranges::any_of(list, [&value](const char *item) { return value == item; });
 }
 
+// The "Apply to all traced inserts" button at the end of the Look of a traced insert (the full sheet has it under the bulb fields)
+static void DrawApplyBulbButton(PropertyPane &props, PinKind kind, void *obj)
+{
+   if (kind != PinKind::Part || props.IsMultiEdit() || obj == nullptr)
+      return;
+   IEditable *const part = static_cast<IEditable *>(obj);
+   if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsTracedInsert())
+      props.ApplyBulbToAllButton(part);
+}
+
 string PropertiesPanel::PartMaterial(const IEditable *part)
 {
    switch (part->GetItemType())
@@ -285,6 +295,8 @@ void PropertiesPanel::DrawTabContent(PropertyPane &props)
          for (const PinnedPanel::Def *def : defs)
             def->draw(props, m_curation.obj);
          props.SetLookSliders(false);
+         if (m_tab == Tab::Look)
+            DrawApplyBulbButton(props, m_curation.kind, m_curation.obj);
          props.EndSection();
       }
       ImGui::PopID();
@@ -402,6 +414,7 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    if (!cur.look.empty() && props.BeginSection("Look"s))
    {
       drawDefs(cur.look);
+      DrawApplyBulbButton(props, cur.kind, cur.obj);
       props.EndSection();
    }
    if (!cur.transform.empty() && props.BeginSection("Transform"s))
@@ -782,9 +795,6 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             coParts.push_back(part->GetEditable());
       props.SetCoEditedParts(coParts);
    }
-   // "Apply to all traced inserts": the bulb sliders of a traced insert also write to the other traced inserts
-   if (editor.m_selection.GetType() == Selection::S_EDITABLE)
-      props.ArmBulbBroadcast(editor.m_selection.GetPart()->GetEditable());
    if (editor.IsInspectMode() && editor.m_selection.GetType() != Selection::S_IMAGE
       && editor.m_selection.GetType() != Selection::S_SOUND) // Images & sounds are shared between live and startup instance, so they do not have 2 states
    {
@@ -828,9 +838,6 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                            editor.m_liveEditedParts.insert(part->GetEditable());
                      else
                         editor.m_liveEditedParts.insert(editor.m_selection.GetPart()->GetEditable());
-                     if (props.WasBroadcast())
-                        for (IEditable *const part : props.GetBroadcastParts())
-                           editor.m_liveEditedParts.insert(part);
                   }
                }
                ImGui::EndTabItem();
@@ -865,10 +872,6 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
                editor.m_undo.MarkForUndo(part->GetEditable());
          editor.m_pinned.ArmApplyToSelected(altApply);
-         // Apply-to-all parts are snapshotted before the pane changes them, only while interacting (a snapshot per part per frame)
-         if (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive())
-            for (IEditable *const part : props.GetBroadcastParts())
-               editor.m_undo.MarkForUndo(part);
          // The playfield mesh pane edits table fields, which the primitive's undo state does not hold
          if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
          {
@@ -1011,10 +1014,6 @@ void PropertiesPanel::RefreshEditedParts(PropertyPane &props)
          refresh(part);
    else
       refresh(editor.m_selection.GetPart());
-   // Apply-to-all parts changed by a broadcast field (read at draw time, so no physics update)
-   if (props.WasBroadcast())
-      for (IEditable *const part : props.GetBroadcastParts())
-         editor.m_renderer->ReinitRenderable(part->GetIRenderable());
 }
 
 void PropertiesPanel::TableProperties(PropertyPane &props)

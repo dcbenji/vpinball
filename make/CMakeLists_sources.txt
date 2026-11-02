@@ -337,6 +337,8 @@ set(VPX_SOURCES
    src/ui/live/editor/OutlinerPanel.cpp
    src/ui/live/editor/PartLibraryPanel.h
    src/ui/live/editor/PartLibraryPanel.cpp
+   src/ui/live/editor/CameraPreviewPanel.h
+   src/ui/live/editor/CameraPreviewPanel.cpp
    src/ui/live/editor/PinnedPanel.h
    src/ui/live/editor/PinnedPanel.cpp
    src/ui/live/editor/SearchPalette.h
@@ -358,6 +360,8 @@ set(VPX_SOURCES
    src/ui/live/editor/RampUIPart.cpp
    src/ui/live/editor/ConvertToPBRModal.h
    src/ui/live/editor/ConvertToPBRModal.cpp
+   src/ui/live/editor/SetOrigin.h
+   src/ui/live/editor/SetOrigin.cpp
    src/ui/live/editor/RendererInspectionModal.h
    src/ui/live/editor/RendererInspectionModal.cpp
    src/ui/live/editor/ResURIPicker.h

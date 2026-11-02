@@ -171,8 +171,74 @@ bool PinnedPanel::CopyToSelected(const PinKey &key)
    return true;
 }
 
+void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
+{
+   EditorUI &editor = m_editor;
+   vector<Primitive *> targets;
+   for (IEditable *const other : editor.m_table->GetParts())
+      if (other != source && IsTracedInsert(other))
+         targets.push_back(static_cast<Primitive *>(other));
+   if (startup) // The pane showed the startup table: the startup counterparts are the ones to read and write (what 'Save' writes to disk)
+   {
+      source = static_cast<Primitive *>(editor.m_table->GetStartupFromLive<IEditable>(source));
+      for (Primitive *&target : targets)
+         target = static_cast<Primitive *>(editor.m_table->GetStartupFromLive<IEditable>(target));
+      std::erase(targets, nullptr);
+      if (source == nullptr)
+         return;
+   }
+   if (targets.empty())
+   {
+      editor.m_liveUI.PushNotification("No other traced inserts in this table"s, 2500);
+      return;
+   }
+   const bool inspect = editor.IsInspectMode() || startup; // Inspection edits are not undoable: they are tracked for 'Save' like the other live edits
+   if (!inspect)
+   {
+      editor.m_undo.BeginUndo();
+      for (Primitive *const target : targets)
+         editor.m_undo.MarkForUndo(target);
+   }
+   for (Primitive *const target : targets)
+   {
+      target->m_d.m_bulbDepth = source->m_d.m_bulbDepth;
+      target->m_d.m_bulbScale = source->m_d.m_bulbScale;
+      target->m_d.m_bulbBrightness = source->m_d.m_bulbBrightness;
+      target->m_d.m_bulbStretchX = source->m_d.m_bulbStretchX;
+      target->m_d.m_bulbStretchY = source->m_d.m_bulbStretchY;
+      target->m_d.m_bulbOffsetX = source->m_d.m_bulbOffsetX;
+      target->m_d.m_bulbOffsetY = source->m_d.m_bulbOffsetY;
+   }
+   const string label = "Apply bulb to " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s);
+   if (!inspect)
+   {
+      editor.m_undo.SetLabel(label);
+      editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
+      editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
+      editor.m_lastUndoId = 0;
+   }
+   for (Primitive *const target : targets)
+   {
+      if (startup)
+         continue; // Startup objects are not rendered
+      editor.m_renderer->ReinitRenderable(target->GetIRenderable()); // Read at draw time, so no physics update
+      if (inspect)
+         editor.m_liveEditedParts.insert(target);
+   }
+   editor.m_liveUI.PushNotification(label, 2500);
+}
+
 void PinnedPanel::FlushPendingCopy()
 {
+   // Undo / redo steps of materials deleted since (not undoable) are skipped, never applied to a material that reuses the name or address
+   if (const int skipped = MaterialEditUndo::ConsumeSkipped(); skipped > 0)
+      m_editor.m_liveUI.PushNotification(skipped == 1 ? "Undo/redo skipped: the material was deleted"s : "Undo/redo skipped for " + std::to_string(skipped) + " deleted materials", 3500);
+   if (m_bulbSource != nullptr)
+   {
+      IEditable *const source = m_bulbSource;
+      m_bulbSource = nullptr;
+      ApplyBulbToAllTraced(static_cast<Primitive *>(source), m_bulbStartup);
+   }
    if (!m_hasPendingCopy)
       return;
    m_hasPendingCopy = false;
@@ -405,6 +471,9 @@ void PinnedPanel::ApplyWorkspace(int index)
    editor.SetAreaLayout(m_workspaces[index].layout); // A copy: the workspace keeps its own tree until it is captured again
 }
 
+// Favorites of fields that no longer exist: the "Apply to all traced inserts" session toggle became a button on 11-02
+static bool IsRetiredPin(const string &prop) { return prop == "Apply to all traced inserts"; }
+
 void PinnedPanel::LoadWorkspaces(const string &json)
 {
    ResetWorkspaces();
@@ -450,8 +519,9 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                }
                // Legacy keys that only say "outliner and properties shown", with no widths or editor types, are the untouched pre-tree default: the
                // workspace keeps its current default tree (Wiring's script beside the Properties editor)
-               const bool legacyDefault = !haveLayout && entry.value("outliner", true) && entry.value("properties", true) && !entry.contains("outliner_width")
-                  && !entry.contains("properties_width") && !entry.contains("left_editor") && !entry.contains("right_editor");
+               // (builds before 11-02 also wrote widths 0 and the default editor types for a workspace never visited)
+               const bool legacyDefault = !haveLayout && entry.value("outliner", true) && entry.value("properties", true) && entry.value("outliner_width", 0.f) <= 0.f
+                  && entry.value("properties_width", 0.f) <= 0.f && entry.value("left_editor", 0) == 0 && entry.value("right_editor", 1) == 1;
                if (!haveLayout && !legacyDefault)
                {
                   bool outliner = true, properties = true;
@@ -477,7 +547,7 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                         continue;
                      key.name = pin.value("name", ""s);
                      key.prop = pin.value("prop", ""s);
-                     if (!key.prop.empty() && std::ranges::find(ws.pins, key) == ws.pins.end())
+                     if (!key.prop.empty() && !IsRetiredPin(key.prop) && std::ranges::find(ws.pins, key) == ws.pins.end())
                         ws.pins.push_back(key);
                   }
                if (name == active)
@@ -516,7 +586,7 @@ void PinnedPanel::SyncWithTable()
    for (const PinTable::EditorPin &pin : base->m_editorPins)
    {
       PinKey key;
-      if (!PinKindFromName(pin.kind, key.kind) || pin.prop.empty())
+      if (!PinKindFromName(pin.kind, key.kind) || pin.prop.empty() || IsRetiredPin(pin.prop))
          continue;
       key.name = pin.name;
       key.prop = pin.prop;
@@ -730,8 +800,6 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       return;
    }
    IEditable *const part = (kind == PinKind::Part && obj != nullptr) ? static_cast<IEditable *>(obj) : nullptr;
-   // "Apply to all traced inserts": the pinned bulb sliders of a traced insert also write to the other traced inserts
-   props.ArmBulbBroadcast(part);
    // Undo of part edits outside of an inspection session, recorded like the properties panel (only while interacting, as it snapshots the part)
    const bool withUndo = part != nullptr && !inspect && hovered;
    // Alt held while editing: the fields also write to the other selected parts, which are snapshotted with the edited one
@@ -740,8 +808,6 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
    {
       editor.m_undo.BeginUndo();
       editor.m_undo.MarkForUndo(part);
-      for (IEditable *const other : props.GetBroadcastParts())
-         editor.m_undo.MarkForUndo(other);
       if (altApply)
          for (const std::shared_ptr<EditorUIPart> &selected : editor.m_multiSel)
             editor.m_undo.MarkForUndo(selected->GetEditable());
@@ -851,9 +917,6 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
          editor.m_renderer->ReinitRenderable(part->GetIRenderable());
          editor.m_player->m_physics->Update(part);
       }
-      if (props.WasBroadcast())
-         for (IEditable *const other : props.GetBroadcastParts())
-            editor.m_renderer->ReinitRenderable(other->GetIRenderable());
       if (inspect)
       {
          // Same tracking as the panel's 'Live' tab: 'Save' copies these edits back to the startup table
@@ -861,9 +924,6 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
             editor.m_liveEditedMaterials.insert(static_cast<Material *>(obj));
          else if (part != nullptr)
             editor.m_liveEditedParts.insert(part);
-         if (props.WasBroadcast())
-            for (IEditable *const other : props.GetBroadcastParts())
-               editor.m_liveEditedParts.insert(other);
       }
       else if (part == nullptr && kind != PinKind::Material) // Material edits are undo steps, which mark the table dirty
          editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
