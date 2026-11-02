@@ -388,6 +388,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Primitive* primitive, float v) { primitive->m_d.m_domePeak = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
          "At full power the lit body and the top go white-hot like a real flash (0 = stays red at the peak); also a hot spot in the middle of the cap");
       props.SliderFloat<Primitive>(
+         m_part, "Dome Flash Boost"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeBoost; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeBoost = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
+         "Gain on the lamp level the dome sees: a flash the game drives below full (short pulses) reads hotter; the lamp's own light on the table is unchanged (1 = as is)");
+      props.SliderFloat<Primitive>(
          m_part, "Dome Depth"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeDepth; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,

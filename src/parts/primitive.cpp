@@ -1210,6 +1210,10 @@ void Primitive::Render(const unsigned int renderMask)
          level = m_lightmap->m_currentIntensity / (m_lightmap->m_d.m_intensity * m_lightmap->m_d.m_intensity_scale);
       if (FlasherDomeTune("lvl=", -1.f) >= 0.f) // VPX_T9_TUNE lvl=: a fixed lamp level (look checks)
          level = FlasherDomeTune("lvl=", -1.f);
+      // dome_boost: the level the dome layer sees (a flash the ROM drives below full reads as a full one); capped at 1.5 (the
+      // peak's headroom). 1 = unchanged, bit-identical
+      if (m_d.m_domeBoost != 1.f)
+         level = min(level * max(m_d.m_domeBoost, 0.f), max(level, 1.5f));
       // The OFF glints are lit by the room: they follow the scene lighting level, relative to the table's default level
       const float roomLevel = m_renderer->m_sceneLighting.GetGlobalEmissionScale() / max(m_ptable->m_globalEmissionScale, 0.01f);
       // The table's light scattered in the plastic (GI glow): the irradiance at the bulb through a soft knee (a dome right next
@@ -1850,6 +1854,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DMGL), m_d.m_domeGlint);
    writer.WriteFloat(FID(DMPK), m_d.m_domePeak);
    writer.WriteFloat(FID(DMDP), m_d.m_domeDepth);
+   writer.WriteFloat(FID(DMBO), m_d.m_domeBoost);
 
    SaveSharedEditableFields(writer);
 
@@ -2101,6 +2106,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMGL): m_d.m_domeGlint = reader.AsFloat(); break;
          case FID(DMPK): m_d.m_domePeak = reader.AsFloat(); break;
          case FID(DMDP): m_d.m_domeDepth = reader.AsFloat(); break;
+         case FID(DMBO): m_d.m_domeBoost = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 
