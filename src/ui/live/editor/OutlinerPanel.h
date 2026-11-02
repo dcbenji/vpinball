@@ -14,8 +14,8 @@ namespace VPX::EditorUI
 class EditorUI;
 class EditorUIPart;
 
-// Left side panel with one tab per object kind (parts tree, lights, materials, images, render probes,
-// collections, view setups & sounds), used to select the edited object.
+// Left side panel modelled on Blender's Outliner: a display mode (scene parts tree or table data), a search box
+// and a filter popover (object types, selected only), used to select the edited object.
 class OutlinerPanel
 {
 public:
@@ -27,8 +27,18 @@ public:
    void Render(float topBarHeight);
    void FocusFilter() { m_focusFilter = true; } // Ctrl+F: type a filter right away
 
-   // Width of the panel in logical pixels (scaled by the UI DPI)
+   // Default width of the panel in logical pixels (scaled by the UI DPI), the current one is EditorUI::m_outlinerWidth
    static constexpr float PaneWidth = 200.f;
+
+   // Filter popover & display mode state, exposed to be saved with the workspaces.
+   // The type mask has one bit per object category (all set: every type is listed), display mode 0 is the scene parts tree, 1 the table data.
+   uint32_t GetTypeMask() const { return m_typeMask; }
+   void SetTypeMask(uint32_t mask) { m_typeMask = mask & AllTypesMask; m_openMatchesPending = true; }
+   bool GetSelectedOnly() const { return m_selectedOnly; }
+   void SetSelectedOnly(bool selectedOnly) { m_selectedOnly = selectedOnly; m_openMatchesPending = true; }
+   int GetDisplayMode() const { return m_displayMode; }
+   void SetDisplayMode(int mode) { m_displayMode = mode == 1 ? 1 : 0; }
+   static constexpr uint32_t AllTypesMask = (1u << 12) - 1u;
 
 private:
    // Filter text split in lowercase tokens: 'n:x' or bare words (name contains), 't:x' (type starts with), 'm:x' (material contains)
@@ -39,23 +49,11 @@ private:
       vector<string> materials;
       bool empty() const { return names.empty() && types.empty() && materials.empty(); }
    };
-   // Breadcrumb element: kind 0 plain text, 1 clears the selection, 2 selects sel, 3 brings tab to front, 4 selects the part of group
-   struct Crumb
-   {
-      string label;
-      int kind;
-      Selection sel;
-      const PartGroup *group;
-      int tab;
-   };
-
    void ParseFilter();
    bool MatchesFilter(const string &name) const; // Name tokens only (non part lists)
    bool MatchesPartCached(size_t index) const; // All tokens, for m_editables[index] (needs RefreshFilterCache)
    void RefreshFilterCache();
    void SelectViewSetup(int viewSetup); // Select a preview camera and switch the view to it
-   void UpdateSelectionHistory();
-   void RenderContextHeader(); // Breadcrumb and recent selections, drawn at the top of each tab
 
    // Render a resource list (images, sounds, materials) with ctrl/shift multi selection.
    // multiSel holds all the selected items, anchor is the last clicked one for range selection.
@@ -73,10 +71,9 @@ private:
    FilterTokens m_tokens;
    bool m_openMatchesPending = false; // Filter changed: open the groups containing matches once the tree is drawn
 
-   int m_pendingTab = -1; // Tab to bring to front on next render (-1: none)
-   int m_activeTab = 0; // Tab drawn last frame
-   Selection m_lastSeenSelection;
-   vector<Selection> m_recentSelections; // Most recent first, includes the current selection
+   uint32_t m_typeMask = AllTypesMask;
+   bool m_selectedOnly = false;
+   int m_displayMode = 0;
 
    // Per frame scratch data of the parts tree (members to avoid reallocating)
    ankerl::unordered_dense::set<const PartGroup *> m_matchedGroups;
@@ -84,10 +81,9 @@ private:
    ankerl::unordered_dense::map<const PartGroup *, int> m_groupCounts;
    vector<const PartGroup *> m_groupStack;
    vector<uint8_t> m_showPart; // Per m_editables entry: part is listed (matches the filter or is in a matching group)
-   vector<std::shared_ptr<EditorUIPart>> m_lightList; // Name sorted lights and flashers matching the filter, rebuilt with the cache
 
-   // Lowercase names/materials of m_editables (only filled when a matching token exists), refreshed when the part count,
-   // filter or view mode changes, or every second to catch renames
+   // Lowercase names/materials of m_editables (only filled when a matching token exists), refreshed when the parts,
+   // filter or view mode change, or every second to catch renames
    vector<const IEditable *> m_cachePtrs; // Editable each cached index was built from, a mismatch means the cache is stale
    vector<string> m_lowerNames;
    vector<string> m_lowerMaterials;
@@ -96,7 +92,6 @@ private:
    int m_cacheGeneration = -1;
    bool m_cacheBackdrop = false;
    double m_cacheTime = -10.0;
-   vector<Crumb> m_crumbs;
 };
 
 }
