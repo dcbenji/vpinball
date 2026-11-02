@@ -4361,7 +4361,7 @@ void Renderer::SetupTonemapping(RenderTarget* renderedRT, RenderTarget* tonemapR
                        : m_toneMapper == TM_NEUTRAL      ? ShaderTechnique::fb_nttonemap
                        : m_toneMapper == TM_AGX          ? ShaderTechnique::fb_agxtonemap
                        : /*m_toneMapper == TM_WCG_SPLINE ?*/ ShaderTechnique::fb_wcgtonemap;
-   else if (outputWnd->IsWCGBackBuffer() && m_HDRforceDisableToneMapper)
+   else if (!m_editorPreviewPass && outputWnd->IsWCGBackBuffer() && m_HDRforceDisableToneMapper) // The camera preview is SDR: it keeps the table tonemapper
       tonemapTechnique = useAO ? filtered ? ShaderTechnique::fb_wcgtonemap_AO : ShaderTechnique::fb_wcgtonemap_AO_no_filter
                                : filtered ? ShaderTechnique::fb_wcgtonemap    : ShaderTechnique::fb_wcgtonemap_no_filter;
    else if (m_toneMapper == TM_REINHARD)
