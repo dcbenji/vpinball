@@ -101,6 +101,7 @@ void SearchPalette::BuildOperators()
    EditorUI &ed = m_editor;
    // Same guards as the menu bar: table edits are off for locked tables, and the File/Tools menus are hidden when inspecting
    const auto unlocked = [&ed]() { return !ed.m_table->IsLocked(); };
+   const auto notInspect = [&ed]() { return !ed.IsInspectMode(); };
    const auto editable = [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
    const auto editablePart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE && !ed.m_table->IsLocked() && !ed.IsInspectMode(); };
    const auto hasPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE; };
@@ -119,10 +120,10 @@ void SearchPalette::BuildOperators()
    };
    const string sep = string(" ") + kSep + " ";
    // Labels and shortcuts below are copied from EditorChrome::RenderMenuBar: keep them identical
-   add("File" + sep + "New" + sep + "New Table", "Ctrl+N", nullptr, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Blank); });
-   add("File" + sep + "New" + sep + "Completely Blank Table", "", nullptr, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Stripped); });
-   add("File" + sep + "New" + sep + "Full Example Table", "", nullptr, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Example); });
-   add("File" + sep + "New" + sep + "Light Sequence Demo Table", "", nullptr, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::LightSeq); });
+   add("File" + sep + "New" + sep + "New Table", "Ctrl+N", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Blank); });
+   add("File" + sep + "New" + sep + "Completely Blank Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Stripped); });
+   add("File" + sep + "New" + sep + "Full Example Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::Example); });
+   add("File" + sep + "New" + sep + "Light Sequence Demo Table", "", notInspect, [&ed]() { ed.NewTable(EditorUI::NewTableTemplate::LightSeq); });
    add("File" + sep + "Open...", "Ctrl+O", editable, [&ed]() { ed.LoadTable(); });
    add("File" + sep + "Open Pack Folder...", "Ctrl+Shift+O", editable, [&ed]() { ed.LoadTableFolder(); });
    add("File" + sep + "Save", "Ctrl+S", editable, [&ed]() { ed.SaveTable(); });
@@ -186,7 +187,7 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
    add("Object" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
    add("Object" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
-   add("Object" + sep + "Add Part...", "Shift+A", editable, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
+   add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
    add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
    add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
    add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
@@ -262,6 +263,7 @@ void SearchPalette::RefreshCatalog()
    {
       int seq;
       string group;
+      string shown;
    };
    vector<std::unordered_map<string, Entry>> found(m_types.size());
    for (const auto &[id, def] : m_editor.m_pinned.GetDefs())
@@ -281,9 +283,9 @@ void SearchPalette::RefreshCatalog()
       }
       if (type < 0 || type >= static_cast<int>(found.size()))
          continue;
-      const auto [it, added] = found[type].try_emplace(def.key.prop, Entry { def.seq, def.group });
+      const auto [it, added] = found[type].try_emplace(def.key.prop, Entry { def.seq, def.group, def.label.empty() ? def.key.prop : def.label });
       if (!added && def.seq < it->second.seq)
-         it->second = Entry { def.seq, def.group };
+         it->second = Entry { def.seq, def.group, def.label.empty() ? def.key.prop : def.label };
    }
    for (size_t t = 0; t < found.size(); ++t)
    {
@@ -300,7 +302,8 @@ void SearchPalette::RefreshCatalog()
       for (const auto &o : order)
       {
          const string &group = found[t][*o.second].group;
-         fields.push_back({ *o.second, group, Lower(*o.second), Lower(group) });
+         const string &shown = found[t][*o.second].shown;
+         fields.push_back({ *o.second, group, Lower(*o.second), Lower(group), shown, Lower(shown) });
       }
    }
 }
@@ -358,17 +361,21 @@ void SearchPalette::MakeResult(Result &r) const
    const TypeInfo &type = m_types[o.type];
    if (r.isField)
    {
+      string shown;
       if (r.field >= 0)
       {
          r.prop = type.fields[r.field].label;
          r.group = type.fields[r.field].group;
+         shown = type.fields[r.field].shown;
       }
       else
       {
          const PinnedPanel::Def *def = m_editor.m_pinned.FindDef(PinKey { o.kind, o.name, r.prop });
          r.group = def ? def->group : string();
+         if (def && !def->label.empty())
+            shown = def->label;
       }
-      r.label = o.display + " " + kSep + " " + r.prop;
+      r.label = o.display + " " + kSep + " " + (shown.empty() ? r.prop : shown);
       r.right = r.group.empty() ? type.name : r.group + " " + kDot + " " + type.name;
    }
    else
@@ -527,8 +534,8 @@ void SearchPalette::Recompute()
          {
             if (mask & (1u << w))
                continue;
-            if (const int m = MatchWord(field.labelLower, words[w]); m != 0)
-               total += (m == 2 ? 40 : 30) + (field.labelLower == words[w] ? 25 : 0); // Exact label first
+            if (const int m = std::max(MatchWord(field.shownLower, words[w]), MatchWord(field.labelLower, words[w])); m != 0)
+               total += (m == 2 ? 40 : 30) + (field.shownLower == words[w] ? 25 : 0); // Exact label first
             else if (const int g = MatchWord(field.groupLower, words[w]); g != 0)
                total += g == 2 ? 20 : 15;
             else

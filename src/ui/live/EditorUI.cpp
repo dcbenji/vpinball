@@ -1368,13 +1368,15 @@ void EditorUI::RenderAreaCorners()
             const float len = 10.f * dpi, gap = 3.5f * dpi;
             const float sx = (corner & 1) ? -1.f : 1.f, sy = (corner & 2) ? -1.f : 1.f;
             const ImVec2 origin((corner & 1) ? leaf.rect.x1 : leaf.rect.x0, (corner & 2) ? leaf.rect.y1 : leaf.rect.y0);
-            ImDrawList *const dl = ImGui::GetForegroundDrawList();
+            ImDrawList *const dl = ImGui::GetWindowDrawList(); // The corner window's own list: windows above it (tooltips, floating panels) cover the hatch
+            dl->PushClipRect(ImVec2(leaf.rect.x0, leaf.rect.y0), ImVec2(leaf.rect.x1, leaf.rect.y1), false);
             const ImU32 hatch = (EditorTheme::TextDim & ~IM_COL32_A_MASK) | (70u << IM_COL32_A_SHIFT);
             for (int k = 1; k <= 2; k++)
             {
                const float d = len - gap * static_cast<float>(k - 1) * 2.f;
                dl->AddLine(ImVec2(origin.x + sx * d, origin.y), ImVec2(origin.x, origin.y + sy * d), hatch, 1.f);
             }
+            dl->PopClipRect();
          }
          ImGui::End();
          ImGui::PopStyleVar(2);

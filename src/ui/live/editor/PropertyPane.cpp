@@ -607,28 +607,6 @@ bool PropertyPane::DragFieldImpl(const char* id, float* value, int* intValue, fl
    else
    {
       intValue ? ImFormatString(text, IM_COUNTOF(text), format, *intValue) : ImFormatString(text, IM_COUNTOF(text), format, *value);
-      // Thousands separators from 10000 up (display only; typing shows the plain number)
-      const char* digits = text + (text[0] == '-' ? 1 : 0);
-      size_t intLen = 0;
-      while (digits[intLen] >= '0' && digits[intLen] <= '9')
-         intLen++;
-      const size_t total = strlen(text);
-      if (intLen >= 5 && total + (intLen - 1) / 3 < IM_COUNTOF(text))
-      {
-         char grouped[64];
-         size_t out = 0;
-         const size_t prefix = digits - text;
-         memcpy(grouped, text, prefix);
-         out = prefix;
-         for (size_t i = 0; i < intLen; i++)
-         {
-            if (i > 0 && (intLen - i) % 3 == 0)
-               grouped[out++] = ',';
-            grouped[out++] = digits[i];
-         }
-         strcpy(grouped + out, digits + intLen);
-         strcpy(text, grouped);
-      }
    }
    ImGui::PushStyleColor(ImGuiCol_Text, mixed ? g.Style.Colors[ImGuiCol_TextMixedValue] : (fill ? ImVec4(1.f, 1.f, 1.f, 1.f) : g.Style.Colors[ImGuiCol_Text]));
    ImGui::RenderTextClipped(bb.Min, bb.Max, shown, nullptr, nullptr, ImVec2(0.5f, 0.5f));

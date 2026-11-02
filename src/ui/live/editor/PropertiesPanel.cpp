@@ -650,7 +650,7 @@ void PropertiesPanel::DrawSearchField()
 
 bool PropertiesPanel::MatchesSearch(const PinnedPanel::Def &def) const
 {
-   string text = def.key.prop + ' ' + def.section + ' ' + def.group;
+   string text = def.label + ' ' + def.key.prop + ' ' + def.section + ' ' + def.group;
    std::ranges::transform(text, text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
    return std::ranges::all_of(m_searchTerms, [&text](const string &term) { return text.find(term) != string::npos; });
 }

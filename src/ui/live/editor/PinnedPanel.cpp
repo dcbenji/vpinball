@@ -83,10 +83,11 @@ bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
    return it == m_defs.end() || (it->second.key.kind == PinKind::Part && it->second.owner != owner);
 }
 
-void PinnedPanel::SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common)
+void PinnedPanel::SetDef(const PinKey &key, const string &label, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common)
 {
    Def &def = m_defs[key.Id()];
    def.key = key;
+   def.label = label;
    def.group = group;
    def.section = section;
    def.owner = owner;
@@ -259,7 +260,7 @@ void PinnedPanel::FlushPendingCopy()
       editor.m_undo.MarkForUndo(part->GetEditable());
    for (const std::shared_ptr<EditorUIPart> &part : targets)
       def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
-   editor.m_undo.SetFieldLabel("Copy to Selected: " + key.prop);
+   editor.m_undo.SetFieldLabel("Copy to Selected: " + (def->label.empty() ? key.prop : def->label));
    editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
    editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
    editor.m_lastUndoId = 0;
@@ -269,7 +270,7 @@ void PinnedPanel::FlushPendingCopy()
       editor.m_player->m_physics->Update(part->GetEditable());
       part->SyncVisibilityOverrides();
    }
-   editor.m_liveUI.PushNotification("Copied '"s + key.prop + "' to " + std::to_string(targets.size()) + (targets.size() == 1 ? " part"s : " parts"s), 2500);
+   editor.m_liveUI.PushNotification("Copied '"s + (def->label.empty() ? key.prop : def->label) + "' to " + std::to_string(targets.size()) + (targets.size() == 1 ? " part"s : " parts"s), 2500);
 }
 
 void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
@@ -1218,7 +1219,7 @@ void PinnedPanel::RenderQuickFavorites()
       const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
       const float fade = 28.f * dpi;
       const ImU32 bg = ImGui::GetColorU32(ImGuiCol_PopupBg), clear = bg & ~IM_COL32_A_MASK;
-      ImGui::GetForegroundDrawList()->AddRectFilledMultiColor(ImVec2(wp.x + 1.f, wp.y + ws.y - fade - 1.f), ImVec2(wp.x + ws.x - 1.f, wp.y + ws.y - 1.f), clear, clear, bg, bg);
+      ImGui::GetWindowDrawList()->AddRectFilledMultiColor(ImVec2(wp.x + 1.f, wp.y + ws.y - fade - 1.f), ImVec2(wp.x + ws.x - 1.f, wp.y + ws.y - 1.f), clear, clear, bg, bg);
    }
    ImGui::EndPopup();
 }

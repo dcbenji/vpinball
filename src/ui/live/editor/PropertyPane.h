@@ -460,7 +460,7 @@ template <class T, class MakeDraw, class CopyMaker> void PropertyPane::PinField(
          const void *const owner = (key.kind == PinKind::Part && m_pinOwner) ? m_pinOwner : static_cast<const void *>(obj);
          // A harvest always refreshes the definitions: it records which fields the object shows now, and in which order
          if (m_pinMode == PinMode::Harvest || m_pins->NeedsDef(key.Id(), owner))
-            m_pins->SetDef(key, m_pinGroup, m_pinSection, owner, makeDraw(), makeCopy(), m_tier == Tier::Common);
+            m_pins->SetDef(key, label, m_pinGroup, m_pinSection, owner, makeDraw(), makeCopy(), m_tier == Tier::Common);
       }
       if (m_modified == m_modifyFieldId)
          m_modifiedLabel = label;

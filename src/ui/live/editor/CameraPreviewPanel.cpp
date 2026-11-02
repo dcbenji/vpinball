@@ -56,7 +56,8 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
       // Letterboxed at the main window's aspect: the framing the player view has on the playfield window
       const ImGuiIO &io = ImGui::GetIO();
-      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      ImVec2 avail = ImGui::GetContentRegionAvail();
+      avail.y -= 4.f * dpi; // The image starts 4 px down: keep it inside the area
       float aspect = (io.DisplaySize.y > 0.f) ? io.DisplaySize.x / io.DisplaySize.y : 16.f / 9.f;
       if (avail.y > avail.x * 1.2f && avail.y > 0.f)
          aspect = avail.x / avail.y; // Portrait area: a portrait player view filling it, not a thumbnail

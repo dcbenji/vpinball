@@ -71,6 +71,7 @@ public:
    struct Def
    {
       PinKey key;
+      string label; // Label shown in the UI (key.prop is the legacy-stable storage key)
       string group; // Section or separator under which the field is drawn in the panel
       string section; // Section (collapsing header) of the field in the full sheet
       const void *owner = nullptr; // Part: its EditorUIPart (definitions may capture it), otherwise the object itself
@@ -81,7 +82,7 @@ public:
       unsigned stamp = 0; // Harvest that registered it (0: registered by the panel outside of a harvest)
    };
    bool NeedsDef(const string &id, const void *owner) const;
-   void SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common);
+   void SetDef(const PinKey &key, const string &label, const string &group, const string &section, const void *owner, PinDrawFn &&draw, PinCopyFn &&copy, bool common);
    bool IsHarvesting() const { return m_harvestStamp != 0; }
 
    // Curated (Look / Transform) sections of the properties panel: the fields of an object, as registered by its latest harvest

@@ -233,7 +233,7 @@ void EditorChrome::RenderMenuBar()
             editor.DuplicateSelection();
          if (ImGui::MenuItem("Delete", "Del", false, editor.CanDelete()))
             editor.DeleteAction();
-         if (ImGui::MenuItem("Add Part...", "Shift+A", false, !editor.m_table->IsLocked()))
+         if (ImGui::MenuItem("Add Part...", "Shift+A", false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
             RequestAddPartPopup(ImGui::GetMousePos());
          ImGui::Separator();
          if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
