@@ -570,6 +570,50 @@ void EditorUI::SetBackdropCamera()
    m_camView = Matrix3D::MatrixLookAtRH(eye, at, up);
 }
 
+void EditorUI::ToggleSidebar() { m_showSidebar = !m_showSidebar; }
+
+void EditorUI::ShowSidebar(SidebarTab tab)
+{
+   m_showSidebar = true;
+   m_sidebarTab = tab;
+}
+
+void EditorUI::FrameSelection()
+{
+   const ImGuiIO &io = ImGui::GetIO();
+   // Editor Camera center on the whole selection, adjusting the zoom so that it fills the view
+   FRect3D bounds;
+   if (GetSelectionBounds(bounds))
+   {
+      m_camMode = ViewMode::EditorCam;
+      Matrix3D view(m_camView);
+      view.Invert();
+      const vec3 up = view.GetOrthoNormalUp();
+      const vec3 dir = view.GetOrthoNormalDir();
+      const vec3 right = view.GetOrthoNormalRight();
+      const vec3 newTarget(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
+
+      // Evaluate the distance needed for all the bounds corners to be inside the view, keeping the camera orientation
+      // and fitting inside the area left visible by the UI (a symmetric margin accounts for the UI drawn over the render)
+      const float aspect = io.DisplaySize.x / io.DisplaySize.y;
+      const Vertex2D visible = GetUIVisibleFraction();
+      const float tanHalfFovY = tanf(0.5f * ANGTORAD(editorCamFovY));
+      float distance = 0.f;
+      for (int i = 0; i < 8; i++)
+      {
+         const vec3 toCorner = vec3((i & 1) ? bounds.right : bounds.left, (i & 2) ? bounds.bottom : bounds.top, (i & 4) ? -bounds.zlow : -bounds.zhigh) - newTarget;
+         const float dx = fabsf(right.Dot(toCorner));
+         const float dy = fabsf(up.Dot(toCorner));
+         distance = max(distance,
+            m_perspectiveCam ? dir.Dot(toCorner) + max(dy / (tanHalfFovY * visible.y), dx / (tanHalfFovY * aspect * visible.x)) : max(dy / visible.y, dx / (aspect * visible.x)));
+      }
+      if (distance > 0.f) // Keep the current distance for degenerate (point) selections
+         m_camDistance = distance * 1.1f; // Small margin so that the selection does not exactly touch the view borders
+      const vec3 newEye = newTarget + dir * m_camDistance;
+      m_camView = Matrix3D::MatrixLookAtRH(newEye, newTarget, up);
+   }
+}
+
 Vertex2D EditorUI::GetUIVisibleFraction() const
 {
    // When the editor UI is not displayed (fly mode, inspection modal), nothing is drawn over the render
@@ -1492,39 +1536,7 @@ void EditorUI::RenderUI()
          m_perspectiveCam = !m_perspectiveCam;
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal))
-      {
-         // Editor Camera center on the whole selection, adjusting the zoom so that it fills the view
-         FRect3D bounds;
-         if (GetSelectionBounds(bounds))
-         {
-            m_camMode = ViewMode::EditorCam;
-            Matrix3D view(m_camView);
-            view.Invert();
-            const vec3 up = view.GetOrthoNormalUp();
-            const vec3 dir = view.GetOrthoNormalDir();
-            const vec3 right = view.GetOrthoNormalRight();
-            const vec3 newTarget(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
-
-            // Evaluate the distance needed for all the bounds corners to be inside the view, keeping the camera orientation
-            // and fitting inside the area left visible by the UI (a symmetric margin accounts for the UI drawn over the render)
-            const float aspect = io.DisplaySize.x / io.DisplaySize.y;
-            const Vertex2D visible = GetUIVisibleFraction();
-            const float tanHalfFovY = tanf(0.5f * ANGTORAD(editorCamFovY));
-            float distance = 0.f;
-            for (int i = 0; i < 8; i++)
-            {
-               const vec3 toCorner = vec3((i & 1) ? bounds.right : bounds.left, (i & 2) ? bounds.bottom : bounds.top, (i & 4) ? -bounds.zlow : -bounds.zhigh) - newTarget;
-               const float dx = fabsf(right.Dot(toCorner));
-               const float dy = fabsf(up.Dot(toCorner));
-               distance = max(distance,
-                  m_perspectiveCam ? dir.Dot(toCorner) + max(dy / (tanHalfFovY * visible.y), dx / (tanHalfFovY * aspect * visible.x)) : max(dy / visible.y, dx / (aspect * visible.x)));
-            }
-            if (distance > 0.f) // Keep the current distance for degenerate (point) selections
-               m_camDistance = distance * 1.1f; // Small margin so that the selection does not exactly touch the view borders
-            const vec3 newEye = newTarget + dir * m_camDistance;
-            m_camView = Matrix3D::MatrixLookAtRH(newEye, newTarget, up);
-         }
-      }
+         FrameSelection(); // Blender's View Selected
       else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDivide))
       {
          m_orbitLock = !m_orbitLock;

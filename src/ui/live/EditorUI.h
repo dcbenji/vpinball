@@ -130,6 +130,7 @@ private:
    bool IsEditablePickable(const IEditable *editable) const;
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
+   void FrameSelection(); // Editor camera centered on the selection, zoomed to fill the view (Blender's View Selected, numpad .)
 
    // Selection snapshot stored in undo records and restored on undo
    struct UndoSelectionState
@@ -343,6 +344,24 @@ private:
    bool m_showNavCube = true; // View > Navigation Cube
    bool m_showOutliner = true; // View > Outliner (workspaces)
    bool m_showProperties = true; // View > Properties (workspaces)
+   // Areas (Blender-style fixed layout: outliner | viewport + N-panel | properties): widths in logical pixels, resized by the
+   // splitters between areas, saved per workspace
+   float m_outlinerWidth = OutlinerPanel::PaneWidth;
+   float m_propertiesWidth = PropertiesPanel::PaneWidth;
+   float m_sidebarWidth = 300.f;
+   // N-panel (Blender's sidebar at the viewport's right edge): tabs Item (selection transform), Look (the Quick Favorites set), View
+   enum class SidebarTab
+   {
+      Item,
+      Look,
+      View
+   };
+   bool m_showSidebar = false;
+   SidebarTab m_sidebarTab = SidebarTab::Item;
+   void ToggleSidebar(); // N
+   void ShowSidebar(SidebarTab tab);
+   void OpenQuickFavorites() { m_openQuickFavorites = true; } // Q: popup of the Quick Favorites at the mouse
+   bool m_openQuickFavorites = false;
    void RenderNavCube(); // ImGuizmo view cube: drag orbits around the orbit pivot, click a face snaps to the axis view
 };
 
