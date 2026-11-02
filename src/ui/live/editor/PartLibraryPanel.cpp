@@ -10,12 +10,23 @@
 #include "parts/pintable.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/EditorUI.h"
+#include "PropertyPane.h"
+#include "EditorTheme.h"
 #include "ui/live/LiveUI.h"
 #include "ui/VPXFileFeedback.h"
 #include "utils/JSONSerializer.h"
 
 namespace VPX::EditorUI
 {
+
+// Full-width (or given width) button with a roomy frame
+static bool PaddedButton(const char *label, const float width, const float dpi)
+{
+   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f * dpi, 5.f * dpi));
+   const bool pressed = ImGui::Button(label, ImVec2(width, 0.f));
+   ImGui::PopStyleVar();
+   return pressed;
+}
 
 PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
    : m_editor(editor)
@@ -115,11 +126,16 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
       // Destination of the import, same as for newly added parts: the group of the current selection
       const PartGroup *const target = m_editor.GetPartGroupForNewPart();
-      ImGui::Text("Import into part group: %s", (target != nullptr) ? target->GetName().c_str() : "(table root)");
+      ImGui::Dummy(ImVec2(0.f, 2.f));
+      ImGui::TextDisabled("Import into part group:");
+      ImGui::SameLine();
+      ImGui::TextUnformatted((target != nullptr) ? target->GetName().c_str() : "(table root)");
       if (m_editor.m_table->IsLocked())
          ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "The table is locked: import is disabled");
 
-      if (ImGui::CollapsingHeader("Import options"))
+      PropertyPane sections(m_editor.m_table);
+      const float dpi = m_editor.m_liveUI.GetDPI();
+      if (sections.BeginSection("Import Options"s))
       {
          int strategy = static_cast<int>(m_mergeStrategy);
          ImGui::RadioButton("Rename on conflict when assets differ", &strategy, static_cast<int>(PartImportMergeStrategy::RenameConflict));
@@ -131,10 +147,12 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("On a name conflict, the imported parts reuse the asset already present in the table.");
          m_mergeStrategy = static_cast<PartImportMergeStrategy>(strategy);
+         sections.EndSection();
       }
 
-      ImGui::SeparatorText("Import a pack file");
-      if (ImGui::Button(ICON_FK_FILE_O " Select VPZ file..."))
+      if (sections.BeginSection("Import a Pack File"s))
+      {
+      if (PaddedButton(ICON_FK_FILE_O "  Select VPZ File...", ImGui::GetContentRegionAvail().x, dpi))
       {
          if (m_editor.m_player->m_playfieldWnd != nullptr)
          {
@@ -155,8 +173,13 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
       }
 
-      ImGui::SeparatorText("Library folders");
-      if (ImGui::Button(ICON_FK_FOLDER_OPEN " Add library folder..."))
+      sections.EndSection();
+      }
+
+      if (sections.BeginSection("Library Folders"s))
+      {
+      const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+      if (PaddedButton(ICON_FK_FOLDER_OPEN "  Add Folder...", halfW, dpi))
       {
          if (m_editor.m_player->m_playfieldWnd != nullptr)
          {
@@ -176,14 +199,22 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
       }
       ImGui::SameLine();
-      if (ImGui::Button(ICON_FK_REFRESH " Refresh"))
+      if (PaddedButton(ICON_FK_REFRESH "  Refresh", ImGui::GetContentRegionAvail().x, dpi))
          m_rescanLibrary = true;
-      if (m_library.empty())
-         ImGui::TextDisabled("No library folder defined");
 
-      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 4.f;
+      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 5.f + 40.f * dpi;
       if (ImGui::BeginChild("##LibraryTree", ImVec2(0.f, -footerHeight), ImGuiChildFlags_Borders))
       {
+         if (m_library.empty())
+         {
+            // Empty state inside the list, centred and dim
+            const char *const msg = "No library folder defined";
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + max(0.f, (avail.x - ImGui::CalcTextSize(msg).x) * 0.5f), ImGui::GetCursorPosY() + max(0.f, avail.y * 0.4f - ImGui::GetTextLineHeight())));
+            ImGui::TextUnformatted(msg);
+            ImGui::PopStyleColor();
+         }
          for (size_t i = 0; i < m_library.size(); i++)
          {
             ImGui::PushID(static_cast<int>(i));
@@ -210,9 +241,12 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
       }
       ImGui::EndChild();
+      sections.EndSection();
+      }
 
       // Selected pack preview and import action
-      ImGui::SeparatorText("Import");
+      if (sections.BeginSection("Import"s))
+      {
       if (m_selectedPack.empty())
          ImGui::TextDisabled("Select a VPZ pack file to import");
       else
@@ -226,9 +260,11 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
                m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
          ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
-         if (ImGui::Button(ICON_FK_DOWNLOAD " Import"))
+         if (PaddedButton(ICON_FK_DOWNLOAD "  Import", ImGui::GetContentRegionAvail().x, dpi))
             ImportPack(m_selectedPack);
          ImGui::EndDisabled();
+      }
+      sections.EndSection();
       }
    }
    m_editor.EndAreaWindow();

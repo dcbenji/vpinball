@@ -48,7 +48,7 @@ public:
 
    // Description shown by the undo history
    string m_label; // Complete label set by the editor (e.g. "Move 3 parts")
-   string m_field; // Edited field/operation, composed with the subject part name (e.g. "PBR_DOME_f125: Rim Width")
+   string m_field; // Edited field/operation, composed with the subject part name (e.g. "Rim Width: PBR_DOME_f125")
    string m_subject; // Name of the first part involved in the record
    size_t m_subjectCount = 0; // Number of parts involved in the record
    void NoteSubject(IEditable *const pie);
@@ -82,8 +82,8 @@ string UndoRecord::Label() const
    if (!m_field.empty())
    {
       if (m_subjectCount > 1)
-         return m_field + " (" + std::to_string(m_subjectCount) + " parts)";
-      return m_subject.empty() ? m_field : m_subject + ": " + m_field;
+         return m_field + ": " + std::to_string(m_subjectCount) + " parts";
+      return m_subject.empty() ? m_field : m_field + ": " + m_subject;
    }
    if (m_subjectCount > 1)
       return std::to_string(m_subjectCount) + " parts";

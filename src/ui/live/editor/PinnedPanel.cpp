@@ -768,7 +768,15 @@ void PinnedPanel::RenderFavoriteRows(bool hovered)
    EditorUI &editor = m_editor;
    const vector<std::pair<PinKind, string>> &objects = m_objects;
    if (m_pins.empty())
-      ImGui::TextDisabled("Right-click a field in the Properties editor\nand pick 'Add to Quick Favorites'");
+   {
+      static const char *const hints[] = { "Right-click a field in the Properties editor", "and pick \u201cAdd to Quick Favorites\u201d" };
+      ImGui::Dummy(ImVec2(0.f, 8.f));
+      for (const char *hint : hints)
+      {
+         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + max(0.f, (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(hint).x) * 0.5f));
+         ImGui::TextDisabled("%s", hint);
+      }
+   }
 
    PropertyPane props(editor.m_table);
    ApplyUnits(props);
@@ -973,9 +981,8 @@ void PinnedPanel::RenderItemTab(bool hovered)
    // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
    EditorUI &editor = m_editor;
    const PropertiesPanel &properties = editor.m_properties;
-   // Nothing selected: the table, like the Properties editor (the table has no transform, its Look fields are shown)
-   const bool tableFallback = editor.m_selection.GetType() == Selection::S_NONE && properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)].empty();
-   const auto &defs = properties.m_curation.tabs[static_cast<int>(tableFallback ? PropertiesPanel::Tab::Look : PropertiesPanel::Tab::Transform)];
+   // Nothing selected: an empty tab (like Blender's Item tab), not a second copy of the table's Look fields shown in Properties
+   const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
    if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
    {
       // Centred in the panel: icon above a dim message
@@ -992,6 +999,13 @@ void PinnedPanel::RenderItemTab(bool hovered)
       ImGui::SetCursorPosX(x0 + max(0.f, (avail.x - textSize.x) * 0.5f));
       ImGui::TextUnformatted(message);
       ImGui::PopStyleColor();
+      if (editor.m_selection.GetType() == Selection::S_NONE)
+      {
+         ImGui::Dummy(ImVec2(0.f, 6.f));
+         if (ImGui::Button("Frame All", ImVec2(ImGui::GetContentRegionAvail().x, 0.f)))
+            editor.FrameAll();
+         ImGui::SetItemTooltip("Home");
+      }
       return;
    }
    ImGui::Dummy(ImVec2(0.f, 2.f)); // The name is the header of the section drawn below
@@ -1009,31 +1023,53 @@ void PinnedPanel::RenderItemTab(bool hovered)
 void PinnedPanel::RenderViewTab()
 {
    EditorUI &editor = m_editor;
-   ImGui::SeparatorText("View");
-   if (ImGui::Selectable("Editor Camera", editor.m_camMode == ViewMode::EditorCam))
-   {
-      editor.m_table->SetViewSetupOverride(BG_DESKTOP);
-      editor.m_table->SetViewSetupOverride(BG_INVALID);
-      editor.m_camMode = ViewMode::EditorCam;
-   }
-   static constexpr const char *setups[] = { "Preview: Desktop", "Preview: Cabinet", "Preview: Full Single Screen" };
+   PropertyPane props(editor.m_table);
+   if (!props.BeginSection("View"s))
+      return;
+   static constexpr const char *cameras[] = { "Editor", "Desktop", "Cabinet", "Full Single Screen" };
    static constexpr int overrides[] = { BG_DESKTOP, BG_FULLSCREEN, BG_FSS };
-   for (int i = 0; i < 3; i++)
+   int current = -1;
+   if (editor.m_camMode == ViewMode::EditorCam)
+      current = 0;
+   else
+      for (int i = 0; i < 3; i++)
+         if (editor.m_selection == Selection::Camera(i))
+            current = i + 1;
+   props.PropertyLabel("Camera"s);
+   if (PropertyPane::BeginFlatCombo("##ViewCamera", current >= 0 ? cameras[current] : "Preview"))
    {
-      const Selection cam = Selection::Camera(i);
-      if (ImGui::Selectable(setups[i], editor.m_camMode == ViewMode::PreviewCam && editor.m_selection == cam))
-      {
-         editor.SetSelection(cam);
-         editor.m_camMode = ViewMode::PreviewCam;
-         editor.m_table->SetViewSetupOverride(static_cast<ViewSetupID>(overrides[i]));
-      }
+      for (int i = 0; i < 4; i++)
+         if (ImGui::Selectable(cameras[i], i == current))
+         {
+            if (i == 0)
+            {
+               editor.m_table->SetViewSetupOverride(BG_DESKTOP);
+               editor.m_table->SetViewSetupOverride(BG_INVALID);
+               editor.m_camMode = ViewMode::EditorCam;
+            }
+            else
+            {
+               editor.SetSelection(Selection::Camera(i - 1));
+               editor.m_camMode = ViewMode::PreviewCam;
+               editor.m_table->SetViewSetupOverride(static_cast<ViewSetupID>(overrides[i - 1]));
+            }
+         }
+      ImGui::EndCombo();
    }
-   ImGui::Checkbox("Perspective", &editor.m_perspectiveCam);
+   props.PropertyLabel("Perspective"s);
+   PropertyPane::FlatCheckbox("##ViewPerspective", &editor.m_perspectiveCam);
    ImGui::SetItemTooltip("Numpad 5");
-   ImGui::Checkbox("Navigation Cube", &editor.m_showNavCube);
-   if (ImGui::Button("Frame Selected"))
+   props.PropertyLabel("Navigation Cube"s);
+   PropertyPane::FlatCheckbox("##ViewNavCube", &editor.m_showNavCube);
+   ImGui::Dummy(ImVec2(0.f, 4.f));
+   const float width = ImGui::GetContentRegionAvail().x;
+   if (ImGui::Button("Frame Selected", ImVec2(width, 0.f)))
       editor.FrameSelection();
    ImGui::SetItemTooltip("F / Numpad .");
+   if (ImGui::Button("Frame All", ImVec2(width, 0.f)))
+      editor.FrameAll();
+   ImGui::SetItemTooltip("Home");
+   props.EndSection();
 }
 
 void PinnedPanel::Render()
@@ -1161,9 +1197,12 @@ void PinnedPanel::RenderQuickFavorites()
    if (!m_quickOpen)
       return;
    s_lastHeight = ImGui::GetWindowSize().y;
-   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-   ImGui::TextUnformatted("Quick Favorites");
-   ImGui::PopStyleColor();
+   {
+      // Section-style title: accent rule on the left, normal text
+      ImGui::TextUnformatted("Quick Favorites");
+      const ImVec2 titleMin = ImGui::GetItemRectMin(), titleMax = ImGui::GetItemRectMax();
+      ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(titleMin.x - 6.f * dpi, titleMin.y), ImVec2(titleMin.x - 4.f * dpi, titleMax.y), EditorTheme::Accent);
+   }
    ImGui::Separator();
    ImGui::Dummy(ImVec2(0.f, max(0.f, 6.f * dpi - ImGui::GetStyle().ItemSpacing.y)));
    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
@@ -1173,6 +1212,14 @@ void PinnedPanel::RenderQuickFavorites()
    }
    // Undo snapshots only while interacting with the popup (as the sidebar)
    RenderFavoriteRows(ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive()));
+   if (ImGui::GetScrollMaxY() > 0.f && ImGui::GetScrollY() < ImGui::GetScrollMaxY() - 1.f)
+   {
+      // More rows below: fade the bottom edge
+      const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+      const float fade = 28.f * dpi;
+      const ImU32 bg = ImGui::GetColorU32(ImGuiCol_PopupBg), clear = bg & ~IM_COL32_A_MASK;
+      ImGui::GetForegroundDrawList()->AddRectFilledMultiColor(ImVec2(wp.x + 1.f, wp.y + ws.y - fade - 1.f), ImVec2(wp.x + ws.x - 1.f, wp.y + ws.y - 1.f), clear, clear, bg, bg);
+   }
    ImGui::EndPopup();
 }
 

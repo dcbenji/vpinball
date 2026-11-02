@@ -4,6 +4,7 @@
 #include "CameraPreviewPanel.h"
 
 #include "IconsLucide.h"
+#include "EditorTheme.h"
 #include "renderer/Renderer.h"
 #include "renderer/RenderTarget.h"
 #include "ui/live/EditorUI.h"
@@ -39,24 +40,26 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::SameLine();
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("Camera Preview");
+      // Header laid out against the area's right edge, keeping the corner zone (area split / join) free
+      const float dpi = m_editor.m_liveUI.GetDPI();
+      const float cornerPad = 12.f * dpi;
+      const float refreshW = ImGui::CalcTextSize(ICON_LC_REFRESH_CW).x + 2.f * ImGui::GetStyle().FramePadding.x;
+      const float rightEdge = ImGui::GetWindowContentRegionMax().x - cornerPad;
       ImGui::SameLine();
       ImGui::Checkbox("Live", &m_live);
-      ImGui::SetItemTooltip("Render the player view continuously (every 2nd frame). Off: only after a change.");
-      ImGui::SameLine();
+      ImGui::SetItemTooltip("Render the player view continuously (every 2nd frame). Off: only after a change (click Refresh).");
+      ImGui::SameLine(max(ImGui::GetCursorPosX(), rightEdge - refreshW));
       if (ImGui::Button(ICON_LC_REFRESH_CW "##CameraPreviewRefresh"))
          m_refresh = true;
       ImGui::SetItemTooltip("Refresh");
-      if (m_width > 0)
-      {
-         ImGui::SameLine();
-         ImGui::TextDisabled("%dx%d", m_width, m_height);
-      }
       ImGui::Separator();
 
       // Letterboxed at the main window's aspect: the framing the player view has on the playfield window
       const ImGuiIO &io = ImGui::GetIO();
       const ImVec2 avail = ImGui::GetContentRegionAvail();
-      const float aspect = (io.DisplaySize.y > 0.f) ? io.DisplaySize.x / io.DisplaySize.y : 16.f / 9.f;
+      float aspect = (io.DisplaySize.y > 0.f) ? io.DisplaySize.x / io.DisplaySize.y : 16.f / 9.f;
+      if (avail.y > avail.x * 1.2f && avail.y > 0.f)
+         aspect = avail.x / avail.y; // Portrait area: a portrait player view filling it, not a thumbnail
       float imgW = avail.x, imgH = avail.x / aspect;
       if (imgH > avail.y)
       {
@@ -107,11 +110,12 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = false;
          }
 
-         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (avail.x - imgW) * 0.5f, ImGui::GetCursorPosY() + (avail.y - imgH) * 0.5f));
+         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (avail.x - imgW) * 0.5f, ImGui::GetCursorPosY() + 4.f * dpi)); // Top-anchored under the header
          if (RenderTarget *const rt = m_editor.m_renderer->GetEditorPreview(); rt != nullptr)
             ImGui::Image(rt->GetColorSampler(), ImVec2(imgW, imgH));
          else
             ImGui::Dummy(ImVec2(imgW, imgH));
+         ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), EditorTheme::WorkspaceOff, 0.f, 0, 1.f);
       }
    }
    m_editor.EndAreaWindow();
