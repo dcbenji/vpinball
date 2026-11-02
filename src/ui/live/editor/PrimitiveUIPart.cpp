@@ -338,6 +338,22 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Bulb Brightness"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); }, 0.f, 4.f, 2, "Hot spot brightness (1 = +80 % of the glow's peak at its centre)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Stretch X"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbStretchX; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchX = max(v, 0.05f); }, 0.2f, 4.f, 2, "Hot spot stretch along the card's X (1 = round)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Stretch Y"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbStretchY; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchY = max(v, 0.05f); }, 0.2f, 4.f, 2, "Hot spot stretch along the card's Y (1 = round)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Offset X (mm)"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbOffsetX; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetX = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's X (the bulb is not under the insert's centre)");
+      props.SliderFloat<Primitive>(
+         m_part, "Bulb Offset Y (mm)"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_bulbOffsetY; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetY = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's Y");
       props.BroadcastFields(false);
       props.SessionToggle<Primitive>(
          m_part, "Apply to all traced inserts"s, PropertyPane::s_applyBulbToAll,

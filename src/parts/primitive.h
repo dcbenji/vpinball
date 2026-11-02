@@ -47,6 +47,10 @@ public:
    float m_bulbDepth = 0.f; // Traced insert: parallax hot spot, the bulb's depth below the insert top in mm (0 = off)
    float m_bulbScale = 1.f; // Traced insert: hot spot size (1 = a soft spot ~19 mm across at half height)
    float m_bulbBrightness = 1.f; // Traced insert: hot spot brightness (1 = +80 % of the glow's peak at its centre)
+   float m_bulbStretchX = 1.f; // Traced insert: hot spot stretch along the card's u (1 = round)
+   float m_bulbStretchY = 1.f; // Traced insert: hot spot stretch along the card's v
+   float m_bulbOffsetX = 0.f; // Traced insert: hot spot offset from the card's centre along u, mm
+   float m_bulbOffsetY = 0.f; // Traced insert: hot spot offset along v, mm
 
    float m_edgeFactorUI = 0.25f; // for drawing the mesh in the editorUI
    float m_collision_reductionFactor = 0.f; // 0=none..1=pow(num_vertices,0.75)

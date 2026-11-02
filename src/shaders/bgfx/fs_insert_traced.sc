@@ -30,6 +30,8 @@
 //      through the print by its alpha (the print's transmission) tinted by its hue; 0 = alpha only, as a cut-out window
 // [12] parallax hot spot: x the bulb's depth below the insert top in mm (0 = off: the block is skipped, output unchanged),
 //      y spot size (1 = a soft spot ~19 mm across at half height), z brightness (1 = +80 % of the glow's peak at its centre)
+// [13] parallax hot spot: xy stretch along the card's u and v (1 = round), zw the spot's offset from the card's centre in mm
+//      (along u and v: for an unturned card x across, y down the table)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -42,7 +44,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #include "common.sh"
 
 uniform vec4 staticColor_Alpha;
-uniform vec4 tracedParams[13];
+uniform vec4 tracedParams[14];
 
 #ifdef STEREO
 	uniform vec4 cameraPosWorld[2];
@@ -281,7 +283,8 @@ void main()
 	if (tracedParams[12].x > 0.0)
 	{
 		const vec2 spotUv = card + inside.xy * (tracedParams[12].x / size / steepInside);
-		const vec2 p = (spotUv - 0.5) * (size / max(tracedParams[12].y, 0.05)); // mm about the bake square's centre
+		// mm about the bake square's centre, moved by the offset and squashed by the stretch (both along the card's u and v)
+		const vec2 p = ((spotUv - 0.5) * size - tracedParams[13].zw) / (max(tracedParams[12].y, 0.05) * max(tracedParams[13].xy, vec2_splat(0.05)));
 		const float sigma = 8.0 + 8.0 * frost;
 		const float spot = exp(-dot(p, p) / (2.0 * sigma * sigma)) * (0.3 + 0.7 * saturate(light));
 		const vec3 hot = mix(staticColor_Alpha.rgb, vec3_splat(staticColor_Alpha.a), tracedParams[10].z * spot);
