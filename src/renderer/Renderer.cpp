@@ -5221,6 +5221,11 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    const Matrix3D vrPlayfieldView[2] = { m_playfieldView[0], m_playfieldView[1] };
    const bool vrNoBackdrop = m_noBackdrop;
    const unsigned int vrVisibilityMask = m_visibilityMask;
+   // Device settings recorded by RenderStatics and read when the frame is executed: restored for the VR scene's depth prepass
+   RenderTarget* const vrDepthPrepassTarget = m_renderDevice->m_depthPrepassTarget;
+   const bool vrDepthPrepassNormals = m_renderDevice->m_depthPrepassNormals;
+   const bool vrDepthPrepassMotion = m_renderDevice->m_depthPrepassMotion;
+   const bool vrPBRAOEnabled = m_renderDevice->m_pbrAOEnabled;
 
    SwapDesktopTargets();
    m_desktopScenePass = true;
@@ -5335,6 +5340,10 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    m_playfieldView[1] = vrPlayfieldView[1];
    m_noBackdrop = vrNoBackdrop;
    m_visibilityMask = vrVisibilityMask;
+   m_renderDevice->m_depthPrepassTarget = vrDepthPrepassTarget;
+   m_renderDevice->m_depthPrepassNormals = vrDepthPrepassNormals;
+   m_renderDevice->m_depthPrepassMotion = vrDepthPrepassMotion;
+   m_renderDevice->m_pbrAOEnabled = vrPBRAOEnabled;
    m_renderDevice->m_basicShader->SetVector(
       ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
    m_renderDevice->m_ballShader->SetVector(
@@ -5465,6 +5474,13 @@ void Renderer::RenderEditorPreview()
    const vec4 ballLighting = m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting); // Keep the 'disable lighting for balls' state (z)
 
    const ShadeMode mainShadeMode = m_shadeMode;
+   // Device settings recorded by RenderStatics and read when the frame is executed (after the main scene AND this pass are recorded):
+   // the main scene's depth prepass clones its draws into m_depthPrepassTarget at execution, so they must be the main scene's again
+   RenderTarget* const mainDepthPrepassTarget = m_renderDevice->m_depthPrepassTarget;
+   const bool mainDepthPrepassNormals = m_renderDevice->m_depthPrepassNormals;
+   const bool mainDepthPrepassMotion = m_renderDevice->m_depthPrepassMotion;
+   const bool mainPBRAOEnabled = m_renderDevice->m_pbrAOEnabled;
+   const unsigned int mainRenderMask = m_render_mask;
    m_shadeMode = ShadeMode::Default; // The player view is never wireframe (the editor view may be)
    m_editorPreviewPass = true;
 
@@ -5526,6 +5542,11 @@ void Renderer::RenderEditorPreview()
    // Restore the main view state
    m_editorPreviewPass = false;
    m_shadeMode = mainShadeMode;
+   m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
+   m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;
+   m_renderDevice->m_depthPrepassMotion = mainDepthPrepassMotion;
+   m_renderDevice->m_pbrAOEnabled = mainPBRAOEnabled;
+   m_render_mask = mainRenderMask;
    SwapDesktopTargets();
    m_mvp = mainMVP;
    m_initialMVP = mainInitialMVP;
