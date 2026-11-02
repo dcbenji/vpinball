@@ -908,27 +908,37 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             const bool modified = props.GetModifiedField() > 0;
             const unsigned int editId = (altApply ? 0x800000u : 0u) | 0x2000u | static_cast<unsigned int>(props.GetModifiedField());
             const bool continues = modified && editor.m_lastUndoPart == editable && editor.m_lastUndoId == editId;
-            if (!modified && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+            const auto endChain = [&editor]()
             {
-               editor.m_lastUndoPart = nullptr;
-               editor.m_lastUndoId = 0;
-            }
+               if (editor.m_lastUndoId != 0x1000) // The gizmo's own marker is not ours to clear
+               {
+                  editor.m_lastUndoPart = nullptr;
+                  editor.m_lastUndoId = 0;
+               }
+            };
+            if (!modified && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+               endChain();
             if (modified && !continues)
             {
                editor.m_lastUndoPart = editable;
                editor.m_lastUndoId = editId;
+               m_editRecordId = editor.m_undo.TopRecordId();
             }
             else
             {
                editor.m_undo.Discard();
-               // Esc cancelled the drag / typed value (restored): the step it had started is dropped too
-               if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo())
+               // Esc cancelled the drag / typed value (restored): the step it had started is dropped too, if it is still the latest record
+               if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo() && editor.m_undo.TopRecordId() == m_editRecordId)
                {
                   editor.m_undo.Discard();
-                  editor.m_lastUndoPart = nullptr;
-                  editor.m_lastUndoId = 0;
+                  endChain();
                }
             }
+            // Another item took the interaction (Tab between components, a click on another field): a new edit
+            const ImGuiID activeId = ImGui::GetActiveID();
+            if (activeId != m_prevActiveId)
+               endChain();
+            m_prevActiveId = activeId;
          }
          if (props.GetModifiedField() > 0)
             RefreshEditedParts(props);

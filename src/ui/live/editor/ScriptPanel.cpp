@@ -11,6 +11,7 @@
 
 #include <SDL3/SDL_error.h>
 
+#include "imgui/imgui_internal.h"
 #include "imgui/imgui_stdlib.h"
 
 #include <fstream>
@@ -230,6 +231,13 @@ void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput;
       if (readOnly)
          flags |= ImGuiInputTextFlags_ReadOnly;
+      // Esc must not revert the typing: ImGui restores the text the field had when it was activated (the edits are applied on every keystroke), so
+      // the field is deactivated before it sees the key. The text is kept and the focus leaves the editor, and the Esc is not an editor Esc.
+      if (ImGui::GetActiveID() == ImGui::GetID("##script") && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      {
+         ImGui::ClearActiveID();
+         m_editor.m_paneEscPending = true;
+      }
       if (ImGui::InputTextMultiline("##script", &m_editor.m_table->m_script_text, ImVec2(-FLT_MIN, -FLT_MIN), flags))
          m_editor.m_table->SetDirtyScript(SaveDirtyState::Dirty);
    }

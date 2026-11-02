@@ -246,6 +246,10 @@ void PinUndo::BeginUndo()
          m_undoRecords.erase(m_undoRecords.begin());
          m_cleanpoint = (m_cleanpoint == 0 || m_cleanpoint == NoCleanPoint) ? NoCleanPoint : m_cleanpoint - 1;
       }
+      // Only the top record can still be canceled or discarded (restoring what it set aside): the one below it is committed, release its stash. The
+      // records begun and discarded every frame by other panels leave the top one alone
+      if (m_undoRecords.size() >= 2)
+         m_undoRecords[m_undoRecords.size() - 2]->m_stashedRedo.clear();
       m_undoRecords.push_back(std::make_unique<UndoRecord>());
       UndoRecord &record = *m_undoRecords.back();
       record.m_id = ++m_lastRecordId;

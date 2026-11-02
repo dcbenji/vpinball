@@ -603,6 +603,8 @@ void EditorChrome::RenderToolbar()
             changed |= ImGui::Checkbox("Scale", &editor.m_snapAffectScale);
             if (changed)
                editor.SaveSnapPreferences();
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) // Esc edits or closes the popover, it is not an editor Esc
+               editor.m_paneEscPending = true;
             ImGui::EndPopup();
          }
       }

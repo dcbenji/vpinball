@@ -45,6 +45,7 @@
 #include "utils/JSONSerializer.h"
 
 #include "imgui/imgui.h"
+#include "imgui/imgui_internal.h"
 
 #if defined(ENABLE_DX9)
 #include <shellapi.h>
@@ -161,6 +162,8 @@ void EditorUI::ToggleSnapping()
 
 EditorUI::~EditorUI()
 {
+   if (ImGuiContext *const context = ImGui::GetCurrentContext())
+      context->ConfigNavEnableTabbing = true;
    // The table outlives the editor (Player deletes the UI first)
    m_fileOp.reset(); // Wait for a file operation in progress, its result being discarded with the session
    RestorePartsVisibility();
@@ -577,6 +580,7 @@ void EditorUI::FinishFileOp()
       if (SUCCEEDED(result))
       {
          m_undo.SetCleanPoint(SaveDirtyState::Clean);
+         m_lastOp.type = LastOperation::Type::None; // Adjusting after a save would change the table without marking it dirty
          // Start a new undo record on next edit (instead of merging it with the previous one), so that the table gets marked dirty again
          m_lastUndoPart = nullptr;
          m_lastUndoId = 0;
@@ -711,9 +715,23 @@ void EditorUI::SetAreaEditor(const bool right, const AreaEditor type)
    AreaEditor &other = right ? m_leftEditor : m_rightEditor;
    if (mine == type)
       return;
+   const AreaEditor previousMine = mine, previousOther = other;
    if (other == type)
       other = mine; // Each panel is a single instance: the other area takes the type this area leaves
    mine = type;
+   // Switching the type of an area that is too narrow for the new editor widens it (once, the splitter can shrink it again afterwards)
+   const auto ensureWidth = [this](const bool rightSide, const AreaEditor editorType)
+   {
+      const float minimum = editorType == AreaEditor::Properties ? 300.f : editorType == AreaEditor::Script ? 400.f : 0.f;
+      float &width = rightSide ? m_propertiesWidth : m_outlinerWidth;
+      const float limit = 0.5f * ImGui::GetIO().DisplaySize.x / m_liveUI.GetDPI(); // Never more than half of the window
+      if (minimum > 0.f && width < min(minimum, limit))
+         width = min(minimum, limit);
+   };
+   if (mine != previousMine)
+      ensureWidth(right, mine);
+   if (other != previousOther)
+      ensureWidth(!right, other);
    if (type == AreaEditor::PartLibrary)
       m_partLibrary.Show(); // Rescan the library folders
 }
@@ -1013,7 +1031,6 @@ void EditorUI::RenderUI()
    if (showFullUI)
    {
       RenderAreas(m_chrome.GetTopBarHeight()); // Left and right areas
-      m_pinned.FlushPendingCopy(); // Copy to Selected requests queued by the panels, applied outside of any undo record
    }
    if (!m_inspectionModal.IsVisible())
       m_pinned.Render(m_chrome.GetTopBarHeight(), m_chrome.GetStatusBarHeight()); // N-panel
@@ -1024,6 +1041,7 @@ void EditorUI::RenderUI()
       m_pinned.RenderQuickFavorites(); // Q
       RenderSplitters();
    }
+   m_pinned.FlushPendingCopy(); // Copy to Selected requests queued by the panels, applied outside of any undo record
    if (showFullUI)
       m_palette.Render();
    if (showFullUI)
@@ -1235,8 +1253,9 @@ void EditorUI::RenderUI()
       if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {
          // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
-         if (m_lastUndoId != 0x1000 && m_table->m_liveBaseTable == nullptr)
+         if (!m_gizmoDragActive && m_table->m_liveBaseTable == nullptr)
          {
+            m_gizmoDragActive = true;
             m_undo.BeginUndo();
             for (const auto &part : m_multiSel)
                m_undo.MarkForUndo(part->GetEditable());
@@ -1252,8 +1271,9 @@ void EditorUI::RenderUI()
       }
    }
    // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
-   if (!ImGuizmo::IsUsing() && m_lastUndoId == 0x1000)
+   if (!ImGuizmo::IsUsing() && m_gizmoDragActive)
    {
+      m_gizmoDragActive = false;
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
       // A finished translation can be adjusted (the rotation and scale gizmos are not: their axes can not be recovered from the matrices)
@@ -1651,6 +1671,9 @@ void EditorUI::RenderUI()
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
    // Search to field palette (Cmd+K on macOS, where ImGui maps Cmd to Ctrl)
+   // Tab and Shift+Tab belong to the editor (drag point edit, snapping) while the mouse is over the viewport and no text is edited: ImGui must not use them
+   // to tab into a field of a panel that kept the navigation focus. The setting is read by ImGui at the start of the next frame.
+   ImGui::GetCurrentContext()->ConfigNavEnableTabbing = io.WantCaptureMouse || io.WantTextInput;
    const bool panelsShown = !m_inspectionModal.IsVisible() && !m_flyMode && !modalWasActive; // The palette and workspaces need the editor panels (and not during a G / R / S modal transform)
    // Also while a field has keyboard focus (e.g. the one the palette just went to): no text field uses Ctrl+K
    if (panelsShown && ((ImGui::IsKeyPressed(ImGuiKey_K, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) || (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)))
@@ -1671,7 +1694,12 @@ void EditorUI::RenderUI()
       AreaEditor hovered = AreaEditor::Count;
       bool hoveredSidebar = false;
       if (GetAreaUnderMouse(hovered, hoveredSidebar) && !hoveredSidebar && hovered == AreaEditor::Properties)
-         m_properties.FocusSearch();
+      {
+         if (m_properties.CanSearch())
+            m_properties.FocusSearch();
+         else
+            Report("Search needs a single selection"); // The search is off for a multi selection: the next keys would otherwise be editor shortcuts
+      }
       else if (IsAreaEditorHosted(AreaEditor::Outliner))
       {
          (m_rightEditor == AreaEditor::Outliner ? m_showProperties : m_showOutliner) = true;
@@ -2031,20 +2059,25 @@ void EditorUI::UndoSteps(const size_t count)
       return;
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
-   const string label = m_undo.UndoLabel(count - 1);
+   string label;
    std::any state;
    size_t done = 0;
+   bool stoppedEarly = false;
    // TODO handle IsUndoPastCleanPoint
    for (; done < count && m_undo.HasUndo(); ++done)
    {
       // A record that can not be redone would wipe the redo steps built so far: a multi-step undo stops before it (a single undo may clear redo)
       if (done > 0 && m_undo.NextUndoClearsRedo())
+      {
+         stoppedEarly = true;
          break;
+      }
+      label = m_undo.UndoLabel(0); // The label reported is the one of the last step actually undone
       if (std::any step = m_undo.Undo(); step.has_value())
          state = std::move(step);
    }
    RestoreUndoState(state);
-   Report(done == 1 ? "Undo: " + label : "Undo: " + std::to_string(done) + " steps (" + label + ")");
+   Report((done == 1 ? "Undo: " + label : "Undo: " + std::to_string(done) + " steps (" + label + ")") + (stoppedEarly ? ", stopped before a step that can not be redone" : ""));
 }
 
 void EditorUI::RedoSteps(const size_t count)
@@ -2053,12 +2086,15 @@ void EditorUI::RedoSteps(const size_t count)
       return;
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
-   const string label = m_undo.RedoLabel(count - 1);
+   string label;
    std::any state;
    size_t done = 0;
    for (; done < count && m_undo.HasRedo(); ++done)
+   {
+      label = m_undo.RedoLabel(0);
       if (std::any step = m_undo.Redo(); step.has_value())
          state = std::move(step);
+   }
    RestoreUndoState(state);
    Report(done == 1 ? "Redo: " + label : "Redo: " + std::to_string(done) + " steps (" + label + ")");
 }
@@ -2112,7 +2148,13 @@ void EditorUI::DuplicateSelection()
    Matrix3D origin;
    const bool hasOrigin = GetSelectionTransform(origin);
    CopySelection();
+   const uint64_t topBefore = m_undo.TopRecordId();
    PasteSelection(ImGui::GetMousePos());
+   if (m_undo.TopRecordId() == topBefore) // Nothing was pasted: the grab would fold into an unrelated step
+   {
+      Report("Nothing to duplicate");
+      return;
+   }
    Report(CountLabel("Duplicated", count, m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
    if (m_navBlenderTransform)
    {
@@ -4064,6 +4106,7 @@ void EditorUI::ApplyLastOperation()
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
+   m_table->SetNonUndoableDirty(SaveDirtyState::Dirty); // The undo record was begun before the edit: make sure the table is dirty
 }
 
 bool EditorUI::RenderAdjustParameters()
@@ -4140,6 +4183,9 @@ bool EditorUI::RenderAdjustParameters()
    }
    ImGui::PopItemWidth();
    ImGui::PopStyleColor(5);
+   // Esc while one of the fields is being edited cancels the edit, it must not reach the editor (deselect)
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsAnyItemActive())
+      m_paneEscPending = true;
    return changed;
 }
 

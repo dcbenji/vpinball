@@ -176,6 +176,8 @@ private:
    bool m_escPending = false;
    PinKey m_pendingCopy;
    bool m_hasPendingCopy = false;
+   uint64_t m_editRecordId = 0; // Undo record kept for the field edit in progress (see TopRecordId)
+   unsigned int m_prevActiveId = 0;
    bool m_applyArmed = false; // ApplyToSelected may act (see ArmApplyToSelected)
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()

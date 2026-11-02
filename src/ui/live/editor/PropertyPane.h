@@ -313,6 +313,8 @@ private:
    // Blender-style number widget shared by FillSlider (fill = true, range vMin..vMax) and NumberField: press and drag changes the value
    // relative to the grab (shift: fine, ctrl: snapped to steps), a click without drag (or ctrl+click, double click, nav) types the value
    static bool DragField(const char *id, float *value, float vMin, float vMax, bool fill, int decimals, const char *format);
+   static bool DragFieldInt(const char *id, int *value); // Integer field: dragged and typed as an integer (exact above 2^24)
+   static bool DragFieldImpl(const char *id, float *value, int *intValue, float vMin, float vMax, bool fill, int decimals, const char *format);
    // Row of `count` number fields sharing the item width (vector fields)
    static bool DragFieldN(const char *id, float *values, int count, int decimals, const char *format);
    // Name list combos (image, material, surface,...) register a definition that rebuilds their list when drawn
@@ -647,10 +649,8 @@ inline void PropertyPane::InputInt(T* obj, const string& label, const std::funct
    ImGui::PushID(label.c_str());
    int value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   float valueF = static_cast<float>(value);
-   if (DragField(("##" + label).c_str(), &valueF, 0.f, 0.f, false, 0, "%.0f")) // Same number field as the float fields
+   if (DragFieldInt(("##" + label).c_str(), &value)) // Same number field as the float fields
    {
-      value = static_cast<int>(roundf(valueF));
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
          setter(target.display, value);

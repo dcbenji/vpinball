@@ -33,6 +33,7 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    // The step being dragged / typed (same material, pane and field): only its first frame records a step
    static const Material *s_material = nullptr;
    static int s_field = 0;
+   static uint64_t s_record = 0;
    if (m_material == nullptr)
       return false;
    const bool interacting = ImGui::IsAnyItemActive() || ImGui::IsMouseDown(ImGuiMouseButton_Left);
@@ -46,16 +47,17 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
       return false;
    }
    const int field = m_source | modifiedField;
-   if (interacting && s_material == m_material && s_field == field)
+   // Cancelled (Esc, also a typed value, which is no longer active on that frame): the value is back, the step it started is dropped if it is still the latest
+   if (s_material == m_material && s_field == field && PropertyPane::ConsumeEditCancel())
    {
-      if (PropertyPane::ConsumeEditCancel()) // Cancelled (Esc): the value is back, the step it started is dropped
-      {
+      if (m_undo.HasUndo() && m_undo.TopRecordId() == s_record)
          m_undo.Discard();
-         s_material = nullptr;
-         s_field = 0;
-      }
+      s_material = nullptr;
+      s_field = 0;
       return false;
    }
+   if (interacting && s_material == m_material && s_field == field)
+      return false;
    s_material = m_material;
    s_field = field;
    // The material may be deleted before the step is undone: check it is still in the table
@@ -80,6 +82,7 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
          };
       });
    m_undo.EndUndo();
+   s_record = m_undo.TopRecordId();
    return true;
 }
 
@@ -382,17 +385,28 @@ struct DragFieldState
 {
    ImGuiID id = 0; // Field pressed or dragged
    ImVec2 press; // Mouse position at the press
-   float start = 0.f; // Value at the press
-   float acc = 0.f; // Value change accumulated since the drag started
+   double start = 0.0; // Value at the press
+   double acc = 0.0; // Value change accumulated since the drag started
    float speed = 0.f; // Value per pixel of a number field
    bool moved = false; // The mouse went past the click slop: this is a drag
    ImGuiID editId = 0; // Field in text edit mode
-   float editStart = 0.f; // Value when the text edit started (Esc restores it exactly, not its rounded text)
+   double editStart = 0.0; // Value when the text edit started (Esc restores it exactly, not its rounded text)
 };
 DragFieldState s_dragField;
 }
 
 bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMax, bool fill, int decimals, const char* format)
+{
+   return DragFieldImpl(id, value, nullptr, vMin, vMax, fill, decimals, format);
+}
+
+bool PropertyPane::DragFieldInt(const char* id, int* value)
+{
+   return DragFieldImpl(id, nullptr, value, 0.f, 0.f, false, 0, "%d");
+}
+
+// Float or integer field (exactly one of value / intValue): an integer is dragged and typed as an integer, so that large values stay exact
+bool PropertyPane::DragFieldImpl(const char* id, float* value, int* intValue, float vMin, float vMax, bool fill, int decimals, const char* format)
 {
    ImGuiWindow* const window = ImGui::GetCurrentWindow();
    if (window->SkipItems)
@@ -404,6 +418,14 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
    ImGui::ItemSize(bb, style.FramePadding.y);
    if (!ImGui::ItemAdd(bb, fieldId, &bb, ImGuiItemFlags_Inputable))
       return false;
+   const auto current = [&]() -> double { return intValue ? static_cast<double>(*intValue) : static_cast<double>(*value); };
+   const auto put = [&](double v)
+   {
+      if (intValue)
+         *intValue = static_cast<int>(clamp(llround(v), static_cast<long long>(INT_MIN), static_cast<long long>(INT_MAX)));
+      else
+         *value = static_cast<float>(v);
+   };
    const bool mixed = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
    const bool hovered = ImGui::ItemHoverable(bb, fieldId, g.LastItemData.ItemFlags);
    DragFieldState& st = s_dragField;
@@ -431,16 +453,16 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
          st = DragFieldState();
          st.id = fieldId;
          st.press = g.IO.MousePos;
-         st.start = *value;
-         st.speed = DragSpeed(decimals, fabsf(*value));
+         st.start = current();
+         st.speed = DragSpeed(decimals, static_cast<float>(fabs(st.start)));
       }
       if (!textMode && st.id == fieldId && g.ActiveId == fieldId)
       {
          if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) // Cancels the drag
          {
-            if (st.moved && *value != st.start)
+            if (st.moved && current() != st.start)
             {
-               *value = st.start;
+               put(st.start);
                changed = true;
                s_editCancelled = true;
             }
@@ -455,33 +477,31 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
             else
             {
                const bool fine = g.IO.KeyShift;
-               float speed = fill ? (vMax - vMin) / max(bb.GetWidth(), 1.f) : st.speed;
+               double speed = fill ? (vMax - vMin) / max(bb.GetWidth(), 1.f) : st.speed;
                if (fine)
-                  speed *= 0.1f;
+                  speed *= 0.1;
                st.acc += g.IO.MouseDelta.x * speed;
                if (fill)
-                  st.acc = clamp(st.start + st.acc, vMin, vMax) - st.start; // Soft range: the drag stays inside it
-               float v = st.start + st.acc;
+                  st.acc = clamp(st.start + st.acc, static_cast<double>(vMin), static_cast<double>(vMax)) - st.start; // Soft range: the drag stays inside it
+               double v = st.start + st.acc;
                if (g.IO.KeyCtrl)
                {
                   // Snap to tenths of the range (number fields: ten units of the last displayed digit)
-                  const float base = fill ? vMin : 0.f;
-                  const float step = fill ? (vMax - vMin) * 0.1f : powf(10.f, 1.f - static_cast<float>(decimals));
-                  if (step > 0.f)
-                     v = base + roundf((v - base) / step) * step;
+                  const double base = fill ? vMin : 0.0;
+                  const double step = fill ? (vMax - vMin) * 0.1 : pow(10.0, 1.0 - decimals);
+                  if (step > 0.0)
+                     v = base + round((v - base) / step) * step;
                   if (fill)
-                     v = clamp(v, vMin, vMax);
+                     v = clamp(v, static_cast<double>(vMin), static_cast<double>(vMax));
                }
                else
                {
-                  const float scale = powf(10.f, static_cast<float>(decimals + (fine ? 1 : 0)));
-                  v = roundf(v * scale) / scale;
+                  const double scale = pow(10.0, decimals + (fine ? 1 : 0));
+                  v = round(v * scale) / scale;
                }
-               if (v != *value)
-               {
-                  *value = v;
-                  changed = true;
-               }
+               const double before = current();
+               put(v);
+               changed = current() != before;
             }
          }
          else
@@ -507,16 +527,17 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
       if (st.editId != fieldId)
       {
          st.editId = fieldId;
-         st.editStart = *value;
+         st.editStart = current();
       }
       const bool cancel = ImGui::TempInputIsActive(fieldId) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-      const float before = *value;
-      bool edited = ImGui::TempInputScalar(bb, fieldId, id, ImGuiDataType_Float, value, "%.6g", nullptr, nullptr);
+      const double before = current();
+      bool edited = intValue ? ImGui::TempInputScalar(bb, fieldId, id, ImGuiDataType_S32, intValue, "%d", nullptr, nullptr)
+                             : ImGui::TempInputScalar(bb, fieldId, id, ImGuiDataType_Float, value, "%.6g", nullptr, nullptr);
       if (cancel)
       {
          s_escConsumed = true;
-         *value = st.editStart;
-         edited = *value != before;
+         put(st.editStart);
+         edited = current() != before;
          if (edited)
             s_editCancelled = true;
       }
@@ -539,7 +560,7 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
    const float rounding = style.FrameRounding;
    ImGui::RenderNavCursor(bb, fieldId);
    drawList->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(active ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
-   if (fill && vMax > vMin)
+   if (fill && vMax > vMin && value != nullptr)
    {
       const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
       if (t > 0.f)
@@ -553,7 +574,7 @@ bool PropertyPane::DragField(const char* id, float* value, float vMin, float vMa
    if (mixed && g.MixedValueLabel != nullptr)
       shown = g.MixedValueLabel;
    else
-      ImFormatString(text, IM_COUNTOF(text), format, *value);
+      intValue ? ImFormatString(text, IM_COUNTOF(text), format, *intValue) : ImFormatString(text, IM_COUNTOF(text), format, *value);
    ImGui::PushStyleColor(ImGuiCol_Text, mixed ? g.Style.Colors[ImGuiCol_TextMixedValue] : (fill ? ImVec4(1.f, 1.f, 1.f, 1.f) : g.Style.Colors[ImGuiCol_Text]));
    ImGui::RenderTextClipped(bb.Min, bb.Max, shown, nullptr, nullptr, ImVec2(0.5f, 0.5f));
    ImGui::PopStyleColor();

@@ -429,6 +429,7 @@ private:
       vector<Vertex2D> snapPoints; // Snap targets of the 'points' snapping (centers and drag points of the unselected parts), built on first use
       bool snapPointsBuilt = false;
    } m_modal;
+   bool m_gizmoDragActive = false; // A gizmo drag is in progress (its undo record was pushed)
    Matrix3D m_gizmoStartTransform; // Selection transform when the current gizmo drag began
    bool m_gizmoDragTranslate = false; // The current gizmo drag is a translation
    void BeginModalTransform(ModalOp op);

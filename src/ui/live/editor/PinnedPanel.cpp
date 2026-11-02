@@ -269,10 +269,33 @@ void PinnedPanel::SaveTo(PinTable *table) const
    table->m_editorPins.clear();
    for (const PinKey &pin : m_pins)
       table->m_editorPins.push_back({ PinKindName(pin.kind), pin.name, pin.prop });
-   if (m_activeWorkspace < 0 || m_workspacesPristine)
+   if (m_activeWorkspace < 0)
       return; // Workspaces never used with this table: leave its data as it is
    std::array<Workspace, WorkspaceCount> workspaces = m_workspaces;
    CaptureWorkspace(workspaces[m_activeWorkspace]);
+   if (m_workspacesPristine)
+   {
+      // Layout is only shown as active: it becomes the table's workspace as soon as the user changed the areas (editor types, widths,
+      // visibility, sidebar), otherwise the table data is left as it is
+      const Workspace &now = workspaces[m_activeWorkspace];
+      const EditorUI &editor = m_editor;
+      const bool untouched = now.outliner && now.properties && !now.sidebar && now.sidebarTab == static_cast<int>(EditorUI::SidebarTab::Item)
+         && now.leftEditor == static_cast<int>(EditorUI::AreaEditor::Outliner) && now.rightEditor == static_cast<int>(EditorUI::AreaEditor::Properties)
+         && now.outlinerWidth == OutlinerPanel::PaneWidth && now.propertiesWidth == PropertiesPanel::PaneWidth && now.sidebarWidth == 300.f;
+      (void)editor;
+      if (untouched)
+         return;
+   }
+   // Widths of 0 mean 'keep the current one' when loading; what is written is the real width
+   for (Workspace &ws : workspaces)
+   {
+      if (ws.outlinerWidth <= 0.f)
+         ws.outlinerWidth = m_editor.m_outlinerWidth;
+      if (ws.propertiesWidth <= 0.f)
+         ws.propertiesWidth = m_editor.m_propertiesWidth;
+      if (ws.sidebarWidth <= 0.f)
+         ws.sidebarWidth = m_editor.m_sidebarWidth;
+   }
    nlohmann::ordered_json list = nlohmann::ordered_json::array();
    for (const Workspace &ws : workspaces)
    {
@@ -741,26 +764,36 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       // One step per drag / typed value (see PropertiesPanel); Alt editing has its own key, and the chain ends with the interaction
       const unsigned int editId = (altApply ? 0x800000u : 0u) | 0x4000u | static_cast<unsigned int>(modified);
       const bool continues = modified > 0 && editor.m_lastUndoPart == part && editor.m_lastUndoId == editId;
-      if (modified <= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+      const auto endChain = [&editor]()
       {
-         editor.m_lastUndoPart = nullptr;
-         editor.m_lastUndoId = 0;
-      }
+         if (editor.m_lastUndoId != 0x1000) // The gizmo's own marker is not ours to clear
+         {
+            editor.m_lastUndoPart = nullptr;
+            editor.m_lastUndoId = 0;
+         }
+      };
+      if (modified <= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive())
+         endChain();
       if (modified > 0 && !continues)
       {
          editor.m_lastUndoPart = part;
          editor.m_lastUndoId = editId;
+         m_editRecordId = editor.m_undo.TopRecordId();
       }
       else
       {
          editor.m_undo.Discard();
-         if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo()) // Esc cancelled the edit: its step is dropped
+         // Esc cancelled the edit: its step is dropped, if it is still the latest record
+         if (continues && PropertyPane::ConsumeEditCancel() && editor.m_undo.HasUndo() && editor.m_undo.TopRecordId() == m_editRecordId)
          {
             editor.m_undo.Discard();
-            editor.m_lastUndoPart = nullptr;
-            editor.m_lastUndoId = 0;
+            endChain();
          }
       }
+      const ImGuiID activeId = ImGui::GetActiveID();
+      if (activeId != m_prevActiveId) // Another item took the interaction: a new edit
+         endChain();
+      m_prevActiveId = activeId;
    }
    if (modified > 0)
    {

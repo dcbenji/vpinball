@@ -45,6 +45,8 @@ public:
    void FocusSearch() { m_focusSearch = true; }
    // The mouse was over the area when it was last drawn
    bool IsMouseOver() const { return m_mouseOver; }
+   // The search applies to the current selection (a single part, material or the table; not a multi selection, image, sound,...)
+   bool CanSearch() const { return m_curation.active && m_curation.tabbed; }
 
    // Width of the panel in logical pixels (scaled by the UI DPI)
    static constexpr float PaneWidth = 360.f;
@@ -118,6 +120,8 @@ private:
    string m_searchTermsFor;
    vector<string> m_searchTerms; // Lower case words of m_search
    bool m_focusSearch = false;
+   uint64_t m_editRecordId = 0; // Undo record kept for the field edit in progress (see TopRecordId)
+   ImGuiID m_prevActiveId = 0;
    bool m_mouseOver = false;
    void DrawTabStrip();
    void DrawTabContent(PropertyPane &props);
