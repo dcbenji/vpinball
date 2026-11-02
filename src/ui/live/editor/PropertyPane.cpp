@@ -169,7 +169,7 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       if (ImGui::MenuItem("Pin bulb set"))
          m_pins->PinBulbSet(part);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Pin the Traced Insert Bulb fields of this part (depth, spot size, brightness, apply to all)");
+         ImGui::SetTooltip("Pin the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset, apply to all)");
    }
    if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == Material::PBR)
    {

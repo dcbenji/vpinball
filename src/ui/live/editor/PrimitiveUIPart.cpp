@@ -325,7 +325,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 
       // Traced insert (an additive card with a TRACED_ image): the lit insert's hot spot over the bulb, parallaxing with the view
       props.Separator("Traced Insert Bulb"s);
-      props.BroadcastFields(true); // The three sliders also write to every other traced insert while "Apply to all traced inserts" is on
+      props.BroadcastFields(true); // The bulb sliders also write to every other traced insert while "Apply to all traced inserts" is on
       props.SliderFloat<Primitive>(
          m_part, "Bulb Depth (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbDepth; }, //
