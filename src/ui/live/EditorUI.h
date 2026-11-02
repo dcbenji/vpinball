@@ -547,6 +547,7 @@ private:
    mutable std::vector<SplitterRect> m_splitterRects;
    mutable AreaRect m_viewportRect, m_viewportContentRect;
    mutable bool m_areaRectsValid = false;
+   mutable bool m_viewportVisible = true; // False while a panel is maximized: the viewport rects are then empty and no viewport overlay is drawn
    mutable string m_areaRectsLog;
    int m_splitDragNode = -1; // Splitter drag: node id and unrounded divider position
    float m_splitDragPos = 0.f;
@@ -588,7 +589,10 @@ private:
    bool m_edgeMenuRequest = false;
    ImVec2 m_edgeMenuPos = ImVec2(0.f, 0.f);
    int m_hoverLeaf = -1; // Area under the mouse at the start of the frame (not while a popup or the palette covers the areas)
+   bool m_sidebarWasShown = false; // The N-panel window is created above the corner zones the first time it is shown: raise them then
    bool m_raiseAreaWindows = false; // After a layout change: splitter strips and corner zones are brought to the front again, in that order (corners win)
+   bool IsViewportVisible() const { return m_viewportVisible; } // The 3D view is shown (not hidden behind a maximized panel): gate for the viewport overlays
+   bool ShouldRaiseAreaWindows() const; // A layout change is pending a raise, and no popup is open (it would be covered)
    bool CanUseAreaTools() const; // Corner zones, edge menu and their modes: off during G / R / S, gizmo / point drags, point edit, running game inspection, file ops, palette, maximize
    const LeafRect *FindLeafRect(int leafId) const; // Visible leaf of the last ComputeAreaRects
    bool PlanAreaSplit(int leafId, SplitAxis axis, bool newOnSecondSide, const ImVec2 &cursor, AreaSplitPlan &plan) const;

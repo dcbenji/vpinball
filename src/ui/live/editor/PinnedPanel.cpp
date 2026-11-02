@@ -983,8 +983,8 @@ void PinnedPanel::Render()
    const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Look;
    if (lookShown || m_quickOpen || editor.m_openQuickFavorites)
       LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun
-   if (!editor.m_showSidebar)
-      return;
+   if (!editor.m_showSidebar || !editor.IsViewportVisible())
+      return; // The N-panel belongs to the viewport area: not with a panel maximized over it
    // The Item tab shows the Properties editor's Transform list: keep it current when the Properties editor is hidden
    if (!editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties) && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
       editor.m_properties.PrepareCuration();

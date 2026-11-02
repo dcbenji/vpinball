@@ -103,11 +103,15 @@ void EditorChrome::Render(bool showFullUI)
    m_statusBarHeight = (showFullUI && m_showStatusBar) ? StatusBarHeight * m_editor.m_liveUI.GetDPI() : 0.f;
 
    if (!showFullUI)
+   {
+      m_toolShelfDrawn = false;
       return;
+   }
 
    RenderMenuBar();
    RenderToolbar();
-   RenderStatusOverlay();
+   if (m_editor.IsViewportVisible()) // No visible viewport (maximized panel): nothing to overlay
+      RenderStatusOverlay();
    RenderUndoHistory();
 }
 
@@ -523,7 +527,7 @@ void EditorChrome::RenderToolbar()
       ToolSeparator();
 
       // Edit mode selection: moved to the tool shelf when it is shown
-      if (!ToolShelfVisible())
+      if (!m_toolShelfDrawn) // Edit modes: in the tool shelf when it was drawn last frame
       {
          for (const auto &mode : editModes)
          {
@@ -645,7 +649,7 @@ void EditorChrome::RenderToolbar()
          }
       }
       // Add part button, opening the part type picker popup (same as the Shift+A shortcut)
-      if (!ToolShelfVisible()) // Moved to the tool shelf when it is shown (the popup below is shared)
+      if (!m_toolShelfDrawn) // Moved to the tool shelf when it is shown (the popup below is shared)
       {
          ImGui::BeginDisabled(editor.m_pointEditPart != nullptr || editor.m_table->IsLocked());
          const bool addPartActive = (editor.m_addPartType != eItemInvalid);
@@ -802,7 +806,8 @@ bool EditorChrome::ToolShelfVisible() const
 
 void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
 {
-   if (!ToolShelfVisible())
+   m_toolShelfDrawn = false; // Set once the shelf is really drawn: the toolbar keeps the tools whenever the shelf is hidden (too small, overlap, no viewport)
+   if (!ToolShelfVisible() || !m_editor.IsViewportVisible())
       return;
    EditorUI &editor = m_editor;
    const float dpi = editor.m_liveUI.GetDPI();
@@ -826,9 +831,10 @@ void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
    // Do not overlap the nav cube / N-panel side (too narrow viewport) nor the F9 Adjust Last panel at the bottom left (last frame rect, if shown)
    if (viewportContent.Width() < estWidth + 220.f * dpi || pos.y + estHeight > viewportContent.y1 - 8.f * dpi)
       return;
-   if (const ImGuiWindow *adjust = ImGui::FindWindowByName("Adjust Last Operation"); adjust != nullptr && adjust->Active && pos.y + estHeight + 4.f * dpi > adjust->Pos.y)
+   if (const ImGuiWindow *adjust = ImGui::FindWindowByName("Adjust Last Operation"); adjust != nullptr && adjust->WasActive && pos.y + estHeight + 4.f * dpi > adjust->Pos.y)
       return;
 
+   m_toolShelfDrawn = true;
    ImGui::SetNextWindowPos(pos);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));

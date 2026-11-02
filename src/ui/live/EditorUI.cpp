@@ -662,6 +662,12 @@ void EditorUI::RenderSplitters()
    const float dpi = m_liveUI.GetDPI();
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
    const ImGuiIO &io = ImGui::GetIO();
+   if (m_showSidebar && m_viewportVisible && !m_sidebarWasShown)
+      m_raiseAreaWindows = true; // The N-panel window was just created, above the corner zones
+   m_sidebarWasShown = m_showSidebar && m_viewportVisible;
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      m_splitDragNode = -1; // Splitter drag over
+   const bool raiseNow = ShouldRaiseAreaWindows(); // Deferred while a popup is open: the raised strips would cover it
    // Returns whether the strip is being dragged. The strip is a window like the former fixed splitters (same flags and cursor), the highlight
    // is drawn on hover / drag, and the seam line only between areas that are not the 3D view (the areas have no border of their own)
    const auto strip = [&](const char *id, const AreaRect &grab, const bool vertical, const bool seam, bool &activated, bool *rightClicked = nullptr) -> bool
@@ -673,7 +679,7 @@ void EditorUI::RenderSplitters()
       ImGui::Begin(id, nullptr,
          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
             | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus); // Never raised by a click: the corner zones, created after the strips, stay above them
-      if (m_raiseAreaWindows)
+      if (raiseNow)
          ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow()); // After a layout change (new windows are created on top): strips, then corners
       ImGui::InvisibleButton("##grab", ImVec2(grab.Width(), grab.Height()));
       activated = ImGui::IsItemActivated();
@@ -750,7 +756,7 @@ void EditorUI::RenderSplitters()
          m_areas.SetSplitSize(split.nodeId, split.SizeForPos(m_splitDragPos, dpi));
       }
    }
-   if (m_showSidebar)
+   if (m_showSidebar && m_viewportVisible)
    {
       const float half = 3.f * dpi;
       const AreaRect grab { m_viewportContentRect.x1 - half, m_viewportRect.y0, m_viewportContentRect.x1 + half, m_viewportRect.y1 };
@@ -762,7 +768,8 @@ void EditorUI::RenderSplitters()
    RenderAreaCorners();
    RenderAreaEdgeMenu();
    RenderAreaModal();
-   m_raiseAreaWindows = false;
+   if (raiseNow)
+      m_raiseAreaWindows = false;
 }
 
 const char *EditorUI::AreaEditorName(const AreaEditor type)
@@ -875,6 +882,8 @@ ImVec2 EditorUI::GetViewportContentCenter() const
 {
    if (!m_areaRectsValid)
       ComputeAreaRects();
+   if (!m_viewportVisible)
+      return ImVec2(0.5f * ImGui::GetIO().DisplaySize.x, 0.5f * ImGui::GetIO().DisplaySize.y);
    return ImVec2(0.5f * (m_viewportContentRect.x0 + m_viewportContentRect.x1), 0.5f * (m_viewportContentRect.y0 + m_viewportContentRect.y1));
 }
 
@@ -1007,6 +1016,7 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
    }
    case PendingAreaOp::Kind::Split:
    {
+      m_maximizedLeafId = -1; // The new layout must be visible
       const bool hadPartLibrary = m_areas.IsHosted(AreaEditor::PartLibrary);
       if (!m_areas.Split(op.leaf, op.axis, op.newOnSecondSide, op.size))
          return false;
@@ -1016,13 +1026,16 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
    }
    case PendingAreaOp::Kind::Join:
    {
+      m_maximizedLeafId = -1;
       if (!m_areas.Join(op.leaf, op.leaf2))
          return false;
       if (m_maximizedLeafId >= 0 && m_areas.Find(m_maximizedLeafId) == nullptr)
          m_maximizedLeafId = -1;
       return true;
    }
-   case PendingAreaOp::Kind::Swap: return m_areas.Swap(op.leaf);
+   case PendingAreaOp::Kind::Swap:
+      m_maximizedLeafId = -1;
+      return m_areas.Swap(op.leaf);
    case PendingAreaOp::Kind::Maximize:
    {
       const AreaNode *const node = op.leaf >= 0 ? m_areas.Find(op.leaf) : nullptr;
@@ -1082,16 +1095,23 @@ void EditorUI::ComputeAreaRects() const
 
    // The viewport area is the window onto the full window 3D render; when no area is drawn (locked table, fly mode, inspection) it is the whole tree
    m_viewportRect = tree;
+   m_viewportVisible = true;
    if (areasShown)
+   {
+      m_viewportVisible = false;
       for (const LeafRect &leaf : m_leafRects)
          if (leaf.type == AreaType::Viewport && leaf.visible)
          {
             m_viewportRect = leaf.rect;
+            m_viewportVisible = true;
             break;
          }
+      if (!m_viewportVisible)
+         m_viewportRect = AreaRect(); // A panel is maximized: nothing of the viewport is shown
+   }
    // The N-panel is at the right edge of the viewport area
    m_viewportContentRect = m_viewportRect;
-   if (sidebarShown)
+   if (sidebarShown && m_viewportVisible)
       m_viewportContentRect.x1 = max(m_viewportContentRect.x0, m_viewportContentRect.x1 - m_sidebarWidth * dpi);
    m_areaRectsValid = true;
 
@@ -1117,6 +1137,11 @@ void EditorUI::ComputeAreaRects() const
          PLOGI << "AreaLayout: " << text;
       }
    }
+}
+
+bool EditorUI::ShouldRaiseAreaWindows() const
+{
+   return m_raiseAreaWindows && !ImGui::IsPopupOpen(static_cast<ImGuiID>(0), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
 bool EditorUI::CanUseAreaTools() const
@@ -1303,12 +1328,13 @@ void EditorUI::RenderAreaCorners()
    if (!m_areaDrag.active && ImGui::IsPopupOpen(static_cast<ImGuiID>(0), ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
       return;
    const float dpi = m_liveUI.GetDPI();
+   const bool raiseNow = ShouldRaiseAreaWindows();
    const vector<LeafRect> leaves = m_leafRects;
    for (const LeafRect &leaf : leaves)
    {
       if (!leaf.visible)
          continue;
-      const float side = min(8.f * dpi, 0.5f * min(leaf.rect.Width(), leaf.rect.Height()));
+      const float side = min(4.f * dpi, 0.5f * min(leaf.rect.Width(), leaf.rect.Height()));
       if (side < 2.f)
          continue;
       for (int corner = 0; corner < 4; ++corner)
@@ -1324,7 +1350,7 @@ void EditorUI::RenderAreaCorners()
          ImGui::Begin(name, nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
                | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus);
-         if (m_raiseAreaWindows)
+         if (raiseNow)
             ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
          ImGui::InvisibleButton("##corner", ImVec2(side, side));
          const bool activated = ImGui::IsItemActivated();
@@ -1525,6 +1551,7 @@ void EditorUI::RenderAreaModal()
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.f, 1.f));
    ImGui::Begin("##AreaModalCatcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+   ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow()); // Every frame: nothing (re-raised strips, popups) may end up above it
    ImGui::InvisibleButton("##catch", io.DisplaySize);
    const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
    ImGui::End();
@@ -1729,6 +1756,10 @@ Vertex2D EditorUI::GetUIVisibleFraction() const
    // When the editor UI is not displayed (fly mode, inspection modal), nothing is drawn over the render
    if (m_flyMode || m_inspectionModal.IsVisible())
       return Vertex2D(1.f, 1.f);
+   if (!m_areaRectsValid)
+      ComputeAreaRects();
+   if (!m_viewportVisible)
+      return Vertex2D(1.f, 1.f); // Maximized panel: no 3D view to fit
    // Otherwise, the top chrome (and the side panes, unless the table is locked) are drawn over the render:
    // evaluate the remaining visible fraction, applied as a symmetric margin so that fitted content stays centered. The area left to
    // the 3D view is the content of the viewport area (its N-panel excluded)
@@ -1856,6 +1887,8 @@ void EditorUI::RenderUI()
 
    const bool showFullUI = !m_inspectionModal.IsVisible() && !m_flyMode;
    m_chrome.Render(showFullUI);
+   if (!showFullUI)
+      CancelAreaInteraction(false); // Fly mode, inspection modal: no corner drag or edge mode survives it
    ComputeAreaRects(); // The bar heights may have changed with the chrome render
    if (showFullUI)
    {
@@ -2010,7 +2043,7 @@ void EditorUI::RenderUI()
       ImGuizmo::Enable(true);
    }
    bool gizmoManipulated = false; // Manipulate called this frame with an operation
-   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost)
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost && m_viewportVisible)
    {
       float camViewLH[16];
       memcpy(camViewLH, &m_camView.m[0][0], sizeof(float) * 4 * 4);
@@ -2163,7 +2196,7 @@ void EditorUI::RenderUI()
          overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
-      if (m_modal.active)
+      if (m_modal.active && m_viewportVisible)
          overlayDrawList->AddText(ImVec2(m_viewportContentRect.x0 + 16.f * m_liveUI.GetDPI(), m_viewportContentRect.y1 - 32.f * m_liveUI.GetDPI()), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
 
       // In desktop backdrop mode, draw the bounds of the backdrop area
@@ -2227,7 +2260,7 @@ void EditorUI::RenderUI()
    const bool modalWasActive = m_modal.active;
    if (modalWasActive && m_fileOp == nullptr)
       UpdateModalTransform();
-   if (!io.WantCaptureMouse && m_fileOp == nullptr && !modalWasActive)
+   if (!io.WantCaptureMouse && m_viewportVisible && m_fileOp == nullptr && !modalWasActive) // Viewport mouse input: not with a panel maximized over it
    {
       // Trackpad: two finger scroll pans the view (Ctrl / Cmd + scroll zooms)
       if (m_navTrackpad && (io.MouseWheel != 0 || io.MouseWheelH != 0) && !io.KeyCtrl && !io.KeySuper)
@@ -2548,7 +2581,8 @@ void EditorUI::RenderUI()
    // Ctrl+Space (physical Ctrl: Cmd+Space is Spotlight on macOS): maximize the area under the mouse, again to restore. Like Ctrl+F it works while a panel has
    // the keyboard focus, but not while text is edited, nor in the situations where the areas are off (G / R / S, running game inspection,...)
    if (panelsShown && !m_table->IsLocked() && m_fileOp == nullptr && !m_palette.IsOpen() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false)
-      && (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && !io.KeyAlt && !io.KeyShift)
+      && (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && !io.KeyAlt && !io.KeyShift
+      && !m_areaDrag.active && m_areaModal == AreaModalKind::None && m_splitDragNode < 0) // Not during a corner drag, an edge mode or a splitter drag
    {
       const ImVec2 mouse = io.MousePos;
       if (m_maximizedLeafId >= 0 || AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y) >= 0) // Over an area (not the bars)
@@ -3852,7 +3886,7 @@ void EditorUI::UpdateEditableList()
 void EditorUI::RenderNavCube()
 {
    // Edit mode only: not in the 2D desktop backdrop view, nor in inspect (play) mode, nor with the side panels hidden
-   if (!m_showNavCube || IsInspectMode() || m_flyMode || m_table->IsLocked() || m_inspectionModal.IsVisible() || m_camMode == ViewMode::DesktopBackdrop)
+   if (!m_showNavCube || !m_viewportVisible || IsInspectMode() || m_flyMode || m_table->IsLocked() || m_inspectionModal.IsVisible() || m_camMode == ViewMode::DesktopBackdrop)
       return;
 
    ImGuiIO &io = ImGui::GetIO();
@@ -4031,6 +4065,8 @@ Matrix3D ScaledTransform(const Matrix3D &m0, const int axis, const bool plane, c
 
 void EditorUI::BeginModalTransform(ModalOp op)
 {
+   if (!m_viewportVisible)
+      return; // G / R / S act on the 3D view
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
       return;
@@ -5061,9 +5097,10 @@ void EditorUI::RenderAdjustPanel()
    if (m_lastOp.type != LastOperation::Type::None
       && (m_modal.active || m_pointEditPart != nullptr || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId || m_multiSel != m_lastOp.selection))
       m_lastOp.type = LastOperation::Type::None;
-   if (m_lastOp.type == LastOperation::Type::None)
+   if (m_lastOp.type == LastOperation::Type::None || !m_viewportVisible)
    {
-      m_adjustPopupOpen = false;
+      if (m_lastOp.type == LastOperation::Type::None)
+         m_adjustPopupOpen = false;
       return;
    }
    const float dpi = m_liveUI.GetDPI();

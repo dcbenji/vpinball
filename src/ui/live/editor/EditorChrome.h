@@ -59,7 +59,7 @@ public:
 private:
    void RenderMenuBar();
    void RenderToolbar();
-   bool ToolShelfVisible() const; // Shelf shown and allowed in the current state: the toolbar then omits the edit modes and the Add button
+   bool ToolShelfVisible() const; // Shelf enabled and allowed in the current state (it may still not fit, see m_toolShelfDrawn)
    void RenderStatusOverlay();
    void RenderUndoHistory();
 
@@ -68,6 +68,7 @@ private:
    float m_toolBarHeight = 0.0f;
    float m_statusBarHeight = 0.0f;
    bool m_showStatusBar = true; // View > Status Bar
+   bool m_toolShelfDrawn = false; // The shelf was drawn last frame: the top toolbar then omits the tools it hosts
    bool m_showToolShelf = true; // View > Tool Shelf (global, not per workspace)
    bool m_undoHistoryOpen = false;
    bool m_undoHistoryJustOpened = false;
