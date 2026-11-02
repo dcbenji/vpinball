@@ -1210,6 +1210,10 @@ void Primitive::Render(const unsigned int renderMask)
          level = m_lightmap->m_currentIntensity / (m_lightmap->m_d.m_intensity * m_lightmap->m_d.m_intensity_scale);
       if (FlasherDomeTune("lvl=", -1.f) >= 0.f) // VPX_T9_TUNE lvl=: a fixed lamp level (look checks)
          level = FlasherDomeTune("lvl=", -1.f);
+      // dome_boost: the level the dome layer sees (a flash the ROM drives below full reads as a full one); capped at 1.5 (the
+      // peak's headroom). 1 = unchanged, bit-identical
+      if (m_d.m_domeBoost != 1.f)
+         level = min(level * max(m_d.m_domeBoost, 0.f), max(level, 1.5f));
       // The OFF glints are lit by the room: they follow the scene lighting level, relative to the table's default level
       const float roomLevel = m_renderer->m_sceneLighting.GetGlobalEmissionScale() / max(m_ptable->m_globalEmissionScale, 0.01f);
       // The table's light scattered in the plastic (GI glow): the irradiance at the bulb through a soft knee (a dome right next
@@ -1244,7 +1248,7 @@ void Primitive::Render(const unsigned int renderMask)
             lampColor = vec4(c.x / m, c.y / m, c.z / m, 0.f);
       }
       const float ridgeR = m_d.m_domeFluteDepth == 1.f ? d.ridgeR : d.rootR - m_d.m_domeFluteDepth * (d.rootR - d.ridgeR);
-      const vec4 p[14] = {
+      const vec4 p[15] = {
          vec4(base.x, base.y, base.z, mm),
          vec4(axis.x, axis.y, axis.z, d.radius * scale * mm),
          vec4(coil.x, coil.y, coil.z, d.height * scale * mm),
@@ -1258,8 +1262,9 @@ void Primitive::Render(const unsigned int renderMask)
          vec4(clamp(m_d.m_domeBody, 0.f, 1.f), max(m_d.m_domeScatter, 0.f), max(m_d.m_domeCap, 0.f), FlasherDomeTune("interior=", 1.f)),
          vec4(sigma.x, sigma.y, sigma.z, FlasherDomeTune("lscat=", 1.f)),
          vec4(lampColor.x, lampColor.y, lampColor.z, FlasherDomeTune("rim=", 1.f)),
-         vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), 0.f, 0.f) };
-      std::copy(p, p + 14, params);
+         vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), max(m_d.m_domeGlint, 0.f), max(m_d.m_domePeak, 0.f)),
+         vec4(max(m_d.m_domeDepth, 0.f), 0.f, 0.f, 0.f) };
+      std::copy(p, p + 15, params);
    };
 
    // Traced insert prototype: an additive card whose image is a multi-view traced bake ('TRACED_' image name prefix). It is
@@ -1502,7 +1507,7 @@ void Primitive::Render(const unsigned int renderMask)
       // submitted after it)
       if (flasherDome && mat->m_bOpacityActive && isPBR && MeasureFlasherDome().valid)
       {
-         vec4 params[14];
+         vec4 params[15];
          flasherDomeParams(params, 1.f);
          const RenderState saved = m_renderer->m_renderDevice->GetRenderState();
          m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
@@ -1510,7 +1515,7 @@ void Primitive::Render(const unsigned int renderMask)
          m_renderer->m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_COLOR);
          m_renderer->m_renderDevice->SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_ADD);
          m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
-         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 14);
+         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 15);
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
          m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
          m_renderer->m_renderDevice->GetRenderState() = saved;
@@ -1634,13 +1639,13 @@ void Primitive::Render(const unsigned int renderMask)
    // Flasher dome layer: additive over the body just drawn (same sort key, submitted after it), outer skin only (depth equal)
    if (flasherDome && !is_reflection_only_pass && MeasureFlasherDome().valid)
    {
-      vec4 params[14];
+      vec4 params[15];
       flasherDomeParams(params, mat->m_bOpacityActive ? 2.f : 0.f);
       m_renderer->m_renderDevice->ResetRenderState();
       m_renderer->m_renderDevice->EnableAlphaBlend(true);
       m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, cullMode);
-      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 14);
+      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 15);
       m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
       m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, bodyIndices);
    }
@@ -1846,6 +1851,10 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteInt(FID(DMFL), m_d.m_domeFlutes);
    writer.WriteFloat(FID(DMFD), m_d.m_domeFluteDepth);
    writer.WriteInt(FID(DMTN), m_d.m_domeTint);
+   writer.WriteFloat(FID(DMGL), m_d.m_domeGlint);
+   writer.WriteFloat(FID(DMPK), m_d.m_domePeak);
+   writer.WriteFloat(FID(DMDP), m_d.m_domeDepth);
+   writer.WriteFloat(FID(DMBO), m_d.m_domeBoost);
 
    SaveSharedEditableFields(writer);
 
@@ -2094,6 +2103,10 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMFL): m_d.m_domeFlutes = reader.AsInt(); break;
          case FID(DMFD): m_d.m_domeFluteDepth = reader.AsFloat(); break;
          case FID(DMTN): m_d.m_domeTint = reader.AsInt(); break;
+         case FID(DMGL): m_d.m_domeGlint = reader.AsFloat(); break;
+         case FID(DMPK): m_d.m_domePeak = reader.AsFloat(); break;
+         case FID(DMDP): m_d.m_domeDepth = reader.AsFloat(); break;
+         case FID(DMBO): m_d.m_domeBoost = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 

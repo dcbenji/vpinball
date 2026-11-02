@@ -37,7 +37,9 @@
 //      rim), room-lit and lamp-lit; w unused
 // [11] xyz the plastic's absorption (1/mm; the red acrylic preset, or from dome_tint = the colour at 2 mm), w unused
 // [12] xyz the lamp's colour (linear, max channel 1), w unused
-// [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting)
+// [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
+//      z dome_glint (the OFF sparkle's scale, 1 = as tuned), w dome_peak (white-hot peak, 0 = the red peak)
+// [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off)
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #ifdef STEREO
@@ -49,7 +51,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 
 #include "common.sh"
 
-uniform vec4 domeParams[14];
+uniform vec4 domeParams[15];
 
 #ifdef STEREO
 	uniform mat4 matView[2];
@@ -162,6 +164,7 @@ void main()
 	const float bodyK = saturate(domeParams[10].x);
 	const float scatK = max(domeParams[10].y, 0.0);
 	const float capK = max(domeParams[10].z, 0.0);
+	const float peakK = max(domeParams[13].w, 0.0);
 	const vec3 lampCol = domeParams[12].xyz;
 
 	// Only the outer skin emits (the inner flutes, base and cap underside are hidden behind it or seen through it); the base
@@ -295,7 +298,9 @@ void main()
 		}
 	}
 	// A thick body stays red at the peak: its glow flood steps back (the lamp scatter carries the body) and its flash is damped
-	const vec3 body = lvlB * domeParams[5].x * glow * mix(flash, 1.0 + 0.35 * (flash - 1.0), bodyK) * (1.0 - 0.7 * bodyK);
+	// dome_peak: the white-hot peak (whiteK, from 85 % of full; a level above 1 pushes it further) undoes that damping
+	const float whiteK = min(peakK * smoothstep(0.85, 1.0, level) * (1.0 + 0.5 * saturate(level - 1.0)), 1.5);
+	const vec3 body = lvlB * domeParams[5].x * glow * mix(mix(flash, 1.0 + 0.35 * (flash - 1.0), bodyK) * (1.0 - 0.7 * bodyK), flash, saturate(whiteK));
 
 	// Bars: each flank transmits the coil as a narrow vertical bar where its GGX transmission lobe (in the horizontal
 	// plane: a vertical flute smears elevation) meets the filament. Broken, staggered and tapered per flank.
@@ -368,7 +373,7 @@ void main()
 	const float nv = saturate(dot(Ns, V));
 	const float whS = (1.0 - 0.45 * edge) * (0.05 + 0.95 * nv * nv) * fall;
 	// at the peak the shell facing the viewer passes some of the filament's white (the leak), its silhouette stays red
-	const vec3 white = (1.0 - 0.85 * bodyK) * domeParams[5].w * pk * whS * mix(vec3(1.0, 0.05, 0.018), bb * vec3(1.0, 0.8, 0.65), domeParams[8].x * nv * nv * fall / (1.0 + fall));
+	const vec3 white = (1.0 - 0.85 * bodyK * (1.0 - saturate(whiteK))) * domeParams[5].w * pk * whS * mix(vec3(1.0, 0.05, 0.018), bb * vec3(1.0, 0.8, 0.65), domeParams[8].x * nv * nv * fall / (1.0 + fall));
 
 	// OFF sparkle: the view ray reflects off the (hash-tilted) inner facet with Fresnel, goes back out through the skin and
 	// picks up a fixed studio room. Deep red: two passes through the wall. Ridge glints and needles on the flute edges.
@@ -466,7 +471,7 @@ void main()
 			const vec3 nCol = mix(tint, vec3(1.0, 0.6, 0.45) * tint.r, 0.8 * lin * lin * slide);
 			sparkle += domeParams[5].z * (1.0 + 4.0 * bodyK) * 4.0 * lin * mix(0.3, 1.0, slide) * exp(-dN * dN) * br * max(Fr, 0.2) * nCol * facing * mix(1.0, 0.3, capW);
 		}
-		sparkle *= domeParams[4].w;
+		sparkle *= domeParams[4].w * domeParams[13].z; // dome_glint
 	}
 
 	// GI glow: the table's light scattered in the red plastic (deep red: the hemispherical path through the wall), banded by
@@ -480,7 +485,8 @@ void main()
 	// Thick body: the milky interior that replaces the scene behind (dome_body), the lamp's light diffused through it
 	// (dome_scatter) and the top edge (dome_cap). All zero at the defaults.
 	vec3 thick = vec3_splat(0.0);
-	BRANCH if (bodyK > 0.0 || scatK > 0.0 || capK > 0.0)
+	const float depthK = max(domeParams[14].x, 0.0);
+	BRANCH if (bodyK > 0.0 || scatK > 0.0 || capK > 0.0 || peakK > 0.0 || depthK > 0.0)
 	{
 		const float bandF = mix(facet * (0.6 + 0.8 * edge), 0.7 + 0.6 * edge, capW); // the flutes (and the cap's ribs) band the scattered light
 		// Interior, lamp off: the room (the table's environment level) and the table's lights at the dome (the GI irradiance, from
@@ -508,7 +514,50 @@ void main()
 		const float FrB = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
 		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeStudio(rV.x * ex + rV.y * up + rV.z * ez), 6.0)) * mix(vec3_splat(1.0), trH, 0.3)
 			+ 4.0 * lvlG * mix(lampCol, bb, domeParams[8].x * pk) * exp(-sigma * 0.5 * wallB) * (1.0 + 0.35 * (flash - 1.0)));
-		thick = interior + lampScat + capRim;
+		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
+		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
+		const vec3 hotCol = bb * vec3(1.0, 0.86, 0.68);
+		const vec3 peakScat = whiteK * scatK * 2.5 * mix(lampCol * trH, hotCol, saturate(0.55 + 0.45 * fallS)) * fallS * (0.85 + 0.3 * edge) * (1.0 + 0.2 * (flash - 1.0));
+		const float capHot = capW * exp(-(rxz / (0.5 * rootR)) * (rxz / (0.5 * rootR)));
+		const vec3 capSpot = scatK * capHot * lvlG * (1.2 * mix(lampCol * trN, hotCol, 0.3) + 2.5 * whiteK * hotCol);
+		// Depth (dome_depth, lamp off): the cavity ray, bent by the near flank it entered through, meets the far wall: its ridge
+		// tips and groove roots show as lines at a different depth, each flute lensing its own slice, so they slide against the near
+		// ridges as the view moves; where the ray is trapped in the wall (total internal reflection) the flank shines as a line
+		vec3 depthL = vec3_splat(0.0);
+		BRANCH if (depthK > 0.0)
+		{
+			float farL = 0.0;
+			if (!tir)
+			{
+				const float rMidD = 0.5 * (rootR + ridgeR);
+				const float aD = dot(d2.xz, d2.xz);
+				const float bD = dot(Pin.xz, d2.xz);
+				const float discD = bD * bD - aD * (dot(Pin.xz, Pin.xz) - rMidD * rMidD);
+				if (aD > 1e-4 && discD > 0.0)
+				{
+					const vec3 Pf = Pin + d2 * ((-bD + sqrt(discD)) / aD);
+					const float fF = (atan2(Pf.z, Pf.x) - domeParams[3].z) / period;
+					const float eF = fF - floor(fF + 0.5);
+					const float eTipF = 0.5 - abs(eF);
+					farL = (exp(-(eTipF / 0.05) * (eTipF / 0.05)) + 0.45 * exp(-(eF / 0.06) * (eF / 0.06)))
+						* smoothstep(0.5, 3.0, Pf.y) * (1.0 - smoothstep(capY - 3.0, capY, Pf.y)) * (0.6 + 0.8 * domeHash(floor(fF + 0.5) * 7.77 + 3.1));
+				}
+			}
+			const float tirL = tir ? 1.2 : 0.0;
+			// The cap: its underside's ribs seen a few mm deeper along the cavity ray, a second starburst that slides against the
+			// top one as the view moves
+			float capL = 0.0;
+			if (capW > 0.0 && !tir)
+			{
+				const vec3 Pd = Pin + d2 * (4.0 / max(-d2.y, 0.3));
+				const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
+				const float eC = fC - floor(fC + 0.5);
+				capL = exp(-(eC / 0.07) * (eC / 0.07)) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+			}
+			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
+			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (4.0 * farL * trH * trN + tirL * trN) + capW * 3.0 * capL * trH);
+		}
+		thick = interior + lampScat + capRim + peakScat + capSpot + depthL;
 	}
 
 	vec3 result = (body + bars + core + cap + white) * domeParams[7].x + sparkle + giGlow + thick;

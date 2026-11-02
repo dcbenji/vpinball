@@ -2697,10 +2697,21 @@ void Renderer::CreateVSMPagePoolTargets()
       m_vsmTransSampler = nullptr;
       if (bgfx::isValid(m_vsmTransTex))
          bgfx::destroy(m_vsmTransTex);
-      m_vsmTransTex = bgfx::createTexture2D(VSM::PAGE_SIZE, VSM::PAGE_SIZE, false, static_cast<uint16_t>(m_vsmPoolPages), bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+      // The nearness (alpha) is normalized over the light's whole depth range: 8 bits step ~9 VPU on a ~2400 VPU room key,
+      // beyond the 2 VPU self-tint margin, so a tilted plastic tinted itself in bands. 16 bit unorm (half float fallback)
+      // keeps it well under; the main pass margin also covers the step (pbrShadowParams.z)
+      constexpr uint32_t transCaps = BGFX_CAPS_FORMAT_TEXTURE_2D | BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER;
+      const uint32_t* const fmtCaps = bgfx::getCaps()->formats;
+      m_vsmTransFormat = (fmtCaps[bgfx::TextureFormat::RGBA16] & transCaps) == transCaps ? bgfx::TextureFormat::RGBA16
+                       : (fmtCaps[bgfx::TextureFormat::RGBA16F] & transCaps) == transCaps ? bgfx::TextureFormat::RGBA16F
+                                                                                          : bgfx::TextureFormat::RGBA8;
+      m_vsmTransNearStep = m_vsmTransFormat == bgfx::TextureFormat::RGBA16 ? 1.f / 65535.f : m_vsmTransFormat == bgfx::TextureFormat::RGBA16F ? 1.f / 2048.f : 1.f / 255.f;
+      if (m_vsmTransFormat == bgfx::TextureFormat::RGBA8)
+         PLOGW << "VSM transmittance: no 16 bit render target format, translucent shadow nearness falls back to 8 bit";
+      m_vsmTransTex = bgfx::createTexture2D(VSM::PAGE_SIZE, VSM::PAGE_SIZE, false, static_cast<uint16_t>(m_vsmPoolPages), m_vsmTransFormat, BGFX_TEXTURE_RT);
       bgfx::setName(m_vsmTransTex, "VSM Page Transmittance");
       m_vsmTransSampler
-         = std::make_shared<Sampler>(m_renderDevice, "VSM Page Transmittance"s, SurfaceType::RT_DEFAULT, m_vsmTransTex, bgfx::TextureFormat::RGBA8, VSM::PAGE_SIZE, VSM::PAGE_SIZE, true);
+         = std::make_shared<Sampler>(m_renderDevice, "VSM Page Transmittance"s, SurfaceType::RT_DEFAULT, m_vsmTransTex, m_vsmTransFormat, VSM::PAGE_SIZE, VSM::PAGE_SIZE, true);
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_trans, m_vsmTransSampler);
    }
    if (!bgfx::isValid(m_vsmPageTableTex))
@@ -2883,8 +2894,9 @@ void Renderer::UpdateVirtualShadowMaps()
    // Content invalidation samples the dirty state once per frame: undo bookkeeping began-and-discarded
    // within the same frame (e.g. on selection) must not reset the maps, real edits persist and still do
    const SaveDirtyState tableDirty = m_table->GetDirtyState();
-   const bool contentDirty = tableDirty != m_vsmLastTableDirty;
+   const bool contentDirty = tableDirty != m_vsmLastTableDirty || m_vsmContentSerial != m_vsmLastContentSerial;
    m_vsmLastTableDirty = tableDirty;
+   m_vsmLastContentSerial = m_vsmContentSerial;
    for (Matrix3D& vp : m_vsmShadowVP)
       vp.SetIdentity();
    for (vec4& v : m_vsmParams)
@@ -3361,7 +3373,7 @@ void Renderer::UpdateVirtualShadowMaps()
    m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_SIZE, 0.002f, 0.f, 0.f);
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_SIZE, 0.002f, m_vsmTransNearStep, 0.f);
 }
 #endif
 

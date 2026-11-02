@@ -121,7 +121,23 @@ void SearchPalette::BuildOperators()
    add("File" + sep + "Save", "Ctrl+S", editable, [&ed]() { ed.SaveTable(); });
    add("File" + sep + "Play", "", editable, [&ed]() { ed.PlayTest(); });
    add("File" + sep + "Part Library", "", unlocked, [&ed]() { ed.OpenPartLibrary(); });
-   add("View" + sep + "Frame Selected", "Numpad .", hasPart, [&ed]() { ed.FrameSelection(); });
+   // View menu: camera and view commands (same keys as the menu; digits are the numpad keys, also the top row with numpad emulation)
+   using PV = EditorUI::PredefinedView;
+   add("View" + sep + "Top", "7", nullptr, [&ed]() { ed.SetView(PV::Top); });
+   add("View" + sep + "Bottom", "Ctrl+7", nullptr, [&ed]() { ed.SetView(PV::Bottom); });
+   add("View" + sep + "Front", "1", nullptr, [&ed]() { ed.SetView(PV::Front); });
+   add("View" + sep + "Back", "Ctrl+1", nullptr, [&ed]() { ed.SetView(PV::Back); });
+   add("View" + sep + "Left", "3", nullptr, [&ed]() { ed.SetView(PV::Left); });
+   add("View" + sep + "Right", "Ctrl+3", nullptr, [&ed]() { ed.SetView(PV::Right); });
+   add("View" + sep + "Perspective / Orthographic", "5", nullptr, [&ed]() { ed.m_camMode = ViewMode::EditorCam; ed.m_perspectiveCam = !ed.m_perspectiveCam; });
+   add("View" + sep + "Cycle Camera (Preview / Editor / Backdrop)", "0", nullptr, [&ed]() { ed.CycleCamera(); });
+   add("View" + sep + "Lock Orbit", "Numpad /", nullptr, [&ed]() { ed.m_orbitLock = !ed.m_orbitLock; });
+   add("View" + sep + "Orbit Left", "4", nullptr, [&ed]() { ed.OrbitStep(true, 1.f); });
+   add("View" + sep + "Orbit Right", "6", nullptr, [&ed]() { ed.OrbitStep(true, -1.f); });
+   add("View" + sep + "Orbit Up", "8", nullptr, [&ed]() { ed.OrbitStep(false, 1.f); });
+   add("View" + sep + "Orbit Down", "2", nullptr, [&ed]() { ed.OrbitStep(false, -1.f); });
+   add("View" + sep + "Frame Selected", "F", hasPart, [&ed]() { ed.FrameSelection(); });
+   add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.m_showOutliner = !ed.m_showOutliner; });

@@ -382,6 +382,26 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Dome Flute Depth"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeFluteDepth; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeFluteDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2, "Flute depth scale (1 = measured from the mesh)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Peak White"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domePeak; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domePeak = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
+         "At full power the lit body and the top go white-hot like a real flash (0 = stays red at the peak); also a hot spot in the middle of the cap");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Flash Boost"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeBoost; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeBoost = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
+         "Gain on the lamp level the dome sees: a flash the game drives below full (short pulses) reads hotter; the lamp's own light on the table is unchanged (1 = as is)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Depth"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeDepth; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeDepth = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
+         "Lamp off: the far wall's ridges seen through the cavity, each flute lensing its own slice, so something moves inside as you move (0 = off)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Glints"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeGlint; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeGlint = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
+         "The lamp-off sparkle: facet glints, ridge glints and needles along the flutes, the room seen in the plastic (1 = as tuned, 0 = none)");
       props.InputRGB<Primitive>(
          m_part, "Dome Tint"s, //
          [](const Primitive* primitive) { return convertColor(primitive->m_d.m_domeTint); }, //
