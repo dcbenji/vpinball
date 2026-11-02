@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "PropertiesPanel.h"
+#include "IconsLucide.h"
 
 #include "audio/AudioPlayer.h"
 #include "core/editablereg.h"
@@ -136,6 +137,8 @@ void PropertiesPanel::PrepareCuration()
    {
       if (const auto it = m_tabMemory.find(TabKey()); it != m_tabMemory.end())
          m_tab = it->second;
+      else
+         m_tab = HasTab(Tab::Look) ? Tab::Look : Tab::Object; // First visit of this type: its look
       if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == kind && PropertyPane::GetFocusKey().name == name)
       {
          m_tab = Tab::Advanced;
@@ -148,7 +151,7 @@ void PropertiesPanel::PrepareCuration()
          m_tabMemory[TabKey()] = m_tab;
       }
       if (!HasTab(m_tab))
-         m_tab = Tab::Object;
+         m_tab = HasTab(Tab::Look) ? Tab::Look : HasTab(Tab::Object) ? Tab::Object : Tab::Advanced;
    }
    const bool hasMaterial = single && !partMaterial.empty() && editor.m_table->GetMaterial(partMaterial) != nullptr;
    PrepareCurationFor(PinKind::Material, partMaterial, -1, hasMaterial, m_materialCuration);
@@ -179,8 +182,8 @@ bool PropertiesPanel::HasTab(Tab tab) const
 {
    switch (tab)
    {
-   case Tab::Object:
    case Tab::Advanced: return true;
+   case Tab::Object: return m_curation.kind == PinKind::Part || !m_curation.tabs[static_cast<int>(Tab::Object)].empty();
    case Tab::Material: return m_hasMaterialTab;
    default: return !m_curation.tabs[static_cast<int>(tab)].empty();
    }
@@ -188,12 +191,12 @@ bool PropertiesPanel::HasTab(Tab tab) const
 
 void PropertiesPanel::DrawTabStrip()
 {
-   static constexpr const char *icons[] = { ICON_FK_CUBE, ICON_FK_ARROWS, ICON_FK_TINT, ICON_FK_EYE, ICON_FK_BOLT, ICON_FK_CODE, ICON_FK_LIST };
+   static constexpr const char *icons[] = { ICON_LC_BOX, ICON_LC_MOVE_3D, ICON_LC_CIRCLE_DOT, ICON_LC_SUN, ICON_LC_ATOM, ICON_LC_CODE, ICON_LC_SLIDERS_HORIZONTAL };
    static constexpr const char *names[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced (every field)" };
    const ImVec2 size(ImGui::GetFrameHeight() + 4.f, ImGui::GetFrameHeight() + 4.f);
    // Pin ID: lock the editor on the current object
    ImGui::PushStyleColor(ImGuiCol_Button, m_locked ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
-   if (ImGui::Button(ICON_FK_THUMB_TACK "##PinID", size))
+   if (ImGui::Button(ICON_LC_PIN "##PinID", size))
    {
       m_locked = !m_locked;
       m_lockedSel = m_editor.m_selection;
@@ -230,7 +233,7 @@ void PropertiesPanel::DrawTabContent(PropertyPane &props)
       if (!material.empty())
       {
          props.PropertyLabel("Material"s);
-         if (ImGui::Button((material + "  " ICON_FK_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+         if (ImGui::Button((material + "  " ICON_LC_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
             m_pendingMaterialSel = editor.m_table->GetMaterial(material);
          ImGui::SetItemTooltip("Select this material");
          props.FlushRow();
@@ -309,7 +312,7 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    {
       // Tabs: one domain per field (fields of no domain are only in Advanced, like everything else)
       Tab tab = Tab::Advanced;
-      if (def->key.prop == "Visible")
+      if (def->key.prop == "Visible" || def->key.prop == "Static Rendering" || def->key.prop == "Reflection Enabled" || def->key.prop == "Show in Editor")
          tab = Tab::Object;
       else if (def->section.find("Physics") != string::npos)
          tab = Tab::Physics;
@@ -344,7 +347,7 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
       if (!material.empty())
       {
          props.PropertyLabel("Material"s);
-         if (ImGui::Button((material + "  " ICON_FK_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+         if (ImGui::Button((material + "  " ICON_LC_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
             m_pendingMaterialSel = editor.m_table->GetMaterial(material);
          ImGui::SetItemTooltip("Select this material");
          props.FlushRow();
@@ -448,7 +451,7 @@ void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
    {
       const int users = static_cast<int>(m_users.size());
       if (users > 1)
-         ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), ICON_FK_EXCLAMATION_TRIANGLE " Shared: used by %d parts", users);
+         ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), ICON_LC_TRIANGLE_ALERT " Shared: used by %d parts", users);
       else
          ImGui::TextDisabled("Used by this part only");
       if (users > 1)
@@ -570,7 +573,7 @@ void PropertiesPanel::Render(float topBarHeight)
    else
    {
       // Objects without tabs still offer the pin
-      if (ImGui::SmallButton(m_locked ? ICON_FK_THUMB_TACK " Pinned##PinID" : ICON_FK_THUMB_TACK "##PinID"))
+      if (ImGui::SmallButton(m_locked ? ICON_LC_PIN " Pinned##PinID" : ICON_LC_PIN "##PinID"))
       {
          m_locked = !m_locked;
          m_lockedSel = editor.m_selection;
@@ -1478,7 +1481,7 @@ void PropertiesPanel::SoundProperties(PropertyPane &props, VPX::Sound *sound)
    ImGui::EndDisabled();
 
    ImGui::BeginDisabled(audioPlayer == nullptr);
-   if (ImGui::Button(isPlaying ? (ICON_FK_STOP " Stop"s).c_str() : (ICON_FK_PLAY " Play"s).c_str()))
+   if (ImGui::Button(isPlaying ? (ICON_LC_SQUARE " Stop"s).c_str() : (ICON_LC_PLAY " Play"s).c_str()))
    {
       if (isPlaying)
       {
@@ -1700,7 +1703,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
       // Members, in the collection's order which is the order exposed to scripts
       if (members.empty())
          ImGui::TextDisabled("Empty collection");
-      const float buttonWidth = ImGui::CalcTextSize(ICON_FK_ARROW_UP).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+      const float buttonWidth = ImGui::CalcTextSize(ICON_LC_ARROW_UP).x + ImGui::GetStyle().FramePadding.x * 2.0f;
       const float buttonsX = ImGui::GetContentRegionAvail().x - 3.f * buttonWidth - 2.f * ImGui::GetStyle().ItemSpacing.x;
       int moveIndex = -1, removeIndex = -1;
       for (int i = 0; i < static_cast<int>(members.size()); i++)
@@ -1719,20 +1722,20 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
             ImGui::SetTooltip("%s", LocalString(EditableRegistry::GetTypeNameStringID(member->GetItemType())).m_szbuffer);
          ImGui::SameLine(buttonsX);
          ImGui::BeginDisabled(i == 0);
-         if (ImGui::SmallButton(ICON_FK_ARROW_UP))
+         if (ImGui::SmallButton(ICON_LC_ARROW_UP))
             moveIndex = i - 1;
          ImGui::EndDisabled();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Move up");
          ImGui::SameLine();
          ImGui::BeginDisabled(i == static_cast<int>(members.size()) - 1);
-         if (ImGui::SmallButton(ICON_FK_ARROW_DOWN))
+         if (ImGui::SmallButton(ICON_LC_ARROW_DOWN))
             moveIndex = i;
          ImGui::EndDisabled();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Move down");
          ImGui::SameLine();
-         if (ImGui::SmallButton(ICON_FK_TIMES))
+         if (ImGui::SmallButton(ICON_LC_X))
             removeIndex = i;
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Remove from collection");

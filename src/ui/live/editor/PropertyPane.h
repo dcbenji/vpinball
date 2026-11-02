@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fonts/IconsForkAwesome.h"
+#include "IconsLucide.h"
 #include "utils/fileio.h"
 #include "parts/Sound.h"
 #include "parts/pintable.h"
@@ -100,6 +101,8 @@ public:
    // Dial surfaces (curated sections, pinned overlay): float fields with a known range draw as sliders (ctrl+click still types)
    void SetLookSliders(bool on) { m_lookSliders = on; }
    static bool LookSliderRange(const string &label, Unit displayUnit, float &vMin, float &vMax);
+   // Blender-style slider: the value is a filled bar behind the number (no grab knob over it); ctrl+click or double-click types
+   static bool FillSlider(const char *id, float *value, float vMin, float vMax, const char *format);
    bool IsHarvest() const { return m_pinMode == PinMode::Harvest; } // Drawn in the hidden window that registers the pin definitions
    bool IsSkippingRest() const { return m_skipRest; }
    // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
@@ -258,7 +261,7 @@ private:
    static inline int s_focusRequestFrame = 0;
    static inline double s_flashUntil = 0.0;
 
-   static constexpr const char* ICON_SAVE = ICON_FK_FLOPPY_O;
+   static constexpr const char* ICON_SAVE = ICON_LC_SAVE;
 
    bool IsStartup() const { return m_table->m_liveBaseTable && m_showStartup; }
    template <class T> T* GetStartupObj(T* obj) const;
@@ -592,7 +595,7 @@ inline void PropertyPane::InputFloat(
    // A value outside the guide range keeps the input field: a click on a slider would snap it into the range
    const bool slider = m_lookSliders && LookSliderRange(label, displayUnit, vMin, vMax) && displayValue >= vMin && displayValue <= vMax;
    m_rowFocusable = true;
-   if (slider ? ImGui::SliderFloat(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str())
+   if (slider ? FillSlider(("##" + label).c_str(), &displayValue, vMin, vMax, format.c_str())
               : ImGui::InputFloat(("##" + label).c_str(), &displayValue, 0.f, 0.f, format.c_str(), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank))
    {
       value = displayValue;
@@ -634,7 +637,7 @@ inline void PropertyPane::SliderFloat(
    float value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
    // Slider range is a guide: ctrl+click types a value, which may go beyond it (the setters clamp where it matters)
-   if (ImGui::SliderFloat(("##" + label).c_str(), &value, vMin, vMax, format.c_str()))
+   if (FillSlider(("##" + label).c_str(), &value, vMin, vMax, format.c_str()))
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)

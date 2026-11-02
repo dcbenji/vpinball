@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "OutlinerPanel.h"
+#include "IconsLucide.h"
 
 #include "fonts/IconsForkAwesome.h"
 #include "parts/Collection.h"
@@ -131,24 +132,24 @@ const char *TypeIcon(ItemTypeEnum type)
 {
    switch (type)
    {
-   case eItemPrimitive: return ICON_FK_CUBE;
-   case eItemLight: return ICON_FK_LIGHTBULB_O;
-   case eItemFlasher: return ICON_FK_BOLT;
-   case eItemRamp: return ICON_FK_ROAD;
-   case eItemSurface: return ICON_FK_SQUARE;
-   case eItemRubber: return ICON_FK_CIRCLE_O;
-   case eItemFlipper: return ICON_FK_HAND_O_RIGHT;
-   case eItemBumper: return ICON_FK_CIRCLE;
-   case eItemHitTarget: return ICON_FK_DOT_CIRCLE_O;
-   case eItemGate: return ICON_FK_ARROWS_H;
-   case eItemSpinner: return ICON_FK_REFRESH;
-   case eItemTrigger: return ICON_FK_MINUS;
-   case eItemKicker: return ICON_FK_CIRCLE_THIN;
-   case eItemPlunger: return ICON_FK_ARROW_UP;
-   case eItemTimer: return ICON_FK_CLOCK_O;
-   case eItemTextbox: return ICON_FK_FONT;
-   case eItemDecal: return ICON_FK_PICTURE_O;
-   default: return ICON_FK_TAG;
+   case eItemPrimitive: return ICON_LC_BOX;
+   case eItemLight: return ICON_LC_LIGHTBULB;
+   case eItemFlasher: return ICON_LC_ZAP;
+   case eItemRamp: return ICON_LC_ROUTE;
+   case eItemSurface: return ICON_LC_SQUARE;
+   case eItemRubber: return ICON_LC_CIRCLE;
+   case eItemFlipper: return ICON_LC_POINTER;
+   case eItemBumper: return ICON_LC_DISC;
+   case eItemHitTarget: return ICON_LC_CIRCLE_DOT;
+   case eItemGate: return ICON_LC_MOVE_HORIZONTAL;
+   case eItemSpinner: return ICON_LC_REFRESH_CW;
+   case eItemTrigger: return ICON_LC_MINUS;
+   case eItemKicker: return ICON_LC_CIRCLE;
+   case eItemPlunger: return ICON_LC_ARROW_UP;
+   case eItemTimer: return ICON_LC_TIMER;
+   case eItemTextbox: return ICON_LC_TYPE;
+   case eItemDecal: return ICON_LC_IMAGE;
+   default: return ICON_LC_TAG;
    }
 }
 }
@@ -296,7 +297,7 @@ void OutlinerPanel::Render(float topBarHeight)
       const bool popStyle = m_syncToSelection;
       if (popStyle)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_FK_LINK "##SyncTree"))
+      if (ImGui::Button(ICON_LC_LINK "##SyncTree"))
       {
          m_syncToSelection = !m_syncToSelection;
          m_lastSyncedPart = nullptr; // Reveal the current selection on next render
@@ -318,8 +319,8 @@ void OutlinerPanel::Render(float topBarHeight)
    }
    // Second row: search, clear and the filter popover
    {
-      const float buttonWidth = ImGui::CalcTextSize(ICON_FK_TIMES).x + style.FramePadding.x * 2.0f;
-      const float filterWidth = ImGui::CalcTextSize(ICON_FK_FILTER).x + style.FramePadding.x * 2.0f;
+      const float buttonWidth = ImGui::CalcTextSize(ICON_LC_X).x + style.FramePadding.x * 2.0f;
+      const float filterWidth = ImGui::CalcTextSize(ICON_LC_LIST_FILTER).x + style.FramePadding.x * 2.0f;
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - buttonWidth - filterWidth - style.ItemSpacing.x * 2.0f);
       if (m_focusFilter)
       {
@@ -330,14 +331,14 @@ void OutlinerPanel::Render(float topBarHeight)
       ImGui::SetItemTooltip("Name words, t:light, m:<material>, n:<name> (Ctrl+F)");
       ImGui::SameLine();
       ImGui::BeginDisabled(m_filter.empty());
-      if (ImGui::Button(ICON_FK_TIMES "##ClearOutlinerFilter"))
+      if (ImGui::Button(ICON_LC_X "##ClearOutlinerFilter"))
          m_filter.clear();
       ImGui::EndDisabled();
       ImGui::SameLine();
       const bool typeFilterActive = m_typeMask != AllTypesMask || m_selectedOnly;
       if (typeFilterActive)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_FK_FILTER "##OutlinerFilterButton"))
+      if (ImGui::Button(ICON_LC_LIST_FILTER "##OutlinerFilterButton"))
          ImGui::OpenPopup("##OutlinerFilterPopup");
       if (typeFilterActive)
          ImGui::PopStyleColor();
@@ -439,7 +440,7 @@ void OutlinerPanel::Render(float topBarHeight)
       {
          ImGui::SameLine(eyeX);
          ImGui::PushStyleColor(ImGuiCol_Text, editable->IsUIVisible(false) ? IM_COL32_WHITE : IM_COL32(128, 128, 128, 255));
-         if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_FK_EYE : ICON_FK_EYE_SLASH) + "##Eye__"s + editable->GetName()).c_str()))
+         if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + editable->GetName()).c_str()))
          {
             editable->SetUIVisible(!editable->IsUIVisible(false));
             editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
@@ -553,7 +554,7 @@ void OutlinerPanel::Render(float topBarHeight)
                   const string &groupName = edit->GetEditable()->GetName();
                   const string idPart = "###" + groupName;
                   const bool wasOpen = ImGui::GetStateStorage()->GetInt(ImGui::GetID(idPart.c_str()), 0) != 0;
-                  const string groupLabel = (wasOpen ? ICON_FK_FOLDER_OPEN "  " : ICON_FK_FOLDER "  ") + groupName + " (" + std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0) + ")" + idPart;
+                  const string groupLabel = (wasOpen ? ICON_LC_FOLDER_OPEN "  " : ICON_LC_FOLDER "  ") + groupName + " (" + std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0) + ")" + idPart;
                   opened = ImGui::TreeNodeEx(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
                   if (inactiveSel)
                      ImGui::PopStyleColor();
@@ -571,8 +572,8 @@ void OutlinerPanel::Render(float topBarHeight)
                   }
                   if (isNewPartTarget)
                   {
-                     ImGui::SameLine(eyeX - ImGui::CalcTextSize(ICON_FK_ARROW_CIRCLE_O_LEFT).x - style.ItemSpacing.x);
-                     ImGui::TextColored(newPartTargetColor, ICON_FK_ARROW_CIRCLE_O_LEFT);
+                     ImGui::SameLine(eyeX - ImGui::CalcTextSize(ICON_LC_CIRCLE_ARROW_LEFT).x - style.ItemSpacing.x);
+                     ImGui::TextColored(newPartTargetColor, ICON_LC_CIRCLE_ARROW_LEFT);
                      if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("New and imported parts are added to this group");
                   }
@@ -580,7 +581,7 @@ void OutlinerPanel::Render(float topBarHeight)
                   {
                      ImGui::SameLine(eyeX);
                      ImGui::PushStyleColor(ImGuiCol_Text, group->IsUIVisible(false) ? IM_COL32_WHITE : IM_COL32(128, 128, 128, 255));
-                     if (ImGui::SmallButton(((group->IsUIVisible(false) ? ICON_FK_EYE : ICON_FK_EYE_SLASH) + "##Eye__"s + edit->GetEditable()->GetName()).c_str()))
+                     if (ImGui::SmallButton(((group->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + edit->GetEditable()->GetName()).c_str()))
                      {
                         group->SetUIVisible(!group->IsUIVisible(false));
                         editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);

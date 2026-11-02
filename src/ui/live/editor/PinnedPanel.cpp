@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "PinnedPanel.h"
+#include "IconsLucide.h"
 
 #include "core/player.h"
 #include "parts/Material.h"
@@ -553,7 +554,11 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       ImGui::PushID(pin.prop.c_str());
       if (removable)
       {
-         if (ImGui::SmallButton(ICON_FK_TIMES))
+         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+         const bool remove = ImGui::SmallButton(ICON_LC_X);
+         ImGui::PopStyleColor(2);
+         if (remove)
             Unpin(pin);
          ImGui::SetItemTooltip("Remove from Quick Favorites");
          ImGui::SameLine();
@@ -613,13 +618,13 @@ void PinnedPanel::RenderLookToolbar()
    const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
       || (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr && sel.GetMaterial()->m_type == Material::PBR);
    ImGui::BeginDisabled(!canPinSel);
-   if (ImGui::SmallButton(ICON_FK_TINT " Add see-through set"))
+   if (ImGui::SmallButton(ICON_LC_DROPLET " Add see-through set"))
       PinSelectionSeeThrough();
    ImGui::EndDisabled();
    ImGui::SetItemTooltip("Add the selection's see-through set to Quick Favorites (refraction fields of the part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
    ImGui::SameLine();
    ImGui::BeginDisabled(m_pins.empty());
-   if (ImGui::SmallButton(ICON_FK_TRASH "##FavClear"))
+   if (ImGui::SmallButton(ICON_LC_TRASH_2 "##FavClear"))
       ImGui::OpenPopup("##PinClearAll");
    ImGui::EndDisabled();
    ImGui::SetItemTooltip("Remove all Quick Favorites");

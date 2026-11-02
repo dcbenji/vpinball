@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "EditorChrome.h"
+#include "IconsLucide.h"
 
 #include "core/FileLocator.h"
 #include "core/VPApp.h"
@@ -134,19 +135,19 @@ void EditorChrome::RenderMenuBar()
       }
       float buttonWidth = 0.f;
       if (editor.IsInspectMode())
-         buttonWidth += ImGui::CalcTextSize(ICON_FK_REPLY, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-      buttonWidth += ImGui::CalcTextSize(ICON_FK_WINDOW_CLOSE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+         buttonWidth += ImGui::CalcTextSize(ICON_LC_UNDO_2, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+      buttonWidth += ImGui::CalcTextSize(ICON_LC_X, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
       ImVec2 padding = ImGui::GetCursorScreenPos();
       padding.x += ImGui::GetContentRegionAvail().x - buttonWidth;
       ImGui::SetCursorScreenPos(padding);
       if (editor.IsInspectMode())
       {
-         if (ImGui::Button(ICON_FK_REPLY)) // ICON_FK_STOP
+         if (ImGui::Button(ICON_LC_UNDO_2)) // ICON_LC_SQUARE
             editor.Close();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Get back to player");
       }
-      if (ImGui::Button(ICON_FK_WINDOW_CLOSE))
+      if (ImGui::Button(ICON_LC_X))
          editor.RequestClose(editor.IsInspectMode() ? Player::CS_STOP_PLAY : Player::CS_CLOSE_APP);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Close editor");
@@ -168,11 +169,11 @@ void EditorChrome::RenderToolbar()
    ImGui::PopStyleVar();
    if (editor.IsInspectMode())
    {
-      if (ImGui::Button(editor.m_player->IsPlaying() ? ICON_FK_PAUSE : ICON_FK_PLAY))
+      if (ImGui::Button(editor.m_player->IsPlaying() ? ICON_LC_PAUSE : ICON_LC_PLAY))
          editor.m_player->SetPlayState(!editor.m_player->IsPlaying());
       ImGui::SameLine();
       ImGui::BeginDisabled(editor.m_player->IsPlaying());
-      if (ImGui::Button(ICON_FK_STEP_FORWARD))
+      if (ImGui::Button(ICON_LC_SKIP_FORWARD))
          editor.m_player->m_step = true;
       ImGui::EndDisabled();
    }
@@ -181,7 +182,7 @@ void EditorChrome::RenderToolbar()
       const float iconSize = ImGui::GetContentRegionAvail().y;
 
       // File operations: same actions as the File menu, each button opening a sub menu
-      if (ImGui::Button(ICON_FK_FILE))
+      if (ImGui::Button(ICON_LC_FILE_PLUS))
          ImGui::OpenPopup("New table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("New table\n[Ctrl+N]");
@@ -198,7 +199,7 @@ void EditorChrome::RenderToolbar()
          ImGui::EndPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button(ICON_FK_FOLDER_OPEN))
+      if (ImGui::Button(ICON_LC_FOLDER_OPEN))
          ImGui::OpenPopup("Open table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Open table");
@@ -212,7 +213,7 @@ void EditorChrome::RenderToolbar()
       }
       ImGui::SameLine();
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_FLOPPY_O))
+      if (ImGui::Button(ICON_LC_SAVE))
          ImGui::OpenPopup("Save table Popup");
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Save table\n[Ctrl+S]");
@@ -233,7 +234,7 @@ void EditorChrome::RenderToolbar()
 
       // Play a shallow copy of the edited table
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_PLAY))
+      if (ImGui::Button(ICON_LC_PLAY))
          editor.PlayTest();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Play table\n[F5]");
@@ -249,10 +250,10 @@ void EditorChrome::RenderToolbar()
          const char *icon;
          const char *tooltip;
       } editModes[] = {
-         { (ImGuizmo::OPERATION)0, ICON_FK_MOUSE_POINTER, "Select\n[Esc]" }, //
-         { ImGuizmo::TRANSLATE, ICON_FK_ARROWS, "Grab\n[G]" }, //
-         { ImGuizmo::SCALE, ICON_FK_EXPAND, "Scale\n[S]" }, //
-         { ImGuizmo::ROTATE, ICON_FK_REPEAT, "Rotate\n[R]" }, //
+         { (ImGuizmo::OPERATION)0, ICON_LC_MOUSE_POINTER_2, "Select\n[Esc]" }, //
+         { ImGuizmo::TRANSLATE, ICON_LC_MOVE, "Grab\n[G]" }, //
+         { ImGuizmo::SCALE, ICON_LC_SCALE_3D, "Scale\n[S]" }, //
+         { ImGuizmo::ROTATE, ICON_LC_ROTATE_3D, "Rotate\n[R]" }, //
       };
       for (const auto &mode : editModes)
       {
@@ -311,7 +312,7 @@ void EditorChrome::RenderToolbar()
       const bool addPartActive = (editor.m_addPartType != eItemInvalid);
       if (addPartActive)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_FK_PLUS))
+      if (ImGui::Button(ICON_LC_PLUS))
          RequestAddPartPopup(ImGui::GetMousePos());
       if (addPartActive)
          ImGui::PopStyleColor();
@@ -324,7 +325,7 @@ void EditorChrome::RenderToolbar()
       const bool canCopy
          = editor.m_pointEditPart ? (editor.m_pointEditCenter ? editor.m_centerSelected : editor.m_pointSel.size() == 1) : (editor.m_selection.GetType() == Selection::S_EDITABLE);
       ImGui::BeginDisabled(!canCopy || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_FILES_O))
+      if (ImGui::Button(ICON_LC_COPY))
          editor.CopySelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Copy selection\n[Ctrl+C]");
@@ -334,7 +335,7 @@ void EditorChrome::RenderToolbar()
          ? (editor.m_pointEditCenter ? editor.m_centerSelected && VPX::EditorClipboard::HasPoint() : editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
          : VPX::EditorClipboard::HasParts();
       ImGui::BeginDisabled(!canPaste || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_CLIPBOARD))
+      if (ImGui::Button(ICON_LC_CLIPBOARD_PASTE))
          editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Paste\n[Ctrl+V]");
@@ -343,7 +344,7 @@ void EditorChrome::RenderToolbar()
       // Delete selection button, always visible but only enabled when there are selected parts
       ImGui::SameLine();
       ImGui::BeginDisabled(editor.m_selection.GetType() != Selection::S_EDITABLE || editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_TRASH_O))
+      if (ImGui::Button(ICON_LC_TRASH_2))
          editor.DeleteSelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Delete selection\n[Delete]");
@@ -352,14 +353,14 @@ void EditorChrome::RenderToolbar()
       // Part library import/export buttons
       ImGui::SameLine();
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      if (ImGui::Button(ICON_FK_DOWNLOAD))
+      if (ImGui::Button(ICON_LC_DOWNLOAD))
          editor.OpenPartLibrary();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Import parts (part library)");
       ImGui::EndDisabled();
       ImGui::SameLine();
       ImGui::BeginDisabled(!editor.CanExportPartSelection());
-      if (ImGui::Button(ICON_FK_UPLOAD))
+      if (ImGui::Button(ICON_LC_UPLOAD))
          editor.ExportPartSelection();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Export selection to a VPZ pack");
@@ -372,7 +373,7 @@ void EditorChrome::RenderToolbar()
       const bool scriptActive = editor.m_scriptPanel.IsVisible();
       if (scriptActive)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(ICON_FK_CODE))
+      if (ImGui::Button(ICON_LC_CODE_XML))
          editor.m_scriptPanel.Show();
       if (scriptActive)
          ImGui::PopStyleColor();
@@ -409,11 +410,11 @@ void EditorChrome::RenderToolbar()
       }
    }
    const float buttonWidth = //
-      ImGui::CalcTextSize(ICON_FK_EXCHANGE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
-      + ImGui::CalcTextSize(ICON_FK_STICKY_NOTE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
-      + ImGui::CalcTextSize(ICON_FK_FILTER, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+      ImGui::CalcTextSize(ICON_LC_RULER, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
+      + ImGui::CalcTextSize(ICON_LC_STICKY_NOTE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f //
+      + ImGui::CalcTextSize(ICON_LC_LIST_FILTER, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
    ImGui::SameLine(ImGui::GetContentRegionAvail().x - buttonWidth);
-   if (ImGui::Button(ICON_FK_EXCHANGE)) // Unit selection menu
+   if (ImGui::Button(ICON_LC_RULER)) // Unit selection menu
       ImGui::OpenPopup("Unit Popup");
    if (ImGui::BeginPopup("Unit Popup"))
    {
@@ -428,7 +429,7 @@ void EditorChrome::RenderToolbar()
       ImGui::EndPopup();
    }
    ImGui::SameLine();
-   if (ImGui::Button(ICON_FK_STICKY_NOTE)) // Overlay option menu
+   if (ImGui::Button(ICON_LC_STICKY_NOTE)) // Overlay option menu
       ImGui::OpenPopup("Overlay Popup");
    if (ImGui::BeginPopup("Overlay Popup"))
    {
@@ -446,7 +447,7 @@ void EditorChrome::RenderToolbar()
       ImGui::EndPopup();
    }
    ImGui::SameLine();
-   if (ImGui::Button(ICON_FK_FILTER)) // Selection filter
+   if (ImGui::Button(ICON_LC_LIST_FILTER)) // Selection filter
       ImGui::OpenPopup("Selection filter Popup");
    if (ImGui::BeginPopup("Selection filter Popup"))
    {
@@ -485,7 +486,7 @@ void EditorChrome::RenderStatusOverlay()
    const bool stylePushed = editor.m_orbitLock;
    if (stylePushed)
       ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-   if (ImGui::Button(editor.m_orbitLock ? ICON_FK_LOCK : ICON_FK_UNLOCK))
+   if (ImGui::Button(editor.m_orbitLock ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN))
       editor.m_orbitLock = !editor.m_orbitLock;
    if (stylePushed)
       ImGui::PopStyleColor();
@@ -526,22 +527,22 @@ void EditorChrome::RenderStatusOverlay()
    const char *gizmoLabel = nullptr;
    if (editor.m_gizmoOperation == ImGuizmo::OPERATION(0))
    {
-      gizmoIcon = ICON_FK_MOUSE_POINTER;
+      gizmoIcon = ICON_LC_MOUSE_POINTER_2;
       gizmoLabel = "Select";
    }
    else if (editor.m_gizmoOperation == ImGuizmo::TRANSLATE)
    {
-      gizmoIcon = ICON_FK_ARROWS;
+      gizmoIcon = ICON_LC_MOVE;
       gizmoLabel = "Grab";
    }
    else if (editor.m_gizmoOperation == ImGuizmo::SCALE)
    {
-      gizmoIcon = ICON_FK_EXPAND;
+      gizmoIcon = ICON_LC_SCALE_3D;
       gizmoLabel = "Scale";
    }
    else if (editor.m_gizmoOperation == ImGuizmo::ROTATE)
    {
-      gizmoIcon = ICON_FK_REPEAT;
+      gizmoIcon = ICON_LC_ROTATE_3D;
       gizmoLabel = "Rotate";
    }
    if (gizmoIcon)

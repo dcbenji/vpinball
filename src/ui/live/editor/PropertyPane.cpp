@@ -1,5 +1,6 @@
 #include "core/stdafx.h"
 #include "PropertyPane.h"
+#include "IconsLucide.h"
 
 #include "imgui/imgui_stdlib.h"
 #include "parts/primitive.h"
@@ -219,6 +220,43 @@ void PropertyPane::EndSection()
    m_inSection = false;
 }
 
+bool PropertyPane::FillSlider(const char* id, float* value, float vMin, float vMax, const char* format)
+{
+   // The widget draws in the upper channel with a transparent frame and grab; the frame and the fill go in the lower one
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   drawList->ChannelsSplit(2);
+   drawList->ChannelsSetCurrent(1);
+   const ImVec4 clear(0.f, 0.f, 0.f, 0.f);
+   ImGui::PushStyleColor(ImGuiCol_FrameBg, clear);
+   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, clear);
+   ImGui::PushStyleColor(ImGuiCol_FrameBgActive, clear);
+   ImGui::PushStyleColor(ImGuiCol_SliderGrab, clear);
+   ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, clear);
+   const bool changed = ImGui::SliderFloat(id, value, vMin, vMax, format);
+   ImGui::PopStyleColor(5);
+   const ImVec2 min = ImGui::GetItemRectMin();
+   const ImVec2 max = ImGui::GetItemRectMax();
+   const bool active = ImGui::IsItemActive();
+   const bool hovered = ImGui::IsItemHovered();
+   const bool editingText = active && ImGui::GetIO().WantTextInput; // Ctrl+click turns the slider into a text field
+   drawList->ChannelsSetCurrent(0);
+   const float rounding = ImGui::GetStyle().FrameRounding;
+   drawList->AddRectFilled(min, max, ImGui::GetColorU32(active ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), rounding);
+   if (!editingText && vMax > vMin)
+   {
+      const float t = clamp((*value - vMin) / (vMax - vMin), 0.f, 1.f);
+      if (t > 0.f)
+      {
+         // Muted fill (Blender's value bar), brighter while dragged
+         const ImVec4 grab = ImGui::GetStyleColorVec4(ImGuiCol_SliderGrab);
+         const ImVec4 fill(0.35f * grab.x + 0.25f, 0.35f * grab.y + 0.25f, 0.35f * grab.z + 0.25f, active ? 0.85f : hovered ? 0.7f : 0.55f);
+         drawList->AddRectFilled(min, ImVec2(min.x + (max.x - min.x) * t, max.y), ImGui::GetColorU32(fill), rounding);
+      }
+   }
+   drawList->ChannelsMerge();
+   return changed;
+}
+
 bool PropertyPane::LookSliderRange(const string& label, Unit displayUnit, float& vMin, float& vMax)
 {
    // Fields whose useful range is known (display units). Percentages are 0..100, scales up to 200 %
@@ -289,10 +327,10 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       return;
    if (m_pins->IsPinned(key))
    {
-      if (ImGui::MenuItem(ICON_FK_STAR " Remove from Quick Favorites"))
+      if (ImGui::MenuItem(ICON_LC_STAR " Remove from Quick Favorites"))
          m_pins->Unpin(key);
    }
-   else if (ImGui::MenuItem(ICON_FK_STAR " Add to Quick Favorites"))
+   else if (ImGui::MenuItem(ICON_LC_STAR " Add to Quick Favorites"))
       m_pins->Pin(key);
    if (part != nullptr && m_pins->HasSeeThroughSet(part))
    {
