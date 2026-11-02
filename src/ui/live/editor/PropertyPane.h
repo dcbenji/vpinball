@@ -244,6 +244,7 @@ private:
    PinMode m_pinMode = PinMode::Off;
    const void *m_pinOwner = nullptr;
    mutable string m_pinGroup; // Current section or separator, used to pin field groups
+   string m_pinSection; // Current section (the Properties tabs sort fields by section)
    ImVec2 m_rowMin; // Top left of the current field row (label included), for the pin context menu
    float m_rowBottom = 0.f; // When the label of the last row wrapped: where the next row starts (screen space), else 0
    Tier m_tier = Tier::Advanced;
@@ -366,7 +367,7 @@ template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const str
          const void *const owner = (key.kind == PinKind::Part && m_pinOwner) ? m_pinOwner : static_cast<const void *>(obj);
          // A harvest always refreshes the definitions: it records which fields the object shows now, and in which order
          if (m_pinMode == PinMode::Harvest || m_pins->NeedsDef(key.Id(), owner))
-            m_pins->SetDef(key, m_pinGroup, owner, makeDraw(), m_tier == Tier::Common);
+            m_pins->SetDef(key, m_pinGroup, m_pinSection, owner, makeDraw(), m_tier == Tier::Common);
       }
       if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Overlay)
          PinContext(key, part, material);

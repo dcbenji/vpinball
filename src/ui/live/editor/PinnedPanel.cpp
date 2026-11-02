@@ -82,11 +82,12 @@ bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
    return it == m_defs.end() || (it->second.key.kind == PinKind::Part && it->second.owner != owner);
 }
 
-void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw, bool common)
+void PinnedPanel::SetDef(const PinKey &key, const string &group, const string &section, const void *owner, PinDrawFn &&draw, bool common)
 {
    Def &def = m_defs[key.Id()];
    def.key = key;
    def.group = group;
+   def.section = section;
    def.owner = owner;
    def.draw = std::move(draw);
    def.common = common;

@@ -128,16 +128,142 @@ void PropertiesPanel::PrepareCuration()
    }
    // Multi selections keep the full sheet (fields of other types, mixed values)
    const bool single = editor.m_multiSel.size() <= 1;
+   m_curation.tabbed = single;
    PrepareCurationFor(kind, name, itemType, single, m_curation);
+   m_hasMaterialTab = single && kind == PinKind::Part && !partMaterial.empty() && editor.m_table->GetMaterial(partMaterial) != nullptr;
+   // Tab memory per object type; a search palette jump goes to the tab holding the field
+   if (m_curation.active && m_curation.tabbed)
+   {
+      if (const auto it = m_tabMemory.find(TabKey()); it != m_tabMemory.end())
+         m_tab = it->second;
+      if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == kind && PropertyPane::GetFocusKey().name == name)
+      {
+         m_tab = Tab::Advanced;
+         for (int t = 0; t < static_cast<int>(Tab::Count); t++)
+            if (std::ranges::any_of(m_curation.tabs[t], [](const PinnedPanel::Def *def) { return def->key == PropertyPane::GetFocusKey(); }))
+            {
+               m_tab = static_cast<Tab>(t);
+               break;
+            }
+         m_tabMemory[TabKey()] = m_tab;
+      }
+      if (!HasTab(m_tab))
+         m_tab = Tab::Object;
+   }
    const bool hasMaterial = single && !partMaterial.empty() && editor.m_table->GetMaterial(partMaterial) != nullptr;
    PrepareCurationFor(PinKind::Material, partMaterial, -1, hasMaterial, m_materialCuration);
+}
+
+bool PropertiesPanel::IsSelectionAlive(const Selection &sel) const
+{
+   const EditorUI &editor = m_editor;
+   const PinTable *const table = editor.m_table;
+   switch (sel.GetType())
+   {
+   case Selection::S_EDITABLE: return std::ranges::find(editor.m_editables, sel.GetPart()) != editor.m_editables.end();
+   case Selection::S_MATERIAL: return std::ranges::find(table->m_materials, sel.GetMaterial()) != table->m_materials.end();
+   case Selection::S_IMAGE: return std::ranges::find(table->m_vimage, sel.GetImage()) != table->m_vimage.end();
+   case Selection::S_SOUND: return std::ranges::find(table->m_vsound, sel.GetSound()) != table->m_vsound.end();
+   case Selection::S_RENDERPROBE: return std::ranges::find(table->m_vrenderprobe, sel.GetProbe()) != table->m_vrenderprobe.end();
+   case Selection::S_COLLECTION: return std::ranges::find(table->GetCollections(), sel.GetCollection()) != table->GetCollections().end();
+   default: return true;
+   }
+}
+
+int PropertiesPanel::TabKey() const
+{
+   return m_curation.kind == PinKind::Table ? -1 : m_curation.kind == PinKind::Material ? -2 : static_cast<IEditable *>(m_curation.obj)->GetItemType();
+}
+
+bool PropertiesPanel::HasTab(Tab tab) const
+{
+   switch (tab)
+   {
+   case Tab::Object:
+   case Tab::Advanced: return true;
+   case Tab::Material: return m_hasMaterialTab;
+   default: return !m_curation.tabs[static_cast<int>(tab)].empty();
+   }
+}
+
+void PropertiesPanel::DrawTabStrip()
+{
+   static constexpr const char *icons[] = { ICON_FK_CUBE, ICON_FK_ARROWS, ICON_FK_TINT, ICON_FK_EYE, ICON_FK_BOLT, ICON_FK_CODE, ICON_FK_LIST };
+   static constexpr const char *names[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced (every field)" };
+   const ImVec2 size(ImGui::GetFrameHeight() + 4.f, ImGui::GetFrameHeight() + 4.f);
+   // Pin ID: lock the editor on the current object
+   ImGui::PushStyleColor(ImGuiCol_Button, m_locked ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive) : ImVec4(0.f, 0.f, 0.f, 0.f));
+   if (ImGui::Button(ICON_FK_THUMB_TACK "##PinID", size))
+   {
+      m_locked = !m_locked;
+      m_lockedSel = m_editor.m_selection;
+   }
+   ImGui::PopStyleColor();
+   ImGui::SetItemTooltip(m_locked ? "Unpin: follow the selection again" : "Pin: keep showing this object while selecting others");
+   ImGui::Spacing();
+   for (int t = 0; t < static_cast<int>(Tab::Count); t++)
+   {
+      if (!HasTab(static_cast<Tab>(t)))
+         continue;
+      const bool active = m_tab == static_cast<Tab>(t);
+      ImGui::PushStyleColor(ImGuiCol_Button, active ? ImGui::GetStyleColorVec4(ImGuiCol_Header) : ImVec4(0.f, 0.f, 0.f, 0.f));
+      ImGui::PushID(t);
+      if (ImGui::Button(icons[t], size))
+      {
+         m_tab = static_cast<Tab>(t);
+         m_tabMemory[TabKey()] = m_tab;
+      }
+      ImGui::PopID();
+      ImGui::PopStyleColor();
+      ImGui::SetItemTooltip("%s", names[t]);
+   }
+}
+
+void PropertiesPanel::DrawTabContent(PropertyPane &props)
+{
+   EditorUI &editor = m_editor;
+   const bool tabbed = m_curation.active && m_curation.tabbed;
+   // Object: the part's material chip (a click selects the material)
+   if ((!tabbed || m_tab == Tab::Object) && editor.m_selection.GetType() == Selection::S_EDITABLE && !props.IsMultiEdit())
+   {
+      const string material = PartMaterial(props.GetEditedPart(editor.m_selection.GetPart()->GetEditable()));
+      if (!material.empty())
+      {
+         props.PropertyLabel("Material"s);
+         if (ImGui::Button((material + "  " ICON_FK_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+            m_pendingMaterialSel = editor.m_table->GetMaterial(material);
+         ImGui::SetItemTooltip("Select this material");
+         props.FlushRow();
+      }
+   }
+   if (!tabbed)
+      return;
+   static constexpr const char *titles[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced" };
+   const vector<const PinnedPanel::Def *> &defs = m_curation.tabs[static_cast<int>(m_tab)];
+   if (!defs.empty())
+   {
+      const int modifiedBefore = props.GetModifiedField();
+      ImGui::PushID("##Tab"); // The tab rows draw the same fields as the full sheet: keep their IDs apart
+      if (props.BeginSection(titles[static_cast<int>(m_tab)]))
+      {
+         props.SetLookSliders(true);
+         for (const PinnedPanel::Def *def : defs)
+            def->draw(props, m_curation.obj);
+         props.SetLookSliders(false);
+         props.EndSection();
+      }
+      ImGui::PopID();
+      if (props.GetModifiedField() != modifiedBefore)
+         m_curation.reharvest = true;
+   }
+   props.SkipRest(m_tab != Tab::Advanced);
 }
 
 void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int itemType, bool enabled, Curation &cur)
 {
    EditorUI &editor = m_editor;
    const CurationRules *const rules = enabled ? GetCurationRules(kind, itemType) : nullptr;
-   if (rules == nullptr)
+   if (!enabled || (rules == nullptr && !cur.tabbed))
    {
       cur.active = false;
       return;
@@ -171,13 +297,35 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    {
       return prim != nullptr && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome()));
    };
+   const auto isLook = [&](const PinnedPanel::Def *def)
+   { return rules == nullptr || def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop); };
+   const auto isTransform = [&](const PinnedPanel::Def *def)
+   { return def->section == "Position" || def->section == "Center" || (rules != nullptr && Listed(rules->transformLabels, def->key.prop)); };
+   for (auto &list : cur.tabs)
+      list.clear();
    for (const PinnedPanel::Def *def : m_defScratch)
    {
+      // Tabs: one domain per field (fields of no domain are only in Advanced, like everything else)
+      Tab tab = Tab::Advanced;
+      if (def->key.prop == "Visible")
+         tab = Tab::Object;
+      else if (def->section.find("Physics") != string::npos)
+         tab = Tab::Physics;
+      else if (def->section == "Timer" || def->section == "States" || def->section == "Transient state" || def->key.prop == "State Link"
+         || def->key.prop.find("Hit Event") != string::npos)
+         tab = Tab::Script;
+      else if (isTransform(def))
+         tab = Tab::Transform;
+      else if (!offLook(def) && isLook(def))
+         tab = Tab::Look;
+      if (tab != Tab::Advanced)
+         cur.tabs[static_cast<int>(tab)].push_back(def);
+      // Sections (the part's material pane)
       if (offLook(def))
          continue;
-      if (def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))
+      if (rules != nullptr && isLook(def))
          cur.look.push_back(def);
-      else if (Listed(rules->transformLabels, def->key.prop))
+      else if (rules != nullptr && Listed(rules->transformLabels, def->key.prop))
          cur.transform.push_back(def);
    }
    cur.advancedCount = static_cast<int>(m_defScratch.size() - cur.look.size() - cur.transform.size());
@@ -360,12 +508,31 @@ void PropertiesPanel::Render(float topBarHeight)
       return;
 
    const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float pane_width = PaneWidth * editor.m_liveUI.GetDPI();
+   const float pane_width = editor.m_propertiesWidth * editor.m_liveUI.GetDPI();
    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - pane_width, viewport->Pos.y + topBarHeight));
    ImGui::SetNextWindowSize(ImVec2(pane_width, viewport->Size.y - topBarHeight));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+   // Pin ID: draw the locked object as if it were selected (the real selection is restored once the panel is drawn)
+   const bool locked = m_locked && IsSelectionAlive(m_lockedSel);
+   m_locked = locked;
+   Selection realSel;
+   vector<std::shared_ptr<EditorUIPart>> realMultiSel;
+   vector<Texture *> realImages;
+   vector<VPX::Sound *> realSounds;
+   vector<Material *> realMaterials;
+   bool swapped = false;
+   if (locked && !(editor.m_selection == m_lockedSel))
+   {
+      swapped = true;
+      realSel = editor.m_selection;
+      realMultiSel = editor.m_multiSel;
+      realImages = editor.m_multiSelImages;
+      realSounds = editor.m_multiSelSounds;
+      realMaterials = editor.m_multiSelMaterials;
+      editor.SetSelection(m_lockedSel);
+   }
    PrepareCuration(); // May harvest the selection's pane in a hidden window: before the panel window is begun
    ImGui::Begin("PROPERTIES", nullptr,
       ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
@@ -385,8 +552,29 @@ void PropertiesPanel::Render(float topBarHeight)
    if (editor.m_multiSelMaterials.size() > 1)
       ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
 
+   // Vertical tab strip (Blender's Properties editor) at the left, content at the right
+   const bool tabbed = m_curation.active && m_curation.tabbed;
+   if (tabbed)
+   {
+      ImGui::BeginChild("##PropTabs", ImVec2(ImGui::GetFrameHeight() + 8.f, 0.f));
+      DrawTabStrip();
+      ImGui::EndChild();
+      ImGui::SameLine(0.f, 2.f);
+      ImGui::BeginChild("##PropContent", ImVec2(0.f, 0.f));
+   }
+   else
+   {
+      // Objects without tabs still offer the pin
+      if (ImGui::SmallButton(m_locked ? ICON_FK_THUMB_TACK " Pinned##PinID" : ICON_FK_THUMB_TACK "##PinID"))
+      {
+         m_locked = !m_locked;
+         m_lockedSel = editor.m_selection;
+      }
+      ImGui::SetItemTooltip(m_locked ? "Unpin: follow the selection again" : "Pin: keep showing this object while selecting others");
+   }
+
    PropertyPane props(editor.m_table);
-   props.SetAfterHeader([this](PropertyPane &p) { DrawCuration(p, m_curation); });
+   props.SetAfterHeader([this](PropertyPane &p) { DrawTabContent(p); });
    // Fields register their definition for the pinned properties overlay and offer the pin context menu
    props.SetPinning(&editor.m_pinned, PropertyPane::PinMode::Panel, editor.m_selection.GetType() == Selection::S_EDITABLE ? editor.m_selection.GetPart().get() : nullptr);
    ApplyUnits(props);
@@ -430,7 +618,8 @@ void PropertiesPanel::Render(float topBarHeight)
                case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
                }
                EndCuration(props, m_curation);
-               PartMaterialPane(!is_live, is_live);
+               if (!tabbed || m_tab == Tab::Material)
+                  PartMaterialPane(!is_live, is_live);
                // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
                if (is_live && props.GetModifiedField() > 0)
                {
@@ -515,14 +704,25 @@ void PropertiesPanel::Render(float topBarHeight)
       }
       if (editor.m_selection.GetType() != Selection::S_EDITABLE)
          EndCuration(props, m_curation);
-      else
+      else if (!tabbed || m_tab == Tab::Material)
          PartMaterialPane(false, false);
    }
+   if (tabbed)
+      ImGui::EndChild();
 
    RenderPopups();
 
    ImGui::End();
    ImGui::PopStyleVar(3);
+   // Pin ID: back to the real selection, unless the panel itself changed the selection
+   if (swapped && editor.m_selection == m_lockedSel)
+   {
+      editor.m_selection = realSel;
+      editor.m_multiSel = std::move(realMultiSel);
+      editor.m_multiSelImages = std::move(realImages);
+      editor.m_multiSelSounds = std::move(realSounds);
+      editor.m_multiSelMaterials = std::move(realMaterials);
+   }
    if (m_pendingMaterialSel != nullptr)
    {
       editor.SetSelection(Selection(m_pendingMaterialSel));

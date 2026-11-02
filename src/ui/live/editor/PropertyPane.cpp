@@ -205,6 +205,7 @@ bool PropertyPane::BeginSection(const string& name)
 
    m_inSection = true;
    m_pinGroup = name;
+   m_pinSection = name;
    m_sectionHasSync = m_table->m_liveBaseTable;
    // for some reason I don't really get, the computed size is too large
    //m_syncWidth = m_sectionHasSync ? (ImGui::CalcTextSize(ICON_SAVE).x + ImGui::GetStyle().ItemSpacing.x) : 0.f;

@@ -6,6 +6,8 @@
 
 #include "audio/AudioPlayer.h"
 #include "PinnedPanel.h"
+#include "Selection.h"
+#include <map>
 
 class Collection;
 class IEditable;
@@ -67,6 +69,19 @@ private:
 
    // Curated sections: the object's Look and Transform fields (drawn from the pin field registry, filled by a harvest of its pane)
    // right after the header, then the full sheet collapsed under an "Advanced" header. Only for the object types with curation rules
+   // Properties editor tabs (Blender's vertical domain tabs). Each tab draws its fields from the pin field registry, so it is
+   // short by construction; Advanced is the complete original sheet
+   enum class Tab
+   {
+      Object,
+      Transform,
+      Material,
+      Look,
+      Physics,
+      Script,
+      Advanced,
+      Count
+   };
    struct Curation
    {
       PinKind kind = PinKind::Table;
@@ -81,7 +96,20 @@ private:
       bool advancedIndent = false;
       double harvestTime = 0.0;
       string advancedLabel;
+      vector<const PinnedPanel::Def *> tabs[static_cast<int>(Tab::Count)]; // Tabbed curation (the selection)
+      bool tabbed = false;
    };
+   void DrawTabStrip();
+   void DrawTabContent(PropertyPane &props);
+   bool HasTab(Tab tab) const;
+   int TabKey() const; // Tab memory per object type
+   bool IsSelectionAlive(const Selection &sel) const;
+   Tab m_tab = Tab::Object;
+   std::map<int, Tab> m_tabMemory;
+   bool m_hasMaterialTab = false;
+   // Pin ID (Blender's Properties editor pin): the panel stays on the locked object while other objects get selected
+   bool m_locked = false;
+   Selection m_lockedSel;
    void PrepareCuration();
    void PrepareCurationFor(PinKind kind, const string &name, int itemType, bool enabled, Curation &cur);
    void DrawCuration(PropertyPane &props, Curation &cur);
