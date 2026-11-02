@@ -53,13 +53,22 @@ private:
    };
    struct Result
    {
-      int obj; // Index in m_objects
+      int obj; // Index in m_objects (-1 for operators)
       int field; // Index in the type's fields, -1: object-only or recent field not in the catalog
       int score;
       bool isField;
       string prop; // Field label (field rows)
       string label, group; // Cached display strings
       string right;
+      int op = -1; // Index in m_ops
+   };
+   // Menu command (Blender's menu search); path is the full menu path, its last component is the label
+   struct Operator
+   {
+      string path, label, shortcut;
+      string labelLower, pathLower;
+      std::function<bool()> enabled;
+      std::function<void()> action;
    };
    struct Recent
    {
@@ -67,12 +76,15 @@ private:
       string name;
       string prop;
       bool isField;
+      string opId; // Operator path (operator entries)
    };
    struct Candidate
    {
       int obj, field, score;
+      int op = -1;
    };
 
+   void BuildOperators();
    void BuildIndex();
    int TypeIndex(const string &key, const string &name);
    void RefreshCatalog();
@@ -106,6 +118,7 @@ private:
    bool m_escPending = false;
    int m_tableType = -1, m_matType = -1;
    vector<Object> m_objects;
+   vector<Operator> m_ops;
    struct QueueItem
    {
       PinKind kind;

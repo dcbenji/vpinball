@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 namespace VPX::EditorUI
 {
@@ -27,6 +28,11 @@ namespace
 
 constexpr const char *kSep = "\xE2\x80\xBA"; // Single right-pointing angle quotation mark
 constexpr const char *kDot = "\xC2\xB7"; // Middle dot
+#ifdef __APPLE__
+constexpr const char *kFooter = "Enter: go / run \xC2\xB7 Cmd+Enter: Add to Quick Favorites \xC2\xB7 Esc: close";
+#else
+constexpr const char *kFooter = "Enter: go / run \xC2\xB7 Ctrl+Enter: Add to Quick Favorites \xC2\xB7 Esc: close";
+#endif
 constexpr size_t kMaxResults = 60;
 constexpr size_t kMaxRecent = 8;
 constexpr size_t kMaxWords = 8;
@@ -77,10 +83,57 @@ void SearchPalette::Open()
    m_sel = 0;
    m_query.clear();
    m_lastQuery.clear();
+   BuildOperators();
    // Retry types whose harvest failed earlier
    m_queue.clear();
    for (TypeInfo &type : m_types)
       type.queued = 0;
+}
+
+// Menu commands; rebuilt on open since workspace names are editable
+void SearchPalette::BuildOperators()
+{
+   m_ops.clear();
+   EditorUI &ed = m_editor;
+   const auto hasPart = [&ed]() { return ed.m_selection.GetType() == Selection::S_EDITABLE; };
+   const auto add = [this](const string &path, const char *shortcut, std::function<bool()> enabled, std::function<void()> action)
+   {
+      Operator op;
+      op.path = path;
+      const size_t cut = path.rfind(kSep);
+      op.label = cut == string::npos ? path : path.substr(cut + strlen(kSep) + 1);
+      op.shortcut = shortcut;
+      op.labelLower = Lower(op.label);
+      op.pathLower = Lower(path);
+      op.enabled = std::move(enabled);
+      op.action = std::move(action);
+      m_ops.push_back(std::move(op));
+   };
+   const string sep = string(" ") + kSep + " ";
+   add("File" + sep + "Save", "Ctrl+S", nullptr, [&ed]() { ed.SaveTable(); });
+   add("File" + sep + "Play", "", [&ed]() { return !ed.IsInspectMode() && !ed.m_table->IsLocked(); }, [&ed]() { ed.PlayTest(); });
+   add("File" + sep + "Part Library", "", nullptr, [&ed]() { ed.OpenPartLibrary(); });
+   add("View" + sep + "Frame Selected", "Numpad .", hasPart, [&ed]() { ed.FrameSelection(); });
+   add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
+   add("View" + sep + "Sidebar" + sep + "Look", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Look); });
+   add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.m_showOutliner = !ed.m_showOutliner; });
+   add("View" + sep + "Properties", "", nullptr, [&ed]() { ed.m_showProperties = !ed.m_showProperties; });
+   add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });
+   add("Quick Favorites", "Q", nullptr, [&ed]() { ed.OpenQuickFavorites(); });
+   add("Select" + sep + "All", "A", nullptr, [&ed]() { ed.SelectAllParts(); });
+   add("Select" + sep + "None", "Alt+A", nullptr, [&ed]() { ed.ClearSelection(); });
+   add("Object" + sep + "Delete", "Del", hasPart, [&ed]() { ed.DeleteSelection(); });
+   add("Object" + sep + "Copy", "Ctrl+C", hasPart, [&ed]() { ed.CopySelection(); });
+   add("Object" + sep + "New Collection from Selection", "", hasPart, [&ed]() { ed.CreateCollection(true); });
+   add("Object" + sep + "Edit Points", "Tab", hasPart, [&ed]() { ed.EnterPointEditMode(); });
+   add("Tools" + sep + "Convert to PBR", "", nullptr, [&ed]() { ed.m_pbrConvertModal.Show(); });
+   add("Debug" + sep + "Renderer Inspection", "", nullptr, [&ed]() { ed.m_inspectionModal.Show(); });
+   for (int i = 0; i < PinnedPanel::WorkspaceCount; ++i)
+   {
+      const string &name = ed.m_pinned.GetWorkspace(i).name;
+      add("Workspace" + sep + (name.empty() ? "Workspace " + std::to_string(i + 1) : name), i == 0 ? "Ctrl+1" : i == 1 ? "Ctrl+2" : "Ctrl+3", nullptr,
+         [&ed, i]() { ed.m_pinned.ApplyWorkspace(i); });
+   }
 }
 
 int SearchPalette::TypeIndex(const string &key, const string &name)
@@ -224,6 +277,13 @@ void SearchPalette::Harvest()
 
 void SearchPalette::MakeResult(Result &r) const
 {
+   if (r.op >= 0)
+   {
+      const Operator &op = m_ops[r.op];
+      r.label = op.label;
+      r.right = op.path == op.label ? op.shortcut : (op.shortcut.empty() ? op.path : op.path + "   " + op.shortcut);
+      return;
+   }
    const Object &o = m_objects[r.obj];
    const TypeInfo &type = m_types[o.type];
    if (r.isField)
@@ -276,6 +336,23 @@ void SearchPalette::Recompute()
       for (size_t k = 0; k < m_recent.size();)
       {
          const Recent &rec = m_recent[k];
+         if (!rec.opId.empty())
+         {
+            int op = -1;
+            for (size_t oi = 0; oi < m_ops.size(); ++oi)
+               if (m_ops[oi].path == rec.opId)
+                  op = static_cast<int>(oi);
+            if (op < 0)
+            {
+               m_recent.erase(m_recent.begin() + k);
+               continue;
+            }
+            Result r { -1, -1, 0, false, {}, {}, {}, {}, op };
+            MakeResult(r);
+            m_results.push_back(std::move(r));
+            ++k;
+            continue;
+         }
          int found = -1;
          for (size_t oi = 0; oi < m_objects.size(); ++oi)
             if (m_objects[oi].kind == rec.kind && m_objects[oi].name == rec.name)
@@ -329,6 +406,7 @@ void SearchPalette::Recompute()
 
    const unsigned full = (1u << words.size()) - 1u;
    vector<Candidate> cands;
+   bool anyName = false; // A word names an object: fields then outrank operators
    for (size_t oi = 0; oi < m_objects.size(); ++oi)
    {
       const Object &o = m_objects[oi];
@@ -341,6 +419,7 @@ void SearchPalette::Recompute()
          const int nameMatch = MatchWord(o.lower, words[w]);
          if (nameMatch != 0)
          {
+            anyName = true;
             mask |= 1u << w;
             base += nameMatch == 2 ? 30 : 20;
          }
@@ -381,11 +460,33 @@ void SearchPalette::Recompute()
       }
    }
 
+   for (size_t oi = 0; oi < m_ops.size(); ++oi)
+   {
+      const Operator &op = m_ops[oi];
+      if (op.enabled && !op.enabled())
+         continue;
+      int total = (anyName ? 0 : 5) - static_cast<int>(std::min<size_t>(op.label.size(), 100) / 2);
+      bool ok = true;
+      for (size_t w = 0; w < words.size() && ok; ++w)
+      {
+         if (const int m = MatchWord(op.labelLower, words[w]); m != 0)
+            total += m == 2 ? 40 : 30;
+         else if (const int p = MatchWord(op.pathLower, words[w]); p != 0)
+            total += p == 2 ? 20 : 15;
+         else
+            ok = false;
+      }
+      if (ok)
+         cands.push_back({ -1, -1, total, static_cast<int>(oi) });
+   }
+
    const auto better = [](const Candidate &a, const Candidate &b)
    {
       if (a.score != b.score)
          return a.score > b.score;
-      return a.obj != b.obj ? a.obj < b.obj : a.field < b.field;
+      if (a.obj != b.obj)
+         return a.obj < b.obj;
+      return a.field != b.field ? a.field < b.field : a.op < b.op;
    };
    if (cands.size() > kMaxResults)
    {
@@ -398,7 +499,7 @@ void SearchPalette::Recompute()
    m_results.reserve(cands.size());
    for (const Candidate &c : cands)
    {
-      Result r { c.obj, c.field, c.score, c.field >= 0, {}, {}, {}, {} };
+      Result r { c.obj, c.field, c.score, c.field >= 0, {}, {}, {}, {}, c.op };
       MakeResult(r);
       m_results.push_back(std::move(r));
    }
@@ -406,21 +507,47 @@ void SearchPalette::Recompute()
 
 void SearchPalette::Remember(const Result &r)
 {
+   if (r.op >= 0)
+   {
+      const string &id = m_ops[r.op].path;
+      for (size_t k = 0; k < m_recent.size(); ++k)
+         if (m_recent[k].opId == id)
+         {
+            m_recent.erase(m_recent.begin() + k);
+            break;
+         }
+      m_recent.insert(m_recent.begin(), Recent { PinKind::Table, string(), string(), false, id });
+      if (m_recent.size() > kMaxRecent)
+         m_recent.resize(kMaxRecent);
+      return;
+   }
    const Object &o = m_objects[r.obj];
    const string prop = r.isField ? r.prop : string();
    for (size_t k = 0; k < m_recent.size(); ++k)
-      if (m_recent[k].kind == o.kind && m_recent[k].name == o.name && m_recent[k].isField == r.isField && m_recent[k].prop == prop)
+      if (m_recent[k].kind == o.kind && m_recent[k].name == o.name && m_recent[k].isField == r.isField && m_recent[k].prop == prop && m_recent[k].opId.empty())
       {
          m_recent.erase(m_recent.begin() + k);
          break;
       }
-   m_recent.insert(m_recent.begin(), Recent { o.kind, o.name, prop, r.isField });
+   m_recent.insert(m_recent.begin(), Recent { o.kind, o.name, prop, r.isField, string() });
    if (m_recent.size() > kMaxRecent)
       m_recent.resize(kMaxRecent);
 }
 
 void SearchPalette::Activate(const Result &r, bool pin)
 {
+   if (r.op >= 0)
+   {
+      if (pin || r.op >= static_cast<int>(m_ops.size()))
+         return;
+      const Operator op = m_ops[r.op]; // Copy: the action may reopen or rebuild the palette
+      if (op.enabled && !op.enabled())
+         return;
+      Close();
+      Remember(r);
+      op.action();
+      return;
+   }
    if (r.obj < 0 || r.obj >= static_cast<int>(m_objects.size()))
       return;
    const Object &o = m_objects[r.obj];
@@ -431,7 +558,7 @@ void SearchPalette::Activate(const Result &r, bool pin)
       if (!r.isField)
          return;
       m_editor.m_pinned.Pin(key);
-      m_editor.m_liveUI.PushNotification("Pinned " + r.label, 2000);
+      m_editor.m_liveUI.PushNotification("Added to Quick Favorites: " + r.label, 2000);
       Remember(r);
       m_focusInput = true;
       return;
@@ -559,7 +686,7 @@ void SearchPalette::Render()
          m_focusInput = false;
       }
       ImGui::SetNextItemWidth(innerWidth);
-      ImGui::InputTextWithHint("##query", "Search: object, field, type  (e.g. ramp refraction, l31 bulb depth)", &m_query);
+      ImGui::InputTextWithHint("##query", "Search menus and fields (F3)", &m_query);
       if (m_query != m_lastQuery)
       {
          // Recompute now so that Enter acts on the list matching the text
@@ -631,7 +758,7 @@ void SearchPalette::Render()
       }
       if (count != 0)
          ImGui::EndChild(); // Always paired with BeginChild, whatever it returned
-      ImGui::TextDisabled("Enter go to field %s Cmd/Ctrl+Enter pin %s Esc close", kDot, kDot);
+      ImGui::TextDisabled("%s", kFooter);
    }
    ImGui::End();
 
