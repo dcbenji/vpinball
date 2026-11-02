@@ -10,7 +10,19 @@
 #include "parts/Collection.h"
 #include "parts/Material.h"
 #include "parts/Sound.h"
+#include "parts/bumper.h"
+#include "parts/decal.h"
+#include "parts/flipper.h"
+#include "parts/gate.h"
+#include "parts/hittarget.h"
+#include "parts/kicker.h"
+#include "parts/plunger.h"
 #include "parts/primitive.h"
+#include "parts/ramp.h"
+#include "parts/rubber.h"
+#include "parts/spinner.h"
+#include "parts/surface.h"
+#include "parts/trigger.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
@@ -21,6 +33,190 @@
 
 namespace VPX::EditorUI
 {
+
+// Curation rules: which fields of a type make its Look and Transform sections. A field is Look when the pane registered it under
+// PropertyPane::Tier::Common, or when its group (section or separator) or label is listed below; the group lists are the pin
+// quick sets (see-through, bulb, dome). Everything stays in the full sheet under "Advanced".
+struct CurationRules
+{
+   std::initializer_list<const char *> lookGroups;
+   std::initializer_list<const char *> lookLabels;
+   std::initializer_list<const char *> transformLabels;
+};
+
+static const CurationRules *GetCurationRules(PinKind kind, int itemType)
+{
+   static const CurationRules primitive { { "Refractions", "Traced Insert Bulb", "Flasher Dome" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
+      { "Position", "Orientation", "Scale" } };
+   // The light pane marks its Light Settings section Common (PropertyPane::SetTier)
+   static const CurationRules light { {}, { "Type", "State", "Show Bulb", "Transmit", "Modulate" }, { "Center", "Position", "Height", "Surface" } };
+   static const CurationRules flasher { {}, { "Visible", "Color", "Image A", "Image B", "Mix", "Mix Factor (%)", "Opacity (%)", "Additive Blend", "Modulate" }, { "Position", "Rotation" } };
+   static const CurationRules material { { "See-Through Surface" },
+      { "Type", "Color", "Metallic", "Roughness", "Occlusion", "Emission Intensity", "Clear Coat", "Clear Coat Roughness", "Edge Brightness", "Enable Transparency", "Opacity", "Edge Opacity",
+         "Thickness" },
+      {} };
+   static const CurationRules table { { "Environment Lighting" },
+      { "Light Em. Scale", "Light Height", "Light Range", "Scene Lighting Scale", "Bloom Strength", "Tonemapping", "Exposure", "Enable Ambient Occlusion", "Ambient Occlusion Scale",
+         "Enable Sc. Sp. Reflections", "Screen Space Reflection Scale" },
+      {} };
+   switch (kind)
+   {
+   case PinKind::Table: return &table;
+   case PinKind::Material: return &material;
+   case PinKind::Part:
+      switch (itemType)
+      {
+      case eItemPrimitive: return &primitive;
+      case eItemLight: return &light;
+      case eItemFlasher: return &flasher;
+      default: return nullptr;
+      }
+   }
+   return nullptr;
+}
+
+static bool Listed(std::initializer_list<const char *> list, const string &value)
+{
+   return std::ranges::any_of(list, [&value](const char *item) { return value == item; });
+}
+
+string PropertiesPanel::PartMaterial(const IEditable *part)
+{
+   switch (part->GetItemType())
+   {
+   case eItemPrimitive: return static_cast<const Primitive *>(part)->m_d.m_szMaterial;
+   case eItemRamp: return static_cast<const Ramp *>(part)->m_d.m_szMaterial;
+   case eItemSurface: return static_cast<const Surface *>(part)->m_d.m_szTopMaterial;
+   case eItemDecal: return static_cast<const Decal *>(part)->m_d.m_szMaterial;
+   case eItemFlipper: return static_cast<const Flipper *>(part)->m_d.m_szMaterial;
+   case eItemHitTarget: return static_cast<const HitTarget *>(part)->m_d.m_szMaterial;
+   case eItemPlunger: return static_cast<const Plunger *>(part)->m_d.m_szMaterial;
+   case eItemRubber: return static_cast<const Rubber *>(part)->m_d.m_szMaterial;
+   case eItemSpinner: return static_cast<const Spinner *>(part)->m_d.m_szMaterial;
+   case eItemKicker: return static_cast<const Kicker *>(part)->m_d.m_szMaterial;
+   case eItemTrigger: return static_cast<const Trigger *>(part)->m_d.m_szMaterial;
+   case eItemGate: return static_cast<const Gate *>(part)->m_d.m_szMaterial;
+   case eItemBumper: return static_cast<const Bumper *>(part)->m_d.m_szCapMaterial;
+   default: return string();
+   }
+}
+
+void PropertiesPanel::PrepareCuration()
+{
+   EditorUI &editor = m_editor;
+   PinKind kind;
+   string name;
+   int itemType = -1;
+   switch (editor.m_selection.GetType())
+   {
+   case Selection::S_NONE: kind = PinKind::Table; break;
+   case Selection::S_MATERIAL:
+      kind = PinKind::Material;
+      name = editor.m_selection.GetMaterial()->m_name;
+      break;
+   case Selection::S_EDITABLE:
+      kind = PinKind::Part;
+      name = editor.m_selection.GetPart()->GetEditable()->GetName();
+      itemType = editor.m_selection.GetPart()->GetEditable()->GetItemType();
+      break;
+   default: m_curation.active = false; return;
+   }
+   const CurationRules *const rules = GetCurationRules(kind, itemType);
+   if (rules == nullptr || editor.m_multiSel.size() > 1) // Multi selections keep the full sheet (fields of other types, mixed values)
+   {
+      m_curation.active = false;
+      return;
+   }
+   if (m_reharvest && !ImGui::IsAnyItemActive())
+   {
+      m_reharvest = false;
+      editor.m_pinned.InvalidateHarvest(kind, name);
+   }
+   const unsigned stamp = editor.m_pinned.EnsureHarvested(kind, name);
+   const void *owner = nullptr;
+   void *const obj = editor.m_pinned.ResolveObject(kind, name, &owner);
+   m_curation.active = stamp != 0 && obj != nullptr;
+   if (!m_curation.active)
+      return;
+   if (stamp == m_curation.stamp && kind == m_curation.kind && name == m_curation.name && obj == m_curation.obj)
+      return;
+   m_curation.kind = kind;
+   m_curation.name = name;
+   m_curation.obj = obj;
+   m_curation.stamp = stamp;
+   vector<const PinnedPanel::Def *> defs;
+   editor.m_pinned.CollectDefs(kind, name, stamp, defs);
+   m_curation.look.clear();
+   m_curation.transform.clear();
+   for (const PinnedPanel::Def *def : defs)
+   {
+      if (def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))
+         m_curation.look.push_back(def);
+      else if (Listed(rules->transformLabels, def->key.prop))
+         m_curation.transform.push_back(def);
+   }
+   m_curation.advancedCount = static_cast<int>(defs.size() - m_curation.look.size() - m_curation.transform.size());
+}
+
+void PropertiesPanel::DrawCuration(PropertyPane &props)
+{
+   EditorUI &editor = m_editor;
+   // Header material chip: the part's material, a click selects it
+   if (editor.m_selection.GetType() == Selection::S_EDITABLE && !props.IsMultiEdit())
+   {
+      const string material = PartMaterial(props.GetEditedPart(editor.m_selection.GetPart()->GetEditable()));
+      if (!material.empty())
+      {
+         props.PropertyLabel("Material"s);
+         if (ImGui::Button((material + "  " ICON_FK_ARROW_RIGHT "###MaterialChip").c_str(), ImVec2(ImGui::CalcItemWidth(), 0.f)))
+            m_pendingMaterialSel = editor.m_table->GetMaterial(material);
+         ImGui::SetItemTooltip("Select this material");
+         props.FlushRow();
+      }
+   }
+   if (!m_curation.active)
+      return;
+   const int modifiedBefore = props.GetModifiedField();
+   ImGui::PushID("##Curated"); // The curated rows draw the same fields as the full sheet below: keep their IDs apart
+   const auto drawDefs = [&props, this](const vector<const PinnedPanel::Def *> &defs)
+   {
+      for (const PinnedPanel::Def *def : defs)
+         def->draw(props, m_curation.obj);
+   };
+   if (!m_curation.look.empty() && props.BeginSection("Look"s))
+   {
+      drawDefs(m_curation.look);
+      props.EndSection();
+   }
+   if (!m_curation.transform.empty() && props.BeginSection("Transform"s))
+   {
+      drawDefs(m_curation.transform);
+      props.EndSection();
+   }
+   ImGui::PopID();
+   if (props.GetModifiedField() != modifiedBefore)
+      m_reharvest = true;
+   ImGui::Spacing();
+   const bool open = ImGui::CollapsingHeader(("Advanced (" + std::to_string(m_curation.advancedCount) + " more)###Advanced").c_str());
+   ImGui::SetItemTooltip("Every field of this object, in the full sheet layout");
+   props.SkipRest(!open);
+   if (open)
+   {
+      ImGui::Indent();
+      m_advancedIndent = true;
+   }
+}
+
+void PropertiesPanel::EndCuration(PropertyPane &props)
+{
+   props.FlushRow();
+   props.SkipRest(false);
+   if (m_advancedIndent)
+   {
+      ImGui::Unindent();
+      m_advancedIndent = false;
+   }
+}
 
 PropertiesPanel::PropertiesPanel(EditorUI &editor)
    : m_editor(editor)
@@ -42,6 +238,7 @@ void PropertiesPanel::Render(float topBarHeight)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+   PrepareCuration(); // May harvest the selection's pane in a hidden window: before the panel window is begun
    ImGui::Begin("PROPERTIES", nullptr,
       ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
          | ImGuiWindowFlags_NoNavFocus);
@@ -61,6 +258,7 @@ void PropertiesPanel::Render(float topBarHeight)
       ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
 
    PropertyPane props(editor.m_table);
+   props.SetAfterHeader([this](PropertyPane &p) { DrawCuration(p); });
    // Fields register their definition for the pinned properties overlay and offer the pin context menu
    props.SetPinning(&editor.m_pinned, PropertyPane::PinMode::Panel, editor.m_selection.GetType() == Selection::S_EDITABLE ? editor.m_selection.GetPart().get() : nullptr);
    switch (editor.m_units)
@@ -108,6 +306,7 @@ void PropertiesPanel::Render(float topBarHeight)
                case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
                case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
                }
+               EndCuration(props);
                // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
                if (is_live && props.GetModifiedField() > 0)
                {
@@ -166,6 +365,7 @@ void PropertiesPanel::Render(float topBarHeight)
                });
          }
          editor.m_selection.GetPart()->UpdatePropertyPane(props);
+         EndCuration(props);
          // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
          editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
          editor.m_undo.EndUndo();
@@ -189,12 +389,21 @@ void PropertiesPanel::Render(float topBarHeight)
       case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
       case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
       }
+      if (editor.m_selection.GetType() != Selection::S_EDITABLE)
+         EndCuration(props);
    }
+   if (props.GetModifiedField() > 0)
+      m_reharvest = true;
 
    RenderPopups();
 
    ImGui::End();
    ImGui::PopStyleVar(3);
+   if (m_pendingMaterialSel != nullptr)
+   {
+      editor.SetSelection(Selection(m_pendingMaterialSel));
+      m_pendingMaterialSel = nullptr;
+   }
 }
 
 void PropertiesPanel::RefreshEditedParts(PropertyPane &props)

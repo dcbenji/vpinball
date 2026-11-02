@@ -67,9 +67,38 @@ public:
    bool WasBroadcast() const { return m_broadcastApplied; }
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
 
+   // Field tiers: Common fields make the curated sections (Look, Transform) the properties panel draws first; Advanced fields only
+   // live in the full sheet, drawn below them under a collapsed "Advanced" header. Panes scope a run of fields with SetTier (same
+   // pattern as BroadcastFields) or a TierScope; the panel also curates fields by group and label (see PropertiesPanel)
+   enum class Tier
+   {
+      Advanced,
+      Common
+   };
+   void SetTier(Tier tier) { m_tier = tier; }
+   Tier GetTier() const { return m_tier; }
+   class TierScope
+   {
+   public:
+      TierScope(PropertyPane &pane, Tier tier) : m_pane(pane), m_prev(pane.m_tier) { pane.m_tier = tier; }
+      ~TierScope() { m_pane.m_tier = m_prev; }
+      TierScope(const TierScope &) = delete;
+      TierScope &operator=(const TierScope &) = delete;
+   private:
+      PropertyPane &m_pane;
+      const Tier m_prev;
+   };
+   // Hook run right after the pane header (name row): the panel draws its curated sections and the Advanced header there
+   void SetAfterHeader(std::function<void(PropertyPane &)> hook) { m_afterHeader = std::move(hook); }
+   // While set, sections and fields are skipped (the full sheet is collapsed under the Advanced header)
+   void SkipRest(bool skip) { m_skipRest = skip; }
+   bool IsSkippingRest() const { return m_skipRest; }
+   // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
+   void FlushRow();
+
    void Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName);
    void EditableHeader(const string& typeName, IEditable* editable);
-   void Separator(const string& label) const;
+   void Separator(const string& label);
    // A checkbox on session state (not part data): never marks the part as edited. Pinnable like the other fields
    template <class T> void SessionToggle(T* obj, const string& label, bool& state, const char* tooltip = nullptr);
    template <class T> void Checkbox(T* obj, const string& label, const std::function<bool(const T*)>& getter, const std::function<void(T*, bool)>& setter, const char* tooltip = nullptr);
@@ -193,6 +222,11 @@ public:
 
 private:
    template <class T, class MakeDraw> void PinField(T *obj, const string &label, const MakeDraw &makeDraw);
+   // Name list combos (image, material, surface,...) register a definition that rebuilds their list when drawn
+   template <class T>
+   using NamedComboFn = void (PropertyPane::*)(T *, const string &, const std::function<string(const T *)> &, const std::function<void(T *, const string &)> &, const char *);
+   template <class T>
+   void PinNamedCombo(T *obj, const string &label, const std::function<string(const T *)> &getter, const std::function<void(T *, const string &)> &setter, const char *tooltip, NamedComboFn<T> combo);
    void PinContext(const PinKey &key, const IEditable *part, const Material *material);
    static string PinTip(const char *tooltip) { return tooltip ? string(tooltip) : string(); }
    static const char *PinTipPtr(const string &tip) { return tip.empty() ? nullptr : tip.c_str(); }
@@ -202,6 +236,11 @@ private:
    const void *m_pinOwner = nullptr;
    mutable string m_pinGroup; // Current section or separator, used to pin field groups
    ImVec2 m_rowMin; // Top left of the current field row (label included), for the pin context menu
+   float m_rowBottom = 0.f; // When the label of the last row wrapped: where the next row starts (screen space), else 0
+   Tier m_tier = Tier::Advanced;
+   std::function<void(PropertyPane &)> m_afterHeader;
+   bool m_skipRest = false;
+   bool m_pinCombo = true; // Combo registers its own definition (off while a name list combo registers its own)
 
    static constexpr const char* ICON_SAVE = ICON_FK_FLOPPY_O;
 
@@ -310,8 +349,9 @@ template <class T, class MakeDraw> void PropertyPane::PinField(T *obj, const str
       if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Harvest)
       {
          const void *const owner = (key.kind == PinKind::Part && m_pinOwner) ? m_pinOwner : static_cast<const void *>(obj);
-         if (m_pins->NeedsDef(key.Id(), owner))
-            m_pins->SetDef(key, m_pinGroup, owner, makeDraw());
+         // A harvest always refreshes the definitions: it records which fields the object shows now, and in which order
+         if (m_pinMode == PinMode::Harvest || m_pins->NeedsDef(key.Id(), owner))
+            m_pins->SetDef(key, m_pinGroup, owner, makeDraw(), m_tier == Tier::Common);
       }
       if (m_pinMode == PinMode::Panel || m_pinMode == PinMode::Overlay)
          PinContext(key, part, material);
@@ -421,6 +461,8 @@ inline void PropertyPane::TimerSection(IEditable* obj)
 template <class T>
 inline void PropertyPane::Checkbox(T* obj, const string& label, const std::function<bool(const T*)>& getter, const std::function<void(T*, bool)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -454,6 +496,8 @@ inline void PropertyPane::Checkbox(T* obj, const string& label, const std::funct
 template <class T>
 inline void PropertyPane::SessionToggle(T* obj, const string& label, bool& state, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    PropertyLabel(label, tooltip);
    ImGui::PushID(label.c_str());
@@ -474,6 +518,8 @@ inline void PropertyPane::SessionToggle(T* obj, const string& label, bool& state
 template <class T>
 inline void PropertyPane::InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -508,6 +554,8 @@ template <class T>
 inline void PropertyPane::InputFloat(
    T* obj, const string& label, const std::function<float(const T*)>& getter, const std::function<void(T*, float)>& setter, Unit unit, int nDecimals, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    int nDecimalAdjust;
@@ -551,6 +599,8 @@ template <class T>
 inline void PropertyPane::SliderFloat(
    T* obj, const string& label, const std::function<float(const T*)>& getter, const std::function<void(T*, float)>& setter, float vMin, float vMax, int nDecimals, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    const string format = "%." + std::to_string(max(0, nDecimals)) + 'f';
@@ -597,6 +647,8 @@ template <class T>
 inline void PropertyPane::InputFloat2(
    T* obj, const string& label, const std::function<Vertex2D(const T*)>& getter, const std::function<void(T*, const Vertex2D&)>& setter, Unit unit, int nDecimals, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    int nDecimalAdjust;
@@ -642,6 +694,8 @@ template <class T>
 inline void PropertyPane::InputFloat3(
    T* obj, const string& label, const std::function<vec3(const T*)>& getter, const std::function<void(T*, const vec3&)>& setter, Unit unit, int nDecimals, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    int nDecimalAdjust;
@@ -688,6 +742,8 @@ inline void PropertyPane::InputFloat3(
 template <class T>
 inline void PropertyPane::InputRGB(T* obj, const string& label, const std::function<vec3(const T*)>& getter, const std::function<void(T*, const vec3&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -721,6 +777,8 @@ inline void PropertyPane::InputRGB(T* obj, const string& label, const std::funct
 template <class T>
 inline void PropertyPane::InputString(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -746,6 +804,8 @@ template <class T>
 inline void PropertyPane::InputResURI(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, ResURIKind kind,
    const char* tooltip, DisplayFamily displayFamily, int semanticType, bool writableOnly, int dataFormat)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -789,6 +849,8 @@ template <class T>
 inline void PropertyPane::Combo(
    T* obj, const string& label, const std::vector<string>& values, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    assert(m_inSection);
    m_modifyFieldId++;
    PropertyLabel(label, tooltip);
@@ -815,87 +877,149 @@ inline void PropertyPane::Combo(
    }
    WidgetTooltip(tooltip);
    EndSyncField(sync, targets, getter, setter, value);
+   if (m_pinCombo)
+      PinField<T>(obj, label,
+         [&]() -> PinDrawFn
+         {
+            return [label, values, getter, setter, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+            {
+               if (T *t = PinCast<T>(o))
+                  p.Combo<T>(t, label, values, getter, setter, PinTipPtr(tip));
+            };
+         });
+   ImGui::PopID();
+}
+
+template <class T>
+inline void PropertyPane::PinNamedCombo(
+   T *obj, const string &label, const std::function<string(const T *)> &getter, const std::function<void(T *, const string &)> &setter, const char *tooltip, NamedComboFn<T> combo)
+{
+   ImGui::PushID(label.c_str()); // Same ID scope as the combo's own row, for the pin context menu
+   PinField<T>(obj, label,
+      [&]() -> PinDrawFn
+      {
+         return [label, getter, setter, combo, tip = PinTip(tooltip)](PropertyPane &p, void *o)
+         {
+            if (T *t = PinCast<T>(o))
+               (p.*combo)(t, label, getter, setter, PinTipPtr(tip));
+         };
+      });
    ImGui::PopID();
 }
 
 template <class T>
 inline void PropertyPane::ImageCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> images(m_table->m_vimage.size());
    const std::function<string(Texture*)> map = [](const Texture* image) -> string { return image->m_name; };
    std::ranges::transform(m_table->m_vimage.begin(), m_table->m_vimage.end(), images.begin(), map);
    std::sort(images.begin(), images.end(), StrLessNoCase);
    images.insert(images.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, images, [&](const T* obj) { return max(0, FindIndexOf(images, getter(obj))); }, [&](T* obj, int v) { setter(obj, images[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::ImageCombo<T>);
 }
 
 template <class T>
 inline void PropertyPane::MaterialCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> materials(m_table->m_materials.size());
    const std::function<string(Material*)> map = [](const Material* material) { return material->m_name; };
    std::ranges::transform(m_table->m_materials.begin(), m_table->m_materials.end(), materials.begin(), map);
    std::sort(materials.begin(), materials.end(), StrLessNoCase);
    materials.insert(materials.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, materials, [&](const T* obj) { return max(0, FindIndexOf(materials, getter(obj))); }, [&](T* obj, int v) { setter(obj, materials[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::MaterialCombo<T>);
 }
 
 template <class T>
 inline void PropertyPane::SurfaceCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> surfaces;
    for (const IEditable* pe : m_table->GetParts())
       if (pe->GetItemType() == ItemTypeEnum::eItemSurface || pe->GetItemType() == ItemTypeEnum::eItemRamp || pe->GetItemType() == ItemTypeEnum::eItemFlasher)
          surfaces.push_back(pe->GetName());
    std::sort(surfaces.begin(), surfaces.end(), StrLessNoCase);
    surfaces.insert(surfaces.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, surfaces, [&](const T* obj) { return max(0, FindIndexOf(surfaces, getter(obj))); }, [&](T* obj, int v) { setter(obj, surfaces[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::SurfaceCombo<T>);
 }
 
 template <class T>
 inline void PropertyPane::LightmapCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> lightmaps;
    for (const IEditable* pe : m_table->GetParts())
       if (pe->GetItemType() == ItemTypeEnum::eItemLight)
          lightmaps.push_back(pe->GetName());
    std::sort(lightmaps.begin(), lightmaps.end(), StrLessNoCase);
    lightmaps.insert(lightmaps.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, lightmaps, [&](const T* obj) { return max(0, FindIndexOf(lightmaps, getter(obj))); }, [&](T* obj, int v) { setter(obj, lightmaps[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::LightmapCombo<T>);
 }
 
 template <class T>
 inline void PropertyPane::RenderProbeCombo(
    T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> renderprobes;
    for (const RenderProbe* probe : m_table->m_vrenderprobe)
       renderprobes.push_back(probe->GetName());
    std::sort(renderprobes.begin(), renderprobes.end(), StrLessNoCase);
    renderprobes.insert(renderprobes.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, renderprobes, [&](const T* obj) { return max(0, FindIndexOf(renderprobes, getter(obj))); }, [&](T* obj, int v) { setter(obj, renderprobes[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::RenderProbeCombo<T>);
 }
 
 template <class T>
 void PropertyPane::CollectionCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> collections;
    for (auto pcol : m_table->GetCollections())
       collections.push_back(pcol->m_name);
    std::sort(collections.begin(), collections.end(), StrLessNoCase);
    collections.insert(collections.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, collections, [&](const T* obj) { return max(0, FindIndexOf(collections, getter(obj))); }, [&](T* obj, int v) { setter(obj, collections[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::CollectionCombo<T>);
 }
 
 template <class T>
 void PropertyPane::SoundCombo(T* obj, const string& label, const std::function<string(const T*)>& getter, const std::function<void(T*, const string&)>& setter, const char* tooltip)
 {
+   if (m_skipRest)
+      return;
    std::vector<string> sounds;
    for (const VPX::Sound* sound : m_table->m_vsound)
       sounds.push_back(sound->GetName());
    std::sort(sounds.begin(), sounds.end(), StrLessNoCase);
    sounds.insert(sounds.begin(), ""s);
+   m_pinCombo = false;
    Combo<T>(obj, label, sounds, [&](const T* obj) { return max(0, FindIndexOf(sounds, getter(obj))); }, [&](T* obj, int v) { setter(obj, sounds[v]); }, tooltip);
+   m_pinCombo = true;
+   PinNamedCombo<T>(obj, label, getter, setter, tooltip, &PropertyPane::SoundCombo<T>);
 }
 
 template <class T> void PropertyPane::Font(T* obj, const std::function<FontDesc(const T*)>& getter, const std::function<void(T*, const FontDesc&)>& setter)

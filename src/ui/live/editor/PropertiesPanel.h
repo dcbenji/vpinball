@@ -5,8 +5,10 @@
 #include <optional>
 
 #include "audio/AudioPlayer.h"
+#include "PinnedPanel.h"
 
 class Collection;
+class IEditable;
 class Material;
 class Texture;
 class RenderProbe;
@@ -37,6 +39,9 @@ public:
    // Width of the panel in logical pixels (scaled by the UI DPI)
    static constexpr float PaneWidth = 280.f;
 
+   // Main visual material of a part (the one its header chip opens), empty if none
+   static string PartMaterial(const IEditable *part);
+
 private:
    void TableProperties(PropertyPane &props);
    void ImageProperties(PropertyPane &props, Texture *image);
@@ -58,6 +63,27 @@ private:
    void RequestConfirm(const string &message, const std::function<void()> &action);
    void UsersSection(PropertyPane &props, const vector<WhereUsedInfo> &whereUsed);
    void RenderPopups();
+
+   // Curated sections: the object's Look and Transform fields (drawn from the pin field registry, filled by a harvest of its pane)
+   // right after the header, then the full sheet collapsed under an "Advanced" header. Only for the object types with curation rules
+   struct Curation
+   {
+      PinKind kind = PinKind::Table;
+      string name;
+      void *obj = nullptr; // Object resolved for the definitions (PinTable*, Material* or IEditable*)
+      unsigned stamp = 0; // Harvest the lists below were built from
+      vector<const PinnedPanel::Def *> look;
+      vector<const PinnedPanel::Def *> transform;
+      int advancedCount = 0; // Fields of the full sheet not in the curated sections
+      bool active = false;
+   };
+   void PrepareCuration();
+   void DrawCuration(PropertyPane &props);
+   void EndCuration(PropertyPane &props);
+   Curation m_curation;
+   bool m_reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
+   bool m_advancedIndent = false;
+   Material *m_pendingMaterialSel = nullptr; // Header material chip clicked: selected once the panel is drawn
 
    EditorUI &m_editor;
    bool m_selectLiveTab = true;

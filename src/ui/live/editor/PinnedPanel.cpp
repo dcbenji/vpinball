@@ -77,13 +77,48 @@ bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
    return it == m_defs.end() || it->second.owner != owner;
 }
 
-void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw)
+void PinnedPanel::SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw, bool common)
 {
    Def &def = m_defs[key.Id()];
    def.key = key;
    def.group = group;
    def.owner = owner;
    def.draw = std::move(draw);
+   def.common = common;
+   if (m_harvestStamp != 0)
+   {
+      def.stamp = m_harvestStamp;
+      def.seq = m_harvestSeq++;
+   }
+   else
+      def.stamp = 0;
+}
+
+unsigned PinnedPanel::EnsureHarvested(PinKind kind, const string &name)
+{
+   const void *owner = nullptr;
+   if (Resolve(kind, name, &owner) == nullptr || owner == nullptr)
+      return 0;
+   const string objId = ObjectId(kind, name);
+   const auto harvested = m_harvested.find(objId);
+   if (harvested == m_harvested.end() || harvested->second != owner)
+      Harvest(kind, name);
+   const auto stamp = m_harvestStamps.find(objId);
+   return stamp == m_harvestStamps.end() ? 0 : stamp->second;
+}
+
+void PinnedPanel::InvalidateHarvest(PinKind kind, const string &name) { m_harvested.erase(ObjectId(kind, name)); }
+
+void PinnedPanel::CollectDefs(PinKind kind, const string &name, unsigned stamp, vector<const Def *> &out) const
+{
+   out.clear();
+   if (stamp == 0)
+      return;
+   const string prefix = ObjectId(kind, name) + '\x1f';
+   for (auto it = m_defs.lower_bound(prefix); it != m_defs.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it)
+      if (it->second.stamp == stamp && it->second.draw)
+         out.push_back(&it->second);
+   std::ranges::sort(out, [](const Def *a, const Def *b) { return a->seq < b->seq; });
 }
 
 bool PinnedPanel::HasBulbSet(const IEditable *part) const { return IsTracedInsert(part); }
@@ -205,6 +240,9 @@ bool PinnedPanel::Harvest(PinKind kind, const string &name)
    m_harvested[ObjectId(kind, name)] = owner;
    if (obj == nullptr || owner == nullptr)
       return false;
+   m_harvestStamp = ++m_harvestCounter;
+   m_harvestSeq = 0;
+   m_harvestStamps[ObjectId(kind, name)] = m_harvestStamp;
    PropertyPane props(m_editor.m_table);
    ApplyUnits(props);
    props.SetPinning(this, PropertyPane::PinMode::Harvest, kind == PinKind::Part ? owner : nullptr);
@@ -220,6 +258,7 @@ bool PinnedPanel::Harvest(PinKind kind, const string &name)
    case PinKind::Part: static_cast<EditorUIPart *>(const_cast<void *>(owner))->UpdatePropertyPane(props); break;
    }
    ImGui::End();
+   m_harvestStamp = 0;
    return true;
 }
 

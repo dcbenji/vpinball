@@ -33,37 +33,98 @@ void PropertyPane::SetShowStartup(bool showStartup)
    m_showStartup = showStartup;
 }
 
+void PropertyPane::FlushRow()
+{
+   if (m_rowBottom <= 0.f)
+      return;
+   const float bottom = m_rowBottom;
+   m_rowBottom = 0.f;
+   const ImVec2 cursor = ImGui::GetCursorScreenPos();
+   if (cursor.y >= bottom)
+      return;
+   // Submit an empty item so that the window bounds follow the moved cursor
+   ImGui::SetCursorScreenPos(ImVec2(cursor.x, bottom - ImGui::GetStyle().ItemSpacing.y));
+   ImGui::Dummy(ImVec2(0.f, 0.f));
+}
+
 void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
 {
+   FlushRow();
    const ImVec2 pos = ImGui::GetCursorScreenPos();
    m_rowMin = pos;
-   const float xSpacing = ImGui::GetStyle().ItemSpacing.x;
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float xSpacing = style.ItemSpacing.x;
    const float xWidth = ImGui::GetContentRegionAvail().x * 0.5f - m_syncWidth;
+   // The panel keeps room for the hover pin toggle at the left of the label column
+   const float pinWidth = m_pinMode == PinMode::Panel ? ImGui::GetFontSize() + xSpacing * 0.5f : 0.f;
+   const float maxWidth = max(0.f, xWidth - xSpacing - pinWidth);
 
-   float textWidth = ImGui::CalcTextSize(label.c_str()).x;
-   if (textWidth + xSpacing > xWidth)
+   const char* const text = label.c_str();
+   const char* const textEnd = text + label.size();
+   const auto drawLine = [&](const char* begin, const char* end, float y)
    {
-      string ellipsis = label;
-      size_t n = label.length();
-      while (n > 1 && textWidth + xSpacing > xWidth)
-      {
-         n--;
-         ellipsis = trim_string(label.substr(0, n)) + "...";
-         textWidth = ImGui::CalcTextSize(ellipsis.c_str()).x;
-      }
-      ImGui::SetCursorScreenPos(ImVec2(pos.x + max(0.0f, xWidth - textWidth - xSpacing), pos.y + ImGui::GetStyle().FramePadding.y));
-      ImGui::TextUnformatted(ellipsis.c_str());
+      const float width = ImGui::CalcTextSize(begin, end).x;
+      ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - width - xSpacing), y));
+      ImGui::TextUnformatted(begin, end);
       if (tooltip != nullptr)
-         ImGui::SetItemTooltip("%s\n%s", label.c_str(), tooltip);
+         ImGui::SetItemTooltip("%s\n%s", text, tooltip);
       else
-         ImGui::SetItemTooltip("%s", label.c_str());
+         ImGui::SetItemTooltip("%s", text);
+   };
+   const auto ellipsized = [&](const char* begin)
+   {
+      // Longest prefix of [begin, textEnd) that fits with an ellipsis
+      const float dotsWidth = ImGui::CalcTextSize("...").x;
+      const char* end = textEnd;
+      while (end > begin + 1 && ImGui::CalcTextSize(begin, end).x + dotsWidth > maxWidth)
+         end--;
+      return trim_string(string(begin, end)) + "...";
+   };
+
+   if (ImGui::CalcTextSize(text, textEnd).x <= maxWidth)
+   {
+      ImGui::SetCursorScreenPos(ImVec2(pos.x + max(pinWidth, xWidth - ImGui::CalcTextSize(text, textEnd).x - xSpacing), pos.y + style.FramePadding.y));
+      ImGui::TextUnformatted(text, textEnd);
+      if (tooltip != nullptr)
+         ImGui::SetItemTooltip("%s", tooltip);
    }
    else
    {
-      ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth - textWidth - xSpacing, pos.y + ImGui::GetStyle().FramePadding.y));
-      ImGui::TextUnformatted(label.c_str());
-      if (tooltip != nullptr)
-         ImGui::SetItemTooltip("%s", tooltip);
+      // Wrap on two lines, at the space giving the most balanced lines; the second line gets an ellipsis if it still does not fit
+      const char* split = nullptr;
+      float best = FLT_MAX;
+      for (const char* c = text; c < textEnd; c++)
+      {
+         if (*c != ' ')
+            continue;
+         const float w1 = ImGui::CalcTextSize(text, c).x;
+         if (w1 > maxWidth)
+            break;
+         const float w = max(w1, ImGui::CalcTextSize(c + 1, textEnd).x);
+         if (w < best)
+         {
+            best = w;
+            split = c;
+         }
+      }
+      if (split == nullptr)
+      {
+         const string line = ellipsized(text);
+         drawLine(line.c_str(), line.c_str() + line.size(), pos.y + style.FramePadding.y);
+      }
+      else
+      {
+         const float lineHeight = ImGui::GetFontSize();
+         drawLine(text, split, pos.y);
+         if (ImGui::CalcTextSize(split + 1, textEnd).x <= maxWidth)
+            drawLine(split + 1, textEnd, pos.y + lineHeight);
+         else
+         {
+            const string line = ellipsized(split + 1);
+            drawLine(line.c_str(), line.c_str() + line.size(), pos.y + lineHeight);
+         }
+         m_rowBottom = max(pos.y + 2.f * lineHeight, pos.y + ImGui::GetFrameHeight()) + style.ItemSpacing.y;
+      }
    }
 
    ImGui::SetCursorScreenPos(ImVec2(pos.x + xWidth, pos.y));
@@ -90,6 +151,8 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
    }
    ImGui::EndDisabled();
    ImGui::Separator();
+   if (m_afterHeader)
+      m_afterHeader(*this);
 }
 
 void PropertyPane::EditableHeader(const string& typeName, IEditable* editable)
@@ -97,9 +160,12 @@ void PropertyPane::EditableHeader(const string& typeName, IEditable* editable)
    Header(typeName, [editable]() { return editable->GetName(); }, [editable](const string& v) { editable->SetName(v); });
 }
 
-void PropertyPane::Separator(const string& label) const
+void PropertyPane::Separator(const string& label)
 {
    m_pinGroup = label;
+   if (m_skipRest)
+      return;
+   FlushRow();
    ImGui::TextUnformatted(label.c_str());
    // Underline the text
    const ImVec2 headerMin = ImGui::GetItemRectMin();
@@ -113,6 +179,9 @@ void PropertyPane::Separator(const string& label) const
 bool PropertyPane::BeginSection(const string& name)
 {
    assert(!m_inSection);
+   if (m_skipRest)
+      return false;
+   FlushRow();
    const bool opened = ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 
    // Add a white line above
@@ -138,6 +207,7 @@ bool PropertyPane::BeginSection(const string& name)
 void PropertyPane::EndSection()
 {
    assert(m_inSection);
+   FlushRow();
    m_inSection = false;
 }
 
@@ -145,8 +215,33 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
 {
    // Right click anywhere on the field row (label or widget) opens the pin menu
    ImGuiWindow* const window = ImGui::GetCurrentWindow();
-   const ImVec2 rowMax(window->WorkRect.Max.x, ImGui::GetItemRectMax().y);
-   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(m_rowMin, rowMax, false))
+   const float rowBottom = m_rowBottom > 0.f ? m_rowBottom - ImGui::GetStyle().ItemSpacing.y : 0.f;
+   const ImVec2 rowMax(window->WorkRect.Max.x, max(ImGui::GetItemRectMax().y, rowBottom));
+   const bool rowHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(m_rowMin, rowMax, false);
+   // Panel: a pin toggle at the left of the row, shown on hover (always when pinned)
+   if (m_pinMode == PinMode::Panel)
+   {
+      const bool pinned = m_pins->IsPinned(key);
+      if (pinned || rowHovered)
+      {
+         const float size = ImGui::GetFontSize();
+         const ImVec2 iconMin(m_rowMin.x, m_rowMin.y + ImGui::GetStyle().FramePadding.y);
+         const bool iconHovered = rowHovered && ImGui::IsMouseHoveringRect(iconMin, ImVec2(iconMin.x + size, iconMin.y + size), false);
+         window->DrawList->AddText(iconMin, ImGui::GetColorU32(pinned ? ImGuiCol_CheckMark : iconHovered ? ImGuiCol_Text : ImGuiCol_TextDisabled), ICON_FK_THUMB_TACK);
+         if (iconHovered)
+         {
+            ImGui::SetTooltip(pinned ? "Unpin from overlay" : "Pin to overlay");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+               if (pinned)
+                  m_pins->Unpin(key);
+               else
+                  m_pins->Pin(key);
+            }
+         }
+      }
+   }
+   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && rowHovered)
       ImGui::OpenPopup("##PinMenu");
    if (!ImGui::BeginPopup("##PinMenu"))
       return;

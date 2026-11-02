@@ -60,8 +60,27 @@ public:
    bool HasPins() const { return !m_pins.empty(); }
 
    // Field definitions, registered by the property panes (owner identifies the definition's provider, see PropertyPane::SetPinning)
+   struct Def
+   {
+      PinKey key;
+      string group; // Section or separator under which the field is drawn in the panel
+      const void *owner = nullptr; // Part: its EditorUIPart (definitions may capture it), otherwise the object itself
+      PinDrawFn draw;
+      bool common = false; // Registered while the pane's tier was Common (PropertyPane::SetTier)
+      int seq = 0; // Draw order in the harvest that registered it
+      unsigned stamp = 0; // Harvest that registered it (0: registered by the panel outside of a harvest)
+   };
    bool NeedsDef(const string &id, const void *owner) const;
-   void SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw);
+   void SetDef(const PinKey &key, const string &group, const void *owner, PinDrawFn &&draw, bool common);
+   bool IsHarvesting() const { return m_harvestStamp != 0; }
+
+   // Curated (Look / Transform) sections of the properties panel: the fields of an object, as registered by its latest harvest
+   void *ResolveObject(PinKind kind, const string &name, const void **owner) const { return Resolve(kind, name, owner); }
+   // Harvests the object if it was never harvested from its current owner; returns the stamp of its latest harvest (0 if unresolved)
+   unsigned EnsureHarvested(PinKind kind, const string &name);
+   void InvalidateHarvest(PinKind kind, const string &name);
+   // Definitions registered by the given harvest of an object, in draw order
+   void CollectDefs(PinKind kind, const string &name, unsigned stamp, vector<const Def *> &out) const;
 
    // "See-through set": a primitive's refraction fields and its material's See-Through Surface fields
    bool HasSeeThroughSet(const IEditable *part) const;
@@ -75,13 +94,6 @@ public:
    void SaveTo(PinTable *table) const;
 
 private:
-   struct Def
-   {
-      PinKey key;
-      string group; // Section or separator under which the field is drawn in the panel
-      const void *owner = nullptr; // Part: its EditorUIPart (definitions may capture it), otherwise the object itself
-      PinDrawFn draw;
-   };
    struct GroupRequest
    {
       PinKind kind;
@@ -105,6 +117,10 @@ private:
    std::map<string, Def> m_defs; // By PinKey::Id()
    vector<GroupRequest> m_groupRequests; // Quick set requests, applied once the object's definitions are known
    std::map<string, const void *> m_harvested; // Objects already harvested (by kind + name) with the owner they were harvested from
+   std::map<string, unsigned> m_harvestStamps; // Stamp of the latest harvest of each object (by kind + name)
+   unsigned m_harvestCounter = 0;
+   unsigned m_harvestStamp = 0; // Stamp of the harvest in progress (0 when not harvesting)
+   int m_harvestSeq = 0;
    const PinTable *m_sourceTable = nullptr; // Base table the pin list was loaded from
 };
 
