@@ -172,9 +172,7 @@ void ConvertToPBRModal::Apply()
          for (const auto &[uid, snapshot] : snapshots)
          {
             if (const Material *const mat = MaterialEditUndo::Find(table, uid))
-               converted.emplace_back(uid, *mat);
-            else
-               MaterialEditUndo::NoteSkipped();
+               converted.emplace_back(uid, *mat); // (a deleted material is already reported by the undo)
          }
          return [table, converted]()
          {

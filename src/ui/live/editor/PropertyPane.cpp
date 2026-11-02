@@ -102,7 +102,7 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
 void PropertyPane::ApplyBulbToAllButton(IEditable* part)
 {
    if (ImGui::Button("Apply to all traced inserts") && m_pins != nullptr)
-      m_pins->RequestApplyBulb(part);
+      m_pins->RequestApplyBulb(part, IsStartup());
    ImGui::SetItemTooltip("Copies this insert's bulb values (depth, spot size, brightness, stretch, offset) to every other traced insert of the table, as one undo step");
 }
 
