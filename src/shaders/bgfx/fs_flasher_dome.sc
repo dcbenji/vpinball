@@ -559,7 +559,7 @@ void main()
 					const float fF = (atan2(Pf.z, Pf.x) - domeParams[3].z) / period;
 					const float eF = fF - floor(fF + 0.5);
 					const float eTipF = 0.5 - abs(eF);
-					farL = (exp(-(eTipF / 0.05) * (eTipF / 0.05)) + 0.45 * exp(-(eF / 0.06) * (eF / 0.06)))
+					farL = (exp(-(eTipF / 0.11) * (eTipF / 0.11)) + 0.45 * exp(-(eF / 0.13) * (eF / 0.13))) * 0.55 // soft wide bands: the ridges are inside, seen through a smooth skin
 						* smoothstep(0.5, 3.0, Pf.y) * (1.0 - smoothstep(capY - 3.0, capY, Pf.y)) * (0.6 + 0.8 * domeHash(floor(fF + 0.5) * 7.77 + 3.1));
 				}
 			}
@@ -573,6 +573,12 @@ void main()
 				const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
 				const float eC = fC - floor(fC + 0.5);
 				capL = exp(-(eC / 0.07) * (eC / 0.07)) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+				// finer lines between the ribs, running in to a small dot at the centre (the moulding's sprue point)
+				const float eC2 = 2.0 * eC - floor(2.0 * eC + 0.5);
+				capL += 0.55 * exp(-(eC2 / 0.06) * (eC2 / 0.06)) * smoothstep(0.06 * rootR, 0.3 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+				capL += 0.8 * exp(-(length(Pd.xz) / (0.035 * rootR)) * (length(Pd.xz) / (0.035 * rootR)));
+				// the zigzag ring: the flutes' sawtooth outline where they meet the cap, seen through it
+				capL += 1.1 * exp(-((length(Pin.xz) - rIn) / 0.3) * ((length(Pin.xz) - rIn) / 0.3));
 			}
 			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
 			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (4.0 * farL * trH * trN + tirL * trN) + capW * 3.0 * capL * trH);

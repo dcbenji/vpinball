@@ -1267,7 +1267,7 @@ void Primitive::Render(const unsigned int renderMask)
          vec4(FlasherDomeTune("gain=", 1.f / 170.f), FlasherDomeTune("debug=", 0.f), FlasherDomeTune("sigma=", 1.f), pass),
          domeGI(FlasherDomeTune("leak=", 0.6f)),
          vec4(m_domeGIDir.x, m_domeGIDir.y, m_domeGIDir.z, m_domeGIDir.w * FlasherDomeTune("gidir=", 1.f)),
-         vec4(clamp(m_d.m_domeBody, 0.f, 1.f), max(m_d.m_domeScatter, 0.f), max(m_d.m_domeCap, 0.f), FlasherDomeTune("interior=", 1.f)),
+         vec4(clamp(m_d.m_domeBody, 0.f, 1.f), max(m_d.m_domeScatter, 0.f), max(m_d.m_domeCap, 0.f), FlasherDomeTune("interior=", 3.f)),
          vec4(sigma.x, sigma.y, sigma.z, FlasherDomeTune("lscat=", 1.f)),
          vec4(lampColor.x, lampColor.y, lampColor.z, FlasherDomeTune("rim=", 1.f)),
          vec4(d.topR * scale * mm, m_ptable->m_envEmissionScale * m_renderer->m_sceneLighting.GetGlobalEmissionScale(), max(m_d.m_domeGlint, 0.f), max(m_d.m_domePeak, 0.f)),
