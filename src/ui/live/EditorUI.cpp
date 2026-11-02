@@ -2390,7 +2390,7 @@ void EditorUI::RenderNavCube()
    mul(Rinv, &m_camView.m[0][0], viewG);
    memcpy(viewGIn, viewG, sizeof(viewG));
    // Own right handed projection so that the cube handedness does not depend on the editor (possibly orthographic) projection
-   const Matrix3D proj = Matrix3D::MatrixPerspectiveFovRH(editorCamFovY, io.DisplaySize.x / io.DisplaySize.y, 1.f, 1000.f);
+   const Matrix3D proj = Matrix3D::MatrixPerspectiveFovRH(m_navFovY, io.DisplaySize.x / io.DisplaySize.y, 1.f, 1000.f);
    const float identity[16] = { 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f };
 
    // Do not fight the selection gizmo: while it is dragged, the cube gets no mouse input (it is still drawn)
