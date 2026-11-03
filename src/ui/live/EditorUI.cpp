@@ -2374,7 +2374,7 @@ void EditorUI::RenderUI()
    {
       LiveRenderContext ctx(m_player, overlayDrawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
       ctx.m_selectionDisplay = m_navSelectionDisplay;
-      if (!m_multiSel.empty() && m_selectionOverlay && !IsSaveInProgress())
+      if (!m_multiSel.empty() && m_selectionOverlay)
       {
          if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
             m_renderer->m_renderDevice->Clear(clearType::ZBUFFER, 0);

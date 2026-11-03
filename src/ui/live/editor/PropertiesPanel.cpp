@@ -54,7 +54,7 @@ static const CurationRules *GetCurationRules(PinKind kind, int itemType)
    static const CurationRules light { {}, { "Type", "State", "Show Bulb", "Transmit", "Modulate" }, { "Center", "Position", "Height", "Surface" } };
    static const CurationRules flasher { {}, { "Visible", "Color", "Image A", "Image B", "Mix", "Mix Factor (%)", "Opacity (%)", "Additive Blend", "Modulate" }, { "Position", "Rotation" } };
    static const CurationRules material { {},
-      { "Type", "Color", "Shininess", "Edge Brightness", "Enable Transparency", "Opacity", "Edge Opacity", "Thickness" },
+      { "Type", "Color", "Metallic", "Roughness", "Occlusion", "Emission Intensity", "Clear Coat", "Clear Coat Roughness", "Edge Brightness", "Enable Transparency", "Opacity", "Edge Opacity", "Thickness" },
       {} };
    static const CurationRules table { { "Environment Lighting" },
       { "Light Emission Scale", "Light Height", "Light Range", "Scene Lighting Scale", "Bloom Strength", "Tonemapping", "Exposure", "Ambient Occlusion", "AO Scale", "Screen Space Reflections",
@@ -1566,7 +1566,7 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             "How much specular highlights take the image's color instead of the glossy color");
       }
       props.InputFloat<Material>(
-         material, "Shininess"s, //
+         material, "Roughness"s, //
          [](const Material *material) { return material->m_fRoughness; }, //
          [](Material *material, float v) { material->m_fRoughness = v; }, PropertyPane::Unit::None, 2, "Sharpness of the specular highlights (higher = smaller, brighter highlights)");
       // The clearcoat layer is not used by the PBR shading path
