@@ -5,6 +5,7 @@
 #include <filesystem>
 
 #include "InputManager.h"
+#include "imguizmo/ImGuizmo.h"
 #include "physics/cabinet/CabinetNudgeSensor.h"
 #include "physics/cabinet/GamepadNudge.h"
 
@@ -87,7 +88,8 @@ public:
 
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
       case SDL_EVENT_MOUSE_BUTTON_UP:
-         if (e.button.which != SDL_TOUCH_MOUSEID && e.button.which != SDL_PEN_MOUSEID)
+         // The live editor's nav cube (drawn over the running game) keeps its clicks
+         if (e.button.which != SDL_TOUCH_MOUSEID && e.button.which != SDL_PEN_MOUSEID && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate())
             m_pininput.PushButtonEvent(m_pininput.GetMouseDeviceId(), e.button.button, e.button.timestamp, e.button.down);
          break;
 

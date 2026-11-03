@@ -171,6 +171,7 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
    }
 
    SUBCASE("camera preview view setup round trips; Auto writes no key")
+   if (AreaLayout::cameraPreviewEnabled)
    {
       AreaLayout a = FromLegacy(kLayout);
       REQUIRE(a.SetType(a.FindLeaf(AreaType::Outliner), AreaType::CameraPreview));
@@ -185,6 +186,20 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       CHECK_FALSE(a.SetPreviewView(leaf, 3));
       REQUIRE(a.SetPreviewView(leaf, -1));
       CHECK(!(b == a));
+   }
+
+   SUBCASE("the preview's view setup follows the preview through SetType swaps and is dropped when it stops being one")
+   if (AreaLayout::cameraPreviewEnabled)
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      const int outliner = a.FindLeaf(AreaType::Outliner), props = a.FindLeaf(AreaType::Properties);
+      REQUIRE(a.SetType(outliner, AreaType::CameraPreview));
+      REQUIRE(a.SetPreviewView(outliner, 1));
+      REQUIRE(a.SetType(props, AreaType::CameraPreview)); // swap: the preview moves to the Properties leaf with its view
+      CHECK(a.Find(props)->previewView == 1);
+      CHECK(a.Find(outliner)->previewView == -1);
+      REQUIRE(a.SetType(props, AreaType::Script)); // not a preview any more
+      CHECK(a.Find(props)->previewView == -1);
    }
 
    SUBCASE("Close replaces the parent split by the sibling")

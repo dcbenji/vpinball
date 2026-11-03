@@ -944,17 +944,23 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
       const bool wasPreview = node->type == AreaType::CameraPreview;
       if (!m_areas.SetType(op.leaf, op.type)) // Each panel is a single instance: the other area takes the type this area leaves
          return false;
-      WidenArea(op.leaf, op.type);
       if (other >= 0 && wasPreview)
       {
-         // The camera preview is dismissed by picking an editor shown elsewhere: the editor moves here and its old area (now the preview) closes
+         // The camera preview is dismissed by picking an editor shown elsewhere: the editor moves here and its old area (now the preview) closes.
+         // The widening runs on the rects of the layout without that area
          if (m_maximizedLeafId == other)
             m_maximizedLeafId = -1;
          m_areas.Close(other);
+         ComputeAreaRects();
+         WidenArea(op.leaf, op.type);
       }
-      else if (other >= 0)
-         if (const AreaNode *const swapped = m_areas.Find(other))
-            WidenArea(other, swapped->type);
+      else
+      {
+         WidenArea(op.leaf, op.type);
+         if (other >= 0)
+            if (const AreaNode *const swapped = m_areas.Find(other))
+               WidenArea(other, swapped->type);
+      }
       if (op.type == AreaEditor::PartLibrary)
          m_partLibrary.Show(); // Rescan the library folders
       return true;
@@ -1349,11 +1355,13 @@ void EditorUI::RenderAreaCorners()
    {
       if (!leaf.visible)
          continue;
-      const float side = min(14.f * dpi, 0.4f * min(leaf.rect.Width(), leaf.rect.Height()));
-      if (side < 6.f)
+      const float fullSide = min(14.f * dpi, 0.4f * min(leaf.rect.Width(), leaf.rect.Height()));
+      if (fullSide < 6.f)
          continue;
       for (int corner = 0; corner < 4; ++corner)
       {
+         // The right corners are smaller: the header search field and the scrollbar ends sit 4 px inside the area edge
+         const float side = (corner & 1) ? min(fullSide, 7.f * dpi) : fullSide;
          const float x = (corner & 1) ? leaf.rect.x1 - side : leaf.rect.x0;
          const float y = (corner & 2) ? leaf.rect.y1 - side : leaf.rect.y0;
          // Triangular hit zone: the half of the square touching the area's corner (Blender). Outside it the window takes no input, so the header
@@ -1378,7 +1386,7 @@ void EditorUI::RenderAreaCorners()
          const ImVec2 origin((corner & 1) ? x + side : x, (corner & 2) ? y + side : y); // The area's corner
          const float sx = (corner & 1) ? -1.f : 1.f, sy = (corner & 2) ? -1.f : 1.f;
          const bool hot = ImGui::IsItemHovered() && inTriangle && !m_areaDrag.active;
-         ImDrawList *const dl = ImGui::GetForegroundDrawList();
+         ImDrawList *const dl = ImGui::GetWindowDrawList(); // Under tooltips and floating windows
          if (hot)
          {
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
@@ -2353,7 +2361,7 @@ void EditorUI::RenderUI()
    {
       // Play test: 2 px accent frame around the viewport area, so the running copy is not mistaken for the edit session
       const AreaRect &r = m_viewportRect;
-      ImGui::GetForegroundDrawList()->AddRect(ImVec2(r.x0 + 1.f, r.y0 + 1.f), ImVec2(r.x1 - 1.f, r.y1 - 1.f), EditorTheme::Accent, 0.f, 0, 2.f);
+      ImGui::GetBackgroundDrawList()->AddRect(ImVec2(r.x0 + 1.f, r.y0 + 1.f), ImVec2(r.x1 - 1.f, r.y1 - 1.f), EditorTheme::Accent, 0.f, 0, 2.f);
    }
    RenderNavCube();
 
@@ -2722,7 +2730,13 @@ void EditorUI::RenderUI()
    }
    // Shift+F5 stops the play test (as in IDEs), also while the game keys are routed to the game
    if (IsInspectMode() && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F5, false))
-      RequestClose(Player::CS_STOP_PLAY);
+   {
+      // Same guard as the Stop button and the X (the file op modal): stopping would pop the table under a running save
+      if (m_fileOp != nullptr)
+         Report("Cannot stop the play test while a save is in progress");
+      else if (!modalWasActive)
+         RequestClose(Player::CS_STOP_PLAY);
+   }
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape() | ConsumedPaneEscape(); // The Esc that closed a popup is not an editor Esc
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive && !gameKeys)
    {

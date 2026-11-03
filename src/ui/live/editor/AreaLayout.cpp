@@ -440,7 +440,7 @@ bool AreaLayout::operator==(const AreaLayout& other) const
       if (x.isSplit != y.isSplit)
          return false;
       if (!x.isSplit)
-         return x.type == y.type && x.hidden == y.hidden && x.previewView == y.previewView;
+         return x.type == y.type && x.hidden == y.hidden && (x.type != AreaType::CameraPreview || x.previewView == y.previewView);
       return x.axis == y.axis && x.fixed == y.fixed && x.size == y.size && self(self, x.child[0], y.child[0]) && self(self, x.child[1], y.child[1]);
    };
    return eq(eq, m_root, other.m_root);
@@ -808,8 +808,15 @@ bool AreaLayout::SetType(const int leaf, const AreaType type)
       return true;
    const int o = IndexOf(FindLeaf(type));
    if (o >= 0)
+   {
       m_nodes[o].type = n.type; // each panel is a single instance: the other leaf takes the type this leaf leaves
+      std::swap(m_nodes[o].previewView, n.previewView); // the preview's view setup follows the preview
+      if (m_nodes[o].type != AreaType::CameraPreview)
+         m_nodes[o].previewView = -1;
+   }
    n.type = type;
+   if (n.type != AreaType::CameraPreview)
+      n.previewView = -1;
    return true;
 }
 
