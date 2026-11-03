@@ -3759,7 +3759,7 @@ void Renderer::RenderDynamics()
 
 void Renderer::SetScreenOffset(const float x, const float y)
 {
-   const float rotation = m_stereo3D == STEREO_VR ? 0.f : ANGTORAD(m_table->GetViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight()));
+   const float rotation = m_stereo3D == STEREO_VR ? 0.f : ANGTORAD(GetRenderViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight()));
    const float c = cosf(-rotation), s = sinf(-rotation);
    m_screenOffset.x = x * c - y * s;
    m_screenOffset.y = x * s + y * c;
@@ -3921,7 +3921,7 @@ RenderTarget* Renderer::ApplyAdditiveScreenSpaceReflection(RenderTarget* rendere
    // FIXME check if size should not be taken from renderdevice to account for stereo (double width/height) or supersampling
    m_renderDevice->m_FBShader->SetVector(
       ShaderUniform::w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), 1.0f /*radical_inverse(m_overall_frames%2048)*/, 1.0f);
-   const float rotation = m_table->GetViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight());
+   const float rotation = GetRenderViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight());
    m_renderDevice->m_FBShader->SetVector(ShaderUniform::SSR_bumpHeight_fresnelRefl_scale_FS, 0.3f, 0.3f, m_table->m_SSRScale, rotation);
 #ifdef ENABLE_BGFX
    const bool pbrMask = m_renderDevice->m_pbrActive && GetBackBufferTexture()->GetPBRSidebandSampler(1) != nullptr;
@@ -5366,6 +5366,11 @@ void Renderer::RequestEditorPreview(const int width, const int height, const Vie
    m_editorPreviewHeight = min(height, 4096);
 }
 
+const ViewSetup& Renderer::GetRenderViewSetup() const
+{
+   return m_editorPreviewViewSetup != nullptr ? *m_editorPreviewViewSetup : m_table->GetViewSetup();
+}
+
 void Renderer::ReleaseEditorPreview()
 {
    m_editorPreviewRequested = false;
@@ -5491,7 +5496,8 @@ void Renderer::RenderEditorPreview()
    // The player window's aspect (as InitLayout), captured before the swap, not the target's (the panel sizes the target at it, up to rounding)
    // The requested view setup (Desktop, Cabinet, FSS) or the active one; the table's own view mode is not changed
    const ViewSetupID view = m_editorPreviewView != BG_INVALID ? m_editorPreviewView : m_table->GetViewMode();
-   m_table->mViewSetups[view].ComputeMVP(m_table, playerAspect, false, m_mvp, vec3(m_cam.x, m_cam.y, m_cam.z), m_inc);
+   m_editorPreviewViewSetup = &m_table->mViewSetups[view]; // Rotation dependent passes (screen offset, SSR, ball stretch) follow it
+   m_editorPreviewViewSetup->ComputeMVP(m_table, playerAspect, false, m_mvp, vec3(m_cam.x, m_cam.y, m_cam.z), m_inc);
    m_initialMVP = m_mvp;
    for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       m_playfieldView[eye] = m_mvp.GetView(eye);
@@ -5546,6 +5552,7 @@ void Renderer::RenderEditorPreview()
 
    // Restore the main view state
    m_editorPreviewPass = false;
+   m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
    m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
    m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;
