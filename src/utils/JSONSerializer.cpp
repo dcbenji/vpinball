@@ -399,6 +399,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(DMGL), "dome_glint" },
             { FID(DMGT), "dome_glint_lights" },
             { FID(DMFR), "dome_frost" },
+            { FID(DMLN), "dome_lens" },
             { FID(DMPK), "dome_peak" },
             { FID(DMDP), "dome_depth" },
             { FID(DMBO), "dome_boost" },

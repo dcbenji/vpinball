@@ -420,6 +420,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Primitive* primitive, float v) { primitive->m_d.m_domeGlintLights = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
          "What the lamp-off sparkle reflects: 0 = a fixed studio room, 1 = the table's own lights near the dome (GI bulbs, inserts, other flashers), so the glints move and change as they light up");
       props.SliderFloat<Primitive>(
+         m_part, "Dome Lens"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeLens; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeLens = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
+         "See-through walls: each ridge shows a mirrored, squeezed slice of what is behind the dome, drawing fine vertical lines (needs a Refraction Probe set on the part; 0 = off)");
+      props.SliderFloat<Primitive>(
          m_part, "Dome Frost"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_domeFrost; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeFrost = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,

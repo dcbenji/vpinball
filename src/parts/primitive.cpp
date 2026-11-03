@@ -1440,7 +1440,10 @@ void Primitive::Render(const unsigned int renderMask)
 
    // Request probes before setting up state since this can trigger a renderprobe update which modifies the render state
    RenderProbe *const refraction_probe = m_ptable->GetRenderProbe(m_d.m_szRefractionProbe);
-   RenderTarget *const refractions = refraction_probe ? refraction_probe->Render(renderMask) : nullptr;
+   RenderTarget *const probeRT = refraction_probe ? refraction_probe->Render(renderMask) : nullptr;
+   // dome_lens: a flasher dome's refraction probe feeds its dome layer (the lensed slices), not its body
+   RenderTarget *const domeLensRT = (flasherDome && m_d.m_domeLens > 0.f && mat->m_bOpacityActive) ? probeRT : nullptr;
+   RenderTarget *const refractions = domeLensRT ? nullptr : probeRT;
 
    const bool depthMask = m_d.m_useDepthMask && !m_d.m_addBlend;
 
@@ -1773,6 +1776,39 @@ void Primitive::Render(const unsigned int renderMask)
       m_renderer->m_renderDevice->EnableAlphaBlend(true);
       m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
       m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, cullMode);
+      // dome_lens: the probe (a copy of the scene behind the dome) for the lensed slices, over the dome's screen bounds
+      if (domeLensRT)
+      {
+         params[19].w = clamp(m_d.m_domeLens, 0.f, 1.f);
+         params[21].w = FlasherDomeTune("lensw=", 4.f);
+         m_mesh.UpdateBounds();
+         float xMin = 1.f, yMin = 1.f, xMax = -1.f, yMax = -1.f;
+         for (int eye = 0; eye < m_renderer->m_renderDevice->m_nEyes; eye++)
+         {
+            const Matrix3D &mvp = m_renderer->GetMVP().GetModelViewProj(eye);
+            for (int i = 0; i < 8; i++)
+            {
+               const Vertex3Ds p((i & 1) ? m_mesh.m_minAABound.x : m_mesh.m_maxAABound.x, (i & 2) ? m_mesh.m_minAABound.y : m_mesh.m_maxAABound.y, (i & 4) ? m_mesh.m_minAABound.z : m_mesh.m_maxAABound.z);
+               const float wp = mvp._14 * p.x + mvp._24 * p.y + mvp._34 * p.z + mvp._44;
+               if (wp <= 0.f)
+               {
+                  xMin = yMin = -1.f;
+                  xMax = yMax = 1.f;
+                  break;
+               }
+               const float xp = (mvp._11 * p.x + mvp._21 * p.y + mvp._31 * p.z + mvp._41) / wp, yp = (mvp._12 * p.x + mvp._22 * p.y + mvp._32 * p.z + mvp._42) / wp;
+               xMin = min(xMin, xp);
+               xMax = max(xMax, xp);
+               yMin = min(yMin, yp);
+               yMax = max(yMax, yp);
+            }
+         }
+         // the slices reach a few flutes sideways: widen the area a little
+         const float mx = 0.25f * (xMax - xMin), my = 0.25f * (yMax - yMin);
+         refraction_probe->ExtendAreaOfInterest(xMin - mx, xMax + mx, yMin - my, yMax + my);
+         m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, domeLensRT->GetColorSampler());
+         m_renderer->m_renderDevice->AddRenderTargetDependencyOnNextRenderCommand(domeLensRT);
+      }
       m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 24);
          if (Texture *const glowMap = m_ptable->GetImage(m_d.m_domeGlowMap))
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_traced_env, glowMap, true, SamplerFilter::SF_TRILINEAR, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP);
@@ -1986,6 +2022,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DMGL), m_d.m_domeGlint);
    writer.WriteFloat(FID(DMGT), m_d.m_domeGlintLights);
    writer.WriteFloat(FID(DMFR), m_d.m_domeFrost);
+   writer.WriteFloat(FID(DMLN), m_d.m_domeLens);
    writer.WriteFloat(FID(DMPK), m_d.m_domePeak);
    writer.WriteFloat(FID(DMDP), m_d.m_domeDepth);
    writer.WriteFloat(FID(DMCD), m_d.m_domeCooldown);
@@ -2244,6 +2281,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMGL): m_d.m_domeGlint = reader.AsFloat(); break;
          case FID(DMGT): m_d.m_domeGlintLights = reader.AsFloat(); break;
          case FID(DMFR): m_d.m_domeFrost = reader.AsFloat(); break;
+         case FID(DMLN): m_d.m_domeLens = reader.AsFloat(); break;
          case FID(DMPK): m_d.m_domePeak = reader.AsFloat(); break;
          case FID(DMDP): m_d.m_domeDepth = reader.AsFloat(); break;
          case FID(DMCD): m_d.m_domeCooldown = reader.AsFloat(); break;

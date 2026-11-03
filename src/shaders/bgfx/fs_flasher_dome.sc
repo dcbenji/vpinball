@@ -43,7 +43,8 @@
 //      own lights), w dome_frost (clear plastic: the thick parts of the wall scatter the room to a milky white, 0 = off)
 // [16..23] the four strongest table lights at the dome (GI bulbs, inserts, other domes' lamps), two entries each: xyz position
 //      (table space), w source radius (table units); then rgb irradiance at the dome (relative to the room light), w unused
-//      ([17].w: dome_frost's gain)
+//      ([17].w: dome_frost's gain; [19].w: dome_lens (0 = off, set only when a refraction probe is bound); [21].w: its slice width
+//      in flutes)
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -59,6 +60,8 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #include "common.sh"
 
 uniform vec4 domeParams[24];
+SAMPLER2DSTEREO(tex_refraction, 6); // dome_lens: the dome's refraction probe (a copy of the scene behind it)
+uniform vec4 w_h_height; // x/y: 1 / render target size
 SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R glow (x2, gamma 2.2), G wall thickness (0..4 mm)
 
 #ifdef STEREO
@@ -258,6 +261,9 @@ void main()
 	// mm across the radius, for the line filters below
 	const float fwRad = abs(dFdx(length(Pin.xz))) + abs(dFdy(length(Pin.xz)));
 	const float fwF = (abs(Pin.z) * (abs(dFdx(Pin.x)) + abs(dFdy(Pin.x))) + abs(Pin.x) * (abs(dFdx(Pin.z)) + abs(dFdy(Pin.z)))) / max(dot(Pin.xz, Pin.xz), 1e-3) * domeParams[3].y / (2.0 * DOME_PI);
+	// the flute coordinate's screen gradient (flute periods per pixel, x and y) and the top edge's footprint, for dome_lens
+	const vec2 gF = vec2(Pin.x * dFdx(Pin.z) - Pin.z * dFdx(Pin.x), Pin.x * dFdy(Pin.z) - Pin.z * dFdy(Pin.x)) / max(dot(Pin.xz, Pin.xz), 1e-3) * domeParams[3].y / (2.0 * DOME_PI);
+	const float fwTop = abs(dFdx(P.y)) + abs(dFdy(P.y));
 	const float fluteF = theta / period;
 	const float idx = floor(fluteF + 0.5);
 	const float eP = fluteF - idx;
@@ -560,7 +566,7 @@ void main()
 		// seen through the smooth skin the inner flutes only ripple the glow (a soft cosine per flute, faint ridge lines), with
 		// little flank-to-flank variation: the milky body evens it out
 		const float bandOff = mix(mix(facet, 1.0, 0.8) * (0.88 + 0.12 * cos(2.0 * DOME_PI * eP)) + 0.4 * ridgeLine, 0.6 + 1.0 * edge, capW);
-		const vec3 interior = bodyK * domeParams[10].w * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
+		const vec3 interior = bodyK * domeParams[10].w * (1.0 - 0.85 * saturate(domeParams[19].w) * (1.0 - capW)) * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
 			+ 0.3 * domeParams[8].yzw * trH * bandOff * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
@@ -629,16 +635,19 @@ void main()
 				const vec3 Pd = Pin + d2 * (4.0 / max(-d2.y, 0.3));
 				const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
 				const float eC = fC - floor(fC + 0.5);
-				capL = domeLine(eC, 0.07, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+				capL = domeLine(eC, 0.05, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
 				// finer lines between the ribs, running in to a small dot at the centre (the moulding's sprue point)
 				const float eC2 = 2.0 * eC - floor(2.0 * eC + 0.5);
 				capL += 0.4 * domeLine(eC2, 0.06, 2.0 * fwF) * smoothstep(0.06 * rootR, 0.3 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
 				capL += 0.8 * exp(-(length(Pd.xz) / (0.035 * rootR)) * (length(Pd.xz) / (0.035 * rootR)));
 				// the zigzag ring: the flutes' sawtooth outline where they meet the cap, seen through it
-				capL += 0.5 * domeLine(length(Pin.xz) - rIn, 0.3, fwRad);
+				capL += 0.2 * domeLine(length(Pin.xz) - rIn, 0.3, fwRad);
 			}
 			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
-			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (2.5 * farL * trH * trN + tirL * trN) + capW * 3.0 * capL * trH);
+			// the zigzag where the flutes end under the cap, seen through the wall just below the top edge: a sawtooth line on the
+			// outer wall a little below the cap's underside, its teeth pointing down at the ridge tips
+			const float topZ = domeLine(P.y - (capY - 0.4 - 1.2 * (1.0 - 2.0 * eTip)), 0.2, fwTop) * (1.0 - capW);
+			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (2.5 * farL * trH * trN + tirL * trN + 1.5 * topZ * trH) + capW * 3.0 * capL * trH);
 		}
 		// Frost (dome_frost; clear plastic, Ben's VPE Clear preset): a clear dome is neither see-through nor grey. Where the light's
 		// path through the wall is long (the ridge tips, the cap, the base band, the rim) the plastic scatters the room to a
@@ -692,10 +701,31 @@ void main()
 		orb = orbK * domeParams[14].w * lvlG * mix(1.0, 3.0, heatW) * strips * col * thru;
 	}
 
+	// Lens (dome_lens, see-through walls): each flute is a small cylinder lens, showing a mirrored slice of what lies behind the
+	// dome a few flutes wide, squeezed into the flute; the slices jump at the flute edges, which draws the fine vertical lines.
+	// What lies behind comes from the dome's refraction probe, through the plastic (two walls); thin dark lines at the edges
+	// (light turned away there). It replaces most of the milky interior; not on the cap (one moulding, it looks at the bulb)
+	vec3 lens = vec3_splat(0.0);
+	const float lensK = saturate(domeParams[19].w);
+	BRANCH if (lensK > 0.0 && mode > 1.5 && capW < 0.99)
+	{
+		const vec2 gN = gF / max(dot(gF, gF), 1e-6); // pixels per flute period, across the flutes
+		const vec2 offPix = -eP * domeParams[21].w * gN;
+		// each flute shows one smooth slice: three taps across it (the plastic's surface blur), not a sharp mirrored copy
+		const vec2 uvL = (gl_FragCoord.xy + offPix) * w_h_height.xy;
+		const vec2 dL = 0.2 * domeParams[21].w * gN * w_h_height.xy;
+		const vec3 bg = (texStereoLod(tex_refraction, uvL - dL, 0.0).rgb + texStereoLod(tex_refraction, uvL, 0.0).rgb + texStereoLod(tex_refraction, uvL + dL, 0.0).rgb) * (1.0 / 3.0);
+		// filtered, not added: through both walls and the scattering plastic (deep red; the long path at the flute edges darker)
+		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
+		const float edgeL = max(fwA > 0.0 ? domeLine(eRoot, 0.035, fwA) : exp(-(eRoot / 0.035) * (eRoot / 0.035)),
+			fwA > 0.0 ? domeLine(eTip, 0.035, fwA) : exp(-(eTip / 0.035) * (eTip / 0.035)));
+		lens = lensK * (1.0 - capW) * trL * bg * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv); // fades at the silhouette
+	}
+
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange
 	// body with a white-hot centre, as in a bake), and so does the white-hot scattered body
 	const float orbW = 1.0 - 0.9 * saturate(orbK);
-	vec3 result = (body + bars + core + cap + white * orbW + orb) * domeParams[7].x + sparkle + giGlow + thick;
+	vec3 result = (body + bars + core + cap + white * orbW + orb) * domeParams[7].x + sparkle + giGlow + thick + lens;
 	if (domeParams[7].y > 0.5)
 		result = domeParams[7].y < 1.5 ? (bars + core + cap) * domeParams[7].x : (domeParams[7].y < 2.5 ? body * domeParams[7].x : (domeParams[7].y < 3.5 ? sparkle : bars * domeParams[7].x));
 	if (domeParams[7].y > 4.5)
@@ -706,5 +736,7 @@ void main()
 		result = domeParams[7].y < 7.5 ? 0.5 * vec3(lvlG, 8.0 / max(dist, 8.0), lampCol.r) : 0.5 * vec3(bodyK, scatK, trH.r);
 	if (domeParams[7].y > 8.5) // diagnostics: 9 = the orb alone
 		result = orb * domeParams[7].x;
+	if (domeParams[7].y > 9.5) // diagnostics: 10 = the lens alone
+		result = lens;
 	gl_FragColor = vec4(result, 1.0);
 }

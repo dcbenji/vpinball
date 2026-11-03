@@ -95,6 +95,7 @@ public:
    float m_domeCooldown = 0.f; // white-hot parts follow the level as a continuous blackbody pulse (white, yellow, orange, red as it cools) instead of gating on near full (0 = off)
    string m_domeGlowMap; // baked glow (the lamp's light scattered in a clear dome, on the mesh's UVs): R = glow (x2, gamma 2.2), G = wall thickness (0..4 mm); empty = the procedural falloff
    float m_domeBoost = 1.f; // gain on the lamp level the dome layer sees (a ROM flash peaking below full reads hotter); the lamp's own light is unchanged
+   float m_domeLens = 0.f; // see-through walls: each flute shows a mirrored, squeezed slice of what lies behind the dome (needs a refraction probe on the part; the body then skips it; 0 = off)
    float m_domeFrost = 0.f; // clear plastic: the thick parts of the wall (ridge tips, cap, base, rim) scatter the room to a milky white, the thin flanks stay clearer, dark creases at the groove roots (0 = off)
    float m_domeGlintLights = 0.f; // what the OFF glints reflect: 0 = a fixed studio room, 1 = the table's own lights near the dome (GI bulbs, inserts, other flashers), live
    float m_domeGlint = 1.f; // OFF glints (facet glints, ridge glints, needles, the room seen in the plastic) scale (1 = as tuned)
