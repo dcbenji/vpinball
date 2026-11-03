@@ -166,6 +166,7 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[static_cast<unsigned int>(Shad
    SHADER_TECHNIQUE(pbr_is_notex),
    SHADER_TECHNIQUE(pbr_shadow_trans),
    SHADER_TECHNIQUE(pbr_shadow_trans_notex),
+   SHADER_TECHNIQUE(pbr_shadow_bake),
    // Lottes-CRT
    SHADER_TECHNIQUE(display_CRT_world),
    // Same as above but built with the Nuance-CRT filter, the renderer picking between them per display (see Renderer::SetupCRTRender)
@@ -386,7 +387,14 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4x4, matShadowVP, 32), // ortho virtual shadow map view-projection, per shadowed light
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMParams, 32), // per shadowed light: x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMBox, 32), // per shadowed light: x/y: world->virtual-uv scale (1/ortho box extents)
-   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: unused
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: page linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness step
+   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrShadowCache, 32), // per shadowed light: static shadow cache uv = table xy * x + (y, z), w: cache layer + 1 (0 = not cached)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowCacheDraw, 1), // x: 1 = this draw (the playfield) reads the static shadow cache
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeLight, 1), // shadow cache bake: light position, range
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeParams, 1), // shadow cache bake: x: light sphere radius, y: penumbra radius
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeMap, 1), // shadow cache bake: table xy -> layer uv (xy * x + (y, z))
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeRect, 1), // shadow cache bake: the light's tile (uv min, max)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeVSM, 1), // shadow cache bake: the light's pbrVSMParams entry
    SHADER_SAMPLER(tex_pbr_orm, 8, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // packed occlusion/roughness/metallic
    SHADER_SAMPLER(tex_pbr_emission, 9, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // emission map
    SHADER_SAMPLER(tex_pbr_ao, 10, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // screenspace ambient occlusion
@@ -399,6 +407,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_SAMPLER(tex_vsm_pagetables, 5, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_NONE), // VSM virtual->physical page table per light
    SHADER_SAMPLER(
       tex_vsm_trans, 6, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // VSM page pool transmittance (translucent casters: absorbance + nearness)
+   SHADER_SAMPLER(tex_pbr_shadow_cache, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // static shadow cache (RGBA8 array: baked cube shadows over the playfield)
    SHADER_SAMPLER(tex_pbr_mask, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP,
       SamplerFilter::SF_BILINEAR), // PBR pixel mask (sideband attachment alpha), masks the tonemap AO application
    SHADER_SAMPLER(tex_pbr_att1, 8, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // sideband att1: probe radiance + coverage
@@ -943,6 +952,8 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), 0.f);
+      // x: the playfield reads the static shadow cache
+      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, 0.f, 0.f, 0.f);
       // Clear coat layer: a zero strength skips the coat lobe in the shaders
       SetVector(ShaderUniform::pbrCoat, saturate(mat.m_fClearcoat), clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), 0.f, 0.f);
       // See-through parts use the transparent shading (premultiplied: their reflections are not modulated by their
@@ -1623,7 +1634,7 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST_CLIP(vs_pbr), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_tex_noat), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_tex_at), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_notex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_t_tex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_t_notex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_ti_tex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_ti_notex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_tex_noat), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_tex_at), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_is_notex),
-      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_st_tex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_st_notex),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_st_tex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_st_notex), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_pbr_sb), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_pbr_sb),
       // Ball shaders
       BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_raycast), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_mv),
       BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_trail),
@@ -1720,6 +1731,7 @@ void Shader::Load()
       loadProgram(embeddedShaders, ShaderTechnique::pbr_is_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_is_notex_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_shadow_trans, STEREO(vs_pbr_noclip), STEREO(fs_pbr_st_tex_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::pbr_shadow_trans_notex, STEREO(vs_pbr_noclip), STEREO(fs_pbr_st_notex_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::pbr_shadow_bake, STEREO(vs_pbr_sb_noclip), STEREO(fs_pbr_sb_noclip));
       // Variants with a clipping plane
       loadProgram(embeddedShaders, ShaderTechnique::basic_with_texture,       STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_noat_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::basic_with_texture_at,    STEREO(vs_basic_tex_clip),           STEREO(fs_basic_tex_at_clip), true);

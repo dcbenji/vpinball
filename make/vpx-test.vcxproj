@@ -30,6 +30,10 @@
     <TargetName>VPXTest_BGFX</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- Counters the engine keeps for the tests only (see make/CMakeLists_test.txt) -->
+      <PreprocessorDefinitions>VPX_TEST_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <Manifest>
       <!-- UTF-8 process code page (see the manifest file) -->
       <AdditionalManifestFiles>$(MSBuildThisFileDirectory)..\..\src\ui\win\res\utf8.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>

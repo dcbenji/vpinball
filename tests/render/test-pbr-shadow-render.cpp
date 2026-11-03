@@ -241,3 +241,159 @@ TEST_CASE("PBR shadow map follows light move [render]")
 
    ResetVPX();
 }
+
+#if defined(ENABLE_BGFX)
+// The shadow table with every shadowed light on a static tier: no dynamic caster re-dirties pages every frame, so the maps complete
+// and the static shadow cache bakes them (the dynamic tier ortho light of the table keeps the page budget busy)
+static void MakeShadowLightsStatic(PinTable* const table)
+{
+   for (IEditable* const part : table->GetParts())
+      if (part->GetItemType() == eItemLight && static_cast<Light*>(part)->m_d.m_shadows == ShadowMode::PBR_STATIC_N_DYNAMIC_SHADOWS)
+         static_cast<Light*>(part)->m_d.m_shadows = ShadowMode::PBR_STATIC_SHADOWS;
+}
+
+// Plays the shadow table with static shadowed lights and captures frame 240, with the static shadow cache on or off (or with no
+// shadowed light at all, the unshadowed reference of the same frame). Returns the number of cache bakes submitted by then
+static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, const bool cacheOn, const string& shot, const bool noShadows = false)
+{
+   g_settingsService.GetAppSettings().SetPlayer_GfxBackend("Direct3D11"s, false);
+   g_settingsService.GetAppSettings().SetPlayer_DepthPrepass(2, false);
+   g_settingsService.GetAppSettings().SetPlayer_PBRShadowCache(cacheOn, false);
+   struct CaptureState
+   {
+      std::filesystem::path path;
+      bool requested = false, done = false;
+      uint64_t bakes = 0;
+   } state { GetAssetPath() / shot };
+   msgpi_msg_callback onPrepareFrame = [](const unsigned int msgId, void* context, void* msgData)
+   {
+      CaptureState* state = reinterpret_cast<CaptureState*>(context);
+      if (state->requested || g_pplayer->m_overall_frames < 240)
+         return;
+      // The static parts are prerendered again after shadow work (pages, bakes): capture the accumulated image, not a partial one
+      if (g_pplayer->m_renderer->IsTemporalAccumulationInProgress() && g_pplayer->m_overall_frames < 512)
+         return;
+      state->requested = true;
+      state->bakes = g_pplayer->m_renderer->m_pbrShadowCacheBakes;
+      g_pplayer->m_renderer->m_renderDevice->CaptureScreenshot({ g_pplayer->m_playfieldWnd }, { state->path },
+         [state](bool success)
+         {
+            g_pplayer->SetCloseState(Player::CS_STOP_PLAY);
+            state->done = success;
+         });
+   };
+   CComObject<PinTable>* table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(tableFile, feedback)));
+   MakeShadowLightsStatic(table);
+   if (noShadows)
+      for (IEditable* const part : table->GetParts())
+         if (part->GetItemType() == eItemLight)
+            static_cast<Light*>(part)->m_d.m_shadows = ShadowMode::NONE;
+   LoadProgress loadProgress;
+   auto player = std::make_unique<Player>(table, Player::PlayMode::Play, loadProgress);
+   const unsigned int onPrepareFrameMsgId = player->m_pluginManager.GetMsgAPI().GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
+   player->m_pluginManager.GetMsgAPI().SubscribeMsg(player->m_pluginAPI.GetVPXEndPointId(), onPrepareFrameMsgId, onPrepareFrame, &state);
+   player->GameLoop();
+   player->m_pluginManager.GetMsgAPI().UnsubscribeMsg(onPrepareFrameMsgId, onPrepareFrame, &state);
+   player->m_pluginManager.GetMsgAPI().ReleaseMsgID(onPrepareFrameMsgId);
+   player = nullptr;
+   table->Release();
+   CHECK(state.done);
+   return state.bakes;
+}
+
+// Cache on against cache off, and both against the same frame without shadows. The shadowed pixels are those of the live render
+// (cache off) at least 16 luminance levels darker than without shadows: the cache must darken them as much (the sums of the
+// darkening over them), so a missing or empty bake fails however small its share of the frame. Elsewhere only capture noise
+// and the unrotated kernel of the bakes may differ: the mean and the share of pixels more than 24 levels apart are bounded.
+struct ShadowCaptureCompare
+{
+   double meanDif = 0.; // mean absolute difference on vs off, levels per channel
+   int maxDif = 0;
+   double farPct = 0.; // % of pixels with a channel more than 24 levels apart, on vs off
+   uint64_t shadowPx = 0; // shadowed pixels of the live render
+   double darkOn = 0., darkOff = 0.; // summed luminance darkening of the shadowed pixels, cache on and off
+};
+static ShadowCaptureCompare CompareShadowCaptures(const string& onShot, const string& offShot, const string& noneShot)
+{
+   ShadowCaptureCompare r;
+   const std::shared_ptr<BaseTexture> on = BaseTexture::CreateFromFile(GetAssetPath() / onShot);
+   const std::shared_ptr<BaseTexture> off = BaseTexture::CreateFromFile(GetAssetPath() / offShot);
+   const std::shared_ptr<BaseTexture> none = BaseTexture::CreateFromFile(GetAssetPath() / noneShot);
+   REQUIRE(on != nullptr);
+   REQUIRE(off != nullptr);
+   REQUIRE(none != nullptr);
+   REQUIRE(on->width() == off->width());
+   REQUIRE(on->height() == off->height());
+   REQUIRE(none->width() == off->width());
+   REQUIRE(none->height() == off->height());
+   const unsigned int bppOn = on->pitch() / on->width(), bppOff = off->pitch() / off->width(), bppNone = none->pitch() / none->width();
+   const uint8_t* const a = static_cast<const uint8_t*>(on->datac());
+   const uint8_t* const b = static_cast<const uint8_t*>(off->datac());
+   const uint8_t* const n = static_cast<const uint8_t*>(none->datac());
+   const auto lum = [](const uint8_t* p) { return 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]; };
+   double sum = 0.;
+   uint64_t far = 0;
+   for (unsigned int y = 0; y < on->height(); y++)
+      for (unsigned int x = 0; x < on->width(); x++)
+      {
+         const uint8_t* const pa = a + y * on->pitch() + x * bppOn;
+         const uint8_t* const pb = b + y * off->pitch() + x * bppOff;
+         const uint8_t* const pn = n + y * none->pitch() + x * bppNone;
+         int pxMax = 0;
+         for (int c = 0; c < 3; c++)
+         {
+            const int d = abs((int)pa[c] - (int)pb[c]);
+            sum += d;
+            pxMax = max(pxMax, d);
+         }
+         r.maxDif = max(r.maxDif, pxMax);
+         if (pxMax > 24)
+            far++;
+         const double dOff = lum(pn) - lum(pb);
+         if (dOff > 16.)
+         {
+            r.shadowPx++;
+            r.darkOff += dOff;
+            r.darkOn += lum(pn) - lum(pa);
+         }
+      }
+   const double px = (double)on->width() * (double)on->height();
+   r.meanDif = sum / (px * 3.);
+   r.farPct = 100. * (double)far / px;
+   return r;
+}
+#endif
+
+// The static shadow cache bakes the playfield shadow of a static light once its map is complete, and the playfield then reads the
+// bake instead of the live filter: the picture must not change (the bake has no per pixel kernel rotation, hence the small margin),
+// and the shadowed pixels must be as dark with the cache as without it
+TEST_CASE("PBR static shadow cache bakes the live shadow [render]")
+{
+   ResetVPX();
+   const std::filesystem::path tableFile = CreatePBRShadowTable();
+
+#if defined(ENABLE_BGFX)
+   const uint64_t bakesOn = CaptureStaticShadows(tableFile, true, "pbr-shadow-cache-on-Test.webp"s);
+   ResetVPX();
+   const uint64_t bakesOff = CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-off-Test.webp"s);
+   ResetVPX();
+   CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-none-Test.webp"s, true);
+   ResetVPX();
+   CHECK(bakesOn >= 1);
+   CHECK(bakesOff == 0);
+   const ShadowCaptureCompare r = CompareShadowCaptures("pbr-shadow-cache-on-Test.webp"s, "pbr-shadow-cache-off-Test.webp"s, "pbr-shadow-cache-none-Test.webp"s);
+   MESSAGE("static shadow cache: " << bakesOn << " bake(s), cache on vs off mean abs " << r.meanDif << ", max " << r.maxDif << " levels, " << r.farPct
+                                   << "% of pixels > 24 apart; " << r.shadowPx << " shadowed pixels, darkening on/off " << r.darkOn / max(r.darkOff, 1.));
+   CHECK(r.meanDif <= 0.5);
+   CHECK(r.farPct <= 0.1);
+   CHECK(r.shadowPx >= 1000);
+   CHECK(r.darkOn >= 0.8 * r.darkOff);
+   CHECK(r.darkOn <= 1.2 * r.darkOff);
+#endif
+
+   ResetVPX();
+}

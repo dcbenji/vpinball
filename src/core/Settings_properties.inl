@@ -154,6 +154,8 @@ PropInt(Player, PBRShadowMapSize, "PBR Shadow Map Size"s, "Virtual resolution in
 PropInt(Player, PBRShadowPoolPages, "PBR Shadow Pool Pages"s, "Number of 128x128 physical pages shared by all shadowed PBR lights"s, 64, 1024, 1024);
 PropInt(Player, PBRShadowMaxLights, "PBR Shadow Max Lights"s, "Maximum number of PBR lights with virtual shadow maps"s, 1, 32, 32);
 PropInt(Player, PBRShadowPagesPerFrame, "PBR Shadow Pages Per Frame"s, "Maximum number of shadow map pages rendered per frame (bakes and dynamic updates amortize over frames)"s, 1, 128, 32);
+PropBool(Player, PBRShadowCache, "PBR Static Shadow Cache"s, "The playfield reads baked shadows of the static PBR lights that do not move instead of filtering their shadow maps per pixel"s, true);
+PropInt(Player, PBRShadowCacheLayers, "PBR Static Shadow Cache Layers"s, "Maximum number of 2048x2048 layers (16 MB each) of the static shadow cache; lights that do not fit keep the live filter"s, 1, 32, 8);
 PropBool(Player, HDRDisableToneMapper, "Disable tonemapping on HDR display"s, "Do not perform tonemapping when rendering on a high dynamic range (HDR) capable monitor/gfxboard/OS"s, true);
 PropFloat(Player, HDRGlobalExposure, "HDR Display Global Exposure"s, "Global exposure scale multiplier for high dynamic range (HDR) capable monitors"s, 0.f, 5.f, 1.f);
 PropBool(Player, ForceBloomOff, "Disable Bloom"s, "Disable postprocessed bloom filter"s, false);

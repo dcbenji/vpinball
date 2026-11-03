@@ -230,6 +230,9 @@ public:
    // write depth; in a SHADOW_MAP|SHADOW_TRANS pass they draw their absorbance into the page's transmittance layer.
    bool IsTranslucentShadowCaster(const Material* mat) const; // Shared per-material caster classification of the SHADOW_MAP branches
    void BindTranslucentShadowCaster(const Material* mat, Texture* image, float partAlpha) const; // pbr_shadow_trans technique + tint bindings
+#ifdef VPX_TEST_BUILD
+   uint64_t m_pbrShadowCacheBakes = 0; // static shadow cache bakes submitted (UpdatePBRShadowCache), read by the tests
+#endif
 
    void ReinitRenderable(IRenderable* part)
    {
@@ -414,6 +417,11 @@ public:
    // transparency probe render target used for the transmission term of transparent parts.
    Shader::PBRTextureSet GetPBRTextureSet(const BaseProperty& partData, const Vertex3Ds& center, const float radius, const bool inShaderSpecular, const bool transparent,
       const unsigned int renderMask, RenderTarget* const refrProbe = nullptr);
+#if defined(ENABLE_BGFX)
+   bool IsPBRShadowCacheOn() const { return m_shadowCacheOn; } // the playfield draw reads the static shadow cache (UpdatePBRShadowCache)
+#else
+   bool IsPBRShadowCacheOn() const { return false; }
+#endif
 
 private:
    void SetSpaceReference(PartGroupData::SpaceReference spaceReference, bool force) { m_activeView->SetSpaceReference(spaceReference, force); }
@@ -445,11 +453,39 @@ private:
    vec4 m_vsmBox[VSM::MAX_LIGHTS]; // x: 1/boxW, y: 1/boxH, z/w: unused
    std::vector<RenderTarget*> m_vsmTouchedRTs; // page RTs written this frame (scene pass dependencies)
    uint64_t m_vsmFrame = 0; // marking frame stamp for pool LRU
+   uint64_t m_vsmSlotPageFrame[VSM::MAX_LIGHTS] {}; // per shadow slot: the last VSM frame a page of its map was rendered (the cache bakes complete maps of earlier frames only)
    int m_vsmPoolPages = 1024; // physical pool size in pages (Player_PBRShadowPoolPages)
    int m_vsmVirtRes = 8192; // ortho virtual map edge in texels (Player_PBRShadowMapSize)
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame
    int m_vsmPageBudget = 32; // dirty pages rendered per frame (Player_PBRShadowPagesPerFrame)
+   unsigned int m_vsmRebuildSerial = 0; // bumped when the shadow caster content changed (every cached map and shadow bake is stale)
+
+   // Static shadow cache: a static light's shadow (cube map, static casters only: shadow modes PBR_STATIC_SHADOWS and
+   // PBR_STATIC_N_BALL_SHADOWS) is a fixed function of the receiver point, so the playfield reads it from a per light bake in
+   // table xy (one bilinear read) instead of running the cube filter per pixel. Bakes run once the light's map is complete,
+   // one light per frame, and stay valid until the light or the casters change. Player.PBRShadowCache turns it off.
+   void UpdatePBRShadowCache();
+   struct ShadowCacheEntry
+   {
+      const class Light* light = nullptr;
+      float rect[4] {}; // baked table xy rect (min x, min y, max x, max y): the light's range square over the playfield bounds
+      int layer = 0, x0 = 0, y0 = 0, w = 0, h = 0; // tile in the cache texture array (texels)
+      vec4 map; // table xy -> layer uv: xy * x + (y, z)
+      bool baked = false;
+      uint64_t validFrame = 0; // published from this VSM frame on (the frame after its bake: every pass of it sees the bake)
+      Vertex3Ds pos; // light state the bake was made for
+      float range = 0.f, penumbra = 0.f, sphereRadius = 0.f;
+      int mode = -1;
+      unsigned int serial = 0;
+   };
+   static constexpr int SHADOW_CACHE_LAYER_SIZE = 2048; // cache layer edge (texels, RGBA8: 16 MB per layer)
+   std::vector<ShadowCacheEntry> m_shadowCache;
+   bgfx::TextureHandle m_shadowCacheTex = BGFX_INVALID_HANDLE; // RGBA8 texture array (a 1x1 placeholder while off)
+   std::shared_ptr<Sampler> m_shadowCacheSampler;
+   int m_shadowCacheLayers = 0; // layer count of m_shadowCacheTex (0 = placeholder)
+   std::vector<uint8_t> m_shadowCacheCleared; // per layer: cleared before its first bake
+   bool m_shadowCacheOn = false;
 #endif
 
    // Per view render target accessors, delegated to the active view (used by ancillary and postprocess helpers)

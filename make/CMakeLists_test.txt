@@ -646,6 +646,9 @@ elseif(PLATFORM STREQUAL "linux")
 
 endif()
 
+# The engine sources of vpx-test keep a few counters for the tests (VPX_TEST_BUILD: renderer work counts the player never reads)
+target_compile_definitions(vpx-test PRIVATE VPX_TEST_BUILD)
+
 # the colorization tests call into libserum/libvni; on MSVC they are linked as
 # serum64/vni64 in the windows section above
 if(NOT MSVC)

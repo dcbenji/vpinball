@@ -201,6 +201,7 @@ public:
    mutable float m_pbrShadowBakedFalloff = 0.f; // Falloff the virtual map was last marked for
    mutable int m_pbrShadowBakedSlot = -1; // VSM index the map was last marked for (invalid = needs bake)
    mutable int m_pbrShadowBakedMode = -1; // ShadowMode tier the map was last marked for (a static bake must not inherit frozen dynamic casters from a downgraded dynamic tier)
+   mutable unsigned int m_pbrShadowBakedSerial = 0; // Renderer caster content serial the map was last reset at (the static shadow cache only bakes a map built after the last caster edit)
    STDMETHOD(get_Surface)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_Surface)(/*[in]*/ BSTR newVal);
    STDMETHOD(get_Intensity)(/*[out, retval]*/ float *pVal);

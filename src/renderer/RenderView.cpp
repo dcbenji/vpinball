@@ -1120,6 +1120,7 @@ void RenderView::PreparePBRPasses()
    // Forward+ light list: light states animate per frame so the cluster grid is rebuilt and uploaded each frame
 #ifdef ENABLE_BGFX
    r->UpdateVirtualShadowMaps();
+   r->UpdatePBRShadowCache();
    r->BuildPBRLightList();
 #endif
 
