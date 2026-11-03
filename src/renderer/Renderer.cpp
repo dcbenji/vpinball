@@ -6054,9 +6054,9 @@ void Renderer::RenderEditorView(const int slot)
       m_renderDevice->m_depthPrepassMotion = false;
       m_renderDevice->m_pbrAOEnabled = false;
 
-      // ponytail: flat 18% grey clear, a vertical gradient needs a full screen draw
+      // ponytail: flat 10% grey clear, a vertical gradient needs a full screen draw
       m_renderDevice->SetRenderTarget("Library Preview Background"s, GetMSAABackBufferTexture());
-      m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x002E2E2E);
+      m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x001A1A1A);
       PreparePBRPasses(); // Sideband clear only: the shared per frame work is skipped for editor views
       m_renderDevice->SetRenderTarget("Library Preview"s, GetMSAABackBufferTexture(), true, true);
       AddPBRShadowDependencies();
