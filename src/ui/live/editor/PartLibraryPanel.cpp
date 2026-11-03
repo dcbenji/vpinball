@@ -819,6 +819,10 @@ void PartLibraryPanel::ReleaseScratch()
                edit->Release();
             });
       }
+   // The table's images are deleted with it: drop them from the texture manager (recorded draws keep their samplers alive)
+   if (m_editor.m_renderer != nullptr)
+      for (Texture *const image : m_scratch->GetImageList())
+         m_editor.m_renderer->m_renderDevice->m_texMan.UnloadTexture(image);
    m_scratch->Release();
    m_scratch = nullptr;
 }
