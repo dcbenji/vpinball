@@ -366,6 +366,7 @@ public:
    // Closes the session with the given Player::CloseState, first asking to discard unsaved changes when they would be lost
    void RequestClose(int closeState);
 private:
+   int m_deferredStop = -1; // Close state of a stop request refused while a save was running, replayed when it finishes
    std::optional<int> m_pendingClose; // Close state awaiting the 'discard unsaved changes' confirmation
 
    // Clipboard (copy/paste of parts through the OS clipboard, and of drag point coordinates in point edit mode)

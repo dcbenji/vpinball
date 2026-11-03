@@ -224,6 +224,7 @@ void EditorUI::Close()
    ImGuizmo::Enable(false); // Clears a gizmo state left by a drag in progress
    ImGuizmo::Enable(true);
    SDLInputHandler::ClearSwallowedMouseButtons(); // The editor stops drawing: no nav cube press can stay swallowed
+   m_deferredStop = -1;
    m_gizmoDragActive = false;
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
@@ -417,7 +418,8 @@ void EditorUI::RequestClose(const int closeState)
    // Stopping a play test pops the table under the async save of the base table: refused for every caller (Stop, X, Shift+F5, OS window close)
    if (IsInspectMode() && m_fileOp != nullptr)
    {
-      Report("Cannot stop the play test while a save is in progress");
+      m_deferredStop = closeState; // Replayed once the save has finished
+      Report("Save in progress: the play test will stop when it finishes");
       return;
    }
    // Only closing a full editor session loses the edited table (a live edit started from the Win32 editor or a play test gets back to its editor)
@@ -1383,7 +1385,15 @@ void EditorUI::RenderAreaCorners()
          // the corner's own button while the zone is the one hovered
          ImGuiWindow *const cornerWindow = ImGui::FindWindowByName(name);
          const ImGuiID hoveredId = ImGui::GetHoveredID();
-         const bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != cornerWindow->GetID("##corner"));
+         bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != cornerWindow->GetID("##corner"));
+         if (overWidget)
+         {
+            ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
+            if (hw != nullptr && strncmp(hw->Name, "##Split", 7) == 0)
+               overWidget = false; // The splitter strip overlaps the corner's edge band: the corner wins inside its triangle
+            else if ((corner & 2) != 0)
+               overWidget = hw != nullptr && (hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_X) || hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_Y)); // Bottom: list rows do not count, only scrollbars
+         }
          const bool inTriangle = lx >= 0.f && ly >= 0.f && lx + ly <= side && (!overWidget || m_areaDrag.active);
          ImGui::SetNextWindowPos(ImVec2(x, y));
          ImGui::SetNextWindowSize(ImVec2(side, side));
@@ -1988,6 +1998,12 @@ void EditorUI::RenderUI()
    // Apply the result of a completed asynchronous file operation (running a worker thread load/save)
    if (m_fileOp && m_fileOp->completed)
       FinishFileOp();
+   if (m_deferredStop >= 0 && m_fileOp == nullptr)
+   {
+      const int closeState = m_deferredStop;
+      m_deferredStop = -1;
+      RequestClose(closeState);
+   }
 
    // Queued layout changes, then the rects of the areas (before any panel and the chrome overlays use them)
    UpdateAreaLayout();
