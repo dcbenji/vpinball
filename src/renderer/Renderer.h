@@ -358,6 +358,15 @@ public:
    bool IsPBRShadowCacheOn() const { return false; }
 #endif
 
+   // Renders a single part (RenderItem) of another table (the part library placement ghost): m_table is swapped for the draw, its PBR maps are looked up there
+   void RenderItemOfTable(IEditable* const renderable, PinTable* const table, bool isNoBackdrop)
+   {
+      PinTable* const saved = m_table;
+      m_table = table;
+      RenderItem(renderable, isNoBackdrop);
+      m_table = saved;
+   }
+
 private:
    void SetSpaceReference(PartGroupData::SpaceReference spaceReference, bool force);
    void RenderStatics(); // Render background, then static parts if IsUsingStaticPrepass

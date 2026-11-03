@@ -12,6 +12,7 @@
 #include "parts/ball.h"
 #include "parts/bumper.h"
 #include "parts/decal.h"
+#include "parts/flasher.h"
 #include "parts/flipper.h"
 #include "parts/gate.h"
 #include "parts/hittarget.h"
@@ -456,6 +457,29 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       sections.EndSection();
       }
 
+      // Selected pack preview and import action
+      if (sections.BeginSection("Import"s))
+      {
+      if (m_selectedPack.empty())
+         ImGui::TextDisabled("Select a VPZ pack file to import");
+      else
+      {
+         ImGui::TextUnformatted(PathToUTF8(m_selectedPack.filename()).c_str());
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", PathToUTF8(m_selectedPack).c_str());
+         if (!m_selectedPackInfo.valid)
+            ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Failed to read the pack");
+         else
+            ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
+               m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
+         ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
+         if (PaddedButton(ICON_FK_DOWNLOAD "  Import", ImGui::GetContentRegionAvail().x, dpi))
+            ImportPack(m_selectedPack);
+         ImGui::EndDisabled();
+      }
+      sections.EndSection();
+      }
+
       if (sections.BeginSection("Library Folders"s))
       {
       const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
@@ -509,35 +533,11 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::TreePop();
       }
 
-      // The grid fills the area height left under the folder tree, above the Import section (a section header, 2 text lines and a button)
-      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 2.f + ImGui::GetTextLineHeightWithSpacing() * 2.f + ImGui::GetFrameHeight() + 24.f * dpi;
-      const float gridHeight = max(ImGui::GetContentRegionAvail().y - footerHeight, 150.f * dpi); // At least a row and a half of tiles
+      // The grid is the last section: it takes the area height down to the bottom edge (at least a row and a half of tiles)
+      const float gridHeight = max(ImGui::GetContentRegionAvail().y - 4.f * dpi, 150.f * dpi);
       if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, gridHeight), ImGuiChildFlags_Borders))
          RenderGrid(ImGui::GetContentRegionAvail().y);
       ImGui::EndChild();
-      sections.EndSection();
-      }
-
-      // Selected pack preview and import action
-      if (sections.BeginSection("Import"s))
-      {
-      if (m_selectedPack.empty())
-         ImGui::TextDisabled("Select a VPZ pack file to import");
-      else
-      {
-         ImGui::TextUnformatted(PathToUTF8(m_selectedPack.filename()).c_str());
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", PathToUTF8(m_selectedPack).c_str());
-         if (!m_selectedPackInfo.valid)
-            ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Failed to read the pack");
-         else
-            ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
-               m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
-         ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
-         if (PaddedButton(ICON_FK_DOWNLOAD "  Import", ImGui::GetContentRegionAvail().x, dpi))
-            ImportPack(m_selectedPack);
-         ImGui::EndDisabled();
-      }
       sections.EndSection();
       }
    }
@@ -1019,6 +1019,8 @@ bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable>
          static_cast<Light *>(part)->m_d.m_stateSrcLink.clear();
       else if (part->GetItemType() == eItemPrimitive)
          static_cast<Primitive *>(part)->m_d.m_stateSrcLink.clear();
+      else if (part->GetItemType() == eItemFlasher)
+         static_cast<Flasher *>(part)->m_d.m_stateSrcLink.clear();
       if (part->GetIRenderable() == nullptr)
          continue;
       part->GetIRenderable()->RenderSetup(m_editor.m_renderer.get());
@@ -1224,7 +1226,15 @@ void PartLibraryPanel::FrameLightbox(const bool resetAngles)
       m_lbCam.yaw = 35.f;
       m_lbCam.pitch = 30.f;
    }
-   CameraPreviewPanel::FrameBounds(m_lbCam, m_lbBounds, m_editor.m_navFovY, m_lbHeight > 0 ? static_cast<float>(m_lbWidth) / static_cast<float>(m_lbHeight) : 1.f);
+   // On the bounding sphere: the distance does not change with the yaw (the projected box would)
+   const float aspect = m_lbHeight > 0 ? static_cast<float>(m_lbWidth) / static_cast<float>(m_lbHeight) : 1.f;
+   const float dx = m_lbBounds.right - m_lbBounds.left, dy = m_lbBounds.bottom - m_lbBounds.top, dz = m_lbBounds.zhigh - m_lbBounds.zlow;
+   const float radius = 0.5f * sqrtf(dx * dx + dy * dy + dz * dz);
+   const float halfV = 0.5f * ANGTORAD(m_editor.m_navFovY), halfH = atanf(tanf(halfV) * aspect);
+   m_lbCam.target[0] = 0.5f * (m_lbBounds.left + m_lbBounds.right);
+   m_lbCam.target[1] = 0.5f * (m_lbBounds.top + m_lbBounds.bottom);
+   m_lbCam.target[2] = 0.5f * (m_lbBounds.zlow + m_lbBounds.zhigh);
+   m_lbCam.distance = max(1.f, 1.1f * radius / sinf(min(halfV, halfH)));
    m_lbCam.orbitValid = true;
    m_lbDirty = true;
 }
@@ -1389,7 +1399,7 @@ void PartLibraryPanel::RenderLightbox()
          m_lbDirty = true;
       }
       if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-         FrameLightbox(false);
+         FrameLightbox(true); // Distance and orbit angles
    }
 
    // Render size: the image in pixels, a new size adopted once stable (no target churn while the window is resized)
@@ -1658,11 +1668,15 @@ void PartLibraryPanel::PlaceAt(const Vertex2D &pos)
 
    // Raise the content on the Z axis so its lowest bound lies on the hit surface. Only parts exposing
    // a Z translation get raised; curve based parts (ramps, surfaces, ...) keep their authored Z
+   // (the lowest bound is taken over the raisable parts only: a part that never moves would be raised again at every pointer move)
    float minZ = FLT_MAX;
-   for (IEditable *const part : m_previewParts)
+   for (size_t i = 0; i < m_previewParts.size(); i++)
    {
+      Matrix3D transform;
+      if ((m_previewUIParts[i]->GetTransform(transform) & EditorUIPart::TM_TransZ) == 0)
+         continue;
       vector<Vertex3Ds> bounds;
-      part->GetBoundingVertices(bounds, nullptr);
+      m_previewParts[i]->GetBoundingVertices(bounds, nullptr);
       for (const Vertex3Ds &v : bounds)
          minZ = min(minZ, v.z);
    }
@@ -1708,6 +1722,7 @@ void PartLibraryPanel::CommitPlacement()
       SetupPlayerSide(part, false);
    m_editor.m_undo.SetLabel("Place " + PathToUTF8(m_placementPack.stem()));
    m_editor.m_undo.EndUndo();
+   UnloadImages(m_previewTable); // Only the images the merge left in it (the merged ones moved to the edited table and stay loaded)
    m_previewTable->Release();
    m_previewTable = nullptr;
    m_previewVisible = false;
@@ -1715,13 +1730,17 @@ void PartLibraryPanel::CommitPlacement()
 
    // Select the imported parts
    m_editor.UpdateEditableList();
-   m_editor.m_multiSel.clear();
+   vector<std::shared_ptr<EditorUIPart>> placedParts;
    for (IEditable *const part : imported)
       if (part->GetItemType() != eItemPartGroup)
          if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end())
-            m_editor.m_multiSel.push_back(it->second);
-   if (!m_editor.m_multiSel.empty())
-      m_editor.m_selection = Selection(m_editor.m_multiSel.back());
+            placedParts.push_back(it->second);
+   if (!placedParts.empty())
+   {
+      m_editor.SetSelection(Selection(placedParts.back()));
+      m_editor.m_multiSel = placedParts;
+      m_editor.m_outlinerAnchor = placedParts.back();
+   }
 
    // F9 repeats the placement with an offset, as for an added part (the offset is relative to the base: Z of the surface it rests on)
    if (Matrix3D placed; m_editor.GetSelectionTransform(placed))
@@ -1736,6 +1755,13 @@ void PartLibraryPanel::CommitPlacement()
       10000);
    m_placementPack.clear(); // ponytail: not armed for another copy, the next placement is a new drag or double click
    m_dragActive = false;
+}
+
+void PartLibraryPanel::UnloadImages(PinTable *const table)
+{
+   if (m_editor.m_renderer != nullptr)
+      for (Texture *const image : table->GetImageList())
+         m_editor.m_renderer->m_renderDevice->m_texMan.UnloadTexture(image);
 }
 
 void PartLibraryPanel::ClearPreview()
@@ -1761,6 +1787,7 @@ void PartLibraryPanel::ClearPreview()
                   edit->Release();
                });
          }
+      UnloadImages(m_previewTable);
       m_previewTable->Release();
       m_previewTable = nullptr;
    }
@@ -1772,7 +1799,7 @@ void PartLibraryPanel::Render3D()
    if (m_previewVisible)
       for (IEditable *const part : m_previewParts)
          if (part->GetIRenderable() != nullptr)
-            m_editor.m_renderer->RenderItem(part, false);
+            m_editor.m_renderer->RenderItemOfTable(part, m_previewTable, false);
 }
 
 // The double click position: the centre of the selection bounds if there is a selection, else the table centre
@@ -1802,32 +1829,49 @@ bool PartLibraryPanel::PlaceItem(const LibraryItem &item)
    return true;
 }
 
-static bool SetPartMaterial(IEditable *const part, const string &name)
+// Sets (or, with apply false, only tests) the part's material: the types with one material field
+static bool SetPartMaterial(IEditable *const part, const string &name, const bool apply = true)
 {
+   const auto set = [apply, &name](string &field)
+   {
+      if (apply)
+         field = name;
+      return true;
+   };
    switch (part->GetItemType())
    {
-   case eItemPrimitive: static_cast<Primitive *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemRamp: static_cast<Ramp *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemSurface: static_cast<Surface *>(part)->m_d.m_szTopMaterial = name; return true;
-   case eItemDecal: static_cast<Decal *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemFlipper: static_cast<Flipper *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemHitTarget: static_cast<HitTarget *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemPlunger: static_cast<Plunger *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemRubber: static_cast<Rubber *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemSpinner: static_cast<Spinner *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemKicker: static_cast<Kicker *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemTrigger: static_cast<Trigger *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemGate: static_cast<Gate *>(part)->m_d.m_szMaterial = name; return true;
-   case eItemBumper: static_cast<Bumper *>(part)->m_d.m_szCapMaterial = name; return true;
+   case eItemPrimitive: return set(static_cast<Primitive *>(part)->m_d.m_szMaterial);
+   case eItemRamp: return set(static_cast<Ramp *>(part)->m_d.m_szMaterial);
+   case eItemSurface: return set(static_cast<Surface *>(part)->m_d.m_szTopMaterial);
+   case eItemDecal: return set(static_cast<Decal *>(part)->m_d.m_szMaterial);
+   case eItemFlipper: return set(static_cast<Flipper *>(part)->m_d.m_szMaterial);
+   case eItemHitTarget: return set(static_cast<HitTarget *>(part)->m_d.m_szMaterial);
+   case eItemPlunger: return set(static_cast<Plunger *>(part)->m_d.m_szMaterial);
+   case eItemRubber: return set(static_cast<Rubber *>(part)->m_d.m_szMaterial);
+   case eItemSpinner: return set(static_cast<Spinner *>(part)->m_d.m_szMaterial);
+   case eItemKicker: return set(static_cast<Kicker *>(part)->m_d.m_szMaterial);
+   case eItemTrigger: return set(static_cast<Trigger *>(part)->m_d.m_szMaterial);
+   case eItemGate: return set(static_cast<Gate *>(part)->m_d.m_szMaterial);
+   case eItemBumper: return set(static_cast<Bumper *>(part)->m_d.m_szCapMaterial);
    default: return false;
    }
 }
 
-// Imports the material pack through the same merge path as a part pack, then assigns the material to the selected parts, in the same undo step
+// Imports the material pack through the same merge path as a part pack, then assigns the material to the selected parts, in the same undo step.
+// Nothing is imported (and no undo step made) when no selected part can take a material
 void PartLibraryPanel::ApplyMaterialItem(const LibraryItem &item)
 {
-   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode())
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr)
       return;
+   vector<IEditable *> targets;
+   for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
+      if (IEditable *const part = uiPart->GetEditable(); !part->IsUILocked() && SetPartMaterial(part, string(), false))
+         targets.push_back(part);
+   if (targets.empty())
+   {
+      m_editor.m_liveUI.PushNotification("Select the parts to apply the material to"s, 4000);
+      return;
+   }
    CComObject<PinTable> *temp;
    CComObject<PinTable>::CreateInstance(&temp);
    temp->AddRef();
@@ -1840,35 +1884,26 @@ void PartLibraryPanel::ApplyMaterialItem(const LibraryItem &item)
       m_editor.m_liveUI.PushNotification("Failed to import '"s + PathToUTF8(item.pack) + '\'', 10000);
       return;
    }
-   // The name the material has after the merge (renamed when a different table material has the same name)
-   string name = item.material;
-   for (const Material *const mat : temp->GetMaterialList())
-      if (mat->m_name == item.material)
-      {
-         name = mat->m_name;
-         break;
-      }
-      else if (mat->m_name.starts_with(item.material))
-         name = mat->m_name;
+   // The name the material has after the merge: the deserializer's rename map (keyed by the file stem), else it kept its name
+   const string stem = JSONSerializer::SanitizeFileName(item.material), renamed = pack->RenamedAsset("materials", stem);
+   const string name = StrCompareNoCase(renamed, stem) ? item.material : renamed;
    PinTable *const table = m_editor.m_table;
    m_editor.m_undo.BeginUndo();
-   const vector<IEditable *> imported = table->ImportParts(temp, nullptr);
+   table->ImportParts(temp, nullptr);
    temp->Release();
    int assigned = 0;
    if (table->GetMaterial(name) != nullptr)
-      for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
+      for (IEditable *const part : targets)
       {
-         IEditable *const part = uiPart->GetEditable();
          m_editor.m_undo.MarkForUndo(part);
-         if (SetPartMaterial(part, name))
-            assigned++;
+         SetPartMaterial(part, name);
+         assigned++;
       }
    m_editor.m_undo.SetLabel("Apply material " + name);
    m_editor.m_undo.EndUndo();
-   for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
-      m_editor.m_renderer->ReinitRenderable(uiPart->GetEditable()->GetIRenderable());
-   m_editor.m_liveUI.PushNotification("Imported material '"s + name + (assigned > 0 ? "', applied to "s + std::to_string(assigned) + " part(s)"s : "'"s), 10000);
-   (void)imported;
+   for (IEditable *const part : targets)
+      m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
+   m_editor.m_liveUI.PushNotification("Imported material '"s + name + "', applied to "s + std::to_string(assigned) + " part(s)"s, 10000);
 }
 
 }

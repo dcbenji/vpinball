@@ -52,6 +52,7 @@ public:
    void CancelPlacement();
    void CommitPlacement();
    void Render3D(); // Renders the ghost preview parts into the 3D scene (called by EditorUI::Render3D)
+   void UnloadImages(PinTable *table); // The table's images are deleted with it: out of the texture manager first
    void ClearPreview(); // Drops the preview parts, e.g. when the edited table is switched or the editor is closed
 
    void Update(); // Every frame, whether the editor is shown or not: applies the results of the asynchronous file dialogs
