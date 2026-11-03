@@ -540,6 +540,8 @@ Renderer::~Renderer()
    ReleaseAORenderTargets();
    m_ballEnvSampler = nullptr;
    m_envSampler = nullptr;
+   m_lookdevEnvSampler = nullptr;
+   m_lookdevIrradianceSampler = nullptr;
    m_aoDitherSampler = nullptr;
    delete m_renderDevice;
 }
@@ -5753,6 +5755,9 @@ bool Renderer::RequestEditorView(const int slot, const EditorViewRequest& reques
       return false;
    if (!request.wireframe && !CanRenderEditorPBRView(slot))
       return false;
+   // The isolated pass is a PBR free camera one; info modes would read the live table's probes from the scratch table in the post chain
+   if (request.isolated != nullptr && (request.isolatedTable == nullptr || request.wireframe || request.playerCamera || g_pplayer->GetInfoMode() != IF_NONE))
+      return false;
    EditorView& v = m_editorViews[slot];
    v.request = request;
    v.request.width = min(request.width, 4096);
@@ -5999,14 +6004,89 @@ void Renderer::RenderEditorView(const int slot)
    m_renderDevice->m_ballShader->SetTexture(ShaderUniform::tex_ball_playfield, GetPreviousBackBufferTexture()->GetColorSampler());
    SetScreenOffset(0.f, 0.f);
 
-   for (auto probe : m_table->m_vrenderprobe)
-      probe->MarkDirty();
    m_render_mask = Renderer::DEFAULT;
-   RenderStatics();
-   for (auto probe : m_table->m_vrenderprobe)
-      probe->MarkDirty();
-   m_renderDevice->m_noMovingBalls = true;
-   RenderDynamics();
+   PinTable* const mainTable = m_table;
+   Shader* const basicShader = m_renderDevice->m_basicShader;
+   std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
+   vec4 mainEnvScale, mainLightGrid2;
+#if defined(ENABLE_BGFX)
+   const bool mainShadowCacheOn = m_shadowCacheOn;
+#endif
+   if (req.isolated != nullptr)
+   {
+      // Part library preview: the scratch parts alone in a neutral lookdev rig. The app's default environment gives the IBL, its irradiance
+      // computed once on the CPU (the GPU path submits a frame, not possible while recording one)
+      if (m_lookdevEnvSampler == nullptr)
+      {
+         const std::shared_ptr<BaseTexture> env = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "EnvMap.webp"));
+         const unsigned int irrHeight = min(env->height(), 256u) / 8;
+         m_lookdevIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Irradiance"s, EnvmapPrecalc(env, irrHeight * 2, irrHeight), false);
+         m_lookdevEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Env"s, env, false);
+      }
+      // Swapped for the pass, restored below: environment, light count 0 (no Forward+ light, so no VSM or flasher cache shadow either), no playfield shadow cache
+      mainEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_env);
+      mainDiffuseEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      mainEnvScale = basicShader->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
+      basicShader->SetTexture(ShaderUniform::tex_env, m_lookdevEnvSampler);
+      basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_lookdevIrradianceSampler);
+      basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, 1.f, static_cast<float>(m_lookdevEnvSampler->GetHeight()), 0.f, 0.f);
+#if defined(ENABLE_BGFX)
+      if (m_renderDevice->m_pbrActive)
+      {
+         mainLightGrid2 = basicShader->GetVector(ShaderUniform::pbrLightGrid2);
+         basicShader->SetVector(ShaderUniform::pbrLightGrid2, mainLightGrid2.x, 0.f, mainLightGrid2.z, mainLightGrid2.w);
+      }
+      m_shadowCacheOn = false;
+#endif
+      m_visibilityMask = ~0u;
+      m_renderDevice->m_depthPrepassTarget = nullptr;
+      m_renderDevice->m_depthPrepassNormals = false;
+      m_renderDevice->m_depthPrepassMotion = false;
+      m_renderDevice->m_pbrAOEnabled = false;
+
+      // ponytail: flat 18% grey clear, a vertical gradient needs a full screen draw
+      m_renderDevice->SetRenderTarget("Library Preview Background"s, GetMSAABackBufferTexture());
+      m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0x002E2E2E);
+      PreparePBRPasses(); // Sideband clear only: the shared per frame work is skipped for editor views
+      m_renderDevice->SetRenderTarget("Library Preview"s, GetMSAABackBufferTexture(), true, true);
+      AddPBRShadowDependencies();
+
+      // As RenderDynamics, without the table's parts, balls and bulb light buffer
+      SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false);
+      Matrix3D matProj[2];
+      for (int eye = 0; eye < m_renderDevice->m_nEyes; eye++)
+         matProj[eye] = GetMVP().GetFlippedProj(eye);
+      basicShader->SetMatrix(ShaderUniform::matProj, &matProj[0], m_renderDevice->m_nEyes);
+      m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::matProj, &matProj[0], m_renderDevice->m_nEyes);
+      UpdateBasicShaderMatrix();
+      UpdateBallShaderMatrix();
+      // The scratch table is m_table for the item draws (PBR maps and probes are looked up there) and the post chain (neutral default tonemapping)
+      m_table = req.isolatedTable;
+      for (IEditable* const part : *req.isolated)
+         RenderItem(part, false);
+
+      for (const auto& [uniform, sampler] : { std::pair { ShaderUniform::tex_env, mainEnv }, std::pair { ShaderUniform::tex_diffuse_env, mainDiffuseEnv } })
+         if (sampler != nullptr)
+            basicShader->SetTexture(uniform, sampler);
+         else
+            basicShader->SetTextureNull(uniform);
+      basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, &mainEnvScale);
+#if defined(ENABLE_BGFX)
+      if (m_renderDevice->m_pbrActive)
+         basicShader->SetVector(ShaderUniform::pbrLightGrid2, &mainLightGrid2);
+      m_shadowCacheOn = mainShadowCacheOn;
+#endif
+   }
+   else
+   {
+      for (auto probe : m_table->m_vrenderprobe)
+         probe->MarkDirty();
+      RenderStatics();
+      for (auto probe : m_table->m_vrenderprobe)
+         probe->MarkDirty();
+      m_renderDevice->m_noMovingBalls = true;
+      RenderDynamics();
+   }
 
    // Resolve MSAA buffer to a normal one (noop if not using MSAA), allowing sampling it for postprocessing
    if (GetMSAABackBufferTexture() != GetBackBufferTexture())
@@ -6033,6 +6113,7 @@ void Renderer::RenderEditorView(const int slot)
       else
          ApplyTonemapping(renderedRT, v.out);
    }
+   m_table = mainTable;
    v.rendered = true;
 
    // Restore the main view state

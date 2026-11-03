@@ -139,10 +139,22 @@ public:
       ViewSetupID viewSetup = BG_INVALID;
       Matrix3D view, proj; // Free camera (playerCamera false): VPX left handed view and projection, as SetViewProj takes them
       bool wireframe = false; // Lite path
+      // Part library preview (free camera only): these parts of a scratch table, drawn alone in a neutral lookdev rig (grey background, the app's
+      // default environment for IBL, no table light, shadow, probe or backdrop), with the scratch table as m_table for the draws and the post chain.
+      // Both pointers must stay valid until the request is rendered (next Render3DScene)
+      const vector<IEditable*>* isolated = nullptr;
+      PinTable* isolatedTable = nullptr;
    };
    bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full PBR view beyond kMaxEditorPBRViews
    bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full PBR view
    RenderTarget* GetEditorView(int slot) const; // Last render of the slot, null before the first one
+   bool IsEditorViewPending(int slot) const { return m_editorViews[slot].requested; } // Requested, not yet rendered (no scene render since)
+   void CancelIsolatedEditorView(const vector<IEditable*>* isolated) // The isolated parts are about to be released: drop their pending request
+   {
+      for (EditorView& v : m_editorViews)
+         if (v.requested && v.request.isolated == isolated)
+            v.requested = false;
+   }
    void ReleaseEditorView(int slot); // Releases the slot's targets (the area was closed), recreated on the next request
    // View setup of the scene being recorded: the table's active one, or the one the editor camera preview renders (rotation dependent passes use it)
    const ViewSetup& GetRenderViewSetup() const;
@@ -591,6 +603,7 @@ private:
    std::shared_ptr<Sampler> m_aoDitherSampler = nullptr;
 
    std::shared_ptr<Sampler> m_envSampler = nullptr;
+   std::shared_ptr<Sampler> m_lookdevEnvSampler, m_lookdevIrradianceSampler; // Part library previews (EditorViewRequest::isolated), created on first use
    std::shared_ptr<Sampler> m_ballEnvSampler = nullptr;
 
    bool m_ss_refl;
