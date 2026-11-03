@@ -232,6 +232,7 @@ void EditorUI::Close()
    RestorePartsVisibility();
    m_inspectionModal.Close();
    m_pbrConvertModal.Close();
+   m_partLibrary.OnEditorClosed(); // The library's lightbox and thumbnails do not survive the editor closing (view slot, scratch tables)
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
 }

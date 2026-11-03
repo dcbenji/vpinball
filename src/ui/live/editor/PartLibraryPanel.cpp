@@ -195,6 +195,12 @@ void PartLibraryPanel::ExportSelection()
       m_editor.m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str());
 }
 
+void PartLibraryPanel::OnEditorClosed()
+{
+   CloseLightbox();
+   AbortThumbnail();
+}
+
 void PartLibraryPanel::Update()
 {
    // Test hook: scan the given library folder and render its missing thumbnails without showing the area
@@ -913,6 +919,11 @@ bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable>
    scratch->m_vrenderprobe.clear();
    for (IEditable *const part : scratch->GetParts())
    {
+      // A state link follows the live controller (Light::UpdateAnimation, the primitive's alpha): the previews run on their own state
+      if (part->GetItemType() == eItemLight)
+         static_cast<Light *>(part)->m_d.m_stateSrcLink.clear();
+      else if (part->GetItemType() == eItemPrimitive)
+         static_cast<Primitive *>(part)->m_d.m_stateSrcLink.clear();
       if (part->GetIRenderable() == nullptr)
          continue;
       part->GetIRenderable()->RenderSetup(m_editor.m_renderer.get());
@@ -1311,6 +1322,9 @@ void PartLibraryPanel::RenderLightbox()
    else
       m_lbPendingFrames = 0;
 
+   // The slot's targets were released under us after the request (a Camera Preview area dropping the slot): render again
+   if (m_lbRequested && m_lbSlot >= 0 && !renderer->IsEditorViewPending(m_lbSlot) && renderer->GetEditorView(m_lbSlot) == nullptr)
+      m_lbDirty = true;
    if (m_lbSlot >= 0 && m_lbScratch != nullptr && m_lbDirty && !renderer->IsEditorViewPending(m_lbSlot))
    {
       Renderer::EditorViewRequest req;

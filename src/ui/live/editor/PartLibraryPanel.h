@@ -50,6 +50,7 @@ public:
    bool CanExportSelection() const;
    void ExportSelection();
 
+   void OnEditorClosed(); // EditorUI::Close: drops the lightbox and the thumbnail in flight (scratch tables, view slots)
    void Update(); // Every frame, whether the editor is shown or not: applies the results of the asynchronous file dialogs
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
 
