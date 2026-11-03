@@ -5500,11 +5500,18 @@ void EditorUI::ApplyLastOperation()
       if (edit == nullptr || edit->GetItemType() != eItemRubber)
          return;
       Rubber *const rubber = static_cast<Rubber *>(edit);
+      const RubberData before = rubber->m_d;
       rubber->m_d.m_thickness = m_lastOp.rbThickness;
       rubber->m_d.m_height = m_lastOp.rbHeight;
       rubber->m_d.m_hitHeight = m_lastOp.rbHeight;
       rubber->m_d.m_postRoundness = m_lastOp.rbRoundness;
-      RubberBetweenPosts::Refit(*this, rubber); // Reports why if no path fits (the shape stays)
+      if (!RubberBetweenPosts::Refit(*this, rubber)) // Reports why if no path fits: keep the shape and the values it was fitted with
+      {
+         rubber->m_d.m_thickness = before.m_thickness;
+         rubber->m_d.m_height = before.m_height;
+         rubber->m_d.m_hitHeight = before.m_hitHeight;
+         rubber->m_d.m_postRoundness = before.m_postRoundness;
+      }
       return;
    }
    case LastOperation::Type::Wireform:
