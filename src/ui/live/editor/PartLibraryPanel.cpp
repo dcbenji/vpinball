@@ -585,20 +585,20 @@ void PartLibraryPanel::RescanLibrary()
             continue;
          const std::filesystem::path thumbs = ThumbFolder(pack);
          const size_t first = m_items.size();
-         const auto addItem = [&](const string &label, const string &material, const ItemKind kind)
+         const auto addItem = [&](const string &label, const string &material, const ItemKind kind, const string &fileStem)
          {
             LibraryItem &item = m_items.emplace_back();
             item.pack = pack;
             item.material = material;
             item.label = label;
             item.kind = kind;
-            item.thumbFile = thumbs / (JSONSerializer::SanitizeFileName(label) + ".png"s);
+            item.thumbFile = thumbs / (fileStem + ".png"s);
          };
          if (info.kind == ItemKind::Material)
-            for (const string &material : info.materialNames)
-               addItem(material, material, ItemKind::Material);
+            for (size_t i = 0; i < info.materialNames.size(); i++) // Indexed: sanitized names may collide (or differ by case only)
+               addItem(info.materialNames[i], info.materialNames[i], ItemKind::Material, JSONSerializer::SanitizeFileName(info.materialNames[i]) + '_' + std::to_string(i));
          else
-            addItem(PathToUTF8(pack.stem()), ""s, info.kind);
+            addItem(PathToUTF8(pack.stem()), ""s, info.kind, JSONSerializer::SanitizeFileName(PathToUTF8(pack.stem())));
          const string key = std::format("{:016x}", PackKey(pack));
          string stored;
          std::ifstream keyFile(thumbs / "key.txt");
@@ -711,7 +711,7 @@ uint64_t PartLibraryPanel::PackKey(const std::filesystem::path &pack)
       for (const std::filesystem::path &file : reader->ListFiles())
       {
          const string name = file.generic_string();
-         if (name.starts_with("thumbs/") || name.starts_with('.')) // The thumbnails themselves, VCS/OS files
+         if (name.starts_with("thumbs/") || std::ranges::any_of(file, [](const std::filesystem::path &c) { return PathToUTF8(c).starts_with('.'); })) // The thumbnails, VCS/OS files
             continue;
          hash(name.data(), name.size());
          if (file.extension() == ".json")
@@ -722,8 +722,11 @@ uint64_t PartLibraryPanel::PackKey(const std::filesystem::path &pack)
          }
          else
          {
+            // Size and modification time: an edited uncompressed image keeps its size
             const uint64_t size = std::filesystem::file_size(pack / file, ec);
+            const int64_t time = std::filesystem::last_write_time(pack / file, ec).time_since_epoch().count();
             hash(&size, sizeof(size));
+            hash(&time, sizeof(time));
          }
       }
    }
