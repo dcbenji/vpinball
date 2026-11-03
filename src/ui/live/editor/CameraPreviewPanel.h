@@ -37,6 +37,7 @@ public:
    // Layout leaf whose settings the panel shows (and writes back on every change), -1 if none
    int GetLeaf() const { return m_leafId; }
    void Bind(int leafId, int previewView, const AreaViewSettings &settings);
+   bool IsOnSchedule() const { return m_onSchedule; } // Last frame: Live on, an image shown and not refused by the PBR cap (renders on its rank's frames)
    void SetRank(int rank) { m_rank = rank; } // Rank among the shown views of the same shading (PBR / Wireframe), sets the render phase
 
    // View setup shown by the Player camera: -1 = Auto (the one the player uses, the table's active view mode), else BG_DESKTOP / BG_FULLSCREEN / BG_FSS.
@@ -76,6 +77,7 @@ private:
    int m_width = 0, m_height = 0; // Requested render size (px)
    int m_pendingWidth = 0, m_pendingHeight = 0, m_pendingFrames = 0;
    int m_rank = 0;
+   bool m_onSchedule = false;
 };
 
 }

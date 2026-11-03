@@ -1788,7 +1788,7 @@ void EditorUI::RenderAreas()
                if (m_cameraPreviews[k].GetLeaf() != leaf.id)
                   m_cameraPreviews[k].Bind(leaf.id, node->previewView, node->view);
                // Render phase: rank among the shown views of the same shading that render, in leaf order (no two views of a class on the same frame).
-               // A PBR view refused by the 2 PBR view cap takes no rank
+               // Views off the regular schedule (Live off, too small, refused by the 2 PBR view cap) take no rank
                int rank = 0;
                for (const LeafRect &other : leaves)
                {
@@ -1797,12 +1797,12 @@ void EditorUI::RenderAreas()
                   const AreaNode *const o = other.visible && other.type == AreaEditor::CameraPreview ? m_areas.Find(other.id) : nullptr;
                   if (o == nullptr || o->view.wireframe != node->view.wireframe)
                      continue;
-                  bool refused = false;
-                  if (!o->view.wireframe)
-                     for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
-                        if (m_cameraPreviews[i].GetLeaf() == other.id)
-                           refused = !m_renderer->CanRenderEditorPBRView(i);
-                  if (!refused)
+                  // Only views on the regular schedule take a rank (Live on, an image shown, not refused by the PBR cap: the panel's last frame)
+                  bool scheduled = false;
+                  for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
+                     if (m_cameraPreviews[i].GetLeaf() == other.id)
+                        scheduled = m_cameraPreviews[i].IsOnSchedule() && (o->view.wireframe || m_renderer->CanRenderEditorPBRView(i));
+                  if (scheduled)
                      rank++;
                }
                m_cameraPreviews[k].SetRank(rank);

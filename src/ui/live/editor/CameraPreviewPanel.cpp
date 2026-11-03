@@ -272,6 +272,7 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
 void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
    m_camMoved = false;
+   m_onSchedule = false;
    const AreaViewSettings before = m_settings;
    const int viewBefore = m_view;
    char windowName[32];
@@ -441,6 +442,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = true;
          Renderer *const renderer = m_editor.m_renderer.get();
          const bool pbrRefused = !m_settings.wireframe && !renderer->CanRenderEditorPBRView(m_slot);
+         m_onSchedule = m_settings.live && !pbrRefused;
          // The views alternate on the half rate frames (2 PBR views cost one view per frame); a wireframe view renders every 4th frame (the editor's
          // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
          // being moved renders every frame
