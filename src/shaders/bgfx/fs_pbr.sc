@@ -444,6 +444,8 @@ vec3 pbr_transmit(const vec3 wPos, const vec3 wN, const vec3 wI, const float rou
 // are choked, w' = w * min(1, (w / core)^(e - 1)) (e = 1 at width 1: w' = w exactly). A plain pow(w, e) lowered the band's
 // peak too wherever it stays below 1 (wall-top bevels, fillets), so width dimmed instead of narrowing (Ben 11-01). The
 // scatter and rim gains stay the only intensity knobs. A band whose own peak is below the core still thins toward it.
+// Width 0 = no band at all (scatter floor only, no rim): the core would otherwise keep a band at any exponent (round 7: the
+// band then comes from a separate cut-face mesh/material).
 // PRES_LIT_K = 1.0: lit is in the linear radiance of a white Lambert sheet, 1.0 = lit to display white before tonemapping.
 #define PRES_LOC_R 60.0
 #define PRES_LOC_DMIN 10.0
@@ -1417,7 +1419,7 @@ void main() {
                {
                   const float litL = dot(lit, vec3(0.2126, 0.7152, 0.0722));
                   const float litN = litL / (litL + PRES_LIT_K);
-                  const float invW = 1.0 / pbrPresence2.w;
+                  const float invW = 1.0 / max(pbrPresence2.w, 0.05); // width 0 (no band) is zeroed below
                   bandE = invW * (1.0 + (invW - 1.0) * (1.0 - litN));
                }
                // Scatter saturation (0..2, 1 = as is): chroma of the light in the scatter and rim lobes (0 = grey of the same
@@ -1427,7 +1429,8 @@ void main() {
                   const float litY = dot(lit, vec3(0.2126, 0.7152, 0.0722));
                   lit = max(vec3_splat(litY) + (lit - litY) * pbrPresence3.y, vec3_splat(0.0));
                }
-               const float edgeBend = pbr_band_choke(max(edge, bend), bandE);
+               const float bandOn = pbrPresence2.w > 0.0 ? 1.0 : 0.0; // scatter width 0 = no band (and no rim)
+               const float edgeBend = bandOn * pbr_band_choke(max(edge, bend), bandE);
                // Dense edge: at the edge-on limit the look-through saturates into an opaque scatter surface (rough cut edge,
                // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));
@@ -1438,7 +1441,7 @@ void main() {
                // width < 1 chokes the band's flanks (exponent 1/width on the weight bend*edge below the core, the core keeps its
                // brightness); the scatter width exponent applies on top, so rim and scatter band choke together
                const float rimE = (1.0 / pbrPresence2.x) * bandE;
-               const float rimW = pbr_band_choke(bend * edge, rimE);
+               const float rimW = bandOn * pbr_band_choke(bend * edge, rimE);
                spec += (pbrScatter * wear * pbrPresence.z * rimW) * lit;
                // The lit playfield mirrored in the underside and the walls: a mirror ray going down meets the playfield plane;
                // the refraction probe (the scene behind, lit) holds the playfield there, so it replaces the env's floor

@@ -932,7 +932,7 @@ void Shader::SetTechniqueMaterial(
       const vec4 absorption = convertColor(mat.m_cAbsorption, max(mat.m_fAbsorption, 0.f));
       SetVector(ShaderUniform::pbrAbsorption, &absorption);
       SetVector(ShaderUniform::pbrPresence, saturate(mat.m_fScatterFloor), max(mat.m_fScatterEnv, 0.f), max(mat.m_fRimGain, 0.f), max(mat.m_fDenseAlbedo, 0.f));
-      SetVector(ShaderUniform::pbrPresence2, clamp(mat.m_fRimWidth, 0.05f, 1.f), max(mat.m_fBevelBright, 0.f), saturate(mat.m_fScatterLocality), clamp(mat.m_fScatterWidth, 0.05f, 1.f));
+      SetVector(ShaderUniform::pbrPresence2, clamp(mat.m_fRimWidth, 0.05f, 1.f), max(mat.m_fBevelBright, 0.f), saturate(mat.m_fScatterLocality), mat.m_fScatterWidth <= 0.f ? 0.f : clamp(mat.m_fScatterWidth, 0.05f, 1.f)); // width 0 = no band
       SetVector(ShaderUniform::pbrPresence3, saturate(mat.m_fAbsorptionLightTint), max(mat.m_fScatterSaturation, 0.f), 0.f, 0.f);
       // VPX_PBR_TI=0: the old routing (transparent parts on the opaque in-shader technique without the prepass), for A/B
       static const bool transparentInShader = []() { const char* const v = std::getenv("VPX_PBR_TI"); return v == nullptr || v[0] != '0'; }();
