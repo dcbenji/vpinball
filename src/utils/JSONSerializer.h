@@ -54,6 +54,8 @@ public:
       // All files of the pack, as paths relative to the pack root
       virtual std::vector<std::filesystem::path> ListFiles() const = 0;
       virtual bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& data) const = 0;
+      // The name an asset of the pack ends up with when the deserializer renames assets (import): the given name when it is not renamed (case insensitive)
+      virtual std::string RenamedAsset(const std::filesystem::path& folder, const std::string& name) const { return name; }
       bool ReadTextFile(const std::filesystem::path& path, std::string& content) const
       {
          std::vector<uint8_t> data;

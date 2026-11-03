@@ -3502,6 +3502,15 @@ public:
 
    bool Exists(const std::filesystem::path &path) const override { return m_files.contains(path); }
 
+   string RenamedAsset(const std::filesystem::path &folder, const string &name) const override
+   {
+      const auto folderIt = m_renames.find(folder);
+      if (folderIt != m_renames.end())
+         if (const auto it = folderIt->second.find(lowerCase(name)); it != folderIt->second.end())
+            return it->second;
+      return name;
+   }
+
    std::vector<std::filesystem::path> ListFiles() const override
    {
       std::vector<std::filesystem::path> files;
