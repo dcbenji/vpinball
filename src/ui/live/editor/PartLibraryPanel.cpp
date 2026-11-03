@@ -1520,6 +1520,14 @@ void PartLibraryPanel::RenderLightbox()
       CloseLightbox();
       return;
    }
+   // Kept inside the editor window every frame (it may have opened before the window got its size, or be resized smaller since): the size is capped by the
+   // constraints above, the position here
+   {
+      const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+      const ImVec2 clamped(clamp(pos.x, 0.f, max(0.f, io.DisplaySize.x - size.x)), clamp(pos.y, 0.f, max(0.f, io.DisplaySize.y - size.y)));
+      if (clamped.x != pos.x || clamped.y != pos.y)
+         ImGui::SetWindowPos(clamped);
+   }
    // Esc or a click outside closes it
    if (!open || ImGui::IsKeyPressed(ImGuiKey_Escape) || (!justOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)))
    {
