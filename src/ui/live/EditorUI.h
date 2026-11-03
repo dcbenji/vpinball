@@ -109,6 +109,7 @@ private:
    ConvertToPBRModal m_pbrConvertModal;
    PartLibraryPanel m_partLibrary;
    CameraPreviewPanel m_cameraPreviews[AreaLayout::kMaxViewLeaves]; // Secondary 3D views, one per renderer view slot, bound to the Camera Preview leaves shown (see RenderAreas)
+   bool IsSecondaryViewEditDrag() const; // An interactive edit runs: the secondary views render on their schedule (see RenderAreas)
    bool m_secondaryViewHovered = false; // A secondary view is under the mouse: the 3D Viewport leaves it the view keys (numpad, F, Home, Z, G / R / S)
    ScriptPanel m_scriptPanel;
    PinnedPanel m_pinned; // Floating overlay of pinned properties

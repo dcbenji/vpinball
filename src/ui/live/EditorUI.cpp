@@ -1720,6 +1720,15 @@ void EditorUI::RenderAreaModal()
    }
 }
 
+bool EditorUI::IsSecondaryViewEditDrag() const
+{
+   // An interactive edit (gizmo drag, G/R/S modal transform, field drag; not a focused text field, not the navigation of a secondary view: its image
+   // or header is an active item of a CAMERAPREVIEW window) keeps one undo record from its start: the secondary views render while it runs
+   const ImGuiWindow *const activeWindow = ImGui::GetCurrentContext()->ActiveIdWindow;
+   const bool viewActive = activeWindow != nullptr && strncmp(activeWindow->RootWindow->Name, "CAMERAPREVIEW", 13) == 0;
+   return ImGuizmo::IsUsingAny() || m_modal.active || (ImGui::IsAnyItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !viewActive);
+}
+
 bool EditorUI::BeginAreaWindow(const char *const name, const ImVec2 &pos, const ImVec2 &size)
 {
    const float pad = 4.0f * m_liveUI.GetDPI();
@@ -1753,6 +1762,27 @@ void EditorUI::RenderAreas()
    const vector<LeafRect> leaves = m_leafRects;
    bool propertiesDrawn = false;
    bool viewDrawn[AreaLayout::kMaxViewLeaves] = {};
+   // Render schedule, one rule for every case: the shown views that want to render periodically this frame (Live on or an edit drag in progress, an image
+   // shown, not refused by the 2 PBR view cap) are ranked within their class (PBR, wireframe) in leaf order; the rank sets the phase (CameraPreviewPanel).
+   // One-shot renders (Refresh, end of an edit, undo, camera moves) are outside the schedule
+   std::map<int, int> viewRanks;
+   {
+      const bool editDrag = IsSecondaryViewEditDrag();
+      int classRank[2] = {};
+      for (const LeafRect &l : leaves)
+      {
+         const AreaNode *const o = l.visible && l.type == AreaEditor::CameraPreview ? m_areas.Find(l.id) : nullptr;
+         if (o == nullptr || !(o->view.live || editDrag))
+            continue;
+         int slot = -1;
+         for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
+            if (m_cameraPreviews[i].GetLeaf() == l.id)
+               slot = i;
+         if (slot >= 0 && (!m_cameraPreviews[slot].HasImage() || (!o->view.wireframe && !m_renderer->CanRenderEditorPBRView(slot))))
+            continue;
+         viewRanks[l.id] = classRank[o->view.wireframe ? 1 : 0]++;
+      }
+   }
    const auto isShownViewLeaf = [&leaves](const int id) {
       return id >= 0 && std::any_of(leaves.begin(), leaves.end(), [id](const LeafRect &l) { return l.visible && l.id == id && l.type == AreaEditor::CameraPreview; });
    };
@@ -1787,24 +1817,8 @@ void EditorUI::RenderAreas()
             {
                if (m_cameraPreviews[k].GetLeaf() != leaf.id)
                   m_cameraPreviews[k].Bind(leaf.id, node->previewView, node->view);
-               // Render phase: rank among the shown views of the same shading that render, in leaf order (no two views of a class on the same frame).
-               // Views off the regular schedule (Live off, too small, refused by the 2 PBR view cap) take no rank
-               int rank = 0;
-               for (const LeafRect &other : leaves)
-               {
-                  if (other.id == leaf.id)
-                     break;
-                  const AreaNode *const o = other.visible && other.type == AreaEditor::CameraPreview ? m_areas.Find(other.id) : nullptr;
-                  if (o == nullptr || o->view.wireframe != node->view.wireframe)
-                     continue;
-                  // Only views on the regular schedule take a rank (Live on, an image shown, not refused by the PBR cap: the panel's last frame)
-                  bool scheduled = false;
-                  for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
-                     if (m_cameraPreviews[i].GetLeaf() == other.id)
-                        scheduled = m_cameraPreviews[i].IsOnSchedule() && (o->view.wireframe || m_renderer->CanRenderEditorPBRView(i));
-                  if (scheduled)
-                     rank++;
-               }
+               const auto r = viewRanks.find(leaf.id);
+               const int rank = r != viewRanks.end() ? r->second : 0;
                m_cameraPreviews[k].SetRank(rank);
                m_cameraPreviews[k].RenderInArea(pos, size);
                viewDrawn[k] = true;
