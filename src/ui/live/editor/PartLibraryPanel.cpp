@@ -1508,10 +1508,12 @@ void PartLibraryPanel::RenderLightbox()
    {
       ImGui::OpenPopup("###PartLibLightbox");
       m_lbOpening = false;
-      ImGui::SetNextWindowSize(ImVec2(480.f * dpi, (m_lbItem.kind == ItemKind::Insert ? 720.f : 520.f) * dpi), ImGuiCond_Appearing);
+      // An insert has its controls in a column beside the preview (wider, not taller); never more than 90% of the display
+      const bool wide = m_lbItem.kind == ItemKind::Insert;
+      ImGui::SetNextWindowSize(ImVec2(min((wide ? 800.f : 480.f) * dpi, 0.9f * io.DisplaySize.x), min((wide ? 560.f : 520.f) * dpi, 0.9f * io.DisplaySize.y)), ImGuiCond_Appearing);
       ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
    }
-   ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(FLT_MAX, FLT_MAX));
+   ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(0.9f * io.DisplaySize.x, 0.9f * io.DisplaySize.y));
    bool open = true;
    if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
    {
@@ -1615,6 +1617,13 @@ void PartLibraryPanel::RenderLightbox()
    ImGui::TextDisabled("%s", kKinds[static_cast<int>(m_lbItem.kind)]);
    ImGui::TextDisabled("%d part(s), %d material(s), %d image(s)%s%s", m_lbInfo.parts, m_lbInfo.materials, m_lbInfo.images, m_lbItem.material.empty() ? "" : ", material ", m_lbItem.material.c_str());
 
+   // An insert's controls: a column left of the preview
+   const bool column = m_lbItem.kind == ItemKind::Insert;
+   if (column)
+   {
+      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing()), ImGuiChildFlags_None);
+      ImGui::PushItemWidth(-135.f * dpi);
+   }
    // Insert states, through the pack's own Light
    if (m_lbItem.kind == ItemKind::Insert)
    {
@@ -1689,6 +1698,12 @@ void PartLibraryPanel::RenderLightbox()
    }
    if (ImGui::Button("Reset View") && m_lbScratch != nullptr)
       FrameLightbox(true);
+   if (column)
+   {
+      ImGui::PopItemWidth();
+      ImGui::EndChild();
+      ImGui::SameLine();
+   }
 
    // The light fades are stepped while the lightbox is open, and re-rendered only while they move (blinking: always)
    if (m_lbScratch != nullptr && !m_lbLights.empty())
