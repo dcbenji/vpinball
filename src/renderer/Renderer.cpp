@@ -5546,7 +5546,8 @@ void Renderer::Render3DScene()
    // Editor secondary views requested by the UI of the previous frame: rendered before the UI pass which samples them (desktop, non stereo only)
    bool editorViewRendered[kMaxEditorViews] = {};
    for (int slot = 0; slot < kMaxEditorViews; slot++)
-      if (m_editorViews[slot].requested)
+      // An isolated request made before an info mode was turned on stays pending (the info post chain reads the live table's probes)
+      if (m_editorViews[slot].requested && !(m_editorViews[slot].request.isolated != nullptr && g_pplayer->GetInfoMode() != IF_NONE))
       {
          m_editorViews[slot].requested = false;
          if (g_pplayer->m_vrDevice == nullptr && m_stereo3D == STEREO_OFF && !uiBeforeStero && xrUILayer == nullptr)
@@ -6019,9 +6020,18 @@ void Renderer::RenderEditorView(const int slot)
       if (m_lookdevEnvSampler == nullptr)
       {
          const std::shared_ptr<BaseTexture> env = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "EnvMap.webp"));
-         const unsigned int irrHeight = min(env->height(), 256u) / 8;
-         m_lookdevIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Irradiance"s, EnvmapPrecalc(env, irrHeight * 2, irrHeight), false);
-         m_lookdevEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Env"s, env, false);
+         if (env != nullptr)
+         {
+            const unsigned int irrHeight = min(env->height(), 256u) / 8;
+            m_lookdevIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Irradiance"s, EnvmapPrecalc(env, irrHeight * 2, irrHeight), false);
+            m_lookdevEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Lookdev Env"s, env, false);
+         }
+         else
+         {
+            // Missing asset: the table's environment and irradiance
+            m_lookdevEnvSampler = m_envSampler;
+            m_lookdevIrradianceSampler = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+         }
       }
       // Swapped for the pass, restored below: environment, light count 0 (no Forward+ light, so no VSM or flasher cache shadow either), no playfield shadow cache
       mainEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_env);

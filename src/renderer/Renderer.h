@@ -603,7 +603,7 @@ private:
    std::shared_ptr<Sampler> m_aoDitherSampler = nullptr;
 
    std::shared_ptr<Sampler> m_envSampler = nullptr;
-   std::shared_ptr<Sampler> m_lookdevEnvSampler, m_lookdevIrradianceSampler; // Part library previews (EditorViewRequest::isolated), created on first use
+   std::shared_ptr<const Sampler> m_lookdevEnvSampler, m_lookdevIrradianceSampler; // Part library previews (EditorViewRequest::isolated), created on first use
    std::shared_ptr<Sampler> m_ballEnvSampler = nullptr;
 
    bool m_ss_refl;
