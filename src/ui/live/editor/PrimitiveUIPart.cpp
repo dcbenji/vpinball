@@ -211,7 +211,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Cull Back Faces"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_cullBackfaces; }, //
          [](Primitive* primitive, bool v) { primitive->m_d.m_cullBackfaces = v; },
-         "Draw front faces only when Depth Mask is off; use for closed, double-walled transparent meshes");
+         "Draw front faces only when Depth Mask is off; use for closed, double-walled transparent meshes. Also sorts its triangles back to front for the camera.");
       props.Checkbox<Primitive>(
          m_part, "Additive Blend"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_addBlend; }, //

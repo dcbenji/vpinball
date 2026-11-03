@@ -871,8 +871,11 @@ void Primitive::RenderSetup(Renderer *renderer)
    if (m_mesh.NumVertices() > 0 && !m_mesh.m_indices.empty())
    {
       std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, (unsigned int)m_mesh.NumVertices(), nullptr, !(m_d.m_staticRendering || m_mesh.m_animationFrames.empty()));
-      std::shared_ptr<IndexBuffer> indexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_mesh.m_indices);
+      // Sorted parts get an updatable index buffer, all others keep the static one
+      std::shared_ptr<IndexBuffer> indexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_mesh.m_indices, WantsTriangleSort());
       m_meshBuffer = std::make_shared<MeshBuffer>(GetName(), vertexBuffer, indexBuffer, true);
+      m_sortValid = false;
+      m_sortCentroids.clear();
 
       // Compute and upload mesh to let a chance for renderdevice to share the buffers with other static objects
       RecalculateMatrices();
@@ -977,6 +980,72 @@ void Primitive::UploadMeshToVB(const std::shared_ptr<VertexBuffer>& vb)
    vb->Lock(buf);
    memcpy(buf, verts.data(), sizeof(Vertex3D_NoTex2) * nv);
    vb->Unlock();
+}
+
+// Cull Back Faces parts drawn blended (no depth mask, see-through material or refraction probe) are taken as closed
+// double-walled transparent shells: their front faces are drawn back to front (SortTrianglesForCamera)
+bool Primitive::WantsTriangleSort() const
+{
+   const Material *const mat = m_ptable->GetMaterial(m_d.m_szMaterial);
+   return m_d.m_cullBackfaces && !m_d.m_useDepthMask && !m_d.m_addBlend && !IsFlasherDome() && m_mesh.m_animationFrames.empty()
+      && (mat->m_bOpacityActive || !m_d.m_szRefractionProbe.empty());
+}
+
+// Orders the index buffer far to near by triangle centroid distance from the camera (stereo: the eyes' midpoint, as both eyes
+// are drawn by one instanced call). Distance does not depend on the camera rotation, so only a camera move of more than
+// 1 VPU (or a part move) re-sorts, at most once every 4 frames: once per table load in play, throttled while the editor orbits.
+// ponytail: runs inline on the render thread (35k triangles ~0.45 ms on an M-series core); a worker if parts get much bigger.
+void Primitive::SortTrianglesForCamera()
+{
+   const ModelViewProj &mvp = m_renderer->GetMVP();
+   const vec4 &c0 = mvp.GetCameraPos(0), &c1 = mvp.GetCameraPos(mvp.m_nEyes - 1);
+   const Vertex3Ds cam(0.5f * (c0.x + c1.x), 0.5f * (c0.y + c1.y), 0.5f * (c0.z + c1.z));
+   const bool partMoved = memcmp(m_sortMatrix.m, m_fullMatrix.m, sizeof(m_fullMatrix.m)) != 0;
+   const unsigned int frame = g_pplayer->m_overall_frames;
+   if (m_sortValid && (frame - m_sortFrame < 4 || (!partMoved && (cam - m_sortCameraPos).LengthSquared() < 1.f)))
+      return;
+
+   const auto start = std::chrono::high_resolution_clock::now();
+   const size_t nt = m_mesh.NumIndices() / 3;
+   if (partMoved || m_sortCentroids.size() != nt)
+   {
+      m_sortCentroids.resize(nt);
+      for (size_t t = 0; t < nt; t++)
+      {
+         const Vertex3D_NoTex2 &a = m_mesh.m_vertices[m_mesh.m_indices[t * 3]], &b = m_mesh.m_vertices[m_mesh.m_indices[t * 3 + 1]], &c = m_mesh.m_vertices[m_mesh.m_indices[t * 3 + 2]];
+         m_sortCentroids[t] = m_fullMatrix * Vertex3Ds((a.x + b.x + c.x) * (float)(1. / 3.), (a.y + b.y + c.y) * (float)(1. / 3.), (a.z + b.z + c.z) * (float)(1. / 3.));
+      }
+      m_sortMatrix = m_fullMatrix;
+   }
+   // Key: the squared distance's float bits (monotonic for positive floats), inverted for far first, over the triangle index
+   vector<uint64_t> keys(nt);
+   for (size_t t = 0; t < nt; t++)
+   {
+      const float d2 = (m_sortCentroids[t] - cam).LengthSquared();
+      uint32_t bits;
+      memcpy(&bits, &d2, sizeof(bits));
+      keys[t] = (static_cast<uint64_t>(~bits) << 32) | static_cast<uint64_t>(t);
+   }
+   std::sort(keys.begin(), keys.end());
+   const unsigned int ofs = m_meshBuffer->m_isVBOffsetApplied ? m_meshBuffer->m_vb->GetVertexOffset() : 0;
+   uint32_t *idx;
+   m_meshBuffer->m_ib->Lock(idx);
+   for (size_t t = 0; t < nt; t++)
+   {
+      const unsigned int *const src = &m_mesh.m_indices[(keys[t] & 0xFFFFFFFFu) * 3];
+      idx[t * 3] = src[0] + ofs;
+      idx[t * 3 + 1] = src[1] + ofs;
+      idx[t * 3 + 2] = src[2] + ofs;
+   }
+   m_meshBuffer->m_ib->Unlock();
+   if (!m_sortValid)
+   {
+      PLOGI << "Primitive " << GetName() << ": " << nt << " triangles sorted back to front in "
+            << std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - start).count() << " ms";
+   }
+   m_sortCameraPos = cam;
+   m_sortFrame = frame;
+   m_sortValid = true;
 }
 
 void Primitive::RenderRelease()
@@ -1332,6 +1401,10 @@ void Primitive::Render(const unsigned int renderMask)
    RenderTarget *const refractions = refraction_probe ? refraction_probe->Render(renderMask) : nullptr;
 
    const bool depthMask = m_d.m_useDepthMask && !m_d.m_addBlend;
+
+   // Not in the reflection pass: its camera is mirrored below the playfield
+   if (!m_meshBuffer->m_ib->m_isStatic && !isReflectionPass && WantsTriangleSort())
+      SortTrianglesForCamera();
 
    RenderState::RenderStateValue cullMode = m_renderer->m_renderDevice->GetRenderState().GetRenderState(RenderState::CULLMODE);
    RenderState::RenderStateValue reversedCullMode = cullMode == RenderState::CULL_CCW ? RenderState::CULL_CW : RenderState::CULL_CCW;
