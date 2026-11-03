@@ -1013,7 +1013,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
             }
          }
          #endif
-         // Test switches (pbrShadowCacheDraw, env-gated, defaults = as is): for wide cube lights (range >= w, the flashers),
+         // Flasher shadow settings (pbrShadowCacheDraw, PBRFlashSoftness/PBRFlashSeeThru: default hard, none on see-through): for wide cube lights (range >= w, the flashers),
          // y >= 0 replaces the penumbra radius (bulb radius stays for the hot spot and specular; 0 = hard, 1 texel), and z on
          // a see-through draw: 1 = hard, 2 = no shadow lookup
          float penumbra = lightRadius;

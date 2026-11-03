@@ -3630,7 +3630,9 @@ void Renderer::UpdatePBRShadowCache()
          const float range = PBRLightRange(l), penumbra = (float)PBRPenumbraHalfUnits(l) * 0.5f, sphereRadius = PBRLightSphereRadius(l);
          const VSM::LightMap& map = m_vsmLights[slot];
          shader->SetVector(ShaderUniform::pbrShadowBakeLight, pos.x, pos.y, pos.z, range);
-         shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, penumbra, 0.f, 0.f);
+         // Same penumbra as the live path (pbr_direct_light's flasher softness override), so cached and live shadows match
+         const float bakePenumbra = (PBRFlashSoftness() >= 0.f && range >= PBRFlashShadowRange()) ? PBRFlashSoftness() : penumbra;
+         shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, bakePenumbra, 0.f, 0.f);
          shader->SetVector(ShaderUniform::pbrShadowBakeMap, e.map.x, e.map.y, e.map.z, 0.f);
          shader->SetVector(ShaderUniform::pbrShadowBakeRect, (float)e.x0 / (float)L, (float)e.y0 / (float)L, (float)(e.x0 + e.w) / (float)L, (float)(e.y0 + e.h) / (float)L);
          // The light's pbrVSMParams entry (UpdateVirtualShadowMaps leaves a parked light's empty)

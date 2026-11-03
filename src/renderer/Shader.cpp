@@ -933,13 +933,10 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), pbrMaps->ownLampRadius);
-      // Flasher shadow test switches (off by default): VPX_FLASH_SOFTNESS = penumbra radius in VPU for wide cube lights (range >=
-      // VPX_FLASH_SHADOW_RANGE, default 600) instead of the bulb radius (0 = hard); VPX_FLASH_SEETHRU = 1 hard / 2 none on see-through parts
-      static const float flashSoftness = []() { const char* const v = std::getenv("VPX_FLASH_SOFTNESS"); return v ? (float)atof(v) : -1.f; }();
-      static const float flashSeeThru = []() { const char* const v = std::getenv("VPX_FLASH_SEETHRU"); return v ? (float)atof(v) : 0.f; }();
-      static const float flashRange = []() { const char* const v = std::getenv("VPX_FLASH_SHADOW_RANGE"); return v ? (float)atof(v) : 600.f; }();
-      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, flashSoftness, pbrMaps->transparent ? flashSeeThru : 0.f,
-         (flashSoftness >= 0.f || flashSeeThru > 0.f) ? flashRange : 1e30f);
+      // Flasher shadow settings (PBRFlashSoftness / PBRFlashSeeThru, Shader.h): y penumbra override (< 0 = bulb radius), z see-through
+      // mode of this draw, w the range from which a cube light counts as a flasher
+      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, PBRFlashSoftness(), pbrMaps->transparent ? PBRFlashSeeThru() : 0.f,
+         (PBRFlashSoftness() >= 0.f || PBRFlashSeeThru() > 0.f) ? PBRFlashShadowRange() : 1e30f);
       // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
       static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
       // z: see-through surface scatter (presence); absorption tint (colour, strength) in pbrAbsorption

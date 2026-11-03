@@ -1091,3 +1091,12 @@ private:
    int* m_stateOffsets; // Position of each uniform inside the state data block
    const bool m_useLowPrecision;
 };
+
+// Flasher (wide cube light) shadow settings, read once from the environment. Defaults: hard shadows (penumbra 0 = one shadow
+// texel, the bulb radius still sizes the hot spot and specular) and no flasher shadow lookup on see-through parts.
+// VPX_FLASH_SOFTNESS=<VPU> penumbra radius, -1 = the bulb radius (the former soft look); VPX_FLASH_SEETHRU = 0 full / 1 hard /
+// 2 none (default) on see-through parts; VPX_FLASH_SHADOW_RANGE = lights with at least this falloff count as flashers (600).
+inline float PBRFlashEnv(const char* const name, const float def) { const char* const v = std::getenv(name); return (v && v[0]) ? (float)atof(v) : def; }
+inline float PBRFlashSoftness() { static const float v = PBRFlashEnv("VPX_FLASH_SOFTNESS", 0.f); return v; }
+inline float PBRFlashSeeThru() { static const float v = PBRFlashEnv("VPX_FLASH_SEETHRU", 2.f); return v; }
+inline float PBRFlashShadowRange() { static const float v = PBRFlashEnv("VPX_FLASH_SHADOW_RANGE", 600.f); return v; }
