@@ -52,6 +52,13 @@ extern marker_series series;
 #endif
 
 std::atomic<int> g_perfVsmPages { 0 }; // VSM shadow pages rendered since the last VPX_PERF_LOG line (see RenderDevice)
+// VPX_FRAME_LOG (per-frame CSV, see RenderDevice): shadow pages, lit PBR lights and the summed level of the lights named in
+// VPX_FRAME_LOG_LIGHTS (comma separated, e.g. the ROM flashers), accumulated by the logic thread since the last logged frame
+std::atomic<int> g_frameVsmPages { 0 };
+std::atomic<int> g_frameLitLights { 0 };
+std::atomic<float> g_frameFlash { 0.f };
+std::atomic<int> g_frameCellOverflow { 0 }; // light grid cells holding more than maxPerCell lights (the extra ones are dropped)
+std::atomic<int> g_frameCellMax { 0 }; // most lights wanting one cell
 
 #define MAX_BALL_SHADOW 8
 
@@ -2648,11 +2655,52 @@ void Renderer::PreparePBRPasses()
    // Both are view independent (light space shadow pages over the table bounds, a world XY light grid): built once per frame by the main
    // scene, the editor secondary views (recorded after it in the same frame) reuse them
 #ifdef ENABLE_BGFX
+   // VPX_FLASH_TEST=<l1,l2,l3> (diagnostic): drive these lights on a fixed 8 s schedule, overriding the script/ROM, so perf
+   // runs compare identical flashes: 1-2 s l1, 3-4 s l2, 5-6 s l3, 6.5-7.5 s all three, each held at VPX_FLASH_TEST_LEVEL (0.45)
+   if (static const char* const flashTest = std::getenv("VPX_FLASH_TEST"); flashTest != nullptr)
+   {
+      static const float level = std::getenv("VPX_FLASH_TEST_LEVEL") ? (float)atof(std::getenv("VPX_FLASH_TEST_LEVEL")) : 0.45f;
+      static const uint64_t start = usec();
+      const float t = fmodf((float)((usec() - start) / 1000) / 1000.f, 8.f);
+      const string names = ","s + flashTest + ',';
+      vector<string> list;
+      for (size_t a = 1, e; (e = names.find(',', a)) != string::npos; a = e + 1)
+         if (e > a)
+            list.push_back(names.substr(a, e - a));
+      for (IEditable* const part : m_table->GetParts())
+         if (part->GetItemType() == eItemLight)
+            for (int i = 0; i < (int)list.size() && i < 3; i++)
+               if (part->GetName() == list[i])
+               {
+                  Light* const l = static_cast<Light*>(part);
+                  static const bool hold = std::getenv("VPX_FLASH_TEST_HOLD") != nullptr; // all on, for stills
+                  const bool on = hold || (t >= 1.f + 2.f * (float)i && t < 2.f + 2.f * (float)i) || (t >= 6.5f && t < 7.5f);
+                  l->m_currentIntensity = on ? level * l->m_d.m_intensity * l->m_d.m_intensity_scale : 0.f;
+               }
+   }
    if (!m_editorPreviewPass)
    {
       UpdateVirtualShadowMaps();
       UpdatePBRShadowCache();
       BuildPBRLightList();
+   }
+   static const char* const frameLogLights = std::getenv("VPX_FRAME_LOG") != nullptr ? std::getenv("VPX_FRAME_LOG_LIGHTS") : nullptr;
+   if (frameLogLights != nullptr)
+   {
+      const string names = ","s + frameLogLights + ',';
+      float flash = 0.f;
+      int lit = 0;
+      for (IEditable* const part : m_table->GetParts())
+         if (part->GetItemType() == eItemLight)
+         {
+            const Light* const l = static_cast<const Light*>(part);
+            if (l->m_d.m_type == LightType::PBR && l->m_currentIntensity > 0.f)
+               lit++;
+            if (l->m_d.m_intensity > 0.f && names.find(","s + part->GetName() + ',') != string::npos)
+               flash += l->m_currentIntensity / l->m_d.m_intensity;
+         }
+      g_frameFlash.store(flash);
+      g_frameLitLights.store(lit);
    }
 #endif
 
@@ -3360,6 +3408,7 @@ void Renderer::UpdateVirtualShadowMaps()
    }
 
    g_perfVsmPages += rendered;
+   g_frameVsmPages += rendered;
    if (!jobs.empty() || !m_vsmTouchedRTs.empty())
    {
       // Restore the camera matrices (the parts' RenderItem calls re-applied the space reference during the passes)
@@ -3936,6 +3985,17 @@ void Renderer::BuildPBRLightList()
          }
    }
 
+   if (static const bool frameLog = std::getenv("VPX_FRAME_LOG") != nullptr; frameLog)
+   {
+      int over = 0, most = 0;
+      for (int c = 0; c < cellCount; c++)
+      {
+         most = max(most, static_cast<int>(counts[c]));
+         over += counts[c] > maxPerCell ? 1 : 0;
+      }
+      g_frameCellOverflow.store(over);
+      g_frameCellMax.store(most);
+   }
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid, m_table->m_left, m_table->m_top, 1.f / cellSize, (float)cellsX);
    // z: specular AA strength (fs_pbr: the normal variance added to the GGX lobes), VPX_SPEC_AA=0 turns it off for A/B
    static const float specAA = std::getenv("VPX_SPEC_AA") ? (float)atof(std::getenv("VPX_SPEC_AA")) : 1.f;

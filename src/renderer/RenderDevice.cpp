@@ -344,6 +344,12 @@ colorFormat RenderDevice::BGFXtoVPXTextureFormat(bgfx::TextureFormat::Enum forma
 
 static const string& bgfxRendererName(const bgfx::RendererType::Enum type);
 extern std::atomic<int> g_perfVsmPages;
+extern std::atomic<int> g_frameVsmPages;
+extern std::atomic<int> g_frameLitLights;
+extern std::atomic<float> g_frameFlash;
+extern std::atomic<int> g_frameCellOverflow;
+extern std::atomic<int> g_frameCellMax;
+bool g_frameLogViewNames = false; // VPX_FRAME_LOG: name the bgfx views by render pass so the per-view GPU timings can be grouped
 
 #ifdef __EMSCRIPTEN__
 // A canvas can only be transferred once to a worker, so a single thread owns it for the whole application
@@ -1116,6 +1122,46 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
                   perfFrameSum = perfFrameMax = perfGpuSum = perfGpuMax = 0;
                   perfFrames = 0;
                }
+            }
+
+            // VPX_FRAME_LOG=<csv path>: one line per GPU frame (frame interval, GPU time, CPU sections, shadow pages, lit
+            // lights, flasher level and the GPU time per render pass group from bgfx's profiler). Diagnostic only.
+            static FILE* const frameLog = []() -> FILE*
+            {
+               const char* const path = getenv("VPX_FRAME_LOG");
+               if (path == nullptr)
+                  return nullptr;
+               FILE* const f = fopen(path, "w");
+               if (f)
+               {
+                  bgfx::setDebug(BGFX_DEBUG_PROFILER);
+                  g_frameLogViewNames = true;
+                  fprintf(f, "frame,t_ms,interval_ms,gpu_ms,submit_ms,wait_ms,prepare_ms,script_ms,physics_ms,draws,vsm_pages,lit,flash,cell_over,cell_max,views\n");
+               }
+               return f;
+            }();
+            static uint64_t frameLogLast = 0;
+            if (frameLog)
+            {
+               std::map<string, double> groups;
+               for (uint16_t v = 0; v < stats->numViews; v++)
+               {
+                  const bgfx::ViewStats& vs = stats->viewStats[v];
+                  string name = vs.name;
+                  name.erase(std::remove_if(name.begin(), name.end(), [](char c) { return (c >= '0' && c <= '9') || c == ',' || c == ';'; }), name.end());
+                  groups[name] += (double)(vs.gpuTimeEnd - vs.gpuTimeBegin) * 1000.0 / (double)stats->gpuTimerFreq;
+               }
+               string views;
+               for (const auto& [name, ms] : groups)
+                  if (ms >= 0.05)
+                     views += std::format("{}={:.2f};", name, ms);
+               const FrameProfiler& lp = g_pplayer->m_logicProfiler;
+               const FrameProfiler& rp = *g_pplayer->m_renderProfiler;
+               fprintf(frameLog, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%d,%d,%.3f,%d,%d,%s\n", lastGpuFrameNum, lastSyncTimestamp / 1000.0,
+                  frameLogLast ? (lastSyncTimestamp - frameLogLast) / 1000.0 : 0.0, m_lastGPUFrameLength / 1000.0, rp.GetPrev(FrameProfiler::PROFILE_RENDER_SUBMIT) / 1000.0,
+                  rp.GetPrev(FrameProfiler::PROFILE_RENDER_WAIT) / 1000.0, lp.GetPrev(FrameProfiler::PROFILE_PREPARE_FRAME) / 1000.0, lp.GetPrev(FrameProfiler::PROFILE_SCRIPT) / 1000.0,
+                  lp.GetPrev(FrameProfiler::PROFILE_PHYSICS) / 1000.0, stats->numDraw, g_frameVsmPages.exchange(0), g_frameLitLights.load(), g_frameFlash.load(), g_frameCellOverflow.load(), g_frameCellMax.load(), views.c_str());
+               frameLogLast = lastSyncTimestamp;
             }
          }
       }

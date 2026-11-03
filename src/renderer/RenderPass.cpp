@@ -260,6 +260,9 @@ bool RenderPass::Execute(const bool log)
    {
       m_rt->Activate();
       #if defined(ENABLE_BGFX)
+      extern bool g_frameLogViewNames;
+      if (g_frameLogViewNames)
+         bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.c_str());
       #if defined(_DEBUG)
       bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(1,']').c_str());
       #endif
@@ -272,6 +275,9 @@ bool RenderPass::Execute(const bool log)
       assert(m_singleLayerRendering < m_rt->m_nLayers);
       m_rt->Activate(m_singleLayerRendering);
       #if defined(ENABLE_BGFX)
+      extern bool g_frameLogViewNames;
+      if (g_frameLogViewNames)
+         bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.c_str());
       #if defined(_DEBUG)
       bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(" / Layer=").append(std::to_string(m_singleLayerRendering)).append(1,']').c_str());
       #endif
@@ -285,6 +291,9 @@ bool RenderPass::Execute(const bool log)
       {
          m_rt->Activate(layer);
          #if defined(ENABLE_BGFX)
+         extern bool g_frameLogViewNames;
+         if (g_frameLogViewNames)
+            bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.c_str());
          #if defined(_DEBUG)
          bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(" / Layer=").append(std::to_string(layer)).append(1,']').c_str());
          #endif
