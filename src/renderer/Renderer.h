@@ -338,9 +338,11 @@ public:
    const class Light* m_vsmShadowLight = nullptr; // light whose shadow map pages are being rendered (a flasher dome stays out of its own lamp's map)
 #endif
 
+public:
+   void RenderItem(IEditable* const renderable, bool isNoBackdrop); // Used by the live editor library placement preview
+
 private:
    void SetSpaceReference(PartGroupData::SpaceReference spaceReference, bool force);
-   void RenderItem(IEditable* const renderable, bool isNoBackdrop);
    void RenderStatics(); // Render background, then static parts if IsUsingStaticPrepass
    void PreparePBRPasses(); // Record PBR sideband clear and early AO passes when PBR is active
    void AddPBRShadowDependencies(); // Order this frame's shadow page passes before the (just created) scene pass (no-op without BGFX)
