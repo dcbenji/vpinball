@@ -712,20 +712,24 @@ void RenderDevice::BGFXOpenXRRenderLoop(const bgfx::Init& init)
    }
 }
 
-void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename)
+#endif
+
+void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, const bool direct)
 {
    const uint16_t width = static_cast<uint16_t>(vrRenderTarget->GetWidth());
    const uint16_t height = static_cast<uint16_t>(vrRenderTarget->GetHeight());
-   if (bgfx::isValid(m_vrScreenshotTex) && (m_vrScreenshotWidth != width || m_vrScreenshotHeight != height))
+   const bool rgb10 = vrRenderTarget->GetColorFormat() == colorFormat::RGBA10; // A blit keeps the format: an RGBA10 back buffer is converted on save
+   if (bgfx::isValid(m_vrScreenshotTex) && (m_vrScreenshotWidth != width || m_vrScreenshotHeight != height || m_vrScreenshotRGB10 != rgb10))
    {
       bgfx::destroy(m_vrScreenshotTex);
       m_vrScreenshotTex = BGFX_INVALID_HANDLE;
    }
    if (!bgfx::isValid(m_vrScreenshotTex))
    {
-      m_vrScreenshotTex = bgfx::createTexture2D(width, height, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+      m_vrScreenshotTex = bgfx::createTexture2D(width, height, false, 1, rgb10 ? bgfx::TextureFormat::RGB10A2 : bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
       m_vrScreenshotWidth = width;
       m_vrScreenshotHeight = height;
+      m_vrScreenshotRGB10 = rgb10;
       m_vrScreenshotData.resize(static_cast<size_t>(width) * height * 4);
    }
    NextView();
@@ -742,6 +746,7 @@ void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::
    bgfx::blit(m_activeViewId, dst, src);
    m_vrScreenshotReadyFrame = bgfx::read(dst, m_vrScreenshotData.data());
    m_vrScreenshotFilename = filename;
+   m_vrScreenshotDirect = direct;
 }
 
 void RenderDevice::ProcessVRScreenshot()
@@ -750,11 +755,33 @@ void RenderDevice::ProcessVRScreenshot()
       return;
    const std::filesystem::path filename = m_vrScreenshotFilename;
    m_vrScreenshotFilename.clear();
+   if (m_vrScreenshotDirect)
+   {
+      if (auto tex = BaseTexture::Create(m_vrScreenshotWidth, m_vrScreenshotHeight, BaseTexture::SRGBA); tex)
+      {
+         uint8_t* const dst = static_cast<uint8_t*>(tex->data());
+         if (m_vrScreenshotRGB10)
+            for (size_t i = 0; i < static_cast<size_t>(m_vrScreenshotWidth) * m_vrScreenshotHeight; i++)
+            {
+               const uint32_t c = reinterpret_cast<const uint32_t*>(m_vrScreenshotData.data())[i];
+               dst[i * 4 + 0] = static_cast<uint8_t>((c & 1023u) >> 2);
+               dst[i * 4 + 1] = static_cast<uint8_t>(((c >> 10) & 1023u) >> 2);
+               dst[i * 4 + 2] = static_cast<uint8_t>(((c >> 20) & 1023u) >> 2);
+               dst[i * 4 + 3] = static_cast<uint8_t>((c >> 30) * 85u);
+            }
+         else
+            memcpy(dst, m_vrScreenshotData.data(), m_vrScreenshotData.size());
+         if (bgfx::getCaps()->originBottomLeft)
+            tex->FlipY();
+         tex->Save(filename);
+      }
+      m_directScreenshotCount++;
+      return;
+   }
    const string path = PathToUTF8(filename);
    OnScreenshotCaptured(path.c_str(), m_vrScreenshotWidth, m_vrScreenshotHeight, m_vrScreenshotWidth * 4, bgfx::TextureFormat::RGBA8, m_vrScreenshotData.data(),
       static_cast<uint32_t>(m_vrScreenshotData.size()), false);
 }
-#endif
 
 void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
 {
@@ -996,6 +1023,7 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
          lastSubmitTimestamp = now;
          g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_FLIP);
          Flip();
+         ProcessVRScreenshot(); // Part library thumbnails, read back once their frame is presented (nothing to do otherwise)
          g_pplayer->m_renderProfiler->ExitProfileSection();
          // Split time spent in Flip between GPU submission and time spent in GPU present
          if (!(syncMode == VideoSyncMode::VSM_FRAME_PACING && waitableSwapchain))
@@ -1185,6 +1213,11 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
             }
          }
       }
+   }
+   if (bgfx::isValid(m_vrScreenshotTex))
+   {
+      bgfx::destroy(m_vrScreenshotTex);
+      m_vrScreenshotTex = BGFX_INVALID_HANDLE;
    }
 
 #if BX_PLATFORM_WINDOWS

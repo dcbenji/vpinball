@@ -290,16 +290,24 @@ private:
    std::function<void(bool)> m_screenshotCallback = [](bool) { };
    #if defined(ENABLE_BGFX)
    void OnScreenshotCaptured(const char* filePath, uint32_t width, uint32_t height, uint32_t pitch, bgfx::TextureFormat::Enum format, const void* data, uint32_t size, bool yflip);
-   #if defined(ENABLE_XR)
-   void RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename);
+
+public:
+   // Render target read back to a file, render thread only. VR screenshots, and (direct = true) the editor part library thumbnails on desktop:
+   // saved as is, outside of the screenshot request bookkeeping, then m_directScreenshotCount is incremented (read by the logic thread)
+   // ponytail: named after its first user, rename if more users come
+   void RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, bool direct = false);
+   std::atomic<uint32_t> m_directScreenshotCount { 0 };
+
+private:
    void ProcessVRScreenshot();
    bgfx::TextureHandle m_vrScreenshotTex = BGFX_INVALID_HANDLE;
    vector<uint8_t> m_vrScreenshotData;
    uint32_t m_vrScreenshotReadyFrame = 0;
    uint16_t m_vrScreenshotWidth = 0;
    uint16_t m_vrScreenshotHeight = 0;
+   bool m_vrScreenshotRGB10 = false;
+   bool m_vrScreenshotDirect = false;
    std::filesystem::path m_vrScreenshotFilename;
-   #endif
    #endif
 
    uint64_t m_presentTimestampReference = 0;
