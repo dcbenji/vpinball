@@ -45,5 +45,21 @@ int main()
    for (unsigned k : i)
       assert(k < v.size());
    assert(!BuildWireform<V>(std::vector<P> { { 0, 0, 0 } }, 3.f, 8, 1, 12.f, Caps::None, v, i));
+   // Path through an exactly vertical tangent: every ring must keep the full radius
+   v.clear(); i.clear();
+   const std::vector<P> bent { { 0, 0, 0 }, { 10, 0, 0 }, { 10, 0, 10 }, { 10, 10, 10 } };
+   assert(BuildWireform<V>(bent, 1.f, 8, 1, 12.f, Caps::None, v, i));
+   assert(v.size() == 4 * 8);
+   for (size_t r = 0; r < 4; r++)
+   {
+      float cx = 0, cy = 0, cz = 0;
+      for (int j = 0; j < 8; j++) { cx += v[r * 8 + j].x; cy += v[r * 8 + j].y; cz += v[r * 8 + j].z; }
+      cx /= 8; cy /= 8; cz /= 8;
+      for (int j = 0; j < 8; j++)
+      {
+         const V& a = v[r * 8 + j];
+         assert(fabsf(sqrtf((a.x - cx) * (a.x - cx) + (a.y - cy) * (a.y - cy) + (a.z - cz) * (a.z - cz)) - 1.f) < 1e-3f);
+      }
+   }
    puts("wiresweep ok");
 }

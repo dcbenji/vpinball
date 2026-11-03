@@ -45,7 +45,7 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
          z += pt->GetZ();
       z = pts.empty() ? 0.f : z / (float)pts.size();
       SetCurveTransform(pos, scale, rot);
-      if (pos.z != z)
+      if (fabsf(pos.z - z) > 1e-4f)
       {
          for (const auto& pt : pts)
             pt->SetZ(pt->GetZ() + pos.z - z);

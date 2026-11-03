@@ -56,7 +56,7 @@ bool SweepTube(const std::vector<Point>& centerline, const float radius, int sid
 
    const unsigned base = (unsigned)verts.size();
    const float twoPi = 6.28318530717958647692f;
-   V3 prevB { 0.f, 0.f, 0.f };
+   V3 prevN { 0.f, 0.f, 0.f };
    V3 firstT { 0.f, 0.f, 0.f }, lastT { 0.f, 0.f, 0.f };
    V3 firstN { 0.f, 0.f, 0.f }, lastN { 0.f, 0.f, 0.f };
    V3 firstB { 0.f, 0.f, 0.f }, lastB { 0.f, 0.f, 0.f };
@@ -99,10 +99,13 @@ bool SweepTube(const std::vector<Point>& centerline, const float radius, int sid
       else
       {
          // Parallel transport (same update as Ramp::CreateWire)
-         nrm = Norm(Cross(prevB, t));
+         // Parallel transport: previous normal projected onto the new ring plane (stays valid through vertical tangents)
+         nrm = Norm(prevN - t * Dot(prevN, t));
+         if (Len(nrm) < 0.5f)
+            nrm = Norm(Cross(t, fabsf(t.z) > 0.999f ? V3 { 1.f, 0.f, 0.f } : V3 { 0.f, 0.f, 1.f }));
          bin = Norm(Cross(t, nrm));
       }
-      prevB = bin;
+      prevN = nrm;
       if (i == 0)
       {
          firstT = t;

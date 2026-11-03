@@ -102,6 +102,14 @@ void Primitive::SetDefaults(const bool fromMouseClick)
 
    m_d.m_use3DMesh = false;
    m_d.m_meshFileName.clear();
+   const PrimitiveData wireDefaults {}; // Wire generator state back to defaults (a Load into an existing object must not keep stale state)
+   m_d.m_wireGen = wireDefaults.m_wireGen;
+   m_d.m_wireDiameter = wireDefaults.m_wireDiameter;
+   m_d.m_wireRails = wireDefaults.m_wireRails;
+   m_d.m_wireSpacing = wireDefaults.m_wireSpacing;
+   m_d.m_wireCaps = wireDefaults.m_wireCaps;
+   m_d.m_wireSides = wireDefaults.m_wireSides;
+   m_wireCurve.ClearPoints();
    m_inPlayState = m_d.m_visible;
 }
 
@@ -1899,6 +1907,7 @@ void Primitive::Translate(const Vertex2D &offset)
 {
    if (m_d.m_wireGen)
    {
+      // Only the mesh is rebuilt here: the callers (gizmo / SetSelectionTransform) reinit the renderable and update the collider themselves
       m_wireCurve.TranslatePoints(offset);
       RegenerateWire();
       return;
