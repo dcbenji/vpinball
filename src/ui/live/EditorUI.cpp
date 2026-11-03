@@ -1236,8 +1236,10 @@ bool EditorUI::PlanAreaSplit(const int leafId, const SplitAxis axis, const bool 
       return false;
    }
    const float newMin = (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH) * dpi;
-   // The viewport's rect includes its N-panel, which moves with it: a sane minimum (twice the panel minimum in all), not the viewport + sidebar minimum
-   const float keepMin = (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH) * dpi;
+   // Same minimum as the layout solver (AreaLayout::Compute): the viewport keeps its own minimum plus the N-panel's width when it is open, so a preview is never squeezed on commit
+   const float keepMin = (leaf->type == AreaType::Viewport ? (vertical ? AreaLayout::kViewportMinW + (m_showSidebar ? m_sidebarWidth : 0.f) : AreaLayout::kViewportMinH)
+                                                           : (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH))
+      * dpi;
    if (hi - lo < newMin + keepMin)
    {
       plan.reason = "Area too small to split";
