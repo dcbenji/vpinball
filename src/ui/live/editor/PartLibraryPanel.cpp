@@ -1018,7 +1018,11 @@ bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable>
       if (part->GetItemType() == eItemLight)
          static_cast<Light *>(part)->m_d.m_stateSrcLink.clear();
       else if (part->GetItemType() == eItemPrimitive)
-         static_cast<Primitive *>(part)->m_d.m_stateSrcLink.clear();
+      {
+         Primitive *const prim = static_cast<Primitive *>(part);
+         prim->m_d.m_stateSrcLink.clear();
+         prim->m_d.m_tracedHaloStrength = 0.f; // The spill pass draws as a flat sheet with no playfield under it
+      }
       else if (part->GetItemType() == eItemFlasher)
          static_cast<Flasher *>(part)->m_d.m_stateSrcLink.clear();
       if (part->GetIRenderable() == nullptr)
@@ -1126,7 +1130,7 @@ void PartLibraryPanel::PumpThumbnails()
       const FRect3D bounds = ScratchBounds(m_scratchParts);
       AreaViewSettings cam;
       cam.yaw = 35.f;
-      cam.pitch = 30.f;
+      cam.pitch = item.kind == ItemKind::Insert ? 55.f : 30.f; // An insert from above: the cap reads first
       CameraPreviewPanel::FrameBounds(cam, bounds, m_editor.m_navFovY, 1.f);
       Renderer::EditorViewRequest req;
       req.width = req.height = kThumbSize;
@@ -1224,7 +1228,7 @@ void PartLibraryPanel::FrameLightbox(const bool resetAngles)
    if (resetAngles)
    {
       m_lbCam.yaw = 35.f;
-      m_lbCam.pitch = 30.f;
+      m_lbCam.pitch = m_lbItem.kind == ItemKind::Insert ? 55.f : 30.f;
    }
    // On the bounding sphere: the distance does not change with the yaw (the projected box would)
    const float aspect = m_lbHeight > 0 ? static_cast<float>(m_lbWidth) / static_cast<float>(m_lbHeight) : 1.f;

@@ -101,7 +101,7 @@ private:
       bool thumbLoaded = false; // Load attempted
    };
 
-   static constexpr unsigned int kRigVersion = 2; // Bump when the thumbnail rig changes: every thumbnail is rendered again
+   static constexpr unsigned int kRigVersion = 3; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
 
    void RescanLibrary();
