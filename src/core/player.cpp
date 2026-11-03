@@ -2085,10 +2085,15 @@ public:
          m_captureStartupEndPhysicsTime = m_player->m_physics->GetCurrentTime();
       }
 
-      // Run 1s of normal emulation to stabilize
+      // Run 1s of normal emulation to stabilize. VPX_CAPTURE_FIXED_STEP=1 (diagnostic): in 1/120 s steps instead of real time, so the
+      // frame count (dither and other per-frame jitters) at each captured frame is the same from run to run (A/B look comparisons)
       if (m_player->m_physics->GetCurrentTime() < m_captureStartupEndPhysicsTime + 1000000)
       {
-         m_captureTime = m_captureStartupEndPhysicsTime + usec() - m_captureStartupEndTime;
+         static const bool fixedStep = std::getenv("VPX_CAPTURE_FIXED_STEP") != nullptr;
+         if (fixedStep)
+            m_captureTime = max(m_captureTime, m_captureStartupEndPhysicsTime) + 1000000 / 120;
+         else
+            m_captureTime = m_captureStartupEndPhysicsTime + usec() - m_captureStartupEndTime;
       }
 
       // Stepped emulation & rendering at the capture frequency
