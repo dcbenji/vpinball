@@ -108,7 +108,8 @@ private:
    RendererInspectionModal m_inspectionModal;
    ConvertToPBRModal m_pbrConvertModal;
    PartLibraryPanel m_partLibrary;
-   CameraPreviewPanel m_cameraPreview;
+   CameraPreviewPanel m_cameraPreviews[AreaLayout::kMaxViewLeaves]; // Secondary 3D views, one per renderer view slot, bound to the Camera Preview leaves shown (see RenderAreas)
+   bool m_secondaryViewHovered = false; // A secondary view is under the mouse: the 3D Viewport leaves it the view keys (numpad, F, Home, Z, G / R / S)
    ScriptPanel m_scriptPanel;
    PinnedPanel m_pinned; // Floating overlay of pinned properties
    SearchPalette m_palette; // Cmd/Ctrl+K search to field
@@ -543,12 +544,11 @@ private:
    void UpdateAreaLayout(); // Start of the UI frame: applies the pending ops, then computes the area rects
    void ComputeAreaRects() const; // Tree rect from the bar heights, then the cached leaf / splitter / viewport rects
    void RenderAreas(); // Hosts the panels of the visible areas
-   void RenderAreaTypeButton(AreaEditor current); // Header button of the area hosting the given type, and its editor type popup
+   void RenderAreaTypeButton(AreaEditor current, int leafId = -1); // Header button of the area hosting the given type (or of the given leaf), and its editor type popup
    bool ApplyAreaOp(const PendingAreaOp &op);
    void WidenArea(int leafId, AreaType type); // Switching the editor of a too narrow area widens it (once, the splitter can shrink it again afterwards)
    AreaLayout m_areas;
    std::vector<PendingAreaOp> m_pendingAreaOps;
-   int m_syncedPreviewView = -1; // Camera preview view setup last exchanged between the panel and the layout leaf (see RenderAreas)
    int m_maximizedLeafId = -1; // Transient (not saved): only this leaf is laid out, on the whole tree rect
    // Rects of the last ComputeAreaRects (physical pixels): leaves, splitters, the viewport leaf and its content (the leaf without the N-panel).
    // The 3D view is the full window, the viewport leaf is a window onto it.
