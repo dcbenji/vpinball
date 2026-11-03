@@ -866,7 +866,8 @@ void PartLibraryPanel::PumpThumbnails()
       for (int i = AreaLayout::kMaxViewLeaves - 1; i >= 0 && m_thumbSlot < 0; i--)
          if (m_editor.m_cameraPreviews[i].GetLeaf() < 0 && renderer->CanRenderEditorPBRView(i))
             m_thumbSlot = i;
-      if (m_thumbSlot < 0)
+      // Checked before loading the item: a refused request would reload it every frame
+      if (m_thumbSlot < 0 || g_pplayer->GetInfoMode() != IF_NONE || !renderer->CanRenderEditorPBRView(m_thumbSlot))
          return;
       const LibraryItem &item = m_items[m_thumbQueue.back()];
       if (!LoadScratch(item))
