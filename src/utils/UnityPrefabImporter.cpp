@@ -11,6 +11,9 @@
 #include "renderer/Texture.h"
 #include "core/editablereg.h"
 
+#ifdef __STANDALONE__
+#define _WINDOWS_
+#endif
 #include <FreeImage.h>
 
 #define XXH_INLINE_ALL

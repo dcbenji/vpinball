@@ -4,6 +4,8 @@
 #include "UnityYaml.h"
 
 #include <charconv>
+#include <cstdlib>
+#include <string>
 #include <stdexcept>
 
 namespace UnityYaml
@@ -464,10 +466,11 @@ double Value::AsFloat(double def) const
 {
    if (type != Type::Scalar)
       return def;
-   double out;
-   const char* b = scalar.data();
-   const char* e = b + scalar.size();
-   if (std::from_chars(b, e, out).ec == std::errc())
+   // std::from_chars for floating point needs macOS 26 / libc++ 20 at runtime: use strtod
+   const std::string s(scalar);
+   char* end = nullptr;
+   const double out = std::strtod(s.c_str(), &end);
+   if (end != s.c_str() && end == s.c_str() + s.size())
       return out;
    return def;
 }
