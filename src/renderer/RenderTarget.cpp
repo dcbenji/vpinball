@@ -561,6 +561,10 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
 RenderTarget::~RenderTarget()
 {
 #if defined(ENABLE_BGFX)
+   // Shader states keep the samplers they were last given (shared pointers): detach them from the textures destroyed below
+   for (const std::shared_ptr<Sampler>& sampler : { m_color_sampler, m_shared_depth ? nullptr : m_depth_sampler, m_msaa_depth_sampler, m_pbrSidebandSampler[0], m_pbrSidebandSampler[1], m_pbrDataSampler })
+      if (sampler)
+         sampler->ReleaseRenderTargetTexture();
    if (bgfx::isValid(m_framebuffer))
       bgfx::destroy(m_framebuffer);
    for (uint16_t i = 0; i < static_cast<uint16_t>(m_nLayers); i++)

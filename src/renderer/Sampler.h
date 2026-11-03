@@ -46,6 +46,9 @@ public:
    Sampler(RenderDevice* rd, string name, SurfaceType type, bgfx::TextureHandle bgfxTexture, bgfx::TextureFormat::Enum bgfxFormat, unsigned int width, unsigned int height, bool ownTexture);
    bgfx::TextureHandle GetCoreTexture(bool withMipmaps);
    bool IsUploadPending() const { return (m_textureUpdate != nullptr) || m_pendingMipMapGen || m_compressedUploadPending; }
+   // The render target owning this (external) texture is destroying it: a shader state that still holds this sampler (a session
+   // transition, a resize, a released editor view) binds the null texture from now on instead of a destroyed Vulkan image
+   void ReleaseRenderTargetTexture() { assert(!m_ownTexture); m_nomipsTexture = BGFX_INVALID_HANDLE; m_msaaDepthResolve = nullptr; }
    class RenderTarget* m_msaaDepthResolve = nullptr;
 
 #elif defined(ENABLE_OPENGL)
