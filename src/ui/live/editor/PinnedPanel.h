@@ -103,25 +103,11 @@ public:
    // field of a compatible part type), as one undo step. Not available in inspection sessions
    bool CanCopyToSelected(const PinKey &key) const;
    bool CopyToSelected(const PinKey &key); // Queues the copy (the menu is drawn inside the panels' undo records)
-   void FlushPendingCopy(); // Runs the queued copy (and bulb apply), as one undo step: to be called outside of any undo record (after the areas are rendered)
-   // "Apply to all traced inserts" button: queues the copy of the traced insert's bulb values to the other traced inserts (run by FlushPendingCopy)
-   void RequestApplyBulb(IEditable *source, bool startup)
-   {
-      m_bulbSource = source;
-      m_bulbStartup = startup;
-   }
+   void FlushPendingCopy(); // Runs the queued copy, as one undo step: to be called outside of any undo record (after the areas are rendered)
    // Alt apply-to-all: a part field was just changed through its pane, copy its new value to the other selected parts. Only acts while armed by the
    // caller, which has begun an undo record and marked all selected parts in it (a snapshot is taken before the pane changes the field)
    void ArmApplyToSelected(bool armed) { m_applyArmed = armed; }
    void ApplyToSelected(IEditable *source, const PinCopyFn &copy);
-
-   // "See-through set": a primitive's refraction fields and its material's See-Through Surface fields
-   bool HasSeeThroughSet(const IEditable *part) const;
-   void PinSeeThroughSet(const IEditable *part);
-   void PinMaterialSeeThrough(const string &materialName);
-   // "Bulb set": the Traced Insert Bulb fields (sliders) of a traced insert; also part of its see-through set
-   bool HasBulbSet(const IEditable *part) const;
-   void PinBulbSet(const IEditable *part);
 
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;
@@ -148,17 +134,9 @@ public:
    void ApplyWorkspace(int index);
 
 private:
-   struct GroupRequest
-   {
-      PinKind kind;
-      string name;
-      string group;
-   };
-
    void SyncWithTable();
    void *Resolve(PinKind kind, const string &name, const void **owner) const;
    bool Harvest(PinKind kind, const string &name);
-   void ProcessGroupRequests();
    void LoadFavoriteDefs();
    void RenderFavoriteRows(bool hovered);
    void RenderObjectRows(PropertyPane &props, PinKind kind, const string &name, const vector<PinKey> &keys, bool removable, bool hovered);
@@ -166,7 +144,6 @@ private:
    void RenderItemTab(bool hovered);
    void RenderViewTab();
    void ApplyUnits(PropertyPane &props) const;
-   void PinSelectionSeeThrough();
    // Selected parts (other than the source) that have the field the copy function handles
    void CollectCopyTargets(IEditable *source, const PinCopyFn &copy, vector<std::shared_ptr<EditorUIPart>> &out) const;
    void ResetWorkspaces();
@@ -181,15 +158,11 @@ private:
    bool m_escPending = false;
    PinKey m_pendingCopy;
    bool m_hasPendingCopy = false;
-   void ApplyBulbToAllTraced(Primitive *source, bool startup);
-   bool m_bulbStartup = false; // The pane showed the startup table (inspection Startup tab): the values go to the startup inserts
-   IEditable *m_bulbSource = nullptr; // Traced insert whose bulb values are to be applied to all the others
    uint64_t m_editRecordId = 0; // Undo record kept for the field edit in progress (see TopRecordId)
    unsigned int m_prevActiveId = 0;
    bool m_applyArmed = false; // ApplyToSelected may act (see ArmApplyToSelected)
    vector<PinKey> m_pins; // In pinning order (rows are grouped by object, in order of first appearance)
    std::map<string, Def> m_defs; // By PinKey::Id()
-   vector<GroupRequest> m_groupRequests; // Quick set requests, applied once the object's definitions are known
    std::map<string, const void *> m_harvested; // Objects already harvested (by kind + name) with the owner they were harvested from
    std::map<string, unsigned> m_harvestStamps; // Stamp of the latest harvest of each object (by kind + name)
    unsigned m_harvestCounter = 0;

@@ -228,6 +228,7 @@ void EditorUI::Close()
    ExitPointEditMode(false);
    RestorePartsVisibility();
    m_inspectionModal.Close();
+   m_partLibrary.CancelPlacement(); // An armed library placement does not survive the editor closing
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
 }
@@ -1759,7 +1760,7 @@ void EditorUI::RenderAreas()
    bool propertiesDrawn = false;
    bool viewDrawn[AreaLayout::kMaxViewLeaves] = {};
    // Render schedule, one rule for every case: the shown views that want to render periodically this frame (Live on or an edit drag in progress, an image
-   // shown, not refused by the 2 PBR view cap) are ranked within their class (PBR, wireframe) in leaf order; the rank sets the phase (CameraPreviewPanel).
+   // shown, not refused by the 2 shaded view cap) are ranked within their class (shaded, wireframe) in leaf order; the rank sets the phase (CameraPreviewPanel).
    // One-shot renders (Refresh, end of an edit, undo, camera moves) are outside the schedule
    std::map<int, int> viewRanks;
    {
@@ -1774,7 +1775,7 @@ void EditorUI::RenderAreas()
          for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
             if (m_cameraPreviews[i].GetLeaf() == l.id)
                slot = i;
-         if (slot >= 0 && (!m_cameraPreviews[slot].HasImage() || (!o->view.wireframe && !m_renderer->CanRenderEditorPBRView(slot))))
+         if (slot >= 0 && (!m_cameraPreviews[slot].HasImage() || (!o->view.wireframe && !m_renderer->CanRenderEditorShadedView(slot))))
             continue;
          viewRanks[l.id] = classRank[o->view.wireframe ? 1 : 0]++;
       }
@@ -2749,7 +2750,6 @@ void EditorUI::RenderUI()
                   curve->OnPointsModified();
                }
                m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
-               m_renderer->InvalidateShadowContent();
                m_player->m_physics->Update(m_pointEditPart->GetEditable());
             }
             m_pointDragPos = pos;
@@ -4833,7 +4833,6 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
       }
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
-      m_renderer->InvalidateShadowContent();
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
       return;
    }
@@ -4889,7 +4888,6 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          rot.Set(0.f, 0.f, 0.f);
       part->SetTransform(pos, scale, rot);
       m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
-      m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
       m_player->m_physics->Update(part->GetEditable());
    };
 
@@ -4998,7 +4996,6 @@ void EditorUI::EndPointEdit()
    if (DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve())
       curve->OnPointsModified();
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
-   m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
 
@@ -5027,7 +5024,6 @@ void EditorUI::AddPointOnNearestSegment()
    m_pointSel.clear();
    m_pointSel.push_back(point);
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
-   m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
 

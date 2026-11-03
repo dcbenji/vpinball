@@ -103,7 +103,6 @@ public:
    static const PinKey &GetFocusKey() { return s_focusKey; }
    // "Apply to all traced inserts" button: queues the copy of this traced insert's bulb values to the other traced inserts of the table
    // (one undo step, run after the areas are drawn)
-   void ApplyBulbToAllButton(IEditable* part);
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
 
    // Field tiers: Common fields make the curated sections (Look, Transform) the properties panel draws first; Advanced fields only

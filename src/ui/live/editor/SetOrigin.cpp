@@ -175,7 +175,6 @@ void SetOrigin::Apply(EditorUI &ed, const Mode mode)
       ed.m_renderer->ReinitRenderable(prim);
       ed.m_player->m_physics->Update(prim); // Collision mesh rebuilt from the shifted vertices and the new position
    }
-   ed.m_renderer->InvalidateShadowContent(); // No-op on master (cached shadow pages are a PBR branch feature)
    ed.m_undo.SetLabel(prims.size() == 1 ? "Set Origin: "s + prims[0]->GetName() : "Set Origin: "s + std::to_string(prims.size()) + " parts");
    ed.m_undo.EndUndo();
    ed.Report(string(what) + ": " + std::to_string(prims.size()) + (prims.size() == 1 ? " part" : " parts") + notes);

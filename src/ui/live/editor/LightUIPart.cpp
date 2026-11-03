@@ -35,7 +35,6 @@ void LightUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec3& r
 
 void LightUIPart::RenderOverlay(const EditorRenderContext& ctx)
 {
-
    ctx.DrawWireframe(m_part);
 
    // Bulb center overlay, same as the win32 editor: falloff ellipse, center crosshair, bulb mesh circle
@@ -191,7 +190,6 @@ void LightUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Light* light, bool v) { light->m_d.m_shadows = v ? ShadowMode::RAYTRACED_BALL_SHADOWS : ShadowMode::NONE; }, "Cast a real-time shadow of the ball from this light");
       props.EndSection();
    }
-
 
    if (props.BeginSection("Position"s))
    {

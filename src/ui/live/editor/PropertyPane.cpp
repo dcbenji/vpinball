@@ -99,13 +99,6 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    return true;
 }
 
-void PropertyPane::ApplyBulbToAllButton(IEditable* part)
-{
-   if (ImGui::Button("Apply to all traced inserts") && m_pins != nullptr)
-      m_pins->RequestApplyBulb(part, IsStartup());
-   ImGui::SetItemTooltip("Copies this insert's bulb values (depth, spot size, brightness, stretch, offset) to every other traced insert of the table, as one undo step");
-}
-
 void PropertyPane::SetShowStartup(bool showStartup)
 {
    assert(!showStartup || m_table->m_liveBaseTable);
@@ -786,27 +779,6 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    {
       m_pins->Pin(key);
       RequestOverlayFlash(key);
-   }
-   if (part != nullptr && m_pins->HasSeeThroughSet(part))
-   {
-      if (ImGui::MenuItem(ICON_LC_STAR " Add See-Through Set to Quick Favorites"))
-         m_pins->PinSeeThroughSet(part);
-      if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Add the refraction fields of this part and the See-Through Surface fields of its material");
-   }
-   if (part != nullptr && m_pins->HasBulbSet(part))
-   {
-      if (ImGui::MenuItem(ICON_LC_STAR " Add Bulb Set to Quick Favorites"))
-         m_pins->PinBulbSet(part);
-      if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Add the Traced Insert Bulb fields of this part (depth, spot size, brightness, stretch, offset)");
-   }
-   if (!(part != nullptr && m_pins->HasSeeThroughSet(part)) && material != nullptr && material->m_type == static_cast<Material::MaterialType>(2) /* PBR-only */)
-   {
-      if (ImGui::MenuItem(ICON_LC_STAR " Add See-Through Set to Quick Favorites"))
-         m_pins->PinMaterialSeeThrough(material->m_name);
-      if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Add the See-Through Surface fields of this material");
    }
    if (part != nullptr)
    {

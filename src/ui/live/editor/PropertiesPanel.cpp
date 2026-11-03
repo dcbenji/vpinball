@@ -38,29 +38,27 @@ namespace VPX::EditorUI
 
 // Curation rules: which fields of a type make its Look and Transform sections. A field is Look when the pane registered it under
 // PropertyPane::Tier::Common, or when its group (section or separator) or label is listed below; the group lists are the pin
-// quick sets (see-through, bulb, dome). Everything stays in the full sheet under "Advanced".
+// quick sets. Everything stays in the full sheet under "Advanced".
 struct CurationRules
 {
    std::initializer_list<const char *> lookGroups;
    std::initializer_list<const char *> lookLabels;
    std::initializer_list<const char *> transformLabels;
-   std::initializer_list<const char *> tracedInsertHiddenGroups; // Groups left out of the Look of a traced insert (fields that do not apply to it)
 };
 
 static const CurationRules *GetCurationRules(PinKind kind, int itemType)
 {
-   static const CurationRules primitive { { "Refractions", "Traced Insert Bulb", "Flasher Dome" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
-      { "Position", "Orientation", "Scale" }, { "Refractions" } }; // A traced insert has no refraction: its block is all zeros
+   static const CurationRules primitive { { "Refractions" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
+      { "Position", "Orientation", "Scale" } };
    // The light pane marks its Light Settings section Common (PropertyPane::SetTier)
    static const CurationRules light { {}, { "Type", "State", "Show Bulb", "Transmit", "Modulate" }, { "Center", "Position", "Height", "Surface" } };
    static const CurationRules flasher { {}, { "Visible", "Color", "Image A", "Image B", "Mix", "Mix Factor (%)", "Opacity (%)", "Additive Blend", "Modulate" }, { "Position", "Rotation" } };
-   static const CurationRules material { { "See-Through Surface" },
-      { "Type", "Color", "Metallic", "Roughness", "Occlusion", "Emission Intensity", "Clear Coat", "Clear Coat Roughness", "Edge Brightness", "Enable Transparency", "Opacity", "Edge Opacity",
-         "Thickness" },
+   static const CurationRules material { {},
+      { "Type", "Color", "Shininess", "Edge Brightness", "Enable Transparency", "Opacity", "Edge Opacity", "Thickness" },
       {} };
    static const CurationRules table { { "Environment Lighting" },
-      { "Light Em. Scale", "Light Height", "Light Range", "Scene Lighting Scale", "Bloom Strength", "Tonemapping", "Exposure", "Enable Ambient Occlusion", "Ambient Occlusion Scale",
-         "Enable Sc. Sp. Reflections", "Screen Space Reflection Scale" },
+      { "Light Emission Scale", "Light Height", "Light Range", "Scene Lighting Scale", "Bloom Strength", "Tonemapping", "Exposure", "Ambient Occlusion", "AO Scale", "Screen Space Reflections",
+         "SSR Scale" },
       {} };
    switch (kind)
    {
@@ -81,16 +79,6 @@ static const CurationRules *GetCurationRules(PinKind kind, int itemType)
 static bool Listed(std::initializer_list<const char *> list, const string &value)
 {
    return std::ranges::any_of(list, [&value](const char *item) { return value == item; });
-}
-
-// The "Apply to all traced inserts" button at the end of the Look of a traced insert (the full sheet has it under the bulb fields)
-static void DrawApplyBulbButton(PropertyPane &props, PinKind kind, void *obj)
-{
-   if (kind != PinKind::Part || props.IsMultiEdit() || obj == nullptr)
-      return;
-   IEditable *const part = static_cast<IEditable *>(obj);
-   if (part->GetItemType() == eItemPrimitive && false /* PBR-only: IsTracedInsert */)
-      props.ApplyBulbToAllButton(part);
 }
 
 string PropertiesPanel::PartMaterial(const IEditable *part)
@@ -318,8 +306,6 @@ void PropertiesPanel::DrawTabContent(PropertyPane &props)
             lastGroup = def->group;
             def->draw(props, m_curation.obj);
          }
-         if (m_tab == Tab::Look)
-            DrawApplyBulbButton(props, m_curation.kind, m_curation.obj);
          props.EndSection();
       }
       ImGui::PopID();
@@ -362,14 +348,6 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    cur.look.clear();
    cur.transform.clear();
    cur.all = m_defScratch;
-   // The insert bulb and dome groups are only Look on the primitives they apply to (the full sheet keeps them for every primitive)
-   const Primitive *const prim = (kind == PinKind::Part && itemType == eItemPrimitive) ? static_cast<const Primitive *>(static_cast<IEditable *>(obj)) : nullptr;
-   const auto offLook = [prim, rules](const PinnedPanel::Def *def)
-   {
-      return prim != nullptr
-         && ((def->group == "Traced Insert Bulb" && !false /* PBR-only: IsTracedInsert */) || (def->group == "Flasher Dome" && !false /* PBR-only: IsFlasherDome */)
-            || (rules != nullptr && false /* PBR-only: IsTracedInsert */ && Listed(rules->tracedInsertHiddenGroups, def->group)));
-   };
    // Types without curation rules: the visual sections make their Look tab
    static constexpr const char *visualSections[] = { "Visuals", "Render Mode", "Light Settings", "Bulb", "Transparency", "Ball Reflections & Shadows" };
    const auto isLook = [&](const PinnedPanel::Def *def)
@@ -391,13 +369,11 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
          tab = Tab::Script;
       else if (isTransform(def))
          tab = Tab::Transform;
-      else if (!offLook(def) && isLook(def))
+      else if (isLook(def))
          tab = Tab::Look;
       if (tab != Tab::Advanced)
          cur.tabs[static_cast<int>(tab)].push_back(def);
       // Sections (the part's material pane)
-      if (offLook(def))
-         continue;
       if (rules != nullptr && isLook(def))
          cur.look.push_back(def);
       else if (rules != nullptr && Listed(rules->transformLabels, def->key.prop))
@@ -436,7 +412,6 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    if (!cur.look.empty() && props.BeginSection("Look"s))
    {
       drawDefs(cur.look);
-      DrawApplyBulbButton(props, cur.kind, cur.obj);
       props.EndSection();
    }
    if (!cur.transform.empty() && props.BeginSection("Transform"s))
@@ -1584,7 +1559,7 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             "How much specular highlights take the image's color instead of the glossy color");
       }
       props.InputFloat<Material>(
-         material, "Roughness"s, //
+         material, "Shininess"s, //
          [](const Material *material) { return material->m_fRoughness; }, //
          [](Material *material, float v) { material->m_fRoughness = v; }, PropertyPane::Unit::None, 2, "Sharpness of the specular highlights (higher = smaller, brighter highlights)");
       props.InputRGB<Material>(
@@ -2424,7 +2399,7 @@ void PropertiesPanel::MaterialActions(PropertyPane &props)
                break;
             Material *const pmat = new Material(mat.bIsMetal ? Material::METAL : Material::BASIC, mat.fWrapLighting, mat.fRoughness, dequantizeUnsigned<8>(mat.fGlossyImageLerp),
                dequantizeUnsigned<8>(mat.fThickness), mat.fEdge, dequantizeUnsigned<7>(mat.bOpacityActive_fEdgeAlpha >> 1), mat.fOpacity, mat.cBase, mat.cGlossy, mat.cClearcoat,
-               !!(mat.bOpacityActive_fEdgeAlpha & 1), elasticity, elasticityFalloff, friction, scatterAngle, 0xFFFFFFFF); // PBR-only: master has no 0.f, 1.f, 0, 1.f PBR ctor args
+               !!(mat.bOpacityActive_fEdgeAlpha & 1), elasticity, elasticityFalloff, friction, scatterAngle, 0xFFFFFFFF);
             pmat->m_name = string_from_utf8_or_cp1252(mat.szName, strnlen(mat.szName, std::size(mat.szName))); // May not be null terminated in a corrupted file
             table->AddMaterial(pmat);
             sel.push_back(pmat);

@@ -20,16 +20,6 @@
 namespace VPX::EditorUI
 {
 
-// Field groups pinned by the see-through quick set (property pane separators)
-static const string kRefractionGroup = "Refractions"s;
-static const string kSeeThroughGroup = "See-Through Surface"s;
-static const string kBulbGroup = "Traced Insert Bulb"s;
-
-static bool IsTracedInsert(const IEditable *part)
-{
-   return part != nullptr && part->GetItemType() == eItemPrimitive && false /* PBR-only: IsTracedInsert */;
-}
-
 static const char *PinKindName(PinKind kind)
 {
    switch (kind)
@@ -133,8 +123,6 @@ void PinnedPanel::CollectDefs(PinKind kind, const string &name, unsigned stamp, 
    std::ranges::sort(out, [](const Def *a, const Def *b) { return a->seq < b->seq; });
 }
 
-bool PinnedPanel::HasBulbSet(const IEditable *part) const { return IsTracedInsert(part); }
-
 void PinnedPanel::CollectCopyTargets(IEditable *source, const PinCopyFn &copy, vector<std::shared_ptr<EditorUIPart>> &out) const
 {
    out.clear();
@@ -172,67 +160,11 @@ bool PinnedPanel::CopyToSelected(const PinKey &key)
    return true;
 }
 
-void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
-{
-   EditorUI &editor = m_editor;
-   vector<Primitive *> targets;
-   for (IEditable *const other : editor.m_table->GetParts())
-      if (other != source && IsTracedInsert(other))
-         targets.push_back(static_cast<Primitive *>(other));
-   if (startup) // The pane showed the startup table: the startup counterparts are the ones to read and write (what 'Save' writes to disk)
-   {
-      source = static_cast<Primitive *>(editor.m_table->GetStartupFromLive<IEditable>(source));
-      for (Primitive *&target : targets)
-         target = static_cast<Primitive *>(editor.m_table->GetStartupFromLive<IEditable>(target));
-      std::erase(targets, nullptr);
-      if (source == nullptr)
-         return;
-   }
-   if (targets.empty())
-   {
-      editor.m_liveUI.PushNotification("No other traced inserts in this table"s, 2500);
-      return;
-   }
-   const bool inspect = editor.IsInspectMode() || startup; // Inspection edits are not undoable: they are tracked for 'Save' like the other live edits
-   if (!inspect)
-   {
-      editor.m_undo.BeginUndo();
-      for (Primitive *const target : targets)
-         editor.m_undo.MarkForUndo(target);
-   }
-   for (Primitive *const target : targets)
-   {
-   }
-   const string label = "Apply bulb to " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s);
-   if (!inspect)
-   {
-      editor.m_undo.SetLabel("Apply Bulb: " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s));
-      editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
-      editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
-      editor.m_lastUndoId = 0;
-   }
-   for (Primitive *const target : targets)
-   {
-      if (startup)
-         continue; // Startup objects are not rendered
-      editor.m_renderer->ReinitRenderable(target->GetIRenderable()); // Read at draw time, so no physics update
-      if (inspect)
-         editor.m_liveEditedParts.insert(target);
-   }
-   editor.m_liveUI.PushNotification(label, 2500);
-}
-
 void PinnedPanel::FlushPendingCopy()
 {
    // Undo / redo steps of materials deleted since (not undoable) are skipped, never applied to a material that reuses the name or address
    if (const int skipped = MaterialEditUndo::ConsumeSkipped(); skipped > 0)
       m_editor.m_liveUI.PushNotification(skipped == 1 ? "Undo/redo skipped: the material was deleted"s : "Undo/redo skipped for " + std::to_string(skipped) + " deleted materials", 3500);
-   if (m_bulbSource != nullptr)
-   {
-      IEditable *const source = m_bulbSource;
-      m_bulbSource = nullptr;
-      ApplyBulbToAllTraced(static_cast<Primitive *>(source), m_bulbStartup);
-   }
    if (!m_hasPendingCopy)
       return;
    m_hasPendingCopy = false;
@@ -280,46 +212,6 @@ void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
       editor.m_player->m_physics->Update(part->GetEditable());
       part->SyncVisibilityOverrides();
    }
-}
-
-bool PinnedPanel::HasSeeThroughSet(const IEditable *part) const
-{
-   if (part == nullptr || part->GetItemType() != eItemPrimitive)
-      return false;
-   if (IsTracedInsert(part)) // The quick set of a traced insert also holds its bulb fields
-      return true;
-   const Primitive *const prim = static_cast<const Primitive *>(part);
-   if (!prim->m_d.m_szRefractionProbe.empty())
-      return true;
-   const Material *const mat = prim->m_d.m_szMaterial.empty() ? nullptr : m_editor.m_table->GetMaterial(prim->m_d.m_szMaterial);
-   return mat != nullptr && !m_editor.m_table->IsDummyMaterial(mat) && mat->m_type == static_cast<Material::MaterialType>(2) /* PBR-only */;
-}
-
-void PinnedPanel::PinSeeThroughSet(const IEditable *part)
-{
-   if (!HasSeeThroughSet(part))
-      return;
-   const Primitive *const prim = static_cast<const Primitive *>(part);
-   m_groupRequests.push_back({ PinKind::Part, part->GetName(), kRefractionGroup });
-   if (false /* PBR-only: IsTracedInsert */)
-      m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
-   if (!prim->m_d.m_szMaterial.empty())
-      PinMaterialSeeThrough(prim->m_d.m_szMaterial);
-}
-
-void PinnedPanel::PinBulbSet(const IEditable *part)
-{
-   if (!HasBulbSet(part))
-      return;
-   m_groupRequests.push_back({ PinKind::Part, part->GetName(), kBulbGroup });
-}
-
-void PinnedPanel::PinMaterialSeeThrough(const string &materialName)
-{
-   const Material *const mat = m_editor.m_table->GetMaterial(materialName);
-   if (mat == nullptr || m_editor.m_table->IsDummyMaterial(mat) || mat->m_type != static_cast<Material::MaterialType>(2) /* PBR-only */)
-      return;
-   m_groupRequests.push_back({ PinKind::Material, materialName, kSeeThroughGroup });
 }
 
 void PinnedPanel::SaveTo(PinTable *table) const
@@ -466,7 +358,6 @@ void PinnedPanel::ApplyWorkspace(int index)
 }
 
 // Favorites of fields that no longer exist: the "Apply to all traced inserts" session toggle became a button on 11-02
-static bool IsRetiredPin(const string &prop) { return prop == "Apply to all traced inserts"; }
 
 void PinnedPanel::LoadWorkspaces(const string &json)
 {
@@ -541,7 +432,7 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                         continue;
                      key.name = pin.value("name", ""s);
                      key.prop = pin.value("prop", ""s);
-                     if (!key.prop.empty() && !IsRetiredPin(key.prop) && std::ranges::find(ws.pins, key) == ws.pins.end())
+                     if (!key.prop.empty() && std::ranges::find(ws.pins, key) == ws.pins.end())
                         ws.pins.push_back(key);
                   }
                if (name == active)
@@ -576,11 +467,10 @@ void PinnedPanel::SyncWithTable()
    m_editor.m_properties.m_materialCuration = PropertiesPanel::Curation();
    m_defs.clear();
    m_harvested.clear();
-   m_groupRequests.clear();
    for (const PinTable::EditorPin &pin : base->m_editorPins)
    {
       PinKey key;
-      if (!PinKindFromName(pin.kind, key.kind) || pin.prop.empty() || IsRetiredPin(pin.prop))
+      if (!PinKindFromName(pin.kind, key.kind) || pin.prop.empty())
          continue;
       key.name = pin.name;
       key.prop = pin.prop;
@@ -672,29 +562,6 @@ bool PinnedPanel::Harvest(PinKind kind, const string &name)
    return true;
 }
 
-void PinnedPanel::ProcessGroupRequests()
-{
-   if (m_groupRequests.empty())
-      return;
-   const vector<GroupRequest> requests = std::move(m_groupRequests);
-   m_groupRequests.clear();
-   int found = 0;
-   for (const GroupRequest &req : requests)
-   {
-      // Always refresh the object's definitions: the group may have fields never drawn yet (other material type, collapsed section,...)
-      Harvest(req.kind, req.name);
-      for (const auto &[id, def] : m_defs)
-         if (def.key.kind == req.kind && def.key.name == req.name && def.group == req.group)
-         {
-            if (!IsPinned(def.key))
-               m_pins.push_back(def.key);
-            found++;
-         }
-   }
-   if (found == 0)
-      m_editor.m_liveUI.PushNotification("No fields found to pin"s, 4000);
-}
-
 void PinnedPanel::ApplyUnits(PropertyPane &props) const
 {
    switch (m_editor.m_units)
@@ -703,15 +570,6 @@ void PinnedPanel::ApplyUnits(PropertyPane &props) const
    case EditorUI::Units::Metric: props.SetLengthUnit(PropertyPane::Unit::Millimeters); break;
    case EditorUI::Units::Imperial: props.SetLengthUnit(PropertyPane::Unit::Inches); break;
    }
-}
-
-void PinnedPanel::PinSelectionSeeThrough()
-{
-   const Selection &sel = m_editor.m_selection;
-   if (sel.GetType() == Selection::S_EDITABLE)
-      PinSeeThroughSet(sel.GetPart()->GetEditable());
-   else if (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr)
-      PinMaterialSeeThrough(sel.GetMaterial()->m_name);
 }
 
 // One log line per pin and reason, so an unresolved pin is diagnosable without flooding the log every frame
@@ -724,7 +582,6 @@ static void LogUnresolved(const PinKey &pin, const string &reason)
 
 void PinnedPanel::LoadFavoriteDefs()
 {
-   ProcessGroupRequests();
    // Objects of the pinned fields, in order of first appearance
    vector<std::pair<PinKind, string>> &objects = m_objects;
    objects.clear();
@@ -936,17 +793,10 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
 void PinnedPanel::RenderFavoritesToolbar()
 {
    const Selection &sel = m_editor.m_selection;
-   const bool canPinSel = (sel.GetType() == Selection::S_EDITABLE && HasSeeThroughSet(sel.GetPart()->GetEditable()))
-      || (sel.GetType() == Selection::S_MATERIAL && sel.GetMaterial() != nullptr && sel.GetMaterial()->m_type == static_cast<Material::MaterialType>(2) /* PBR-only */);
    const float dpi = m_editor.m_liveUI.GetDPI();
    const float buttonHeight = 24.f * dpi;
    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-   ImGui::BeginDisabled(!canPinSel);
-   if (ImGui::Button(ICON_LC_DROPLET " Add see-through set", ImVec2(max(1.f, ImGui::GetContentRegionAvail().x - buttonHeight - spacing), buttonHeight)))
-      PinSelectionSeeThrough();
-   ImGui::EndDisabled();
-   ImGui::SetItemTooltip("Add the selection's see-through set to Quick Favorites (refraction fields of the part, its Traced Insert Bulb fields if it is a traced insert, and the See-Through Surface fields of its material)");
-   ImGui::SameLine();
+   ImGui::SetCursorPosX(max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - buttonHeight)); // Right aligned
    ImGui::BeginDisabled(m_pins.empty());
    ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::IconMuted));
    if (ImGui::Button(ICON_LC_TRASH_2 "##FavClear", ImVec2(buttonHeight, buttonHeight)))
@@ -1076,7 +926,6 @@ void PinnedPanel::Render()
       return;
    PropertyPane::ConsumeEditCancel(); // A cancelled edit nobody handled
    SyncWithTable();
-   ProcessGroupRequests(); // Quick sets added from the Properties editor, whether or not the favorites are shown
    const bool lookShown = editor.m_showSidebar && editor.m_sidebarTab == EditorUI::SidebarTab::Favorites;
    if (lookShown || m_quickOpen || editor.m_openQuickFavorites)
       LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun

@@ -3786,20 +3786,20 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    UpdateBallShaderMatrix();
 }
 
-bool Renderer::CanRenderEditorPBRView(const int slot) const
+bool Renderer::CanRenderEditorShadedView(const int slot) const
 {
    int others = 0;
    for (int i = 0; i < kMaxEditorViews; i++)
-      if (i != slot && (m_editorViews[i].pbr || (m_editorViews[i].requested && !m_editorViews[i].request.wireframe)))
+      if (i != slot && (m_editorViews[i].shaded || (m_editorViews[i].requested && !m_editorViews[i].request.wireframe)))
          others++;
-   return others < kMaxEditorPBRViews;
+   return others < kMaxEditorShadedViews;
 }
 
 bool Renderer::RequestEditorView(const int slot, const EditorViewRequest& request)
 {
    if (slot < 0 || slot >= kMaxEditorViews || request.width <= 0 || request.height <= 0)
       return false;
-   if (!request.wireframe && !CanRenderEditorPBRView(slot))
+   if (!request.wireframe && !CanRenderEditorShadedView(slot))
       return false;
    EditorView& v = m_editorViews[slot];
    v.request = request;
@@ -3855,7 +3855,7 @@ void Renderer::ReleaseEditorView(const int slot)
    v.requested = false;
    v.rendered = false;
    v.lite = false;
-   v.pbr = false;
+   v.shaded = false;
    if (v.out != nullptr)
    {
       RenderTarget* const rt = v.out;
@@ -3961,7 +3961,7 @@ void Renderer::RenderEditorView(const int slot)
       }
    }
    v.lite = lite;
-   v.pbr = !lite;
+   v.shaded = !lite;
    m_renderWidth = width;
    m_renderHeight = height;
 
