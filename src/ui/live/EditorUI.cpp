@@ -1404,7 +1404,7 @@ void EditorUI::RenderAreaCorners()
          const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
          if (overStrip)
             overWidget = false; // The splitter strip overlaps the corner's edge band: the corner wins inside its triangle
-         if (overWidget && strncmp(hwName, "CAMERAPREVIEW", 13) == 0 && hoveredId == hw->RootWindow->GetID("##ViewImage"))
+         if (overWidget && strncmp(hwName, "CAMERAPREVIEW", 13) == 0 && hoveredId == ImHashStr("##ViewImage", 0, hw->RootWindow->ID))
             overWidget = false; // The image of a secondary view is a button over the whole area (its mouse navigation): the corner wins inside its triangle
          else if (overWidget && (corner & 2) != 0 && overArea && hw != nullptr)
             overWidget = hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_X)
