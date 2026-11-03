@@ -15,7 +15,7 @@ public:
    ~PinUndo();
 
    void BeginUndo();
-   void MarkForUndo(IEditable * const pie, const bool saveForUndo = true);
+   void MarkForUndo(IEditable * const pie, const bool saveForUndo = true, const bool noteSubject = true); // noteSubject false: a dependent part, not counted in the label
    void MarkForCreate(IEditable *const pie);
    void MarkForDelete(IEditable *const pie);
    // Records a change that is not a part edit (asset, script, table property): the callback restores the previous state when the record is undone

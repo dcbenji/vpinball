@@ -5,6 +5,7 @@
 
 #include "core/editablereg.h"
 #include "parts/Material.h"
+#include "parts/primitive.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 
@@ -248,7 +249,10 @@ void SearchPalette::BuildIndex()
       if (itemType == eItemTable)
          continue;
       int type;
-      if (const auto cached = m_itemTypeIdx.find(static_cast<int>(itemType)); cached != m_itemTypeIdx.end())
+      // A Metal Wire Guide shows other property rows than a plain primitive (the Properties panel branches on it): give it its own type
+      if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireGen)
+         type = TypeIndex("wireguide"s, "Metal Wire Guide"s);
+      else if (const auto cached = m_itemTypeIdx.find(static_cast<int>(itemType)); cached != m_itemTypeIdx.end())
          type = cached->second;
       else
       {
@@ -562,7 +566,7 @@ void SearchPalette::Recompute()
       const Operator &op = m_ops[oi];
       if (op.enabled && !op.enabled())
          continue;
-      int total = (anyName ? 0 : 5) - static_cast<int>(std::min<size_t>(op.label.size(), 100) / 2);
+      int total = (anyName ? 0 : 60) - static_cast<int>(std::min<size_t>(op.label.size(), 100) / 2); // Commands outrank property rows (but not objects named by the query)
       bool ok = true;
       for (size_t w = 0; w < words.size() && ok; ++w)
       {

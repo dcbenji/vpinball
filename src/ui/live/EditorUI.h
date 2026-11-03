@@ -16,6 +16,7 @@
 #include "editor/PartLibraryPanel.h"
 #include "editor/PinnedPanel.h"
 #include "editor/PropertiesPanel.h"
+#include "editor/RubberBetweenPosts.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ConvertToPBRModal.h"
 #include "editor/ScriptPanel.h"
@@ -301,6 +302,17 @@ private:
    void MarkDependentsForUndo(const vector<IEditable *> &touched);
    void DetachSelectedRubbersFromUnselectedPosts(); // A linked rubber moved without its posts stops following them
    void RefitDependents(const vector<IEditable *> &touched);
+   // Hash of the inputs of the last fit of each rubber (a refit with the same inputs is skipped), dropped when an undo or a deletion may have changed the shapes
+   std::unordered_map<const Rubber *, uint64_t> m_rubberFitHash;
+   // During a drag (modal or gizmo) the rubbers and the post names are resolved once, and the physics of the refit rubbers is updated when the drag ends
+   struct RubberDrag
+   {
+      bool valid = false;
+      vector<Rubber *> rubbers;
+      RubberBetweenPosts::PostMap posts;
+      vector<Rubber *> pendingPhysics;
+   } m_rubberDrag;
+   void FlushRubberDrag(); // Physics of the rubbers refit during the drag, and forgets the drag caches
    void ClearSelectionTransform(const Matrix3D &transform, bool clearPosition, bool clearScale, bool clearRotation, const char *label);
    void RefitSelectionDependents() { RefitDependents(SelectedEditables()); }
    void DetachRubberRefs(IEditable *part); // The points of a linked rubber were edited by hand: it stops following its posts

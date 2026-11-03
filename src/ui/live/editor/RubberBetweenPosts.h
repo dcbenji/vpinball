@@ -41,12 +41,14 @@ public:
    // has the rubber in the record). False (rubber untouched, the solver error reported) if a post is missing or no path can be fit; also
    // false, silently, while inspecting the live table during play (no refit in play mode).
    // posts: the primitives of the table by lowercase name, built once by the caller for several refits (null: looked up in the table)
+   // force: refit even if the posts, thickness, roundness and height are those of the last fit (EditorUI::m_rubberFitHash); else true without doing anything
+   // physics: false defers the physics update (during a drag, the caller then updates the physics of the rubber when the drag ends)
    using PostMap = std::unordered_map<string, ::Primitive *>;
-   static bool Refit(EditorUI &ed, Rubber *rubber, const PostMap *posts = nullptr);
+   static bool Refit(EditorUI &ed, Rubber *rubber, const PostMap *posts = nullptr, bool force = true, bool physics = true);
    static PostMap PostsByName(const EditorUI &ed);
 
 private:
-   static void Refresh(EditorUI &ed, Rubber *rubber); // Renderable, shadows and physics after a change of the points
+   static void Refresh(EditorUI &ed, Rubber *rubber, bool physics = true); // Renderable, shadows and physics after a change of the points
    static vector<::Primitive *> SelectedPosts(const EditorUI &ed);
    static vector<Rubber *> SelectedLinkedRubbers(const EditorUI &ed);
 };

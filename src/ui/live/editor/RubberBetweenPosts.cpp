@@ -75,11 +75,12 @@ void SetPoints(Rubber *const rubber, const vector<RubberFit::Point> &pts, const 
 
 }
 
-void RubberBetweenPosts::Refresh(EditorUI &ed, Rubber *const rubber)
+void RubberBetweenPosts::Refresh(EditorUI &ed, Rubber *const rubber, const bool physics)
 {
    ed.m_renderer->ReinitRenderable(rubber);
    ed.m_renderer->InvalidateShadowContent();
-   ed.m_player->m_physics->Update(rubber);
+   if (physics)
+      ed.m_player->m_physics->Update(rubber);
 }
 
 vector<Primitive *> RubberBetweenPosts::SelectedPosts(const EditorUI &ed)
@@ -125,7 +126,7 @@ RubberBetweenPosts::PostMap RubberBetweenPosts::PostsByName(const EditorUI &ed)
    return posts;
 }
 
-bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap *const posts)
+bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap *const posts, const bool force, const bool physics)
 {
    if (ed.IsInspectMode()) // Not while playing: the live table is only inspected
       return false;
@@ -147,15 +148,48 @@ bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap
       }
       prims.push_back(prim);
    }
-   vector<RubberFit::Point> pts;
+   const float thickness = static_cast<float>(rubber->m_d.m_thickness);
+   vector<RubberFit::Post> circles;
    string error;
-   if (!FitPosts(prims, static_cast<float>(rubber->m_d.m_thickness), rubber->m_d.m_postRoundness, pts, error))
+   for (Primitive *const prim : prims)
+   {
+      RubberFit::Post post;
+      if (!Footprint(prim, post, error))
+      {
+         ed.Report(rubber->GetName() + ": " + error + " (shape kept)");
+         return false;
+      }
+      circles.push_back(post);
+   }
+   // Hash of everything the fit depends on (FNV-1a over the float bits)
+   uint64_t hash = 1469598103934665603ull;
+   const auto mix = [&hash](const float f)
+   {
+      uint32_t bits;
+      memcpy(&bits, &f, sizeof(bits));
+      hash = (hash ^ bits) * 1099511628211ull;
+   };
+   for (const RubberFit::Post &post : circles)
+   {
+      mix(post.x);
+      mix(post.y);
+      mix(post.r);
+   }
+   mix(thickness);
+   mix(rubber->m_d.m_postRoundness);
+   mix(rubber->m_d.m_height);
+   if (!force)
+      if (const auto it = ed.m_rubberFitHash.find(rubber); it != ed.m_rubberFitHash.end() && it->second == hash)
+         return true; // Same inputs as the last fit
+   vector<RubberFit::Point> pts;
+   if (!RubberFit::Fit(circles, thickness, rubber->m_d.m_postRoundness, pts, error))
    {
       ed.Report(rubber->GetName() + ": " + error + " (shape kept)"); // The previous shape stays
       return false;
    }
    SetPoints(rubber, pts, rubber->m_d.m_height);
-   Refresh(ed, rubber);
+   Refresh(ed, rubber, physics);
+   ed.m_rubberFitHash[rubber] = hash;
    return true;
 }
 
@@ -188,6 +222,7 @@ void RubberBetweenPosts::Create(EditorUI &ed)
    if (pie == nullptr)
       return;
    Rubber *const rubber = static_cast<Rubber *>(pie);
+   ed.m_rubberFitHash.erase(rubber); // An address reused by the new part
    rubber->m_d.m_thickness = thickness;
    rubber->m_d.m_height = height;
    rubber->m_d.m_hitHeight = height;
@@ -253,6 +288,7 @@ void RubberBetweenPosts::Bind(EditorUI &ed)
       rubber->m_d.m_postRefs.push_back(prim->GetName());
    SetPoints(rubber, pts, rubber->m_d.m_height);
    Refresh(ed, rubber);
+   ed.m_rubberFitHash.erase(rubber);
    ed.m_undo.SetLabel("Bind Selected: " + rubber->GetName());
    ed.m_undo.EndUndo();
    ed.Report(rubber->GetName() + " follows " + std::to_string(prims.size()) + (prims.size() == 1 ? " post" : " posts"));

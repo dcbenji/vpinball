@@ -416,6 +416,18 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    ankerl::unordered_dense::set<std::pair<unsigned, unsigned>> addedEdges;
 
+   // The hit shape reuses the render mesh arrays: when the renderer is already set up (live editor creating or editing a rubber), keep its
+   // vertices/indices, else the dynamic buffer update and draw count would use the low detail hit shape mesh
+   vector<Vertex3D_NoTex2> renderVertices;
+   vector<WORD> renderIndices;
+   const bool keepRenderMesh = !isUI && m_renderer != nullptr;
+   const int renderNumVertices = m_numVertices, renderNumIndices = m_numIndices;
+   if (keepRenderMesh)
+   {
+      renderVertices = m_vertices;
+      renderIndices = m_ringIndices;
+   }
+
    if (!isUI)
       GenerateMesh(6, true); //!! adapt hacky code in the function if changing the "6" here
    UpdateRubber(false, m_d.m_hitHeight);
@@ -449,6 +461,14 @@ void Rubber::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          Vertex3Ds v = Vertex3Ds(m_vertices[i].x, m_vertices[i].y, m_vertices[i].z);
          SetupHitObject(physics, new HitPoint(this, v), isUI);
       }
+
+   if (keepRenderMesh)
+   {
+      m_vertices = std::move(renderVertices);
+      m_ringIndices = std::move(renderIndices);
+      m_numVertices = renderNumVertices;
+      m_numIndices = renderNumIndices;
+   }
 }
 
 void Rubber::PhysicRelease(PhysicsEngine* physics, const bool isUI)

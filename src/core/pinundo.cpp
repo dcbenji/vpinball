@@ -23,7 +23,7 @@ public:
    UndoRecord();
    ~UndoRecord();
 
-   void MarkForUndo(IEditable *const pie, const bool saveForUndo);
+   void MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject = true);
    void MarkForCreate(IEditable *const pie);
    void MarkForDelete(IEditable *const pie);
 
@@ -92,7 +92,7 @@ string UndoRecord::Label() const
    return "Edit";
 }
 
-void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo)
+void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject)
 {
    if (FindIndexOf(m_vieMark, pie) != -1) // Been marked already
       return;
@@ -101,7 +101,8 @@ void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo)
       return;
 
    m_vieMark.push_back(pie);
-   NoteSubject(pie);
+   if (noteSubject)
+      NoteSubject(pie);
 
    auto pstm = std::make_unique<InMemStream>();
 
@@ -270,7 +271,7 @@ void PinUndo::BeginUndo()
    }
 }
 
-void PinUndo::MarkForUndo(IEditable *const pie, const bool saveForUndo)
+void PinUndo::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject)
 {
    assert(!m_undoRecords.empty());
    assert(m_nUndoLayer > 0);
@@ -279,7 +280,7 @@ void PinUndo::MarkForUndo(IEditable *const pie, const bool saveForUndo)
    if (m_nUndoLayer <= 0)
       BeginUndo();
 
-   m_undoRecords.back()->MarkForUndo(pie, saveForUndo);
+   m_undoRecords.back()->MarkForUndo(pie, saveForUndo, noteSubject);
 }
 
 void PinUndo::MarkForCreate(IEditable *const pie)

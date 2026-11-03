@@ -230,6 +230,7 @@ void EditorUI::Close()
    SDLInputHandler::ClearSwallowedMouseButtons(); // The editor stops drawing: no nav cube press can stay swallowed
    m_deferredStop = -1;
    m_gizmoDragActive = false;
+   FlushRubberDrag();
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
    RestorePartsVisibility();
@@ -2388,6 +2389,7 @@ void EditorUI::RenderUI()
    if (m_gizmoDragActive && (gizmoLost || !ImGuizmo::IsUsing()))
    {
       m_gizmoDragActive = false;
+      FlushRubberDrag();
       m_gizmoDragSelection.clear();
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
@@ -3238,6 +3240,7 @@ bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m
 
 void EditorUI::RestoreUndoState(const std::any &state)
 {
+   m_rubberFitHash.clear(); // The restored rubbers have other shapes than the last fit
    if (state.has_value())
       RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
 }
@@ -4078,7 +4081,7 @@ void EditorUI::MarkDependentsForUndo() { MarkDependentsForUndo(SelectedEditables
 void EditorUI::MarkDependentsForUndo(const vector<IEditable *> &touched)
 {
    for (Rubber *const rubber : DependentRubbers(touched))
-      m_undo.MarkForUndo(rubber);
+      m_undo.MarkForUndo(rubber, true, false); // Not counted in the label: only the edited parts are
 }
 
 void EditorUI::DetachSelectedRubbersFromUnselectedPosts()
@@ -4097,12 +4100,39 @@ void EditorUI::DetachSelectedRubbersFromUnselectedPosts()
 // The record of the edit already holds the rubbers (MarkDependentsForUndo before it, DropDeletedPostRefs for a deletion)
 void EditorUI::RefitDependents(const vector<IEditable *> &touched)
 {
+   if (m_modal.active || m_gizmoDragActive)
+   {
+      // Per frame while dragging: no table scan, skip unchanged rubbers, and no physics update (a full collider rebuild) until FlushRubberDrag
+      if (!m_rubberDrag.valid)
+      {
+         m_rubberDrag.rubbers = DependentRubbers(touched);
+         if (!m_rubberDrag.rubbers.empty())
+            m_rubberDrag.posts = RubberBetweenPosts::PostsByName(*this);
+         m_rubberDrag.valid = true;
+      }
+      for (Rubber *const rubber : m_rubberDrag.rubbers)
+         if (RubberBetweenPosts::Refit(*this, rubber, &m_rubberDrag.posts, false, false) && std::ranges::find(m_rubberDrag.pendingPhysics, rubber) == m_rubberDrag.pendingPhysics.end())
+            m_rubberDrag.pendingPhysics.push_back(rubber);
+      return;
+   }
    const vector<Rubber *> rubbers = DependentRubbers(touched);
    if (rubbers.empty())
       return;
    const RubberBetweenPosts::PostMap posts = RubberBetweenPosts::PostsByName(*this);
    for (Rubber *const rubber : rubbers)
-      RubberBetweenPosts::Refit(*this, rubber, &posts);
+      RubberBetweenPosts::Refit(*this, rubber, &posts, false);
+}
+
+void EditorUI::FlushRubberDrag()
+{
+   if (!m_rubberDrag.pendingPhysics.empty())
+   {
+      const auto &parts = m_table->GetParts();
+      for (Rubber *const rubber : m_rubberDrag.pendingPhysics)
+         if (std::ranges::find(parts, static_cast<IEditable *>(rubber)) != parts.end()) // Still in the table (a canceled drag restored it)
+            m_player->m_physics->Update(rubber);
+   }
+   m_rubberDrag = RubberDrag();
 }
 
 void EditorUI::DetachRubberRefs(IEditable *const part)
@@ -4117,6 +4147,7 @@ void EditorUI::DetachRubberRefs(IEditable *const part)
 
 void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
 {
+   m_rubberFitHash.clear(); // Addresses of deleted rubbers may be reused
    vector<string> names;
    for (const IEditable *const part : deleted)
       if (part->GetItemType() == eItemPrimitive)
@@ -4554,6 +4585,7 @@ void EditorUI::EndModalTransform(const bool confirm)
          SetSelectionTransform(m_modal.initial);
    }
    m_modal.active = false;
+   FlushRubberDrag(); // After the restore of a canceled drag
    m_gizmoOperation = m_modal.savedGizmo; // The gizmo comes back after the transform
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
