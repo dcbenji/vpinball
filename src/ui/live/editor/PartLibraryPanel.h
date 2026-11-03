@@ -108,9 +108,17 @@ private:
       float gain = 8.f, depth = 0.f, spot = 1.f, bright = 1.f, ox = 0.f, oy = 0.f;
       bool operator==(const InsertLook &) const = default;
    };
+   // A session override: only the edited fields (mask bits gain, depth, spot, bright, ox, oy = 1..32) are written, to every Traced card (cards keep their other values)
+   struct LookOverride
+   {
+      InsertLook look;
+      unsigned mask = 0;
+   };
    static bool PackLook(PinTable *table, InsertLook &look); // The first Traced card's values
-   static void ApplyLook(PinTable *table, const InsertLook &look); // To every Traced card of the table
-   InsertLook ResolveLook(const std::filesystem::path &pack, PinTable *table); // The session override of the pack, else the card's own values
+   static vector<Primitive *> TracedCards(PinTable *table);
+   static void ApplyLook(PinTable *table, const LookOverride &override);
+   LookOverride ResolveLook(const std::filesystem::path &pack, PinTable *table); // The session override of the pack (mask 0: none)
+   void ApplyLightboxLook(); // The cards' own values, then the override
 
    static constexpr unsigned int kRigVersion = 6; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
@@ -232,7 +240,8 @@ private:
    InsertLook m_lbLook, m_lbPackLook; // Edited look, and the pack's own
    bool m_lbHasCard = false; // The scratch table has a Traced card
    bool m_lbReal = false; // 'Table brightness': the normalization is off
-   std::map<std::filesystem::path, InsertLook> m_looks; // Overrides of the packs, for the session (never written to a pack)
+   vector<InsertLook> m_lbOrig; // Each Traced card's own values
+   std::map<std::filesystem::path, LookOverride> m_looks; // Overrides of the packs, for the session (never written to a pack)
    std::map<string, float> m_hookLook; // VPX_LIBRARY_PREVIEW look fields (gain, depth, spot, bright, ox, oy)
    std::filesystem::path m_hookLookPack;
    bool m_lbOpening = false; // Open the popup this frame

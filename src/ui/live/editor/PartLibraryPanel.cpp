@@ -115,6 +115,7 @@ static std::filesystem::path NormFile(const std::filesystem::path &thumbFile)
 static float ReadNorm(const std::filesystem::path &thumbFile)
 {
    std::ifstream in(NormFile(thumbFile));
+   in.imbue(std::locale::classic()); // Not the global locale: a comma decimal separator would read 0.5 as 0
    float factor = 1.f;
    return (in >> factor) && factor >= 0.1f && factor <= 1.f ? factor : 1.f;
 }
@@ -175,39 +176,71 @@ bool PartLibraryPanel::PackLook(PinTable *const table, InsertLook &look)
    return false;
 }
 
-void PartLibraryPanel::ApplyLook(PinTable *const table, const InsertLook &look)
+vector<Primitive *> PartLibraryPanel::TracedCards(PinTable *const table)
 {
+   vector<Primitive *> cards;
    for (IEditable *const part : table->GetParts())
       if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsTracedInsert())
-      {
-         PrimitiveData &d = static_cast<Primitive *>(part)->m_d;
-         d.m_tracedGain = look.gain;
-         d.m_bulbDepth = look.depth;
-         d.m_bulbScale = look.spot;
-         d.m_bulbBrightness = look.bright;
-         d.m_bulbOffsetX = look.ox;
-         d.m_bulbOffsetY = look.oy;
-      }
+         cards.push_back(static_cast<Primitive *>(part));
+   return cards;
 }
 
-PartLibraryPanel::InsertLook PartLibraryPanel::ResolveLook(const std::filesystem::path &pack, PinTable *const table)
+void PartLibraryPanel::ApplyLook(PinTable *const table, const LookOverride &override)
 {
-   InsertLook look;
-   PackLook(table, look);
+   const InsertLook &look = override.look;
+   for (Primitive *const card : TracedCards(table))
+   {
+      PrimitiveData &d = card->m_d;
+      if (override.mask & 1) d.m_tracedGain = look.gain;
+      if (override.mask & 2) d.m_bulbDepth = look.depth;
+      if (override.mask & 4) d.m_bulbScale = look.spot;
+      if (override.mask & 8) d.m_bulbBrightness = look.bright;
+      if (override.mask & 16) d.m_bulbOffsetX = look.ox;
+      if (override.mask & 32) d.m_bulbOffsetY = look.oy;
+   }
+}
+
+PartLibraryPanel::LookOverride PartLibraryPanel::ResolveLook(const std::filesystem::path &pack, PinTable *const table)
+{
    if (const auto it = m_looks.find(pack); it != m_looks.end())
-      look = it->second;
-   else if (!m_hookLook.empty() && pack == m_hookLookPack)
+      return it->second;
+   LookOverride ov;
+   if (!m_hookLook.empty() && pack == m_hookLookPack)
    {
       // Test hook fields over the card's values, kept as the pack's override
-      for (const auto &[key, value] : m_hookLook)
-      {
-         float &field = key == "gain" ? look.gain : key == "depth" ? look.depth : key == "spot" ? look.spot : key == "bright" ? look.bright : key == "ox" ? look.ox : look.oy;
-         if (key == "gain" || key == "depth" || key == "spot" || key == "bright" || key == "ox" || key == "oy")
-            field = value;
-      }
-      m_looks[pack] = look;
+      PackLook(table, ov.look);
+      static constexpr const char *kKeys[] = { "gain", "depth", "spot", "bright", "ox", "oy" };
+      float *const fields[] = { &ov.look.gain, &ov.look.depth, &ov.look.spot, &ov.look.bright, &ov.look.ox, &ov.look.oy };
+      for (int i = 0; i < 6; i++)
+         if (const auto it = m_hookLook.find(kKeys[i]); it != m_hookLook.end())
+         {
+            *fields[i] = it->second;
+            ov.mask |= 1u << i;
+         }
+      if (ov.mask != 0)
+         m_looks[pack] = ov;
    }
-   return look;
+   return ov;
+}
+
+// The Traced cards of the lightbox: their own values, then the override (a reverted field gives each card its own value back)
+void PartLibraryPanel::ApplyLightboxLook()
+{
+   const vector<Primitive *> cards = TracedCards(m_lbScratch);
+   for (size_t i = 0; i < cards.size() && i < m_lbOrig.size(); i++)
+   {
+      PrimitiveData &d = cards[i]->m_d;
+      const InsertLook &o = m_lbOrig[i];
+      d.m_tracedGain = o.gain;
+      d.m_bulbDepth = o.depth;
+      d.m_bulbScale = o.spot;
+      d.m_bulbBrightness = o.bright;
+      d.m_bulbOffsetX = o.ox;
+      d.m_bulbOffsetY = o.oy;
+   }
+   const auto it = m_looks.find(m_lbItem.pack);
+   if (it != m_looks.end())
+      ApplyLook(m_lbScratch, it->second);
 }
 
 static void SetLightsState(const vector<Light *> &lights, const double clock, const float state) // 0 unlit, 1 lit, 2 blinking
@@ -805,6 +838,13 @@ void PartLibraryPanel::RenderGrid(const float height)
          const ImVec2 bs = ImGui::CalcTextSize(badge);
          drawList->AddRectFilled(ImVec2(p0.x + 2.f * dpi, p0.y + 2.f * dpi), ImVec2(p0.x + 6.f * dpi + bs.x, p0.y + 4.f * dpi + bs.y), kBadgeColors[static_cast<int>(item.kind)], 2.f * dpi);
          drawList->AddText(ImVec2(p0.x + 4.f * dpi, p0.y + 3.f * dpi), IM_COL32(255, 255, 255, 255), badge);
+         if (item.kind == ItemKind::Insert && m_looks.contains(item.pack))
+         {
+            // A session look override applies on the next placement of this pack
+            const ImVec2 es = ImGui::CalcTextSize("EDITED");
+            drawList->AddRectFilled(ImVec2(p1.x - 6.f * dpi - es.x, p0.y + 2.f * dpi), ImVec2(p1.x - 2.f * dpi, p0.y + 4.f * dpi + es.y), IM_COL32(40, 40, 40, 230), 2.f * dpi);
+            drawList->AddText(ImVec2(p1.x - 4.f * dpi - es.x, p0.y + 3.f * dpi), IM_COL32(255, 200, 80, 255), "EDITED");
+         }
          const ImVec4 clip(p0.x, p1.y, p1.x, p1.y + labelH);
          drawList->AddText(nullptr, 0.f, ImVec2(p0.x + 2.f * dpi, p1.y + 2.f * dpi), ImGui::GetColorU32(ImGuiCol_Text), item.label.c_str(), nullptr, 0.f, &clip);
       }
@@ -1364,7 +1404,9 @@ void PartLibraryPanel::PumpThumbnails()
                }
             }
          item.norm = m_thumbFactor;
-         std::ofstream(NormFile(item.thumbFile), std::ios::trunc) << m_thumbFactor << '\n';
+         std::ofstream norm(NormFile(item.thumbFile), std::ios::trunc);
+         norm.imbue(std::locale::classic());
+         norm << m_thumbFactor << '\n';
          PLOGI << "LIBNORM " << PathToUTF8(item.pack) << " factor=" << m_thumbFactor;
       }
       m_thumbIter = 0;
@@ -1523,8 +1565,12 @@ void PartLibraryPanel::RenderLightbox()
             m_lbReal = false;
             if (m_lbHasCard)
             {
-               m_lbLook = ResolveLook(m_lbItem.pack, m_lbScratch);
-               ApplyLook(m_lbScratch, m_lbLook);
+               m_lbOrig.clear();
+               for (const Primitive *const card : TracedCards(m_lbScratch))
+                  m_lbOrig.push_back({ card->m_d.m_tracedGain, card->m_d.m_bulbDepth, card->m_d.m_bulbScale, card->m_d.m_bulbBrightness, card->m_d.m_bulbOffsetX, card->m_d.m_bulbOffsetY });
+               const LookOverride ov = ResolveLook(m_lbItem.pack, m_lbScratch);
+               m_lbLook = ov.mask != 0 ? ov.look : m_lbPackLook;
+               ApplyLightboxLook();
             }
             m_lbBounds = ScratchBounds(m_lbParts);
             m_lbCam = AreaViewSettings();
@@ -1545,6 +1591,22 @@ void PartLibraryPanel::RenderLightbox()
          }
       }
    }
+
+   // The normalization of an insert thumbnail that landed after the lightbox opened
+   if (m_lbScratch != nullptr && m_lbItem.kind == ItemKind::Insert && m_lbItem.norm == 1.f)
+      for (const LibraryItem &tile : m_items)
+         if (tile.pack == m_lbItem.pack && tile.label == m_lbItem.label)
+         {
+            if (tile.norm != 1.f)
+            {
+               m_lbItem.norm = tile.norm;
+               if (!m_lbReal)
+                  for (Primitive *const card : TracedCards(m_lbScratch))
+                     card->m_d.m_alpha *= tile.norm;
+               m_lbDirty = true;
+            }
+            break;
+         }
 
    // Header: name, kind and counts
    static constexpr const char *kKinds[] = { "Part", "Material", "Insert" };
@@ -1613,11 +1675,15 @@ void PartLibraryPanel::RenderLightbox()
       }
       if (changed)
       {
-         ApplyLook(m_lbScratch, m_lbLook);
-         if (m_lbLook == m_lbPackLook)
+         // The edited fields are the ones that differ from the pack's card; none left: the override is dropped
+         const InsertLook &a = m_lbLook, &b = m_lbPackLook;
+         const unsigned mask = (a.gain != b.gain ? 1u : 0u) | (a.depth != b.depth ? 2u : 0u) | (a.spot != b.spot ? 4u : 0u) | (a.bright != b.bright ? 8u : 0u)
+            | (a.ox != b.ox ? 16u : 0u) | (a.oy != b.oy ? 32u : 0u);
+         if (mask == 0)
             m_looks.erase(m_lbItem.pack);
          else
-            m_looks[m_lbItem.pack] = m_lbLook;
+            m_looks[m_lbItem.pack] = { m_lbLook, mask };
+         ApplyLightboxLook();
          m_lbDirty = true;
       }
    }
@@ -1854,7 +1920,8 @@ void PartLibraryPanel::StartPlacement()
       return;
    }
 
-   ApplyLook(temp, ResolveLook(m_placementPack, temp)); // The look edited in the lightbox (set before the parts are created on commit)
+   if (const LookOverride ov = ResolveLook(m_placementPack, temp); ov.mask != 0)
+      ApplyLook(temp, ov); // The fields edited in the lightbox (set before the parts are created on commit)
    m_previewTable = temp;
    for (RenderProbe *const probe : temp->m_vrenderprobe)
       probe->RenderSetup(m_editor.m_renderer.get()); // The ghost parts draw with them; the ones merged on commit stay set up
