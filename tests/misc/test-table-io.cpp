@@ -1509,6 +1509,46 @@ TEST_CASE("VPZ partial pack export and import")
       std::filesystem::remove_all(packPath, ec);
    }
 
+   SUBCASE("a pack material with shorter numbers than the saved floats is not renamed on import")
+   {
+      CComObject<PinTable> *source;
+      CComObject<PinTable>::CreateInstance(&source);
+      source->AddRef();
+      TestFileFeedback sourceFeedback;
+      REQUIRE(SUCCEEDED(source->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", sourceFeedback)));
+      Material *const mat = source->GetMaterialList().front();
+      mat->m_fRoughness = 0.07f;
+      const std::filesystem::path packPath = GetTmpDir() / "shortnum-pack";
+      std::filesystem::remove_all(packPath, ec);
+      TestFileFeedback saveFeedback;
+      REQUIRE(SUCCEEDED(source->SavePartsToJSONPack(packPath, { source->GetParts().front() }, saveFeedback)));
+      // Hand written pack: the roughness as the short decimal number (0.07), not the saved float (0.07000000029802322)
+      for (const auto &entry : std::filesystem::directory_iterator(packPath / "materials", ec))
+      {
+         std::ifstream in(entry.path());
+         nlohmann::ordered_json doc = nlohmann::ordered_json::parse(in);
+         in.close();
+         for (auto &[key, value] : doc.items())
+            if (key.find("rough") != string::npos && key.find("coat") == string::npos && value.is_number())
+               value = 0.07;
+         std::ofstream(entry.path(), std::ios::trunc) << doc.dump(2);
+      }
+
+      CComObject<PinTable> *target;
+      CComObject<PinTable>::CreateInstance(&target);
+      target->AddRef();
+      TestFileFeedback targetFeedback;
+      REQUIRE(SUCCEEDED(target->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", targetFeedback)));
+      target->GetMaterialList().front()->m_fRoughness = 0.07f;
+      const std::unique_ptr<JSONSerializer::Deserializer> reader = target->CreateImportDeserializer(packPath, PartImportMergeStrategy::RenameConflict);
+      REQUIRE(reader != nullptr);
+      CHECK(reader->RenamedAsset("materials", JSONSerializer::SanitizeFileName(mat->m_name)) == JSONSerializer::SanitizeFileName(mat->m_name)); // Not renamed
+
+      target->Release();
+      source->Release();
+      std::filesystem::remove_all(packPath, ec);
+   }
+
    table->Release();
 }
 
