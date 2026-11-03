@@ -32,7 +32,7 @@ enum class AreaType : uint8_t
 constexpr int kPanelTypeCount = 4; // types offered in editor-type menus (CameraPreview added only by task 5)
 
 // Settings of a CameraPreview leaf (a secondary 3D view), saved with the leaf. JSON keys, all optional (absent = the default; builds
-// before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" (default "pbr"),
+// before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" (default shaded),
 // "live": false, "orbit": { "yaw", "pitch", "distance", "target": [x, y, z], "ortho" } (absent = framed on the table when first shown)
 struct AreaViewSettings
 {

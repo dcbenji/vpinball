@@ -438,7 +438,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (!m_settings.SameChoices(before) || m_view != viewBefore)
             m_refresh = true;
          Renderer *const renderer = m_editor.m_renderer.get();
-         const bool pbrRefused = !m_settings.wireframe && !renderer->CanRenderEditorPBRView(m_slot);
+         const bool shadedRefused = !m_settings.wireframe && !renderer->CanRenderEditorShadedView(m_slot);
          m_hasImage = true;
          // The views alternate on the half rate frames (2 PBR views cost one view per frame); a wireframe view renders every 4th frame (the editor's
          // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
@@ -449,7 +449,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          static constexpr unsigned int kWirePhases[4] = { 1u, 3u, 0u, 2u };
          const unsigned int frame = static_cast<unsigned int>(ImGui::GetFrameCount());
          const bool scheduled = m_settings.wireframe ? (frame % 4u) == kWirePhases[static_cast<unsigned int>(m_rank) % 4u] : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0;
-         if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
+         if (!shadedRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
          {
             Renderer::EditorViewRequest req;
             req.width = m_width;
@@ -467,7 +467,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
 
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
-         if (RenderTarget *const rt = renderer->GetEditorView(m_slot); rt != nullptr && !pbrRefused)
+         if (RenderTarget *const rt = renderer->GetEditorView(m_slot); rt != nullptr && !shadedRefused)
          {
             // Render targets are stored bottom-left first on OpenGL / GLES (the scene shaders' TEX_V_IS_UP): flip them for ImGui there only
 #if defined(ENABLE_BGFX)
@@ -481,7 +481,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
          else
             drawList->AddRectFilled(imgMin, imgMax, IM_COL32(20, 20, 20, 255));
-         if (pbrRefused)
+         if (shadedRefused)
          {
             const char *const msg = "2 PBR views at most: set this one to Wireframe";
             const ImVec2 ts = ImGui::CalcTextSize(msg);

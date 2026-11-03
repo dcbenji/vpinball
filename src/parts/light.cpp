@@ -458,7 +458,8 @@ void Light::Render(const unsigned int renderMask)
 
    if (isUIPass)
    {
-      if (!m_d.m_visible)
+      // Hidden in the editor (outliner), or no lightmap mesh (empty or degenerate shape: RenderSetup left it null, and UpdateMeshBuffer/RenderMesh would dereference it)
+      if (!m_d.m_visible || !IsUIVisible(true) || m_lightmapMeshBuffer == nullptr)
          return;
 
       UpdateMeshBuffer();
@@ -466,15 +467,12 @@ void Light::Render(const unsigned int renderMask)
       if (m_desktopBackdrop)
          m_renderer->UpdateDesktopBackdropShaderMatrix(true, false, false);
       const vec3 pos = m_desktopBackdrop ? vec3(0.f, 0.f, 0.f) : vec3(m_boundingSphereCenter.x, m_boundingSphereCenter.y, m_surfaceHeight);
-      if (m_lightmapMeshBuffer != nullptr) // No lightmap mesh (e.g. nothing to draw for this light): the UI render would dereference a null mesh
-      {
-         RenderMeshDesc lightmap;
-         lightmap.mesh = m_lightmapMeshBuffer;
-         lightmap.sortCenter = Vertex3Ds(pos.x, pos.y, pos.z);
-         lightmap.uiEdgeMesh = &m_lightmapMeshEdgeBuffer;
-         lightmap.edgeMode = UIEdgeMode::VertexRing;
-         m_renderer->RenderMesh(renderMask, lightmap, {});
-      }
+      RenderMeshDesc lightmap;
+      lightmap.mesh = m_lightmapMeshBuffer;
+      lightmap.sortCenter = Vertex3Ds(pos.x, pos.y, pos.z);
+      lightmap.uiEdgeMesh = &m_lightmapMeshEdgeBuffer;
+      lightmap.edgeMode = UIEdgeMode::VertexRing;
+      m_renderer->RenderMesh(renderMask, lightmap, {});
 
       // FIXME render bulb
 

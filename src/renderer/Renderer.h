@@ -127,10 +127,10 @@ public:
    // the lite wireframe path: hidden line wireframe drawn straight into an LDR target, no post processing, no HDR target set).
    // A request made while recording the UI of frame N is rendered by the Render3DScene of frame N+1, before its UI pass, so the UI of
    // frame N+1 samples a finished target. Nothing is rendered (and nothing costs) without a request. Each slot has its own scene target
-   // set (slot 0's is also the VR desktop display's: secondary views are never rendered in VR); at most kMaxEditorPBRViews slots hold a
+   // set (slot 0's is also the VR desktop display's: secondary views are never rendered in VR); at most kMaxEditorShadedViews slots hold a
    // full set at once.
    static constexpr int kMaxEditorViews = 3;
-   static constexpr int kMaxEditorPBRViews = 2;
+   static constexpr int kMaxEditorShadedViews = 2;
    struct EditorViewRequest
    {
       int width = 0, height = 0;
@@ -139,13 +139,12 @@ public:
       Matrix3D view, proj; // Free camera (playerCamera false): VPX left handed view and projection, as SetViewProj takes them
       bool wireframe = false; // Lite path
    };
-   bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full view beyond kMaxEditorPBRViews
-   bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full view
+   bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full view beyond kMaxEditorShadedViews
+   bool CanRenderEditorShadedView(int slot) const; // False when kMaxEditorShadedViews other slots hold or requested a full view
    RenderTarget* GetEditorView(int slot) const; // Last render of the slot, null before the first one
    void ReleaseEditorView(int slot); // Releases the slot's targets (the area was closed), recreated on the next request
    // View setup of the scene being recorded: the table's active one, or the one the editor camera preview renders (rotation dependent passes use it)
    const ViewSetup& GetRenderViewSetup() const;
-   void InvalidateShadowContent() { } // Hook for cached shadow content invalidation after the editor moves a caster: no-op on master (the PBR branch has the shadow page cache)
    void RenderUIScene(); // Records a frame containing only the LiveUI (used while the initial table content is being loaded)
 
    enum ColorSpace
@@ -501,8 +500,8 @@ private:
       bool requested = false;
       bool rendered = false;
       bool lite = false; // The slot's target set holds lite (LDR, wireframe) targets
-      bool pbr = false; // The slot's target set holds full PBR targets
-      RenderTarget* out = nullptr; // Tonemapped output of a full PBR view (a lite view's output is its set's back buffer)
+      bool shaded = false; // The slot's target set holds full (shaded) targets
+      RenderTarget* out = nullptr; // Tonemapped output of a shaded view (a lite view's output is its set's back buffer)
    };
    EditorView m_editorViews[kMaxEditorViews];
    void RenderEditorView(int slot);

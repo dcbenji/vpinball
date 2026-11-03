@@ -238,7 +238,6 @@ void LightUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-
    if (props.BeginSection("Position"s))
    {
       props.InputFloat2<Light>(
