@@ -1474,7 +1474,7 @@ void EditorUI::UpdateAreaDrag()
    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
    if (m_areaDrag.decided)
    {
-      // Inside the area: split (the axis is locked at the first decision from the dominant movement). Inside another area: join, the source takes over
+      // Inside the area: split (the axis follows the dominant movement for the first 20 px, then locks; the other axis when the chosen one cannot fit). Inside another area: join, the source takes over
       const int under = AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y);
       if (under == m_areaDrag.leaf)
       {

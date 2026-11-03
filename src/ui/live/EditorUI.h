@@ -580,7 +580,7 @@ private:
       int corner = 0; // 0 top left, 1 top right, 2 bottom left, 3 bottom right
       ImVec2 start = ImVec2(0.f, 0.f);
       bool decided = false; // Moved far enough: split inside the area, join in another one
-      bool axisChosen = false; // The split axis stays locked once chosen
+      bool axisChosen = false; // The split axis is re-evaluated until the drag passes 20 px, then stays locked
       SplitAxis axis = SplitAxis::Vertical;
    };
    enum class AreaModalKind
