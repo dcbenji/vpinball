@@ -884,6 +884,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
          else
             editor.m_undo.MarkForUndo(editable);
+         editor.MarkDependentsForUndo(); // Rubbers following an edited post (Rubber Between Posts)
          // Alt held while editing: the fields also write to the other selected parts, snapshotted in the same record
          const bool areaActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
             || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());
@@ -965,7 +966,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_prevActiveId = activeId;
          }
          if (props.GetModifiedField() > 0)
+         {
             RefreshEditedParts(props);
+            editor.RefitSelectionDependents();
+         }
          break;
       }
       case Selection::S_IMAGE: ImageProperties(props, editor.m_selection.GetImage()); break;

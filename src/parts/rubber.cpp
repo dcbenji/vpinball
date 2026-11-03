@@ -668,6 +668,13 @@ void Rubber::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteBool(FID(REEN), m_d.m_reflectionEnabled);
    writer.WriteString(FID(MAPH), m_d.m_szPhysicsMaterial);
    writer.WriteBool(FID(OVPH), m_d.m_overwritePhysics);
+   if (m_d.m_postRefs.size() >= 2)
+   {
+      for (const string &name : m_d.m_postRefs)
+         writer.WriteWideString(FID(RPST), MakeWString(name));
+      writer.WriteInt(FID(RPWR), m_d.m_postWrap);
+      writer.WriteFloat(FID(RPSL), m_d.m_postSlack);
+   }
    SaveSharedEditableFields(writer);
    m_curve.SavePoints(writer);
    writer.EndObject();
@@ -676,6 +683,9 @@ void Rubber::Save(IObjectWriter& writer, const bool saveForUndo)
 void Rubber::Load(IObjectReader& reader)
 {
    SetDefaults(false);
+   m_d.m_postRefs.clear();
+   m_d.m_postWrap = 0;
+   m_d.m_postSlack = 0.f;
    m_d.m_hitHeight = -1.0f;
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
@@ -709,6 +719,9 @@ void Rubber::Load(IObjectReader& reader)
          case FID(ROTZ): m_d.m_rotZ = reader.AsFloat(); break;
          case FID(MAPH): m_d.m_szPhysicsMaterial = reader.AsString(); break;
          case FID(OVPH): m_d.m_overwritePhysics = reader.AsBool(); break;
+         case FID(RPST): m_d.m_postRefs.push_back(MakeString(reader.AsWideString())); break;
+         case FID(RPWR): m_d.m_postWrap = reader.AsInt(); break;
+         case FID(RPSL): m_d.m_postSlack = reader.AsFloat(); break;
          case FID(PNTS): break; // Empty tag placed before drag point data (unused)
          case FID(DPNT): m_curve.LoadPointToken(reader); break;
          default: LoadSharedEditableField(tag, reader); break;

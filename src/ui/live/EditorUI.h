@@ -40,6 +40,7 @@ class PartGroup;
 class FRect3D;
 struct HitTestResult;
 class IEditable;
+class Rubber;
 
 namespace VPX
 {
@@ -65,6 +66,7 @@ class EditorUI final
    friend class PinnedPanel;
    friend class SearchPalette;
    friend class SetOrigin;
+   friend class RubberBetweenPosts;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -251,7 +253,7 @@ private:
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
    struct LastOperation
    {
-      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale };
+      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts };
       Type type = Type::None;
       uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
       vector<std::shared_ptr<EditorUIPart>> selection;
@@ -263,6 +265,10 @@ private:
       bool plane = false; // Scale: the axes perpendicular to the axis
       float angle = 0.f; // Degrees
       float factor = 1.f;
+      int rbThickness = 8; // Rubber Between Posts: the created rubber is the selection, adjusting refits it in place
+      float rbHeight = 25.f;
+      int rbWrap = 0; // RubberFit::Wrap
+      float rbSlack = 0.f;
       bool expanded = true;
    } m_lastOp;
    bool m_adjustPopupOpen = false; // F9
@@ -280,6 +286,16 @@ private:
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
    bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc
+
+   // Rubber Between Posts (see RubberBetweenPosts): the rubbers that follow primitives by name. A record that moves posts must hold the rubbers too
+   // (MarkDependentsForUndo, with the record open, before the move), the move then refits them (RefitDependents), so that one undo reverts both.
+   vector<Rubber *> DependentRubbers(const vector<IEditable *> &posts) const;
+   vector<IEditable *> SelectedEditables() const;
+   void MarkDependentsForUndo(); // Rubbers following the selected parts, in the open undo record
+   void RefitDependents(const vector<IEditable *> &touched);
+   void RefitSelectionDependents() { RefitDependents(SelectedEditables()); }
+   void DetachRubberRefs(IEditable *part); // The points of a linked rubber were edited by hand: it stops following its posts
+   void DropDeletedPostRefs(const vector<IEditable *> &deleted); // In the open undo record of the deletion
 
    // Add/Remove parts
    void DeleteSelection();
@@ -455,7 +471,7 @@ private:
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
    bool IsNumpadPressed(int digit) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
-   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false) const;
+   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false);
 
    // Editor camera
    ViewMode m_camMode = ViewMode::PreviewCam;

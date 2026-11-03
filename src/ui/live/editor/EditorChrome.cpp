@@ -3,6 +3,7 @@
 #include "core/stdafx.h"
 #include "EditorChrome.h"
 #include "SetOrigin.h"
+#include "RubberBetweenPosts.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 
@@ -261,6 +262,8 @@ void EditorChrome::RenderMenuBar()
             editor.DeleteAction();
          if (ImGui::MenuItem("Add Part...", "Shift+A", false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
             RequestAddPartPopup(ImGui::GetMousePos());
+         if (ImGui::MenuItem("Rubber Between Posts", nullptr, false, RubberBetweenPosts::CanApply(editor)))
+            RubberBetweenPosts::Apply(editor);
          ImGui::Separator();
          if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
             editor.SetGizmoOperation(ImGuizmo::TRANSLATE);
@@ -848,6 +851,17 @@ void EditorChrome::RenderToolbar()
             Tip((string("Add ") + button.name).c_str());
             column = (column + 1) % 5;
          }
+         ImGui::Separator();
+         const bool canRubber = RubberBetweenPosts::CanApply(editor);
+         ImGui::BeginDisabled(!canRubber);
+         if (ImGui::Selectable("Rubber Between Posts"))
+         {
+            RubberBetweenPosts::Apply(editor);
+            ImGui::CloseCurrentPopup();
+         }
+         ImGui::EndDisabled();
+         if (!canRubber)
+            ImGui::SetItemTooltip("Select two or more primitives (the posts) first");
          ImGui::EndPopup();
       }
    }
@@ -1245,6 +1259,8 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    {
       // Navigation hints follow the navigation preferences
       hints.push_back({ "LMB", "Select" });
+      if (!editor.IsInspectMode() && RubberBetweenPosts::CanApply(editor))
+         hints.push_back({ "Shift+A", "Rubber Between Posts" });
       hints.push_back({ editor.m_navAltMiddleButton ? "MMB / Alt+LMB" : "MMB", "Orbit" });
       hints.push_back({ "Shift+MMB", "Pan" });
       if (editor.m_navTrackpad)

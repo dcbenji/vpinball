@@ -5922,11 +5922,25 @@ float PinTable::GetSurfaceHeight(const string& name, float x, float y) const
 
 void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &oldName, const std::function<void(IEditable *)> &beforeChange)
 {
-   if (surface->GetItemType() != eItemSurface && surface->GetItemType() != eItemRamp)
+   if (surface->GetItemType() != eItemSurface && surface->GetItemType() != eItemRamp && surface->GetItemType() != eItemPrimitive)
       return;
    const string& newName = surface->GetIScriptable()->m_name;
    if (newName == oldName)
       return;
+   if (surface->GetItemType() == eItemPrimitive)
+   {
+      // Rubbers following a post (Rubber Between Posts) hold the names of their posts
+      for (IEditable *const pedit : m_vedit)
+         if (pedit->GetItemType() == eItemRubber)
+            for (string &ref : static_cast<Rubber *>(pedit)->m_d.m_postRefs)
+               if (StrCompareNoCase(ref, oldName))
+               {
+                  if (beforeChange)
+                     beforeChange(pedit);
+                  ref = newName;
+               }
+      return;
+   }
    const auto surfaceRef = [](IEditable *const pedit) -> string *
    {
       switch (pedit->GetItemType())

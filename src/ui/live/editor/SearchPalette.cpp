@@ -14,6 +14,7 @@
 #include "PropertyPane.h"
 #include "Selection.h"
 #include "SetOrigin.h"
+#include "RubberBetweenPosts.h"
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
@@ -188,6 +189,7 @@ void SearchPalette::BuildOperators()
    add("Object" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
    add("Object" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
    add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
+   add("Object" + sep + "Rubber Between Posts", "", [&ed]() { return RubberBetweenPosts::CanApply(ed); }, [&ed]() { RubberBetweenPosts::Apply(ed); });
    add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
    add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
    add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });

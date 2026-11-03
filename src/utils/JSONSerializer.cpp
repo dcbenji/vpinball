@@ -532,7 +532,11 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(RSCT), "scatter" },
          { FID(RVIS), "visible" },
          { FID(WDTP), "thickness" },
-      });
+         { FID(RPST), "post_refs" },
+         { FID(RPWR), "post_wrap" },
+         { FID(RPSL), "post_slack" },
+      },
+      { FID(RPST) });
 
       m[eItemSpinner] = MakePartMap({
          { FID(AFRC), "damping" },

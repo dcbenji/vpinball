@@ -17,6 +17,7 @@
 #include "editor/IconsLucide.h"
 #include "editor/LiveRenderContext.h"
 #include "editor/PropertyPane.h"
+#include "editor/RubberBetweenPosts.h"
 
 #include "parts/Collection.h"
 #include "parts/PartGroup.h"
@@ -24,6 +25,7 @@
 #include "parts/light.h"
 #include "parts/Material.h"
 #include "parts/primitive.h"
+#include "parts/rubber.h"
 #include "math/dragpoint.h"
 #include "math/matrix.h"
 #include "utils/UnityPrefabImporter.h"
@@ -2357,6 +2359,7 @@ void EditorUI::RenderUI()
             m_undo.BeginUndo();
             for (const auto &part : m_multiSel)
                m_undo.MarkForUndo(part->GetEditable());
+            MarkDependentsForUndo();
             m_undo.SetLabel(CountLabel(((static_cast<int>(m_gizmoOperation) & ImGuizmo::ROTATE) != 0) ? "Rotate"
                   : ((static_cast<int>(m_gizmoOperation) & ImGuizmo::SCALE) != 0)                     ? "Scale"
                                                                                                       : "Move",
@@ -2786,6 +2789,7 @@ void EditorUI::RenderUI()
                      point->Translate(delta);
                   curve->OnPointsModified();
                }
+               DetachRubberRefs(m_pointEditPart->GetEditable());
                m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
                m_renderer->InvalidateShadowContent();
                m_player->m_physics->Update(m_pointEditPart->GetEditable());
@@ -3917,6 +3921,7 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
    const bool backdrop = (m_camMode == ViewMode::DesktopBackdrop);
    PartGroup *const partGroup = GetPartGroupForNewPart();
    vector<IEditable *> pasted;
+   vector<string> originalNames; // Aligned with 'pasted': the names the parts were copied with (rubbers follow their posts by name)
    Vertex2D pasteMin(FLT_MAX, FLT_MAX), pasteMax(-FLT_MAX, -FLT_MAX);
    m_undo.BeginUndo();
    for (const vector<uint8_t> &partData : parts)
@@ -3930,6 +3935,7 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       BiffReader reader(partData.data() + sizeof(int), static_cast<uint32_t>(partData.size() - sizeof(int)), CURRENT_FILE_FORMAT_VERSION, nullptr, 0);
       editable->Load(reader);
       editable->m_desktopBackdrop = backdrop;
+      originalNames.push_back(editable->GetName());
       // If the original name is not yet used, use that one, otherwise add/increase the suffix until we find a name that's not used yet
       if (!m_table->IsNameUnique(editable->GetName()))
       {
@@ -3949,6 +3955,31 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       pasteMin.y = min(pasteMin.y, center.y);
       pasteMax.x = max(pasteMax.x, center.x);
       pasteMax.y = max(pasteMax.y, center.y);
+   }
+   // A pasted rubber that follows posts follows their copies if all of them were pasted with it, else it is detached (it keeps its shape)
+   for (IEditable *const editable : pasted)
+   {
+      if (editable->GetItemType() != eItemRubber || static_cast<Rubber *>(editable)->m_d.m_postRefs.empty())
+         continue;
+      RubberData &d = static_cast<Rubber *>(editable)->m_d;
+      vector<string> copies;
+      for (const string &ref : d.m_postRefs)
+      {
+         for (size_t i = 0; i < pasted.size(); i++)
+            if (pasted[i]->GetItemType() == eItemPrimitive && StrCompareNoCase(originalNames[i], ref))
+            {
+               copies.push_back(pasted[i]->GetName());
+               break;
+            }
+      }
+      if (copies.size() == d.m_postRefs.size())
+         d.m_postRefs = copies;
+      else
+      {
+         d.m_postRefs.clear();
+         d.m_postWrap = 0;
+         d.m_postSlack = 0.f;
+      }
    }
    if (!pasted.empty())
       m_undo.SetLabel(CountLabel("Paste", pasted.size(), pasted.front()->GetName()));
@@ -3989,6 +4020,86 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       SetLastOperation(LastOperation::Type::Paste, placed);
       m_lastOp.base = vec3(placed._41 - offset.x, placed._42 - offset.y, placed._43);
       m_lastOp.offset = vec3(offset.x, offset.y, 0.f);
+   }
+}
+
+vector<IEditable *> EditorUI::SelectedEditables() const
+{
+   vector<IEditable *> parts;
+   for (const auto &part : m_multiSel)
+      if (IEditable *const edit = part->GetEditable(); edit != nullptr)
+         parts.push_back(edit);
+   return parts;
+}
+
+// Rubbers (other than the touched parts themselves) that follow one of the touched primitives
+vector<Rubber *> EditorUI::DependentRubbers(const vector<IEditable *> &posts) const
+{
+   vector<Rubber *> rubbers;
+   for (IEditable *const part : m_table->GetParts())
+   {
+      if (part->GetItemType() != eItemRubber || static_cast<Rubber *>(part)->m_d.m_postRefs.empty())
+         continue;
+      Rubber *const rubber = static_cast<Rubber *>(part);
+      const bool follows = std::ranges::any_of(posts, [rubber](const IEditable *post)
+         { return post->GetItemType() == eItemPrimitive && std::ranges::any_of(rubber->m_d.m_postRefs, [post](const string &ref) { return StrCompareNoCase(ref, post->GetName()); }); });
+      if (follows)
+         rubbers.push_back(rubber);
+   }
+   return rubbers;
+}
+
+void EditorUI::MarkDependentsForUndo()
+{
+   for (Rubber *const rubber : DependentRubbers(SelectedEditables()))
+      m_undo.MarkForUndo(rubber);
+}
+
+// The record of the edit already holds the rubbers (MarkDependentsForUndo before it, DropDeletedPostRefs for a deletion)
+void EditorUI::RefitDependents(const vector<IEditable *> &touched)
+{
+   for (Rubber *const rubber : DependentRubbers(touched))
+      RubberBetweenPosts::Refit(*this, rubber);
+}
+
+void EditorUI::DetachRubberRefs(IEditable *const part)
+{
+   if (part == nullptr || part->GetItemType() != eItemRubber || static_cast<Rubber *>(part)->m_d.m_postRefs.empty())
+      return;
+   RubberData &d = static_cast<Rubber *>(part)->m_d;
+   d.m_postRefs.clear();
+   d.m_postWrap = 0;
+   d.m_postSlack = 0.f;
+   Report(part->GetName() + " no longer follows its posts (points edited)");
+}
+
+void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
+{
+   vector<string> names;
+   for (const IEditable *const part : deleted)
+      if (part->GetItemType() == eItemPrimitive)
+         names.push_back(part->GetName());
+   if (names.empty())
+      return;
+   for (IEditable *const part : m_table->GetParts()) // The deleted parts are no longer in the table
+   {
+      if (part->GetItemType() != eItemRubber)
+         continue;
+      Rubber *const rubber = static_cast<Rubber *>(part);
+      vector<string> &refs = rubber->m_d.m_postRefs;
+      const auto gone = [&names](const string &ref) { return std::ranges::any_of(names, [&ref](const string &n) { return StrCompareNoCase(n, ref); }); };
+      if (refs.empty() || !std::ranges::any_of(refs, gone))
+         continue;
+      m_undo.MarkForUndo(rubber);
+      std::erase_if(refs, gone);
+      if (refs.size() < 2) // Nothing left to follow: keeps its shape
+      {
+         refs.clear();
+         rubber->m_d.m_postWrap = 0;
+         rubber->m_d.m_postSlack = 0.f;
+      }
+      else
+         RubberBetweenPosts::Refit(*this, rubber);
    }
 }
 
@@ -4047,6 +4158,7 @@ void EditorUI::DeleteSelection()
          collection->RemovePart(edit);
       m_table->RemovePart(edit);
    }
+   DropDeletedPostRefs(partsToDelete);
    m_undo.SetLabel(CountLabel("Delete", partsToDelete.size(), partsToDelete.front()->GetName()));
    m_undo.EndUndo();
    Report(CountLabel("Deleted", partsToDelete.size(), partsToDelete.front()->GetName()));
@@ -4378,6 +4490,7 @@ void EditorUI::BeginModalTransform(ModalOp op)
       m_undo.BeginUndo();
       for (const auto &part : m_multiSel)
          m_undo.MarkForUndo(part->GetEditable());
+      MarkDependentsForUndo();
       m_undo.SetLabel(CountLabel(op == ModalOp::Rotate ? "Rotate"
             : op == ModalOp::Scale                     ? "Scale"
                                                        : "Move",
@@ -4852,7 +4965,7 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
    return bounds.left <= bounds.right;
 }
 
-void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation) const
+void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation)
 {
    if (m_pointEditPart)
    {
@@ -4886,6 +4999,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             point->SetY(v.y);
          }
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
+         DetachRubberRefs(m_pointEditPart->GetEditable());
       }
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
       m_renderer->InvalidateShadowContent();
@@ -4958,6 +5072,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             continue;
          applyTransform(part, partTransform, clearPosition, clearScale, clearRotation);
       }
+      RefitSelectionDependents();
       return;
    }
 
@@ -4973,6 +5088,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          continue;
       applyTransform(part, partTransform * delta, false, false, false);
    }
+   RefitSelectionDependents();
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -5052,6 +5168,7 @@ void EditorUI::EndPointEdit()
       return;
    if (DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve())
       curve->OnPointsModified();
+   DetachRubberRefs(m_pointEditPart->GetEditable());
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
@@ -5078,6 +5195,7 @@ void EditorUI::AddPointOnNearestSegment()
       m_undo.Discard();
       return;
    }
+   DetachRubberRefs(m_pointEditPart->GetEditable());
    // Select the newly created point
    m_pointSel.clear();
    m_pointSel.push_back(point);
@@ -5276,6 +5394,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    case LastOperation::Type::Move: return "Move";
    case LastOperation::Type::Rotate: return "Rotate";
    case LastOperation::Type::Scale: return "Scale";
+   case LastOperation::Type::RubberBetweenPosts: return "Rubber Between Posts";
    case LastOperation::Type::None: break;
    }
    return "";
@@ -5317,6 +5436,22 @@ void EditorUI::ApplyLastOperation()
       break;
    case LastOperation::Type::Rotate: result = RotatedTransform(m_lastOp.initial, m_lastOp.axis < 0 ? m_lastOp.axisView : TableAxis(m_lastOp.axis), ANGTORAD(m_lastOp.angle)); break;
    case LastOperation::Type::Scale: result = ScaledTransform(m_lastOp.initial, m_lastOp.axis, m_lastOp.plane, m_lastOp.factor); break;
+   case LastOperation::Type::RubberBetweenPosts:
+   {
+      // The created rubber is the selection: refit it in place (the undo record of its creation is unchanged)
+      IEditable *const edit = m_lastOp.selection.empty() ? nullptr : m_lastOp.selection.front()->GetEditable();
+      if (edit == nullptr || edit->GetItemType() != eItemRubber)
+         return;
+      Rubber *const rubber = static_cast<Rubber *>(edit);
+      rubber->m_d.m_thickness = m_lastOp.rbThickness;
+      rubber->m_d.m_height = m_lastOp.rbHeight;
+      rubber->m_d.m_hitHeight = m_lastOp.rbHeight;
+      rubber->m_d.m_postWrap = m_lastOp.rbWrap;
+      rubber->m_d.m_postSlack = m_lastOp.rbSlack;
+      if (!RubberBetweenPosts::Refit(*this, rubber))
+         Report("Rubber Between Posts: no loop fits these posts");
+      return;
+   }
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
@@ -5416,6 +5551,19 @@ bool EditorUI::RenderAdjustParameters()
          row("");
          changed |= ImGui::Checkbox("Perpendicular plane", &m_lastOp.plane);
       }
+      break;
+   }
+   case LastOperation::Type::RubberBetweenPosts:
+   {
+      row("Thickness");
+      changed |= ImGui::DragInt("##RbThickness", &m_lastOp.rbThickness, 0.2f, 1, 200);
+      row("Height");
+      changed |= ImGui::DragFloat("##RbHeight", &m_lastOp.rbHeight, 0.5f, 0.f, 0.f, "%.1f");
+      row("Wrap");
+      static constexpr const char *wraps[] = { "Hull", "Selection Order" };
+      changed |= ImGui::Combo("##RbWrap", &m_lastOp.rbWrap, wraps, 2);
+      row("Slack");
+      changed |= ImGui::DragFloat("##RbSlack", &m_lastOp.rbSlack, 0.1f, -50.f, 50.f, "%.2f");
       break;
    }
    case LastOperation::Type::None: break;
