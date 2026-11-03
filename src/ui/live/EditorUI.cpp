@@ -1787,13 +1787,22 @@ void EditorUI::RenderAreas()
             {
                if (m_cameraPreviews[k].GetLeaf() != leaf.id)
                   m_cameraPreviews[k].Bind(leaf.id, node->previewView, node->view);
-               // Render phase: rank among the shown views of the same shading, in leaf order (2 PBR views never render on the same frame)
+               // Render phase: rank among the shown views of the same shading that render, in leaf order (no two views of a class on the same frame).
+               // A PBR view refused by the 2 PBR view cap takes no rank
                int rank = 0;
                for (const LeafRect &other : leaves)
                {
                   if (other.id == leaf.id)
                      break;
-                  if (const AreaNode *const o = other.visible && other.type == AreaEditor::CameraPreview ? m_areas.Find(other.id) : nullptr; o != nullptr && o->view.wireframe == node->view.wireframe)
+                  const AreaNode *const o = other.visible && other.type == AreaEditor::CameraPreview ? m_areas.Find(other.id) : nullptr;
+                  if (o == nullptr || o->view.wireframe != node->view.wireframe)
+                     continue;
+                  bool refused = false;
+                  if (!o->view.wireframe)
+                     for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
+                        if (m_cameraPreviews[i].GetLeaf() == other.id)
+                           refused = !m_renderer->CanRenderEditorPBRView(i);
+                  if (!refused)
                      rank++;
                }
                m_cameraPreviews[k].SetRank(rank);

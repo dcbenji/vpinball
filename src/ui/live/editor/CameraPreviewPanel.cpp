@@ -445,9 +445,11 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
          // being moved renders every frame
          // One global frame counter, each view phased by its rank among the shown views of its shading (set by EditorUI::RenderAreas): PBR rank r on
-         // the frames (F + r) even, so 2 PBR views never render on the same frame; wireframe rank w on the odd frames 1 + 2w (mod 4), off the first PBR view's
+         // the frames (F + r) even, so 2 PBR views never render on the same frame; wireframe rank w on the phases 1, 3 (mod 4, off the first PBR view's
+         // frames), then 0, 2, so no two wireframe views share a frame
+         static constexpr unsigned int kWirePhases[4] = { 1u, 3u, 0u, 2u };
          const unsigned int frame = static_cast<unsigned int>(ImGui::GetFrameCount());
-         const bool scheduled = m_settings.wireframe ? (frame % 4u) == ((1u + 2u * static_cast<unsigned int>(m_rank)) % 4u) : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0;
+         const bool scheduled = m_settings.wireframe ? (frame % 4u) == kWirePhases[static_cast<unsigned int>(m_rank) % 4u] : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0;
          if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
          {
             Renderer::EditorViewRequest req;
