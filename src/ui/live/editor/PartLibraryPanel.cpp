@@ -315,7 +315,7 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             ImGui::PushID(static_cast<int>(i));
             if (ImGui::SmallButton(ICON_FK_TRASH_O))
             {
-               RemoveLibraryFolder(i);
+               RemoveLibraryFolder(m_library[i].path); // By path: m_library skips the stored folders missing on disk
                ImGui::PopID();
                break;
             }
@@ -385,7 +385,7 @@ void PartLibraryPanel::RenderGrid(const float height)
    const float tile = 96.f * dpi, labelH = ImGui::GetTextLineHeight() + 4.f * dpi;
    const ImGuiStyle &style = ImGui::GetStyle();
    const int columns = max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + style.ItemSpacing.x) / (tile + style.ItemSpacing.x)));
-   const string filter = PathToUTF8(m_filterFolder);
+   const string filter = m_filterFolder.empty() ? ""s : PathToUTF8(m_filterFolder / ""); // Trailing separator: /lib/foo does not match /lib/foobar
    ImDrawList *const drawList = ImGui::GetWindowDrawList();
    int shown = 0, loads = 0;
    for (size_t i = 0; i < m_items.size(); i++)
@@ -523,20 +523,17 @@ void PartLibraryPanel::AddLibraryFolder(const std::filesystem::path &folder)
    SetLibraryFolders(folders);
 }
 
-void PartLibraryPanel::RemoveLibraryFolder(size_t index)
+void PartLibraryPanel::RemoveLibraryFolder(const std::filesystem::path &folder)
 {
    vector<std::filesystem::path> folders = GetLibraryFolders();
-   if (index >= folders.size())
-      return;
-   const std::filesystem::path removed = folders[index];
-   folders.erase(folders.begin() + static_cast<ptrdiff_t>(index));
+   std::erase(folders, folder);
    // Removing the default library folder is persisted as an exclusion entry so it does not come back
    const std::filesystem::path defaultFolder = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "library";
    string stored;
-   if (StrCompareNoCase(PathToUTF8(removed.lexically_normal()), PathToUTF8(defaultFolder.lexically_normal())))
+   if (StrCompareNoCase(PathToUTF8(folder.lexically_normal()), PathToUTF8(defaultFolder.lexically_normal())))
       stored = "-"s + PathToString(defaultFolder.lexically_normal());
-   for (const std::filesystem::path &folder : folders)
-      stored += (stored.empty() ? ""s : ";"s) + PathToString(folder);
+   for (const std::filesystem::path &kept : folders)
+      stored += (stored.empty() ? ""s : ";"s) + PathToString(kept);
    g_settingsService.GetAppSettings().SetEditor_PartLibraryFolders(stored, false);
    m_rescanLibrary = true;
 }

@@ -115,7 +115,7 @@ private:
    vector<std::filesystem::path> GetLibraryFolders() const;
    void SetLibraryFolders(const vector<std::filesystem::path> &folders);
    void AddLibraryFolder(const std::filesystem::path &folder);
-   void RemoveLibraryFolder(size_t index);
+   void RemoveLibraryFolder(const std::filesystem::path &folder);
    PackInfo ScanPack(const std::filesystem::path &path);
    void ImportPack(const std::filesystem::path &path);
 
