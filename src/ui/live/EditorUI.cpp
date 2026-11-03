@@ -1236,9 +1236,8 @@ bool EditorUI::PlanAreaSplit(const int leafId, const SplitAxis axis, const bool 
       return false;
    }
    const float newMin = (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH) * dpi;
-   const float keepMin = (leaf->type == AreaType::Viewport ? (vertical ? AreaLayout::kViewportMinW + (m_showSidebar ? m_sidebarWidth : 0.f) : AreaLayout::kViewportMinH)
-                                                           : (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH))
-      * dpi;
+   // The viewport's rect includes its N-panel, which moves with it: a sane minimum (twice the panel minimum in all), not the viewport + sidebar minimum
+   const float keepMin = (vertical ? AreaLayout::kPanelMinW : AreaLayout::kPanelMinH) * dpi;
    if (hi - lo < newMin + keepMin)
    {
       plan.reason = "Area too small to split";
@@ -1477,15 +1476,28 @@ void EditorUI::UpdateAreaDrag()
       const int under = AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y);
       if (under == m_areaDrag.leaf)
       {
+         // Blender: the axis follows the dominant direction of the drag until it has gone ~20 px, then it is kept
          if (!m_areaDrag.axisChosen)
          {
             m_areaDrag.axis = fabsf(dx) > fabsf(dy) ? SplitAxis::Vertical : SplitAxis::Horizontal;
-            m_areaDrag.axisChosen = true;
+            const float lockDistance = 20.f * m_liveUI.GetDPI();
+            m_areaDrag.axisChosen = dx * dx + dy * dy >= lockDistance * lockDistance;
          }
-         const bool vertical = m_areaDrag.axis == SplitAxis::Vertical;
-         const bool newOnSecondSide = vertical ? (m_areaDrag.corner & 1) != 0 : (m_areaDrag.corner & 2) != 0; // The new area is on the side of the start corner
+         const auto sideOf = [this](const SplitAxis a) { return a == SplitAxis::Vertical ? (m_areaDrag.corner & 1) != 0 : (m_areaDrag.corner & 2) != 0; }; // The new area is on the side of the start corner
          AreaSplitPlan plan;
-         PlanAreaSplit(m_areaDrag.leaf, m_areaDrag.axis, newOnSecondSide, mouse, plan);
+         PlanAreaSplit(m_areaDrag.leaf, m_areaDrag.axis, sideOf(m_areaDrag.axis), mouse, plan);
+         if (!plan.ok)
+         {
+            // The chosen axis does not fit: the other one is used when it does
+            const SplitAxis other = m_areaDrag.axis == SplitAxis::Vertical ? SplitAxis::Horizontal : SplitAxis::Vertical;
+            AreaSplitPlan alt;
+            if (PlanAreaSplit(m_areaDrag.leaf, other, sideOf(other), mouse, alt))
+            {
+               plan = alt;
+               m_areaDrag.axis = other;
+            }
+         }
+         const bool newOnSecondSide = sideOf(m_areaDrag.axis);
          DrawAreaSplitPreview(plan);
          if (released)
          {
