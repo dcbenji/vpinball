@@ -17,6 +17,15 @@ PrimitiveUIPart::PrimitiveUIPart(Primitive* primitive)
 
 PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform)
 {
+   if (m_part->m_d.m_wireGen)
+   {
+      // Wireform: the wire points are in table coordinates, the gizmo works on them like on a ramp curve
+      const auto& pts = m_part->m_wireCurve.GetPoints();
+      float z = 0.f;
+      for (const auto& pt : pts)
+         z += pt->GetZ();
+      return GetCurveTransform(transform, pts.empty() ? 0.f : z / (float)pts.size());
+   }
    const Matrix3D Smatrix = Matrix3D::MatrixScale(m_part->m_d.m_vSize.x, m_part->m_d.m_vSize.y, m_part->m_d.m_vSize.z);
    const Matrix3D Tmatrix = Matrix3D::MatrixTranslate(m_part->m_d.m_vPosition);
    const Matrix3D Rmatrix = (Matrix3D::MatrixRotateZ(ANGTORAD(m_part->m_d.m_aRotAndTra[2])) //
@@ -28,6 +37,22 @@ PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform
 
 void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec3& rot)
 {
+   if (m_part->m_d.m_wireGen)
+   {
+      const auto& pts = m_part->m_wireCurve.GetPoints();
+      float z = 0.f;
+      for (const auto& pt : pts)
+         z += pt->GetZ();
+      z = pts.empty() ? 0.f : z / (float)pts.size();
+      SetCurveTransform(pos, scale, rot);
+      if (pos.z != z)
+      {
+         for (const auto& pt : pts)
+            pt->SetZ(pt->GetZ() + pos.z - z);
+         m_part->RegenerateWire();
+      }
+      return;
+   }
    m_part->m_d.m_vPosition = pos;
    m_part->m_d.m_aRotAndTra[0] = rot.x;
    m_part->m_d.m_aRotAndTra[1] = rot.y;
@@ -40,9 +65,65 @@ void PrimitiveUIPart::RenderOverlay(const EditorRenderContext& ctx)
    ctx.DrawWireframe(m_part);
 }
 
+void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
+{
+   // Open path: insert on the nearest segment (the default implementation assumes a closed 2D curve), z interpolated
+   DragPointCurve* const curve = &m_part->m_wireCurve;
+   vector<RenderVertex3D> vv;
+   curve->GetRgVertex(vv, false, 4.f);
+   Vertex2D out;
+   int seg = -1;
+   ClosestPointOnPolygon(vv, pos, out, seg, false);
+   if (seg < 0 || seg + 1 >= (int)vv.size())
+      return;
+   int icp = 0;
+   for (int i = 0; i < seg + 1; i++)
+      if (vv[i].controlPoint)
+         icp++;
+   const float dx = vv[seg + 1].x - vv[seg].x, dy = vv[seg + 1].y - vv[seg].y;
+   const float len2 = dx * dx + dy * dy;
+   const float t = len2 > 0.f ? clamp(((out.x - vv[seg].x) * dx + (out.y - vv[seg].y) * dy) / len2, 0.f, 1.f) : 0.f;
+   curve->InsertPoint(icp, std::make_unique<DragPoint>(curve, out.x, out.y, vv[seg].z + t * (vv[seg + 1].z - vv[seg].z), true));
+}
+
+void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
+{
+   props.InputFloat<DragPoint>(
+      point, "Z"s, //
+      [](const DragPoint* p) { return p->GetZ(); }, //
+      [](DragPoint* p, float v) { p->SetZ(v); }, PropertyPane::Unit::VPLength, 1, "Height of this point of the wire (the gizmo moves points in the XY plane only)");
+}
+
 void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 {
-   props.EditableHeader("Primitive"s, m_part);
+   props.EditableHeader(m_part->m_d.m_wireGen ? "Wireform"s : "Primitive"s, m_part);
+
+   UpdateCurveSection(props);
+
+   if (m_part->m_d.m_wireGen && props.BeginSection("Wireform"s))
+   {
+      props.InputFloat<Primitive>(
+         m_part, "Diameter"s, //
+         [](const Primitive* p) { return p->m_d.m_wireDiameter; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireDiameter = clamp(v, 0.1f, 100.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2);
+      props.InputInt<Primitive>(
+         m_part, "Rails"s, //
+         [](const Primitive* p) { return p->m_d.m_wireRails; }, //
+         [](Primitive* p, int v) { p->m_d.m_wireRails = clamp(v, 1, 3); p->UpdateWire(); }, "1 to 3 parallel wires");
+      props.InputFloat<Primitive>(
+         m_part, "Rail Spacing"s, //
+         [](const Primitive* p) { return p->m_d.m_wireSpacing; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireSpacing = max(v, 0.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 1);
+      props.Combo<Primitive>(
+         m_part, "Caps"s, vector<string> { "None"s, "Flat"s, "Round"s }, //
+         [](const Primitive* p) { return p->m_d.m_wireCaps; }, //
+         [](Primitive* p, int v) { p->m_d.m_wireCaps = clamp(v, 0, 2); p->UpdateWire(); });
+      props.InputInt<Primitive>(
+         m_part, "Sides"s, //
+         [](const Primitive* p) { return p->m_d.m_wireSides; }, //
+         [](Primitive* p, int v) { p->m_d.m_wireSides = clamp(v, 3, 32); p->UpdateWire(); }, "Segments around the wire");
+      props.EndSection();
+   }
 
    // Apply asynchronous mesh file dialog results (not in the hidden pin harvest pane, which would open the dialogs out of sight)
    if (!props.IsHarvest() && m_pendingMeshImport && !m_pendingMeshImport->empty())
@@ -438,7 +519,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (props.BeginSection("Position"s))
+   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && props.BeginSection("Position"s))
    {
       props.Separator("Position, Rotation & Size"s);
       props.InputFloat3<Primitive>(

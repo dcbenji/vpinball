@@ -264,6 +264,11 @@ void EditorChrome::RenderMenuBar()
             RequestAddPartPopup(ImGui::GetMousePos());
          if (ImGui::MenuItem("Rubber Between Posts", nullptr, false, RubberBetweenPosts::CanApply(editor)))
             RubberBetweenPosts::Apply(editor);
+         if (ImGui::MenuItem("Add Wireform", nullptr, false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
+         {
+            editor.m_addPartType = eItemPrimitive;
+            editor.m_addWireform = true;
+         }
          ImGui::Separator();
          if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
             editor.SetGizmoOperation(ImGuizmo::TRANSLATE);
@@ -744,6 +749,7 @@ void EditorChrome::RenderToolbar()
             ItemTypeEnum type;
             const char *name;
             const char *file;
+            bool wire = false;
          } addParts[] = {
             { eItemSurface, "Surface", "editor/wall.png" }, //
             { eItemGate, "Gate", "editor/gate.png" }, //
@@ -765,11 +771,12 @@ void EditorChrome::RenderToolbar()
             { eItemPrimitive, "Primitive", "editor/primitive.png" }, //
             { eItemFlasher, "Flasher", "editor/flasher.png" }, //
             { eItemRubber, "Rubber", "editor/rubber.png" }, //
+            { eItemPrimitive, "Wireform", "editor/ramp.png", true }, // Primitive with the wire generator (no dedicated icon yet)
          };
          for (const auto &def : addParts)
          {
             std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, def.file));
-            m_addPartButtons.push_back({ def.type, def.name, tex ? std::make_shared<Sampler>(editor.m_renderer->m_renderDevice, def.name, tex, false) : nullptr });
+            m_addPartButtons.push_back({ def.type, def.name, tex ? std::make_shared<Sampler>(editor.m_renderer->m_renderDevice, def.name, tex, false) : nullptr, def.wire });
          }
       }
       // Add part button, opening the part type picker popup (same as the Shift+A shortcut)
@@ -846,6 +853,7 @@ void EditorChrome::RenderToolbar()
             if (ImGui::ImageButton(button.name, button.icon, ImVec2(iconSize, iconSize)))
             {
                editor.m_addPartType = button.type;
+               editor.m_addWireform = button.wire;
                ImGui::CloseCurrentPopup();
             }
             Tip((string("Add ") + button.name).c_str());
@@ -1252,7 +1260,9 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       }
    }
    else if (editor.m_addPartType != eItemInvalid)
-      hints = { { "LMB", "Place Part" }, { "Esc", "Cancel" } };
+      hints = { { "LMB", editor.m_addWireform ? "Place Wireform" : "Place Part" }, { "Esc", "Cancel" } };
+   else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireGen)
+      hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Wire Profile" } };
    else if (editor.m_pointEditPart)
       hints = { { "LMB", "Select Point" }, { "Shift+LMB", "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
    else

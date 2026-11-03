@@ -91,6 +91,7 @@ private:
       ItemTypeEnum type;
       const char *name;
       std::shared_ptr<Sampler> icon;
+      bool wire = false; // The Wireform entry (a primitive armed with the wire generator)
    };
    std::vector<AddPartButton> m_addPartButtons; // Lazily initialized add part toolbar buttons
    ImVec2 m_addPartPopupPos {}; // Position at which the Shift+A part type picker popup was opened

@@ -20,6 +20,7 @@
 #include "forsyth.h"
 #include "progmesh.h"
 #include "miniz/miniz.h"
+#include "math/wiresweep.h"
 
 
 Primitive::~Primitive()
@@ -31,6 +32,8 @@ Primitive *Primitive::CopyForPlay() const
 {
    STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Primitive)
    dst->m_mesh = m_mesh;
+   for (const auto &dpt : m_wireCurve.GetPoints())
+      dst->m_wireCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_wireCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
    return dst;
 }
 
@@ -754,6 +757,8 @@ void Primitive::RenderSetup(Renderer *renderer)
 {
    assert(m_renderer == nullptr);
    m_renderer = renderer;
+
+   RegenerateWire(); // Wireform: every editor point edit reinitializes the renderable, so the mesh follows the points
 
    // Check if we are part of a group, and if so if we are a child or the base
    m_groupdRendering = false;
@@ -1892,14 +1897,90 @@ void Primitive::UpdateAnimation(const float diff_time_msec)
 
 void Primitive::Translate(const Vertex2D &offset)
 {
+   if (m_d.m_wireGen)
+   {
+      m_wireCurve.TranslatePoints(offset);
+      RegenerateWire();
+      return;
+   }
    m_d.m_vPosition.x += offset.x;
    m_d.m_vPosition.y += offset.y;
    CalculateBuiltinOriginal();
 }
 
+void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool useElementCenter)
+{
+   if (!m_d.m_wireGen)
+      return IEditable::Rotate(ang, pvCenter, useElementCenter);
+   m_wireCurve.RotatePoints(ang, useElementCenter ? GetCenter() : pvCenter);
+   RegenerateWire();
+}
+
+void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter)
+{
+   if (!m_d.m_wireGen)
+      return IEditable::Scale(scalex, scaley, pvCenter, useElementCenter);
+   m_wireCurve.ScalePoints(scalex, scaley, useElementCenter ? GetCenter() : pvCenter);
+   RegenerateWire();
+}
+
 Vertex2D Primitive::GetCenter() const
 {
+   if (m_d.m_wireGen)
+      return m_wireCurve.GetCenter();
    return {m_d.m_vPosition.x, m_d.m_vPosition.y};
+}
+
+//////////////////////////////
+// Wireform generator
+//////////////////////////////
+
+void Primitive::RegenerateWire()
+{
+   if (!m_d.m_wireGen)
+      return;
+   vector<RenderVertex3D> path;
+   m_wireCurve.GetRgVertex(path, false, 4.f);
+   m_mesh.Clear();
+   WireSweep::BuildWireform<Vertex3D_NoTex2>(path, 0.5f * max(m_d.m_wireDiameter, 0.1f), m_d.m_wireSides, m_d.m_wireRails, m_d.m_wireSpacing, static_cast<WireSweep::Caps>(clamp(m_d.m_wireCaps, 0, 2)),
+      m_mesh.m_vertices, m_mesh.m_indices);
+   // The mesh is in table coordinates: identity transform
+   m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f);
+   m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
+   for (float &v : m_d.m_aRotAndTra)
+      v = 0.f;
+   m_d.m_use3DMesh = true;
+   m_vertexBufferRegenerate = true;
+   OnMeshVerticesChanged();
+   m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate to force the collider rebuild (the transform itself did not change)
+}
+
+void Primitive::UpdateWire()
+{
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this); // RenderSetup regenerates the mesh
+   else
+      RegenerateWire();
+   if (g_pplayer && g_pplayer->m_physics)
+      g_pplayer->m_physics->Update(this);
+}
+
+void Primitive::InitWireform(const Vertex2D &pos)
+{
+   m_d.m_wireGen = true;
+   m_d.m_collidable = true;
+   m_d.m_toy = false;
+   m_d.m_overwritePhysics = true;
+   m_d.m_elasticity = 0.3f;
+   m_d.m_elasticityFalloff = 0.f;
+   m_d.m_friction = 0.1f;
+   m_d.m_scatter = 0.f;
+   m_wireCurve.ClearPoints();
+   // 3 point arc, ~100 VP units span, at z 25
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x - 50.f, pos.y, 25.f, true));
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y + 25.f, 25.f, true));
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x + 50.f, pos.y, 25.f, true));
+   RegenerateWire();
 }
 
 //////////////////////////////
@@ -2024,6 +2105,16 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
 
       }
    }
+   if (m_d.m_wireGen) // Optional fields: only written for wireforms, so other primitives save byte-identical
+   {
+      writer.WriteBool(FID(WGEN), true);
+      writer.WriteFloat(FID(WDIA), m_d.m_wireDiameter);
+      writer.WriteInt(FID(WRLS), m_d.m_wireRails);
+      writer.WriteFloat(FID(WSPC), m_d.m_wireSpacing);
+      writer.WriteInt(FID(WCAP), m_d.m_wireCaps);
+      writer.WriteInt(FID(WSEG), m_d.m_wireSides);
+      m_wireCurve.SavePoints(writer);
+   }
    writer.WriteFloat(FID(PIDB), m_d.m_depthBias);
    writer.WriteFloat(FID(TRGN), m_d.m_tracedGain);
    writer.WriteFloat(FID(TRHS), m_d.m_tracedHaloSize);
@@ -2078,6 +2169,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
 void Primitive::Load(IObjectReader& reader)
 {
    SetDefaults(false);
+   m_wireCurve.ClearPoints();
    m_mesh.m_validBounds = false;
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
@@ -2135,6 +2227,13 @@ void Primitive::Load(IObjectReader& reader)
          case FID(U3DM): m_d.m_use3DMesh = reader.AsBool(); break;
          case FID(EBFC): m_d.m_backfacesEnabled = reader.AsBool(); break;
          case FID(CLBF): m_d.m_cullBackfaces = reader.AsBool(); break;
+         case FID(WGEN): m_d.m_wireGen = reader.AsBool(); break;
+         case FID(WDIA): m_d.m_wireDiameter = reader.AsFloat(); break;
+         case FID(WRLS): m_d.m_wireRails = clamp(reader.AsInt(), 1, 3); break;
+         case FID(WSPC): m_d.m_wireSpacing = reader.AsFloat(); break;
+         case FID(WCAP): m_d.m_wireCaps = clamp(reader.AsInt(), 0, 2); break;
+         case FID(WSEG): m_d.m_wireSides = clamp(reader.AsInt(), 3, 32); break;
+         case FID(DPNT): m_wireCurve.LoadPointToken(reader); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
          case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
          case FID(M3VN):
@@ -2347,6 +2446,8 @@ void Primitive::Load(IObjectReader& reader)
    }
    m_inPlayState = m_d.m_visible;
    CalculateBuiltinOriginal();
+   if (m_d.m_wireGen) // The mesh is derived from the points: rebuild it (deterministic, also covers undo whose records skip meshes)
+      RegenerateWire();
 }
 
 bool Primitive::LoadMesh(

@@ -5,6 +5,7 @@
 #include "core/resourceid.h"
 #include "math/Mesh.h"
 #include "math/MeshUtils.h"
+#include "math/dragpoint.h"
 #include "math/matrix.h"
 #include "parts/pintable.h"
 #include "physics/hitable.h"
@@ -103,6 +104,13 @@ public:
    bool m_toy = false;
    bool m_backfacesEnabled = false;
    bool m_cullBackfaces = false; // depth mask off: draw front faces only instead of both (closed, double-walled transparent meshes)
+   // Wireform generator (editor operator): when on, m_mesh is generated from the wire curve points (table coordinates, identity transform)
+   bool m_wireGen = false;
+   float m_wireDiameter = 6.f;
+   int m_wireRails = 1; // 1..3
+   float m_wireSpacing = 12.f; // between rails
+   int m_wireCaps = 2; // 0 none, 1 flat, 2 round
+   int m_wireSides = 8;
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
 };
@@ -266,7 +274,7 @@ public:
    STDMETHOD(get_RefractionProbe)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_RefractionProbe)(/*[in]*/ BSTR newVal);
 
-   Primitive() { }
+   Primitive() : m_wireCurve(this, 2) { }
    virtual ~Primitive();
 
    BEGIN_COM_MAP(Primitive)
@@ -293,6 +301,8 @@ public:
    bool PhysicUpdate(class PhysicsEngine *physics, const bool isUI) final;
 
    void Translate(const Vertex2D &offset) final;
+   void Rotate(const float ang, const Vertex2D &pvCenter, const bool useElementCenter) final;
+   void Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter) final;
    // Multi-object manipulation
    Vertex2D GetCenter() const final;
 
@@ -368,6 +378,12 @@ public:
    Mesh m_mesh;
 
    PrimitiveData m_d;
+
+   // Wireform generator: the wire path (3D points) and the mesh built from it
+   DragPointCurve m_wireCurve;
+   void InitWireform(const Vertex2D &pos); // Turns this (new) primitive into a wireform: 3 point arc at pos, defaults
+   void UpdateWire(); // RegenerateWire + renderable / collider refresh (after a parameter change)
+   void RegenerateWire(); // Rebuilds m_mesh from m_wireCurve and the wire parameters (no-op unless m_d.m_wireGen)
 
    bool m_lockedByLS = false;
    bool m_inPlayState = false;

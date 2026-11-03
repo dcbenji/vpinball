@@ -253,7 +253,7 @@ private:
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
    struct LastOperation
    {
-      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts };
+      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts, Wireform };
       Type type = Type::None;
       uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
       vector<std::shared_ptr<EditorUIPart>> selection;
@@ -269,6 +269,11 @@ private:
       float rbHeight = 25.f;
       int rbWrap = 0; // RubberFit::Wrap
       float rbSlack = 0.f;
+      int rails = 1; // Wireform profile
+      float diameter = 6.f;
+      float spacing = 12.f;
+      int caps = 2;
+      int sides = 8;
       bool expanded = true;
    } m_lastOp;
    bool m_adjustPopupOpen = false; // F9
@@ -300,7 +305,8 @@ private:
    // Add/Remove parts
    void DeleteSelection();
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
-   void CreatePart(ItemTypeEnum type, const Vertex2D &pos);
+   bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
+   void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false);
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
    vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first

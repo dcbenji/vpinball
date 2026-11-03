@@ -2633,7 +2633,7 @@ void EditorUI::RenderUI()
             // Add part mode: create the pending part at the picked point of the playfield XY plane
             const ItemTypeEnum type = m_addPartType;
             m_addPartType = eItemInvalid;
-            CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f));
+            CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f), m_addWireform && type == eItemPrimitive);
          }
          else if (m_pointEditPart != nullptr && m_pointEditCenter)
          {
@@ -3757,7 +3757,7 @@ void EditorUI::BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool
       m_selection = Selection(m_multiSel.back());
 }
 
-void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
+void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bool wireform)
 {
    IEditable *const pie = EditableRegistry::CreateAndInit(type, m_table, pos.x, pos.y);
    if (pie == nullptr)
@@ -3765,7 +3765,14 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
 
    // Same initialization sequence as the WinUI editor
    if (auto *const scriptable = pie->GetIScriptable(); scriptable)
-      m_table->GetUniqueName(type, scriptable->m_name);
+   {
+      if (wireform)
+         scriptable->m_name = m_table->GetUniqueName("Wireform"s);
+      else
+         m_table->GetUniqueName(type, scriptable->m_name);
+   }
+   if (wireform)
+      static_cast<Primitive *>(pie)->InitWireform(pos);
    pie->m_desktopBackdrop = (m_camMode == ViewMode::DesktopBackdrop);
    m_table->AddPart(pie);
    pie->SetPartGroup(GetPartGroupForNewPart());
@@ -3781,7 +3788,7 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
 
    m_undo.BeginUndo();
    m_undo.MarkForCreate(pie);
-   m_undo.SetLabel("Add " + pie->GetName());
+   m_undo.SetLabel(wireform ? "Add Wireform"s : "Add " + pie->GetName());
    m_undo.EndUndo();
    Report("Added " + pie->GetName());
 
@@ -3791,7 +3798,20 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
    {
       SetSelection(Selection(it->second));
       m_outlinerAnchor = it->second;
-      if (Matrix3D placed; GetSelectionTransform(placed))
+      if (wireform)
+      {
+         // F9: the wire profile, applied in place (the undo record above already holds the state before the add)
+         Matrix3D placed;
+         GetSelectionTransform(placed);
+         SetLastOperation(LastOperation::Type::Wireform, placed);
+         const PrimitiveData &d = static_cast<Primitive *>(pie)->m_d;
+         m_lastOp.diameter = d.m_wireDiameter;
+         m_lastOp.rails = d.m_wireRails;
+         m_lastOp.spacing = d.m_wireSpacing;
+         m_lastOp.caps = d.m_wireCaps;
+         m_lastOp.sides = d.m_wireSides;
+      }
+      else if (Matrix3D placed; GetSelectionTransform(placed))
       {
          SetLastOperation(LastOperation::Type::Add, placed);
          m_lastOp.base = vec3(0.f, 0.f, placed._43);
@@ -5389,6 +5409,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    switch (type)
    {
    case LastOperation::Type::Add: return "Add Part";
+   case LastOperation::Type::Wireform: return "Add Wireform";
    case LastOperation::Type::Paste: return "Paste";
    case LastOperation::Type::Duplicate: return "Duplicate";
    case LastOperation::Type::Move: return "Move";
@@ -5452,6 +5473,19 @@ void EditorUI::ApplyLastOperation()
          Report("Rubber Between Posts: no loop fits these posts");
       return;
    }
+   case LastOperation::Type::Wireform:
+      if (m_lastOp.selection.empty() || m_lastOp.selection.front()->GetEditable()->GetItemType() != eItemPrimitive)
+         return;
+      {
+         Primitive *const prim = static_cast<Primitive *>(m_lastOp.selection.front()->GetEditable());
+         prim->m_d.m_wireDiameter = m_lastOp.diameter;
+         prim->m_d.m_wireRails = m_lastOp.rails;
+         prim->m_d.m_wireSpacing = m_lastOp.spacing;
+         prim->m_d.m_wireCaps = m_lastOp.caps;
+         prim->m_d.m_wireSides = m_lastOp.sides;
+         prim->UpdateWire();
+      }
+      return;
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
@@ -5520,6 +5554,24 @@ bool EditorUI::RenderAdjustParameters()
       changed |= dragVec("##Position", &m_lastOp.offset.x, 2);
       ImGui::SetItemTooltip("X, Y in VP units");
       break;
+   case LastOperation::Type::Wireform:
+   {
+      row("Diameter");
+      changed |= ImGui::DragFloat("##WDia", &m_lastOp.diameter, 0.1f, 0.5f, 50.f, "%.2f");
+      row("Rails");
+      changed |= ImGui::SliderInt("##WRails", &m_lastOp.rails, 1, 3);
+      if (m_lastOp.rails > 1)
+      {
+         row("Spacing");
+         changed |= ImGui::DragFloat("##WSpc", &m_lastOp.spacing, 0.1f, 0.f, 200.f, "%.2f");
+      }
+      row("Caps");
+      static constexpr const char *caps[] = { "None", "Flat", "Round" };
+      changed |= ImGui::Combo("##WCaps", &m_lastOp.caps, caps, 3);
+      row("Sides");
+      changed |= ImGui::SliderInt("##WSides", &m_lastOp.sides, 3, 32);
+      break;
+   }
    case LastOperation::Type::Rotate:
    {
       row("Angle");
