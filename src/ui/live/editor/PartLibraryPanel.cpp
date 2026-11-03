@@ -1394,7 +1394,9 @@ void PartLibraryPanel::RenderLightbox()
       {
          constexpr float radPerPixel = 0.01f * (180.f / static_cast<float>(M_PI));
          m_lbCam.yaw = fmodf(m_lbCam.yaw - io.MouseDelta.x * radPerPixel * m_editor.m_navOrbitSensitivity, 360.f);
-         m_lbCam.pitch = clamp(m_lbCam.pitch + io.MouseDelta.y * radPerPixel * m_editor.m_navOrbitSensitivity, -89.f, 89.f);
+         // An insert keeps to the pitches where the traced card's parallax holds (looking down, never near edge-on); yaw is free
+         const float minPitch = m_lbItem.kind == ItemKind::Insert ? 35.f : -89.f;
+         m_lbCam.pitch = clamp(m_lbCam.pitch + io.MouseDelta.y * radPerPixel * m_editor.m_navOrbitSensitivity, minPitch, 89.f);
          m_lbDirty = true;
       }
       if (hovered && io.MouseWheel != 0.f)
