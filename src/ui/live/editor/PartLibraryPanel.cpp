@@ -105,6 +105,49 @@ struct PlayerClock
    const uint32_t saved;
 };
 
+// Normalization cache of an insert thumbnail
+static std::filesystem::path NormFile(const std::filesystem::path &thumbFile)
+{
+   std::filesystem::path file = thumbFile;
+   return file.replace_extension(".norm");
+}
+
+static float ReadNorm(const std::filesystem::path &thumbFile)
+{
+   std::ifstream in(NormFile(thumbFile));
+   float factor = 1.f;
+   return (in >> factor) && factor >= 0.1f && factor <= 1.f ? factor : 1.f;
+}
+
+// 90th percentile display luminance (Rec.709 weights over the saved bytes) of the pixels that differ from the stage clear (the top left pixel), -1 on failure
+static float MeasureLuma(const std::filesystem::path &file)
+{
+   const std::shared_ptr<BaseTexture> tex = BaseTexture::CreateFromFile(file);
+   if (tex == nullptr || tex->m_format < BaseTexture::RGB || tex->m_format > BaseTexture::SRGBA)
+      return -1.f;
+   const unsigned int bpp = tex->HasAlpha() ? 4u : 3u;
+   const uint8_t *const data = static_cast<const uint8_t *>(tex->data());
+   unsigned int histogram[256] = {}, count = 0;
+   for (unsigned int y = 0; y < tex->height(); y++)
+      for (unsigned int x = 0; x < tex->width(); x++)
+      {
+         const uint8_t *const p = data + (static_cast<size_t>(y) * tex->width() + x) * bpp;
+         const int diff = max(abs(p[0] - data[0]), max(abs(p[1] - data[1]), abs(p[2] - data[2])));
+         if (diff > 10)
+         {
+            histogram[min(255, static_cast<int>(0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2] + 0.5f))]++;
+            count++;
+         }
+      }
+   if (count == 0)
+      return -1.f;
+   unsigned int seen = 0;
+   for (int level = 0; level < 256; level++)
+      if ((seen += histogram[level]) >= count * 9u / 10u)
+         return static_cast<float>(level) / 255.f;
+   return -1.f;
+}
+
 // The Light of an insert pack is a state driver: taken out of the parts to draw (the pass has no light either way)
 static vector<Light *> ExtractLights(vector<IEditable *> &parts)
 {
@@ -337,6 +380,8 @@ void PartLibraryPanel::Update()
          if (info.kind == ItemKind::Material && !info.materialNames.empty())
             item.material = item.label = info.materialNames[0];
          item.thumbFile = ThumbFolder(item.pack) / (JSONSerializer::SanitizeFileName(item.label) + (info.kind == ItemKind::Material ? "_0"s : ""s) + ".png"s);
+         if (info.kind == ItemKind::Insert)
+            item.norm = ReadNorm(item.thumbFile);
          OpenLightbox(item);
          m_lbWantYaw = m_hookYaw;
          m_lbWantState = m_hookState;
@@ -802,6 +847,8 @@ void PartLibraryPanel::RescanLibrary()
             item.label = label;
             item.kind = kind;
             item.thumbFile = thumbs / (fileStem + ".png"s);
+            if (kind == ItemKind::Insert)
+               item.norm = ReadNorm(item.thumbFile);
          };
          if (info.kind == ItemKind::Material)
             for (size_t i = 0; i < info.materialNames.size(); i++) // Indexed: sanitized names may collide (or differ by case only)
@@ -815,7 +862,7 @@ void PartLibraryPanel::RescanLibrary()
          bool cached = stored == key;
          std::error_code ec;
          for (size_t i = first; i < m_items.size() && cached; i++)
-            cached = std::filesystem::exists(m_items[i].thumbFile, ec);
+            cached = std::filesystem::exists(m_items[i].thumbFile, ec) && (m_items[i].kind != ItemKind::Insert || std::filesystem::exists(NormFile(m_items[i].thumbFile), ec));
          if (cached)
             m_thumbsCached += static_cast<int>(m_items.size() - first);
          else
@@ -985,7 +1032,7 @@ FRect3D PartLibraryPanel::ScratchBounds(const vector<IEditable *> &parts)
 
 // Loads the item into a scratch table (never saved, the live table is not consulted) and sets its parts up with the live renderer, as the
 // placement ghost does. Material items: the built-in preview sphere wearing the material
-bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts)
+bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts, const float factor)
 {
    ReleaseScratch(scratch, scratchParts);
    const auto load = [](const std::filesystem::path &path) -> CComObject<PinTable> *
@@ -1031,6 +1078,8 @@ bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable>
          Primitive *const prim = static_cast<Primitive *>(part);
          prim->m_d.m_stateSrcLink.clear();
          prim->m_d.m_tracedHaloStrength = 0.f; // The spill pass draws as a flat sheet with no playfield under it
+         if (prim->IsTracedInsert())
+            prim->m_d.m_alpha *= factor; // Normalized glow (the card's alpha scales its lit level, blinking included)
       }
       else if (part->GetItemType() == eItemFlasher)
          static_cast<Flasher *>(part)->m_d.m_stateSrcLink.clear();
@@ -1075,7 +1124,7 @@ void PartLibraryPanel::ReleaseScratch(CComObject<PinTable> *&scratch, vector<IEd
    scratch = nullptr;
 }
 
-bool PartLibraryPanel::LoadScratch(const LibraryItem &item) { return LoadScratch(item, m_scratch, m_scratchParts); }
+bool PartLibraryPanel::LoadScratch(const LibraryItem &item, const float factor) { return LoadScratch(item, m_scratch, m_scratchParts, factor); }
 
 void PartLibraryPanel::ReleaseScratch() { ReleaseScratch(m_scratch, m_scratchParts); }
 
@@ -1083,6 +1132,8 @@ void PartLibraryPanel::AbortThumbnail()
 {
    // An item in flight is queued again (still at the back of the queue)
    m_thumbStage = ThumbStage::Idle;
+   m_thumbIter = 0;
+   m_thumbFactor = 1.f;
    ReleaseScratch();
    if (m_thumbSlot >= 0 && m_editor.m_renderer != nullptr && m_editor.m_cameraPreviews[m_thumbSlot].GetLeaf() < 0)
       m_editor.m_renderer->ReleaseEditorView(m_thumbSlot);
@@ -1122,7 +1173,7 @@ void PartLibraryPanel::PumpThumbnails()
       if (m_thumbSlot < 0 || g_pplayer->GetInfoMode() != IF_NONE || !renderer->CanRenderEditorPBRView(m_thumbSlot))
          return;
       const LibraryItem &item = m_items[m_thumbQueue.back()];
-      if (!LoadScratch(item))
+      if (!LoadScratch(item, m_thumbFactor))
       {
          ReleaseScratch();
          PLOGW << "Library thumbnail: nothing to render in '" << PathToUTF8(item.pack) << '\'';
@@ -1182,6 +1233,27 @@ void PartLibraryPanel::PumpThumbnails()
       if (rd->m_directScreenshotDone != m_thumbTicket) // A read back aborted earlier completes with its own ticket
          return;
       LibraryItem &item = m_items[m_thumbQueue.back()];
+      if (item.kind == ItemKind::Insert && rd->m_directScreenshotSaved)
+      {
+         // Normalization: render again at a lower factor until the card's luminance reaches the target (at most 3 renders, never brighter than the pack)
+         if (m_thumbIter < 2)
+            if (const float luma = MeasureLuma(item.thumbFile); luma > 0.f && (m_thumbIter == 0 || fabsf(luma - kNormTarget) > 0.04f))
+            {
+               const float want = clamp(m_thumbFactor * kNormTarget / luma, 0.1f, 1.f);
+               if (fabsf(want - m_thumbFactor) > 0.01f)
+               {
+                  m_thumbFactor = want;
+                  m_thumbIter++;
+                  m_thumbStage = ThumbStage::Idle; // The same item again
+                  return;
+               }
+            }
+         item.norm = m_thumbFactor;
+         std::ofstream(NormFile(item.thumbFile), std::ios::trunc) << m_thumbFactor << '\n';
+         PLOGI << "LIBNORM " << PathToUTF8(item.pack) << " factor=" << m_thumbFactor;
+      }
+      m_thumbIter = 0;
+      m_thumbFactor = 1.f;
       m_thumbQueue.pop_back();
       m_thumbStage = ThumbStage::Idle;
       item.thumb = nullptr;
@@ -1313,7 +1385,7 @@ void PartLibraryPanel::RenderLightbox()
    if (m_lbSlot >= 0 && m_lbScratch == nullptr && !m_lbFailed)
    {
       vector<IEditable *> all;
-      if (!LoadScratch(m_lbItem, m_lbScratch, all))
+      if (!LoadScratch(m_lbItem, m_lbScratch, all, m_lbItem.norm))
       {
          ReleaseScratch(m_lbScratch, all);
          m_lbFailed = true;

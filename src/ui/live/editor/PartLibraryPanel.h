@@ -97,19 +97,23 @@ private:
       string label;
       ItemKind kind = ItemKind::Part;
       std::filesystem::path thumbFile;
+      float norm = 1.f; // Inserts: the cached normalization factor
       std::shared_ptr<Sampler> thumb;
       bool thumbLoaded = false; // Load attempted
    };
 
-   static constexpr unsigned int kRigVersion = 4; // Bump when the thumbnail rig changes: every thumbnail is rendered again
+   static constexpr unsigned int kRigVersion = 5; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
+   // Insert previews are normalized: the card's alpha is scaled (never up) until the 90th percentile display luminance of the item's pixels reaches this value
+   // (the red round insert, the least blown of the set, as it read at factor 1); the factor is cached beside the thumbnail ('<name>.norm')
+   static constexpr float kNormTarget = 0.70f;
 
    void RescanLibrary();
    void RenderGrid(float height);
    void PumpThumbnails(); // Renders the missing thumbnails, one at a time
-   bool LoadScratch(const LibraryItem &item);
+   bool LoadScratch(const LibraryItem &item, float factor = 1.f);
    void ReleaseScratch();
-   bool LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
+   bool LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts, float factor = 1.f);
    void ReleaseScratch(CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
    static FRect3D ScratchBounds(const vector<IEditable *> &parts);
    // Pack placement: the pack is loaded in a scratch table so that it never pollutes the edited one (no outliner entry, no undo, not in the picking
@@ -160,6 +164,8 @@ private:
    vector<size_t> m_thumbQueue;
    std::map<std::filesystem::path, std::pair<string, int>> m_packKeys; // Pack -> (key, items left to render)
    enum class ThumbStage { Idle, Requested, ReadBack } m_thumbStage = ThumbStage::Idle;
+   int m_thumbIter = 0; // Insert normalization: renders done for the item in flight, and the factor of the current one
+   float m_thumbFactor = 1.f;
    int m_thumbSlot = -1; // Renderer view slot held while thumbnails are rendered
    uint32_t m_thumbTicket = 0, m_readSeq = 0; // Read back of the item in flight (RenderDevice::RequestVRScreenshot ticket)
    CComObject<PinTable> *m_scratch = nullptr; // Never saved
