@@ -102,6 +102,7 @@ set(VPX_SOURCES
    src/math/Mesh.cpp
    src/math/MeshGLTF.cpp
    src/math/MeshUtils.h
+   src/math/wiresweep.h
    src/math/ModelViewProj.h
 
    src/meshes/ballMesh.h
