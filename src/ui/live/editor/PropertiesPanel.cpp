@@ -351,7 +351,7 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    // Types without curation rules: the visual sections make their Look tab
    static constexpr const char *visualSections[] = { "Visuals", "Render Mode", "Light Settings", "Bulb", "Transparency", "Ball Reflections & Shadows" };
    const auto isLook = [&](const PinnedPanel::Def *def)
-   { return (rules == nullptr && std::ranges::any_of(visualSections, [def](const char *section) { return def->section == section; })) || def->common || Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop); };
+   { return (rules == nullptr && std::ranges::any_of(visualSections, [def](const char *section) { return def->section == section; })) || def->common || (rules != nullptr && (Listed(rules->lookGroups, def->group) || Listed(rules->lookLabels, def->key.prop))); };
    const auto isTransform = [&](const PinnedPanel::Def *def)
    { return def->section == "Position" || def->section == "Center" || (rules != nullptr && Listed(rules->transformLabels, def->key.prop)); };
    for (auto &list : cur.tabs)
