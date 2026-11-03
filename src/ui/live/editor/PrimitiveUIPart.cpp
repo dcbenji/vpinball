@@ -44,8 +44,8 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 {
    props.EditableHeader("Primitive"s, m_part);
 
-   // Apply asynchronous mesh file dialog results
-   if (m_pendingMeshImport && !m_pendingMeshImport->empty())
+   // Apply asynchronous mesh file dialog results (not in the hidden pin harvest pane, which would open the dialogs out of sight)
+   if (!props.IsHarvest() && m_pendingMeshImport && !m_pendingMeshImport->empty())
    {
       // A file was selected: reset the options to their defaults and show the import option dialog
       m_meshImportFileName = *m_pendingMeshImport;
@@ -59,7 +59,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       m_meshImportFailed = false;
       ImGui::OpenPopup("Wavefront OBJ Importer");
    }
-   if (m_pendingMeshExport && !m_pendingMeshExport->empty())
+   if (!props.IsHarvest() && m_pendingMeshExport && !m_pendingMeshExport->empty())
    {
       // A file was selected: reset the options to their defaults and show the export option dialog
       m_meshExportFileName = *m_pendingMeshExport;
@@ -105,7 +105,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             }
          }
          ImGui::SameLine();
-         if (ImGui::Button("Cancel"))
+         if (ImGui::Button("Cancel") || PropertyPane::ModalEscapePressed())
          {
             m_meshImportFileName.clear();
             ImGui::CloseCurrentPopup();
@@ -138,7 +138,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             }
          }
          ImGui::SameLine();
-         if (ImGui::Button("Cancel"))
+         if (ImGui::Button("Cancel") || PropertyPane::ModalEscapePressed())
          {
             m_meshExportFileName.clear();
             ImGui::CloseCurrentPopup();
@@ -321,7 +321,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.InputFloat3<Primitive>(
          m_part, "Scale"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_vSize; }, //
-         [](Primitive* primitive, const vec3& v) { primitive->m_d.m_vSize = v; }, PropertyPane::Unit::PercentX100, 2);
+         [](Primitive* primitive, const vec3& v) { primitive->m_d.m_vSize = v; }, PropertyPane::Unit::PercentX100, 0); // Default primitives have a size of 100
 
       props.Separator("Additional Transform"s);
       props.InputFloat3<Primitive>(
@@ -386,9 +386,9 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* surf) { return surf->m_d.m_collidable; }, //
          [](Primitive* surf, bool v) { surf->m_d.m_collidable = v; });
       props.Checkbox<Primitive>(
-         m_part, "Toy (never collidable)"s, //
+         m_part, "Toy"s, //
          [](const Primitive* surf) { return surf->m_d.m_toy; }, //
-         [](Primitive* surf, bool v) { surf->m_d.m_toy = v; });
+         [](Primitive* surf, bool v) { surf->m_d.m_toy = v; }, "Never collidable");
       props.InputFloat<Primitive>(
          m_part, "Reduction Factor"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_collision_reductionFactor; }, //
