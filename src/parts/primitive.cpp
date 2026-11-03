@@ -1335,7 +1335,7 @@ void Primitive::Render(const unsigned int renderMask)
 
    RenderState::RenderStateValue cullMode = m_renderer->m_renderDevice->GetRenderState().GetRenderState(RenderState::CULLMODE);
    RenderState::RenderStateValue reversedCullMode = cullMode == RenderState::CULL_CCW ? RenderState::CULL_CW : RenderState::CULL_CCW;
-   m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, depthMask ? ((m_d.m_backfacesEnabled && mat->m_bOpacityActive) ? reversedCullMode : cullMode) : RenderState::CULL_NONE);
+   m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, depthMask ? ((m_d.m_backfacesEnabled && mat->m_bOpacityActive) ? reversedCullMode : cullMode) : (m_d.m_cullBackfaces ? cullMode : RenderState::CULL_NONE));
 
    // Force disable light from below for objects marked as static since there is no light from below during pre-render pass (to get the same result in dynamic mode & static mode)
    m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::fDisableLighting_top_below, m_d.m_disableLightingTop, m_d.m_staticRendering ? 1.0f : m_d.m_disableLightingBelow, 0.f, 0.f);
@@ -1752,6 +1752,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DILB), m_d.m_disableLightingBelow);
    writer.WriteBool(FID(REEN), m_d.m_reflectionEnabled);
    writer.WriteBool(FID(EBFC), m_d.m_backfacesEnabled);
+   writer.WriteBool(FID(CLBF), m_d.m_cullBackfaces);
    writer.WriteString(FID(MAPH), m_d.m_szPhysicsMaterial);
    writer.WriteBool(FID(OVPH), m_d.m_overwritePhysics);
    writer.WriteBool(FID(DIPT), m_d.m_displayTexture);
@@ -1936,6 +1937,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DILB): m_d.m_disableLightingBelow = reader.AsFloat(); break;
          case FID(U3DM): m_d.m_use3DMesh = reader.AsBool(); break;
          case FID(EBFC): m_d.m_backfacesEnabled = reader.AsBool(); break;
+         case FID(CLBF): m_d.m_cullBackfaces = reader.AsBool(); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
          case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
          case FID(M3VN):

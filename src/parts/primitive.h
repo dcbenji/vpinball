@@ -99,6 +99,7 @@ public:
 
    bool m_toy = false;
    bool m_backfacesEnabled = false;
+   bool m_cullBackfaces = false; // depth mask off: draw front faces only instead of both (closed, double-walled transparent meshes)
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
 };
