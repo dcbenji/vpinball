@@ -1369,9 +1369,7 @@ void EditorUI::RenderAreaCorners()
          continue;
       for (int corner = 0; corner < 4; ++corner)
       {
-         // The top corners are smaller: the header's first and last widgets (type button, search field) sit 4 px inside the area edge. The bottom corners
-         // keep the full size on the left (nothing sits there), but not on the right (scrollbar end)
-         const float side = ((corner & 2) == 0 || (corner & 1)) ? min(fullSide, 7.f * dpi) : fullSide;
+         const float side = fullSide;
          const float x = (corner & 1) ? leaf.rect.x1 - side : leaf.rect.x0;
          const float y = (corner & 2) ? leaf.rect.y1 - side : leaf.rect.y0;
          // Triangular hit zone: the half of the square touching the area's corner (Blender). Outside it the window takes no input, so the header
@@ -1379,9 +1377,14 @@ void EditorUI::RenderAreaCorners()
          const ImVec2 mouse = ImGui::GetIO().MousePos;
          const float lx = (corner & 1) ? x + side - mouse.x : mouse.x - x; // Distance from the corner along x / y
          const float ly = (corner & 2) ? y + side - mouse.y : mouse.y - y;
-         const bool inTriangle = lx >= 0.f && ly >= 0.f && lx + ly <= side;
          char name[40];
          snprintf(name, sizeof(name), "##Corner%d_%d", leaf.id, corner); // Keyed by the stable node id
+         // A widget under the pointer (header search field, buttons, scrollbar ends) keeps the click: ImGui's hovered item of the last frame, which is
+         // the corner's own button while the zone is the one hovered
+         ImGuiWindow *const cornerWindow = ImGui::FindWindowByName(name);
+         const ImGuiID hoveredId = ImGui::GetHoveredID();
+         const bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != cornerWindow->GetID("##corner"));
+         const bool inTriangle = lx >= 0.f && ly >= 0.f && lx + ly <= side && (!overWidget || m_areaDrag.active);
          ImGui::SetNextWindowPos(ImVec2(x, y));
          ImGui::SetNextWindowSize(ImVec2(side, side));
          ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
