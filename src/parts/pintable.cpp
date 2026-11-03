@@ -2644,7 +2644,7 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
    }
    else
    {
-      PLOGW << "\"" << PathToUTF8(m_filename) << "\" is a partial VPZ pack without a table definition";
+      PLOGD << "\"" << PathToUTF8(m_filename) << "\" is a partial VPZ pack without a table definition";
       SetLoadDefaults();
       memset(m_loadTemp, 0, sizeof(m_loadTemp));
    }
