@@ -418,7 +418,8 @@ void EditorUI::RequestClose(const int closeState)
    // Stopping a play test pops the table under the async save of the base table: refused for every caller (Stop, X, Shift+F5, OS window close)
    if (IsInspectMode() && m_fileOp != nullptr)
    {
-      m_deferredStop = closeState; // Replayed once the save has finished
+      if (m_deferredStop != Player::CS_CLOSE_APP) // A Quit is the stronger request: a later Stop does not downgrade it
+         m_deferredStop = closeState; // Replayed once the save has finished
       Report("Save in progress: the play test will stop when it finishes");
       return;
    }
@@ -590,6 +591,11 @@ void EditorUI::FinishFileOp()
       {
          PLOGE << "Save failed (hr=" << std::hex << static_cast<unsigned long>(result) << std::dec << ") for " << op->displayPath;
          m_liveUI.PushNotification("SAVE FAILED: '" + op->displayPath + "'", 15000);
+         if (m_deferredStop >= 0)
+         {
+            m_deferredStop = -1; // Never quit or stop on top of a failed save
+            Report("Save failed: close cancelled");
+         }
       }
       else
       {
@@ -1386,14 +1392,19 @@ void EditorUI::RenderAreaCorners()
          ImGuiWindow *const cornerWindow = ImGui::FindWindowByName(name);
          const ImGuiID hoveredId = ImGui::GetHoveredID();
          bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != cornerWindow->GetID("##corner"));
-         if (overWidget)
-         {
-            ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
-            if (hw != nullptr && strncmp(hw->Name, "##Split", 7) == 0)
-               overWidget = false; // The splitter strip overlaps the corner's edge band: the corner wins inside its triangle
-            else if ((corner & 2) != 0)
-               overWidget = hw != nullptr && (hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_X) || hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_Y)); // Bottom: list rows do not count, only scrollbars
-         }
+         ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
+         const char *const hwName = hw != nullptr ? hw->RootWindow->Name : "";
+         const bool overStrip = strncmp(hwName, "##Split", 7) == 0;
+         const bool overArea = hw == nullptr || strcmp(hwName, "OUTLINER") == 0 || strcmp(hwName, "PROPERTIES") == 0 || strcmp(hwName, "SCRIPT") == 0
+            || strcmp(hwName, "PARTLIBRARY") == 0 || strcmp(hwName, "CAMERAPREVIEW") == 0;
+         // A floating window (popup, tooltip, palette, history, overlay) keeps all its clicks: no corner acts through it
+         const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
+         if (overStrip)
+            overWidget = false; // The splitter strip overlaps the corner's edge band: the corner wins inside its triangle
+         else if (overWidget && (corner & 2) != 0 && overArea && hw != nullptr)
+            overWidget = hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_X) || hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_Y); // Bottom, on an area window: list rows do not count, only scrollbars
+         if (overFloating)
+            overWidget = true;
          const bool inTriangle = lx >= 0.f && ly >= 0.f && lx + ly <= side && (!overWidget || m_areaDrag.active);
          ImGui::SetNextWindowPos(ImVec2(x, y));
          ImGui::SetNextWindowSize(ImVec2(side, side));
@@ -2760,10 +2771,8 @@ void EditorUI::RenderUI()
    // Shift+F5 stops the play test (as in IDEs), also while the game keys are routed to the game
    if (IsInspectMode() && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F5, false))
    {
-      // Same guard as the Stop button and the X (the file op modal): stopping would pop the table under a running save
-      if (m_fileOp != nullptr)
-         Report("Cannot stop the play test while a save is in progress");
-      else if (!modalWasActive)
+      // RequestClose defers the stop while a save is running, like the Stop button and the X
+      if (!modalWasActive)
          RequestClose(Player::CS_STOP_PLAY);
    }
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape() | ConsumedPaneEscape(); // The Esc that closed a popup is not an editor Esc
