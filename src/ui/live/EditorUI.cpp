@@ -1396,7 +1396,8 @@ void EditorUI::RenderAreaCorners()
          const char *const hwName = hw != nullptr ? hw->RootWindow->Name : "";
          const bool overStrip = strncmp(hwName, "##Split", 7) == 0;
          const bool overArea = hw == nullptr || strcmp(hwName, "OUTLINER") == 0 || strcmp(hwName, "PROPERTIES") == 0 || strcmp(hwName, "SCRIPT") == 0
-            || strcmp(hwName, "PARTLIBRARY") == 0 || strcmp(hwName, "CAMERAPREVIEW") == 0;
+            || strcmp(hwName, "PARTLIBRARY") == 0 || strcmp(hwName, "CAMERAPREVIEW") == 0
+            || strcmp(hwName, "SIDEBAR") == 0 || strcmp(hwName, "orbit lock toggle") == 0; // The N-panel and the orbit lock button belong to the viewport area
          // A floating window (popup, tooltip, palette, history, overlay) keeps all its clicks: no corner acts through it
          const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
          if (overStrip)
