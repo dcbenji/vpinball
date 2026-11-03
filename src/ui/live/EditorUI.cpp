@@ -76,7 +76,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_inspectionModal(*this)
    , m_pbrConvertModal(*this)
    , m_partLibrary(*this)
-   , m_cameraPreview(*this)
+   , m_cameraPreviews { CameraPreviewPanel(*this, 0), CameraPreviewPanel(*this, 1), CameraPreviewPanel(*this, 2) }
    , m_scriptPanel(*this)
    , m_pinned(*this)
    , m_palette(*this)
@@ -803,7 +803,7 @@ const char *EditorUI::AreaEditorName(const AreaEditor type)
    case AreaEditor::Script: return "Script";
    case AreaEditor::PartLibrary: return "Part Library";
    case AreaEditor::Viewport: return "3D Viewport";
-   case AreaEditor::CameraPreview: return "Camera Preview";
+   case AreaEditor::CameraPreview: return "Camera / 3D View";
    case AreaEditor::Count: break;
    }
    return "";
@@ -1397,13 +1397,15 @@ void EditorUI::RenderAreaCorners()
          ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
          const char *const hwName = hw != nullptr ? hw->RootWindow->Name : "";
          const bool overStrip = strncmp(hwName, "##Split", 7) == 0;
-         const bool overArea = hw == nullptr || strcmp(hwName, "OUTLINER") == 0 || strcmp(hwName, "PROPERTIES") == 0 || strcmp(hwName, "SCRIPT") == 0 || strcmp(hwName, "PARTLIBRARY") == 0
-            || strcmp(hwName, "CAMERAPREVIEW") == 0 || strcmp(hwName, "SIDEBAR") == 0
-            || strcmp(hwName, "orbit lock toggle") == 0; // The N-panel and the orbit lock button belong to the viewport area
+         const bool overArea = hw == nullptr || strcmp(hwName, "OUTLINER") == 0 || strcmp(hwName, "PROPERTIES") == 0 || strcmp(hwName, "SCRIPT") == 0
+            || strcmp(hwName, "PARTLIBRARY") == 0 || strncmp(hwName, "CAMERAPREVIEW", 13) == 0
+            || strcmp(hwName, "SIDEBAR") == 0 || strcmp(hwName, "orbit lock toggle") == 0; // The N-panel and the orbit lock button belong to the viewport area
          // A floating window (popup, tooltip, palette, history, overlay) keeps all its clicks: no corner acts through it
          const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
          if (overStrip)
             overWidget = false; // The splitter strip overlaps the corner's edge band: the corner wins inside its triangle
+         if (overWidget && strncmp(hwName, "CAMERAPREVIEW", 13) == 0 && hoveredId == hw->RootWindow->GetID("##ViewImage"))
+            overWidget = false; // The image of a secondary view is a button over the whole area (its mouse navigation): the corner wins inside its triangle
          else if (overWidget && (corner & 2) != 0 && overArea && hw != nullptr)
             overWidget = hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_X)
                || hoveredId == ImGui::GetWindowScrollbarID(hw, ImGuiAxis_Y); // Bottom, on an area window: list rows do not count, only scrollbars
@@ -1741,13 +1743,19 @@ void EditorUI::RenderAreas()
    if (m_table->IsLocked())
    {
       m_properties.ClearMouseOver();
-      m_cameraPreview.NotHosted();
+      for (CameraPreviewPanel &view : m_cameraPreviews)
+         view.NotHosted();
       return;
    }
    // The leaves are read once: picking a type in the header of an area re-types them, which takes effect on the next frame. Each panel
-   // is a single instance (one leaf per type), so it is drawn at most once
+   // is a single instance (one leaf per type), so it is drawn at most once; the Camera Preview leaves (up to kMaxViewLeaves) each get
+   // one of the secondary view panels: the one bound to that leaf, else one not bound to a shown leaf (it reads the leaf's settings)
    const vector<LeafRect> leaves = m_leafRects;
-   bool propertiesDrawn = false, cameraPreviewDrawn = false;
+   bool propertiesDrawn = false;
+   bool viewDrawn[AreaLayout::kMaxViewLeaves] = {};
+   const auto isShownViewLeaf = [&leaves](const int id) {
+      return id >= 0 && std::any_of(leaves.begin(), leaves.end(), [id](const LeafRect &l) { return l.visible && l.id == id && l.type == AreaEditor::CameraPreview; });
+   };
    for (const LeafRect &leaf : leaves)
    {
       if (!leaf.visible)
@@ -1765,34 +1773,36 @@ void EditorUI::RenderAreas()
       case AreaEditor::PartLibrary: m_partLibrary.RenderInArea(pos, size); break;
       case AreaEditor::Viewport: break; // The 3D view shows through
       case AreaEditor::CameraPreview:
-         // The view setup is saved in the layout leaf: a change made in the panel is written to it, a different leaf value (workspace switch) is applied to the panel
+         // The view settings are saved in the layout leaf: read when a panel is bound to it, written back by the panel on every change
          if (const AreaNode *const node = m_areas.Find(leaf.id))
          {
-            const int shown = m_cameraPreview.GetView();
-            if (shown != m_syncedPreviewView)
+            int k = -1;
+            for (int i = 0; i < AreaLayout::kMaxViewLeaves && k < 0; i++)
+               if (m_cameraPreviews[i].GetLeaf() == leaf.id)
+                  k = i;
+            for (int i = 0; i < AreaLayout::kMaxViewLeaves && k < 0; i++)
+               if (!viewDrawn[i] && !isShownViewLeaf(m_cameraPreviews[i].GetLeaf()))
+                  k = i;
+            if (k >= 0 && !viewDrawn[k])
             {
-               m_areas.SetPreviewView(leaf.id, shown);
-               m_syncedPreviewView = shown;
-            }
-            else if (node->previewView != shown)
-            {
-               m_cameraPreview.SetView(node->previewView);
-               m_syncedPreviewView = m_cameraPreview.GetView();
+               if (m_cameraPreviews[k].GetLeaf() != leaf.id)
+                  m_cameraPreviews[k].Bind(leaf.id, node->previewView, node->view);
+               m_cameraPreviews[k].RenderInArea(pos, size);
+               viewDrawn[k] = true;
             }
          }
-         m_cameraPreview.RenderInArea(pos, size);
-         cameraPreviewDrawn = true;
          break;
       case AreaEditor::Count: break;
       }
    }
    if (!propertiesDrawn)
       m_properties.ClearMouseOver(); // A panel that is not hosted this frame must not keep last frame's hover
-   if (!cameraPreviewDrawn)
-      m_cameraPreview.NotHosted(); // Zero cost when not shown: no render request, targets released
+   for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
+      if (!viewDrawn[i])
+         m_cameraPreviews[i].NotHosted(); // Zero cost when not shown: no render request, targets released
 }
 
-void EditorUI::RenderAreaTypeButton(const AreaEditor current)
+void EditorUI::RenderAreaTypeButton(const AreaEditor current, const int leafId)
 {
    // Blender's editor type switcher: the editor icon and a down chevron at the far left of the area header, opening the list of the editor types
    const ImGuiStyle &style = ImGui::GetStyle();
@@ -1800,7 +1810,7 @@ void EditorUI::RenderAreaTypeButton(const AreaEditor current)
    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
    const float chevronWidth = ImGui::GetFontSize() * 0.4f; // Small, drawn in TextDim
    const ImVec2 buttonSize(style.FramePadding.x * 2.f + iconSize.x + style.ItemInnerSpacing.x + chevronWidth, ImGui::GetFrameHeight());
-   const int leaf = m_areas.FindLeaf(current);
+   const int leaf = leafId >= 0 ? leafId : m_areas.FindLeaf(current);
 
    ImGui::PushID("##AreaType");
    const bool clicked = ImGui::Button("##AreaTypeButton", buttonSize);
@@ -2052,6 +2062,7 @@ void EditorUI::RenderUI()
    if (!showFullUI)
       CancelAreaInteraction(false); // Fly mode, inspection modal: no corner drag or edge mode survives it
    ComputeAreaRects(); // The bar heights may have changed with the chrome render
+   m_secondaryViewHovered = false; // Set by the secondary views drawn by RenderAreas
    if (showFullUI)
    {
       RenderAreas(); // Panels of the visible areas
@@ -2833,6 +2844,14 @@ void EditorUI::RenderUI()
             ExitPointEditMode(true); // Exit drag point edit mode
          else if (m_selection.GetType() != Selection::S_NONE)
             ClearSelection(); // Cancel current selection
+      }
+      else if (m_secondaryViewHovered
+         && ((!io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_G) || ImGui::IsKeyPressed(ImGuiKey_R) || ImGui::IsKeyPressed(ImGuiKey_S) || ImGui::IsKeyPressed(ImGuiKey_Z)
+                || ImGui::IsKeyPressed(ImGuiKey_F) || ImGui::IsKeyPressed(ImGuiKey_Home) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide)))
+            || IsNumpadPressed(0) || IsNumpadPressed(1) || IsNumpadPressed(2) || IsNumpadPressed(3) || IsNumpadPressed(4) || IsNumpadPressed(5) || IsNumpadPressed(6)
+            || IsNumpadPressed(7) || IsNumpadPressed(8) || IsNumpadPressed(9)))
+      {
+         // A secondary 3D view is under the mouse: the view keys are its own (it has no G / R / S, no shading key)
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {

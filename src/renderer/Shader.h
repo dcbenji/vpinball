@@ -963,6 +963,14 @@ public:
       }
    }
 
+   // Rebinds every sampler of the given list to the replacement (released render targets: their samplers must not be bound by a later draw)
+   void ReplaceSamplers(const vector<const Sampler*>& gone, const std::shared_ptr<const Sampler>& replacement)
+   {
+      for (std::shared_ptr<const Sampler>& sampler : m_samplers)
+         if (sampler != nullptr && std::find(gone.begin(), gone.end(), sampler.get()) != gone.end())
+            sampler = replacement;
+   }
+
    void SetTexture(const ShaderUniform uniformName, std::shared_ptr<const Sampler> sampler, SamplerFilter filter = SamplerFilter::SF_UNDEFINED,
       SamplerAddressMode clampU = SamplerAddressMode::SA_UNDEFINED, SamplerAddressMode clampV = SamplerAddressMode::SA_UNDEFINED)
    {

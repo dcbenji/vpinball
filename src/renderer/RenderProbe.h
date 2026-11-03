@@ -65,8 +65,10 @@ public:
    bool IsRendering() const { return m_rendering; }
    bool IsStaticAccumulationPending() const; // True while this probe still has samples to accumulate for its static parts prerender
    void MarkDirtyStatics(); // Mark the prerendered static parts as dirty, they are lazily accumulated again over the next frames
-   void SwapDesktopTargets();
+   static constexpr int kAlternateTargetSets = 3; // == Renderer::kMaxEditorViews (checked in Renderer.cpp)
+   void SwapAlternateTargets(int set); // Swaps the targets with an alternate set (one per scene target set of the renderer: VR desktop display, editor secondary views)
    void ReleaseRenderTargets(); // Release the render targets sized after the main render (on resize), recreated on next use
+   void GetRenderTargets(vector<RenderTarget*>& targets) const; // Appends the render targets ReleaseRenderTargets releases (the ones swapped in)
    RenderTarget* Render(const unsigned int renderMask); // Lazily update render probe and returns it
    void RenderRelease();
 
@@ -103,10 +105,10 @@ private:
    RenderTarget* m_dynamicRT = nullptr;
    RenderTarget* m_prerenderRT = nullptr; // Prerendered static parts, accumulated over successive frames
    int m_staticAccumCount = 0; // Number of samples accumulated so far in the static parts prerender
-   RenderTarget* m_desktopDynamicRT = nullptr;
-   RenderTarget* m_desktopPrerenderRT = nullptr;
-   RenderTarget* m_desktopBlurRT = nullptr;
-   int m_desktopStaticAccumCount = 0;
+   RenderTarget* m_altDynamicRT[kAlternateTargetSets] = {};
+   RenderTarget* m_altPrerenderRT[kAlternateTargetSets] = {};
+   RenderTarget* m_altBlurRT[kAlternateTargetSets] = {};
+   int m_altStaticAccumCount[kAlternateTargetSets] = {};
    RenderPass* m_copyPass = nullptr; // Pass that performs the screen space copy
    vector<RenderPass*> m_probePasses; // Passes recorded by this probe's renders since the last ApplyAreaOfInterest (which applies the area of interest to them only)
 };
