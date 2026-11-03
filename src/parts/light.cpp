@@ -458,7 +458,9 @@ void Light::Render(const unsigned int renderMask)
 
    if (isUIPass)
    {
-      if (!m_d.m_visible)
+      // The editor keeps the light's visibility (its illumination) on while it is hidden in the UI: don't draw the UI mesh then.
+      // No lightmap mesh when RenderSetup bailed out (empty/degenerate shape): nothing to outline
+      if (!m_d.m_visible || !IsUIVisible(true) || m_lightmapMeshBuffer == nullptr)
          return;
 
       UpdateMeshBuffer();
