@@ -4,12 +4,15 @@
 #include "PartLibraryPanel.h"
 
 #include "core/Settings.h"
+#include "core/VPApp.h"
 #include "core/SettingsService.h"
 #include "core/VPApp.h"
 #include "fonts/IconsForkAwesome.h"
 #include "parts/ball.h"
 #include "parts/pintable.h"
+#include "parts/primitive.h"
 #include "physics/PhysicsEngine.h"
+#include "renderer/RenderDevice.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/editor/EditorUIPartRegistry.h"
 #include "PropertyPane.h"
@@ -18,6 +21,7 @@
 #include "ui/VPXFileFeedback.h"
 #include "utils/JSONSerializer.h"
 
+#include <miniz/miniz.h>
 namespace
 {
 
@@ -75,9 +79,18 @@ static bool PaddedButton(const char *label, const float width, const float dpi)
 PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
    : m_editor(editor)
 {
+   if (const char *const folder = std::getenv("VPX_LIBRARY_THUMBS"); folder != nullptr && *folder != '\0')
+   {
+      m_hookFolder = PathFromUTF8(folder);
+      m_hookActive = true;
+   }
 }
 
-PartLibraryPanel::~PartLibraryPanel() { ClearPreview(); }
+PartLibraryPanel::~PartLibraryPanel()
+{
+   ClearPreview();
+   ReleaseScratch();
+}
 
 
 bool PartLibraryPanel::CanExportSelection() const
@@ -109,6 +122,27 @@ void PartLibraryPanel::ExportSelection()
 
 void PartLibraryPanel::Update()
 {
+   // Test hook: scan the given library folder and render its missing thumbnails without showing the area
+   if (m_hookActive && m_editor.m_renderer != nullptr)
+   {
+      if (m_rescanLibrary)
+      {
+         m_rescanLibrary = false;
+         RescanLibrary();
+      }
+      PumpThumbnails();
+      if (m_thumbQueue.empty() && m_thumbStage == ThumbStage::Idle)
+      {
+         PLOGI << "LIBTHUMB rendered=" << m_thumbsRendered << " cached=" << m_thumbsCached << " failed=" << m_thumbsFailed;
+         m_hookActive = false;
+         m_hookFolder.clear();
+         m_rescanLibrary = true; // The area, when shown, lists the user's folders
+      }
+   }
+   // The area is no longer shown: stop rendering thumbnails and give the view slot back
+   else if ((m_thumbSlot >= 0 || m_scratch != nullptr) && ImGui::GetFrameCount() > m_lastShownFrame + 1)
+      AbortThumbnail();
+
    // Apply the file picked by the asynchronous 'Export' save dialog (deferred to the main thread)
    if (m_pendingExportPath && !m_pendingExportPath->empty())
    {
@@ -173,11 +207,14 @@ void PartLibraryPanel::Update()
 
 void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
-   if (m_rescanLibrary)
+   if (m_rescanLibrary && !m_hookActive)
    {
       m_rescanLibrary = false;
       RescanLibrary();
    }
+   m_lastShownFrame = ImGui::GetFrameCount();
+   if (!m_hookActive)
+      PumpThumbnails();
 
    if (m_editor.BeginAreaWindow("PARTLIBRARY", pos, size))
    {
@@ -266,19 +303,13 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       if (PaddedButton(ICON_FK_REFRESH "  Refresh", ImGui::GetContentRegionAvail().x, dpi))
          m_rescanLibrary = true;
 
-      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 5.f + 40.f * dpi;
-      if (ImGui::BeginChild("##LibraryTree", ImVec2(0.f, -footerHeight), ImGuiChildFlags_Borders))
+      // Folder tree, collapsible, as a filter of the tiles
+      if (ImGui::TreeNodeEx("Folders", ImGuiTreeNodeFlags_SpanAvailWidth))
       {
          if (m_library.empty())
-         {
-            // Empty state inside the list, centred and dim
-            const char *const msg = "No library folder defined";
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + max(0.f, (avail.x - ImGui::CalcTextSize(msg).x) * 0.5f), ImGui::GetCursorPosY() + max(0.f, avail.y * 0.4f - ImGui::GetTextLineHeight())));
-            ImGui::TextUnformatted(msg);
-            ImGui::PopStyleColor();
-         }
+            ImGui::TextDisabled("No library folder defined");
+         if (!m_library.empty() && ImGui::Selectable("(all)", m_filterFolder.empty()))
+            m_filterFolder.clear();
          for (size_t i = 0; i < m_library.size(); i++)
          {
             ImGui::PushID(static_cast<int>(i));
@@ -293,17 +324,15 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             ImGui::SameLine();
             const LibraryFolder &root = m_library[i];
             const string label = root.path.filename().empty() ? PathToUTF8(root.path) : PathToUTF8(root.path.filename());
-            const bool open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen);
-            if (ImGui::IsItemHovered())
-               ImGui::SetTooltip("%s", PathToUTF8(root.path).c_str());
-            if (open)
-            {
-               RenderLibraryFolder(root, label);
-               ImGui::TreePop();
-            }
+            RenderLibraryFolder(root, label);
             ImGui::PopID();
          }
+         ImGui::TreePop();
       }
+
+      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 5.f + 40.f * dpi;
+      if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, -footerHeight), ImGuiChildFlags_Borders))
+         RenderGrid(ImGui::GetContentRegionAvail().y);
       ImGui::EndChild();
       sections.EndSection();
       }
@@ -335,31 +364,88 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 }
 void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const string &label)
 {
-   for (const std::filesystem::path &pack : folder.packs)
+   // A folder node: clicking it filters the tiles to its packs (subfolders included)
+   const bool open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | (folder.subFolders.empty() ? ImGuiTreeNodeFlags_Leaf : 0)
+         | (folder.path == m_filterFolder ? ImGuiTreeNodeFlags_Selected : 0));
+   if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+      m_filterFolder = folder.path;
+   if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("%s", PathToUTF8(folder.path).c_str());
+   if (open)
    {
-      ImGui::TreeNodeEx(PathToUTF8(pack.filename()).c_str(),
-         ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth | (pack == m_selectedPack ? ImGuiTreeNodeFlags_Selected : 0));
-      if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("%s", PathToUTF8(pack).c_str());
-      if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-      {
-         m_selectedPack = pack;
-         m_selectedPackInfo = ScanPack(pack);
-         // Selecting a pack arms the placement of its whole content
-         m_placementPack = pack;
-         StartPlacement();
-      }
+      for (const LibraryFolder &sub : folder.subFolders)
+         RenderLibraryFolder(sub, PathToUTF8(sub.path.filename()));
+      ImGui::TreePop();
    }
-   for (const LibraryFolder &sub : folder.subFolders)
+}
+
+void PartLibraryPanel::RenderGrid(const float height)
+{
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   const float tile = 96.f * dpi, labelH = ImGui::GetTextLineHeight() + 4.f * dpi;
+   const ImGuiStyle &style = ImGui::GetStyle();
+   const int columns = max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + style.ItemSpacing.x) / (tile + style.ItemSpacing.x)));
+   const string filter = PathToUTF8(m_filterFolder);
+   ImDrawList *const drawList = ImGui::GetWindowDrawList();
+   int shown = 0, loads = 0;
+   for (size_t i = 0; i < m_items.size(); i++)
    {
-      const bool open = ImGui::TreeNodeEx(PathToUTF8(sub.path.filename()).c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
-      if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("%s", PathToUTF8(sub.path).c_str());
-      if (open)
+      LibraryItem &item = m_items[i];
+      if (!filter.empty() && PathToUTF8(item.pack).rfind(filter, 0) != 0)
+         continue;
+      if (shown % columns != 0)
+         ImGui::SameLine();
+      shown++;
+      ImGui::PushID(static_cast<int>(i));
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      ImGui::InvisibleButton("##tile", ImVec2(tile, tile + labelH));
+      const bool hovered = ImGui::IsItemHovered(), visible = ImGui::IsItemVisible();
+      if (ImGui::IsItemClicked())
       {
-         RenderLibraryFolder(sub, label);
-         ImGui::TreePop();
+         m_selectedPack = item.pack;
+         m_selectedPackInfo = ScanPack(item.pack);
       }
+      if (hovered)
+         ImGui::SetTooltip("%s%s%s", PathToUTF8(item.pack).c_str(), item.material.empty() ? "" : "\nMaterial: ", item.material.c_str());
+      if (visible)
+      {
+         // Thumbnails are loaded when their tile is first shown, a few per frame
+         if (!item.thumbLoaded && loads < 4)
+         {
+            item.thumbLoaded = true;
+            std::error_code ec;
+            if (std::filesystem::exists(item.thumbFile, ec))
+            {
+               loads++;
+               std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(item.thumbFile);
+               item.thumb = tex ? std::make_shared<Sampler>(m_editor.m_renderer->m_renderDevice, "Library Thumbnail"s, tex, false) : nullptr;
+            }
+         }
+         const ImVec2 p1(p0.x + tile, p0.y + tile);
+         const bool selected = item.pack == m_selectedPack;
+         drawList->AddRectFilled(p0, p1, IM_COL32(46, 46, 46, 255));
+         if (item.thumb)
+            drawList->AddImage(item.thumb, p0, p1);
+         drawList->AddRect(p0, ImVec2(p1.x, p1.y + labelH), selected ? EditorTheme::Accent : hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(0, 0, 0, 0), 0.f, 0, selected ? 2.f : 1.f);
+         static constexpr const char *kBadges[] = { "PART", "MAT", "INSERT" };
+         static constexpr ImU32 kBadgeColors[] = { IM_COL32(70, 110, 160, 230), IM_COL32(150, 100, 50, 230), IM_COL32(150, 60, 120, 230) };
+         const char *const badge = kBadges[static_cast<int>(item.kind)];
+         const ImVec2 bs = ImGui::CalcTextSize(badge);
+         drawList->AddRectFilled(ImVec2(p0.x + 2.f * dpi, p0.y + 2.f * dpi), ImVec2(p0.x + 6.f * dpi + bs.x, p0.y + 4.f * dpi + bs.y), kBadgeColors[static_cast<int>(item.kind)], 2.f * dpi);
+         drawList->AddText(ImVec2(p0.x + 4.f * dpi, p0.y + 3.f * dpi), IM_COL32(255, 255, 255, 255), badge);
+         const ImVec4 clip(p0.x, p1.y, p1.x, p1.y + labelH);
+         drawList->AddText(nullptr, 0.f, ImVec2(p0.x + 2.f * dpi, p1.y + 2.f * dpi), ImGui::GetColorU32(ImGuiCol_Text), item.label.c_str(), nullptr, 0.f, &clip);
+      }
+      ImGui::PopID();
+   }
+   if (shown == 0)
+   {
+      const char *const msg = m_library.empty() ? "No library folder defined" : "No pack found";
+      const ImVec2 avail = ImGui::GetContentRegionAvail();
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+      ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + max(0.f, (avail.x - ImGui::CalcTextSize(msg).x) * 0.5f), ImGui::GetCursorPosY() + max(0.f, height * 0.4f - ImGui::GetTextLineHeight())));
+      ImGui::TextUnformatted(msg);
+      ImGui::PopStyleColor();
    }
 }
 
@@ -373,6 +459,11 @@ vector<std::filesystem::path> PartLibraryPanel::GetLibraryFolders() const
    std::filesystem::create_directories(defaultFolder, ec);
 
    vector<std::filesystem::path> folders;
+   if (!m_hookFolder.empty())
+   {
+      folders.push_back(m_hookFolder);
+      return folders;
+   }
    ankerl::unordered_dense::set<string> excluded;
    const string stored = g_settingsService.GetAppSettings().GetEditor_PartLibraryFolders();
    size_t start = 0;
@@ -452,7 +543,12 @@ void PartLibraryPanel::RemoveLibraryFolder(size_t index)
 
 void PartLibraryPanel::RescanLibrary()
 {
+   AbortThumbnail();
    m_library.clear();
+   m_items.clear();
+   m_thumbQueue.clear();
+   m_packKeys.clear();
+   m_thumbsRendered = m_thumbsCached = m_thumbsFailed = 0;
    const std::function<void(LibraryFolder &)> scanFolder = [&scanFolder](LibraryFolder &node)
    {
       std::error_code ec;
@@ -460,7 +556,14 @@ void PartLibraryPanel::RescanLibrary()
       for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(node.path, ec))
       {
          if (entry.is_directory(ec))
-            subdirs.push_back(entry.path());
+         {
+            // A folder holding a manifest is a folder pack; thumbnail sidecars of zip packs and the built-in preview packs are not browsed
+            const string name = PathToUTF8(entry.path().filename());
+            if (std::filesystem::exists(entry.path() / "manifest.json", ec))
+               node.packs.push_back(entry.path());
+            else if (lowerCase(PathToUTF8(entry.path().extension())) != ".thumbs"s && name != "_preview"s)
+               subdirs.push_back(entry.path());
+         }
          else if (entry.is_regular_file(ec) && lowerCase(PathToUTF8(entry.path().extension())) == ".vpz"s)
             node.packs.push_back(entry.path());
       }
@@ -472,6 +575,50 @@ void PartLibraryPanel::RescanLibrary()
          scanFolder(node.subFolders.back());
       }
    };
+   // Tiles in tree order: a pack's kind, and its thumbnails' state (cached when the pack key matches and every thumbnail exists)
+   const std::function<void(const LibraryFolder &)> addItems = [this, &addItems](const LibraryFolder &node)
+   {
+      for (const std::filesystem::path &pack : node.packs)
+      {
+         const PackInfo info = ScanPack(pack);
+         if (!info.valid)
+            continue;
+         const std::filesystem::path thumbs = ThumbFolder(pack);
+         const size_t first = m_items.size();
+         const auto addItem = [&](const string &label, const string &material, const ItemKind kind)
+         {
+            LibraryItem &item = m_items.emplace_back();
+            item.pack = pack;
+            item.material = material;
+            item.label = label;
+            item.kind = kind;
+            item.thumbFile = thumbs / (JSONSerializer::SanitizeFileName(label) + ".png"s);
+         };
+         if (info.kind == ItemKind::Material)
+            for (const string &material : info.materialNames)
+               addItem(material, material, ItemKind::Material);
+         else
+            addItem(PathToUTF8(pack.stem()), ""s, info.kind);
+         const string key = std::format("{:016x}", PackKey(pack));
+         string stored;
+         std::ifstream keyFile(thumbs / "key.txt");
+         std::getline(keyFile, stored);
+         bool cached = stored == key;
+         std::error_code ec;
+         for (size_t i = first; i < m_items.size() && cached; i++)
+            cached = std::filesystem::exists(m_items[i].thumbFile, ec);
+         if (cached)
+            m_thumbsCached += static_cast<int>(m_items.size() - first);
+         else
+         {
+            m_packKeys[pack] = { key, static_cast<int>(m_items.size() - first) };
+            for (size_t i = first; i < m_items.size(); i++)
+               m_thumbQueue.push_back(i);
+         }
+      }
+      for (const LibraryFolder &sub : node.subFolders)
+         addItems(sub);
+   };
    for (const std::filesystem::path &folder : GetLibraryFolders())
    {
       std::error_code ec;
@@ -479,27 +626,51 @@ void PartLibraryPanel::RescanLibrary()
          continue;
       m_library.emplace_back().path = folder;
       scanFolder(m_library.back());
+      addItems(m_library.back());
    }
+   std::ranges::reverse(m_thumbQueue); // Rendered from the back: in tile order
 }
 
 PartLibraryPanel::PackInfo PartLibraryPanel::ScanPack(const std::filesystem::path &path)
 {
    PackInfo info;
    const auto pack = JSONSerializer::CreateReader(path);
-   if (!pack)
+   if (!pack || !pack->Exists("manifest.json"s))
       return info;
    info.valid = true;
+   bool insert = false;
    for (const std::filesystem::path &file : pack->ListFiles())
    {
       const std::filesystem::path folder = file.parent_path();
       if (file == "table.json"s)
          info.hasTable = true;
       else if (file.extension() == ".json" && folder == "parts"s)
+      {
          info.parts++;
+         // A traced insert card (Primitive::IsTracedInsert): a primitive with add_blend and a TRACED_ image
+         string content;
+         if (!insert && pack->ReadTextFile(file, content))
+            try
+            {
+               const nlohmann::json doc = nlohmann::json::parse(content);
+               insert = doc.value("$type", ""s) == JSONSerializer::GetPartTypeName(eItemPrimitive) && doc.value("add_blend", false) && lowerCase(doc.value("image", ""s)).starts_with("traced_");
+            }
+            catch (const nlohmann::json::exception &) { }
+      }
       else if (file.extension() == ".json" && folder == "collections"s)
          info.collections++;
       else if (file.extension() == ".json" && folder == "materials"s)
+      {
          info.materials++;
+         string content, name = PathToUTF8(file.stem());
+         if (pack->ReadTextFile(file, content))
+            try
+            {
+               name = nlohmann::json::parse(content).value("name", name);
+            }
+            catch (const nlohmann::json::exception &) { }
+         info.materialNames.push_back(name);
+      }
       else if (file.extension() == ".json" && folder == "images"s)
          info.images++;
       else if (file.extension() == ".json" && folder == "sounds"s)
@@ -507,7 +678,282 @@ PartLibraryPanel::PackInfo PartLibraryPanel::ScanPack(const std::filesystem::pat
       else if (file.extension() == ".json" && folder == "fonts"s)
          info.fonts++;
    }
+   info.kind = info.parts > 0 ? (insert ? ItemKind::Insert : ItemKind::Part) : info.materials > 0 ? ItemKind::Material : ItemKind::Part;
    return info;
+}
+
+std::filesystem::path PartLibraryPanel::ThumbFolder(const std::filesystem::path &pack)
+{
+   // Inside a folder pack (its own git can commit them); beside a zip pack, which is never rewritten
+   std::error_code ec;
+   if (std::filesystem::is_directory(pack, ec))
+      return pack / "thumbs";
+   std::filesystem::path sidecar = pack;
+   sidecar += ".thumbs";
+   return sidecar;
+}
+
+// 64 bit FNV-1a over the pack content (paths, JSON bytes, binary sizes; zip: entry names and CRC32, nothing decompressed), the rig version and the thumbnail size
+uint64_t PartLibraryPanel::PackKey(const std::filesystem::path &pack)
+{
+   uint64_t h = 0xcbf29ce484222325ull;
+   const auto hash = [&h](const void *data, const size_t size)
+   {
+      for (size_t i = 0; i < size; i++)
+         h = (h ^ static_cast<const uint8_t *>(data)[i]) * 0x100000001b3ull;
+   };
+   const uint32_t rig[2] = { kRigVersion, static_cast<uint32_t>(kThumbSize) };
+   hash(rig, sizeof(rig));
+   std::error_code ec;
+   if (std::filesystem::is_directory(pack, ec))
+   {
+      const auto reader = JSONSerializer::CreateReader(pack);
+      for (const std::filesystem::path &file : reader->ListFiles())
+      {
+         const string name = file.generic_string();
+         if (name.starts_with("thumbs/") || name.starts_with('.')) // The thumbnails themselves, VCS/OS files
+            continue;
+         hash(name.data(), name.size());
+         if (file.extension() == ".json")
+         {
+            vector<uint8_t> data;
+            if (reader->ReadBinaryFile(file, data))
+               hash(data.data(), data.size());
+         }
+         else
+         {
+            const uint64_t size = std::filesystem::file_size(pack / file, ec);
+            hash(&size, sizeof(size));
+         }
+      }
+   }
+   else
+   {
+      mz_zip_archive zip {};
+      if (mz_zip_reader_init_file(&zip, PathToUTF8(pack).c_str(), 0))
+      {
+         for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); i++)
+         {
+            mz_zip_archive_file_stat stat;
+            if (!mz_zip_reader_file_stat(&zip, i, &stat))
+               continue;
+            hash(stat.m_filename, strlen(stat.m_filename));
+            hash(&stat.m_crc32, sizeof(stat.m_crc32));
+         }
+         mz_zip_reader_end(&zip);
+      }
+   }
+   return h;
+}
+
+// Loads the item into a scratch table (never saved, the live table is not consulted) and sets its parts up with the live renderer, as the
+// placement ghost does. Material items: the built-in preview sphere wearing the material
+bool PartLibraryPanel::LoadScratch(const LibraryItem &item)
+{
+   ReleaseScratch();
+   const auto load = [](const std::filesystem::path &path) -> CComObject<PinTable> *
+   {
+      CComObject<PinTable> *table;
+      CComObject<PinTable>::CreateInstance(&table);
+      table->AddRef();
+      VPXFileFeedback feedback;
+      const auto pack = JSONSerializer::CreateReader(path);
+      const HRESULT hr = pack != nullptr ? table->LoadGameFromJSONPack(*pack, feedback) : E_FAIL;
+      if (FAILED(hr) && (hr != APPX_E_BLOCK_HASH_INVALID) && (hr != APPX_E_CORRUPT_CONTENT))
+      {
+         table->Release();
+         return nullptr;
+      }
+      return table;
+   };
+   m_scratch = load(item.pack);
+   if (m_scratch == nullptr)
+      return false;
+   if (item.kind == ItemKind::Material)
+   {
+      CComObject<PinTable> *const sphere = load(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "library" / "_preview" / "sphere.vpz");
+      if (sphere == nullptr)
+         return false;
+      const vector<IEditable *> parts = m_scratch->ImportParts(sphere, nullptr);
+      sphere->Release();
+      for (IEditable *const part : parts)
+         if (part->GetItemType() == eItemPrimitive)
+            static_cast<Primitive *>(part)->m_d.m_szMaterial = item.material;
+   }
+   // ponytail: the scratch table's render probes are dropped (never set up with the renderer), probe reflection/refraction is not previewed
+   for (RenderProbe *const probe : m_scratch->m_vrenderprobe)
+      delete probe;
+   m_scratch->m_vrenderprobe.clear();
+   for (IEditable *const part : m_scratch->GetParts())
+   {
+      if (part->GetIRenderable() == nullptr)
+         continue;
+      part->GetIRenderable()->RenderSetup(m_editor.m_renderer.get());
+      if (part->GetItemType() != eItemPartGroup)
+         m_scratchParts.push_back(part);
+   }
+   return !m_scratchParts.empty();
+}
+
+void PartLibraryPanel::ReleaseScratch()
+{
+   if (m_editor.m_renderer != nullptr)
+      m_editor.m_renderer->CancelIsolatedEditorView(&m_scratchParts);
+   m_scratchParts.clear();
+   if (m_scratch == nullptr)
+      return;
+   if (m_editor.m_renderer != nullptr)
+      for (IEditable *const edit : m_scratch->GetParts())
+      {
+         if (edit->GetIRenderable() == nullptr)
+            continue;
+         // Same deferred release as part deletion: the render thread may still use the render state
+         m_editor.m_renderer->DropRenderable(edit->GetIRenderable());
+         edit->AddRef();
+         edit->m_renderReleasePending = true;
+         m_editor.m_renderer->m_renderDevice->AddEndOfFrameCmd(
+            [edit]()
+            {
+               edit->GetIRenderable()->RenderRelease();
+               edit->m_renderReleasePending = false;
+               edit->Release();
+            });
+      }
+   m_scratch->Release();
+   m_scratch = nullptr;
+}
+
+void PartLibraryPanel::AbortThumbnail()
+{
+   // An item in flight is queued again (still at the back of the queue)
+   m_thumbStage = ThumbStage::Idle;
+   ReleaseScratch();
+   if (m_thumbSlot >= 0 && m_editor.m_renderer != nullptr && m_editor.m_cameraPreviews[m_thumbSlot].GetLeaf() < 0)
+      m_editor.m_renderer->ReleaseEditorView(m_thumbSlot);
+   m_thumbSlot = -1;
+}
+
+void PartLibraryPanel::PumpThumbnails()
+{
+#if !defined(ENABLE_BGFX)
+   m_thumbQueue.clear(); // ponytail: the read back (RenderDevice::RequestVRScreenshot) is BGFX only
+#else
+   Renderer *const renderer = m_editor.m_renderer.get();
+   if (renderer == nullptr || (m_thumbQueue.empty() && m_thumbStage == ThumbStage::Idle && m_thumbSlot < 0))
+      return;
+   // A Camera Preview area took the slot over: start again with another one
+   if (m_thumbSlot >= 0 && m_editor.m_cameraPreviews[m_thumbSlot].GetLeaf() >= 0)
+   {
+      m_thumbSlot = -1;
+      AbortThumbnail();
+   }
+   switch (m_thumbStage)
+   {
+   case ThumbStage::Idle:
+   {
+      if (m_thumbQueue.empty())
+      {
+         AbortThumbnail(); // Done: give the slot back
+         return;
+      }
+      if (g_pplayer->m_vrDevice != nullptr || renderer->m_stereo3D != STEREO_OFF)
+         return; // Secondary views are only rendered on desktop
+      // A view slot no Camera Preview area uses (the last ones first), kept until the queue is empty
+      for (int i = AreaLayout::kMaxViewLeaves - 1; i >= 0 && m_thumbSlot < 0; i--)
+         if (m_editor.m_cameraPreviews[i].GetLeaf() < 0 && renderer->CanRenderEditorPBRView(i))
+            m_thumbSlot = i;
+      if (m_thumbSlot < 0)
+         return;
+      const LibraryItem &item = m_items[m_thumbQueue.back()];
+      if (!LoadScratch(item))
+      {
+         ReleaseScratch();
+         PLOGW << "Library thumbnail: nothing to render in '" << PathToUTF8(item.pack) << '\'';
+         m_thumbsFailed++;
+         m_thumbQueue.pop_back();
+         return;
+      }
+      // Fixed 3/4 camera framed on the item bounds: primitives by their mesh bounds, other parts by their position +/- 100 VPU
+      FRect3D bounds(FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX);
+      for (IEditable *const part : m_scratchParts)
+      {
+         Vertex3Ds bMin, bMax;
+#if defined(ENABLE_BGFX)
+         if (part->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(part)->GetShadowCacheBounds(bMin, bMax))
+#endif
+         {
+            const Vertex2D c = part->GetCenter();
+            bMin = Vertex3Ds(c.x - 100.f, c.y - 100.f, 0.f);
+            bMax = Vertex3Ds(c.x + 100.f, c.y + 100.f, 100.f);
+         }
+         bounds.Extend(FRect3D(bMin.x, bMax.x, bMin.y, bMax.y, bMin.z, bMax.z));
+      }
+      AreaViewSettings cam;
+      cam.yaw = 35.f;
+      cam.pitch = 30.f;
+      CameraPreviewPanel::FrameBounds(cam, bounds, m_editor.m_navFovY, 1.f);
+      Renderer::EditorViewRequest req;
+      req.width = req.height = kThumbSize;
+      req.playerCamera = false;
+      CameraPreviewPanel::ComputeOrbit(cam, m_editor.m_navFovY, 1.f, req.view, req.proj);
+      req.isolated = &m_scratchParts;
+      req.isolatedTable = m_scratch;
+      if (renderer->RequestEditorView(m_thumbSlot, req))
+         m_thumbStage = ThumbStage::Requested;
+      else
+         ReleaseScratch(); // Retried on a later frame
+      break;
+   }
+
+   case ThumbStage::Requested:
+   {
+      // Once a scene render recorded the request (this frame's): read the view back at the end of this frame (render thread), then save it
+      if (renderer->IsEditorViewPending(m_thumbSlot))
+         return;
+      RenderTarget *const rt = renderer->GetEditorView(m_thumbSlot);
+      if (rt == nullptr)
+      {
+         AbortThumbnail();
+         return;
+      }
+      const LibraryItem &item = m_items[m_thumbQueue.back()];
+      std::error_code ec;
+      std::filesystem::create_directories(item.thumbFile.parent_path(), ec);
+      RenderDevice *const rd = renderer->m_renderDevice;
+      m_thumbReadCount = rd->m_directScreenshotCount;
+      rd->AddEndOfFrameCmd([rd, rt, file = item.thumbFile]() { rd->RequestVRScreenshot(rt, file, true); });
+      ReleaseScratch();
+      m_thumbStage = ThumbStage::ReadBack;
+      break;
+   }
+
+   case ThumbStage::ReadBack:
+   {
+      RenderDevice *const rd = renderer->m_renderDevice;
+      if (rd->m_directScreenshotCount == m_thumbReadCount)
+         return;
+      LibraryItem &item = m_items[m_thumbQueue.back()];
+      m_thumbQueue.pop_back();
+      m_thumbStage = ThumbStage::Idle;
+      item.thumb = nullptr;
+      item.thumbLoaded = false;
+      std::error_code ec;
+      if (!std::filesystem::exists(item.thumbFile, ec))
+      {
+         m_thumbsFailed++;
+         return;
+      }
+      m_thumbsRendered++;
+      // The pack key is written once all its thumbnails are rendered
+      if (auto it = m_packKeys.find(item.pack); it != m_packKeys.end() && --it->second.second == 0)
+      {
+         std::ofstream(ThumbFolder(item.pack) / "key.txt", std::ios::trunc) << it->second.first << '\n';
+         m_packKeys.erase(it);
+      }
+      break;
+   }
+   }
+#endif
 }
 
 // Imports the parts and referenced assets of a VPZ pack into the edited table, merging them
