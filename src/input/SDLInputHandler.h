@@ -5,6 +5,7 @@
 #include <filesystem>
 
 #include "InputManager.h"
+#include "PlungerHandler.h" // PlungerSensor is constructed here; EditorUI.cpp now includes this header on its own (nav cube mouse swallow)
 #include <atomic>
 #include "physics/cabinet/CabinetNudgeSensor.h"
 #include "physics/cabinet/GamepadNudge.h"
