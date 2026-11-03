@@ -74,24 +74,27 @@ void RenderProbe::RenderRelease()
    m_dynamicRT = nullptr;
    delete m_blurRT;
    m_blurRT = nullptr;
-   delete m_desktopPrerenderRT;
-   m_desktopPrerenderRT = nullptr;
-   delete m_desktopDynamicRT;
-   m_desktopDynamicRT = nullptr;
-   delete m_desktopBlurRT;
-   m_desktopBlurRT = nullptr;
-   m_desktopStaticAccumCount = 0;
+   for (int set = 0; set < kAlternateTargetSets; set++)
+   {
+      delete m_altPrerenderRT[set];
+      m_altPrerenderRT[set] = nullptr;
+      delete m_altDynamicRT[set];
+      m_altDynamicRT[set] = nullptr;
+      delete m_altBlurRT[set];
+      m_altBlurRT[set] = nullptr;
+      m_altStaticAccumCount[set] = 0;
+   }
    // Passes belong to the render frame of the released renderer
    m_probePasses.clear();
    m_copyPass = nullptr;
 }
 
-void RenderProbe::SwapDesktopTargets()
+void RenderProbe::SwapAlternateTargets(const int set)
 {
-   std::swap(m_dynamicRT, m_desktopDynamicRT);
-   std::swap(m_prerenderRT, m_desktopPrerenderRT);
-   std::swap(m_blurRT, m_desktopBlurRT);
-   std::swap(m_staticAccumCount, m_desktopStaticAccumCount);
+   std::swap(m_dynamicRT, m_altDynamicRT[set]);
+   std::swap(m_prerenderRT, m_altPrerenderRT[set]);
+   std::swap(m_blurRT, m_altBlurRT[set]);
+   std::swap(m_staticAccumCount, m_altStaticAccumCount[set]);
 }
 
 void RenderProbe::MarkDirty()
@@ -116,6 +119,13 @@ void RenderProbe::MarkDirtyStatics()
       m_renderer->m_renderDevice->AddEndOfFrameCmd([rt = m_prerenderRT]() { delete rt; });
    m_prerenderRT = nullptr;
    m_staticAccumCount = 0;
+}
+
+void RenderProbe::GetRenderTargets(vector<RenderTarget*>& targets) const
+{
+   for (RenderTarget* rt : { m_prerenderRT, m_dynamicRT, m_blurRT })
+      if (rt != nullptr)
+         targets.push_back(rt);
 }
 
 void RenderProbe::ReleaseRenderTargets()

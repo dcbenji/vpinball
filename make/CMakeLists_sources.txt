@@ -310,6 +310,7 @@ set(VPX_SOURCES
    src/ui/live/editor/EditorChrome.cpp
    src/ui/live/editor/AreaLayout.h
    src/ui/live/editor/AreaLayout.cpp
+   src/ui/live/editor/CameraPreviewPanel.cpp
    src/ui/live/editor/EditorUIPart.h
    src/ui/live/editor/EditorUIPart.cpp
    src/ui/live/editor/EditorUIPartRegistry.h
@@ -334,6 +335,7 @@ set(VPX_SOURCES
    src/ui/live/editor/OutlinerPanel.cpp
    src/ui/live/editor/PartLibraryPanel.h
    src/ui/live/editor/PartLibraryPanel.cpp
+   src/ui/live/editor/CameraPreviewPanel.h
    src/ui/live/editor/PinnedPanel.h
    src/ui/live/editor/PinnedPanel.cpp
    src/ui/live/editor/SearchPalette.h
