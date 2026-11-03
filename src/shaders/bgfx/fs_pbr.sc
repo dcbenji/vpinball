@@ -138,7 +138,7 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 SAMPLER2DARRAY(tex_pbr_shadow_cache, 7);
 #endif
 uniform vec4 pbrShadowCache[32]; // per shadowed light (VSM index): cache uv = table xy * x + (y, z), w = cache layer + 1 (0 = not cached)
-uniform vec4 pbrShadowCacheDraw; // x: 1 = this draw (the playfield) reads the cache, 0 = live filter only
+uniform vec4 pbrShadowCacheDraw; // x: 1 = this draw (the playfield) reads the cache, 0 = live filter only; y/z/w: flasher shadow test switches (pbr_direct_light)
 #define PBR_SHADOW_CACHE_MIN_NZ 0.7 // receivers steeper than ~45 deg are not cached (a wall shares the table xy of its floor)
 #ifdef SHADOW_BAKE
 uniform vec4 pbrShadowBakeLight;  // the baked light: xyz position, w range (as its light record)
@@ -1013,8 +1013,21 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
             }
          }
          #endif
-         BRANCH if (!cached)
-            shadow = pbr_cube_shadow(pbrVSMParams[shadowIndex], lPos, lightRadius, wPos, wNg, gNdotLraw, dist2, vsmRot);
+         // Test switches (pbrShadowCacheDraw, env-gated, defaults = as is): for wide cube lights (range >= w, the flashers),
+         // y >= 0 replaces the penumbra radius (bulb radius stays for the hot spot and specular; 0 = hard, 1 texel), and z on
+         // a see-through draw: 1 = hard, 2 = no shadow lookup
+         float penumbra = lightRadius;
+         bool skipShadow = false;
+         BRANCH if (lPos.w >= pbrShadowCacheDraw.w)
+         {
+            if (pbrShadowCacheDraw.y >= 0.0)
+               penumbra = pbrShadowCacheDraw.y;
+            if (pbrShadowCacheDraw.z > 0.5)
+               penumbra = 0.0;
+            skipShadow = pbrShadowCacheDraw.z > 1.5;
+         }
+         BRANCH if (!cached && !skipShadow)
+            shadow = pbr_cube_shadow(pbrVSMParams[shadowIndex], lPos, penumbra, wPos, wNg, gNdotLraw, dist2, vsmRot);
       }
       BRANCH if (shadowMode == 1 || shadowMode >= 3) // RAYTRACED_BALL_SHADOWS or PBR ball shadow tiers
          shadow *= get_light_ball_shadow(lPos.xyz, -dl, sqrt(dist2));

@@ -933,7 +933,13 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), pbrMaps->ownLampRadius);
-      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, 0.f, 0.f, 0.f);
+      // Flasher shadow test switches (off by default): VPX_FLASH_SOFTNESS = penumbra radius in VPU for wide cube lights (range >=
+      // VPX_FLASH_SHADOW_RANGE, default 600) instead of the bulb radius (0 = hard); VPX_FLASH_SEETHRU = 1 hard / 2 none on see-through parts
+      static const float flashSoftness = []() { const char* const v = std::getenv("VPX_FLASH_SOFTNESS"); return v ? (float)atof(v) : -1.f; }();
+      static const float flashSeeThru = []() { const char* const v = std::getenv("VPX_FLASH_SEETHRU"); return v ? (float)atof(v) : 0.f; }();
+      static const float flashRange = []() { const char* const v = std::getenv("VPX_FLASH_SHADOW_RANGE"); return v ? (float)atof(v) : 600.f; }();
+      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, flashSoftness, pbrMaps->transparent ? flashSeeThru : 0.f,
+         (flashSoftness >= 0.f || flashSeeThru > 0.f) ? flashRange : 1e30f);
       // Clear coat layer (on by default, VPX_COAT=0 disables it for A/B tests): a zero strength skips the coat lobe in the shaders
       static const bool coatEnabled = []() { const char* const v = std::getenv("VPX_COAT"); return v == nullptr || v[0] != '0'; }();
       // z: see-through surface scatter (presence); absorption tint (colour, strength) in pbrAbsorption
