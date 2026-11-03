@@ -156,7 +156,7 @@ uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
 uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is), z: scatter locality (0 = as is), w: scatter width (1 = as is)
 uniform vec4 pbrPresence3; // x: absorption light tint (0 = as is), y: scatter saturation (1 = as is), z: edge glow gain (0 = off), w: edge glow tint (0 = white)
-uniform vec4 pbrPresence4; // x: edge glow view falloff 0..1 (0 = view-independent, 1 = dark face-on), yzw: unused
+uniform vec4 pbrPresence4; // x: edge glow view falloff 0..1 (0 = view-independent, 1 = dark face-on), y: scatter bend 0..1 (1 = as is), zw: unused
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -1564,7 +1564,9 @@ void main() {
                   lit = max(vec3_splat(litY) + (lit - litY) * pbrPresence3.y, vec3_splat(0.0));
                }
                const float bandOn = pbrPresence2.w > 0.0 ? 1.0 : 0.0; // scatter width 0 = no band (and no rim)
-               const float edgeBend = bandOn * pbr_band_choke(max(edge, bend), bandE);
+               // Scatter Bend (0..1, 1 = as is): how much the curvature (fillets, bevels) adds to the band; real thick bevels
+               // refract more (the curvature term above) but are not frostier (Ben 11-03), so 0 leaves the band to the look-through
+               const float edgeBend = bandOn * pbr_band_choke(max(edge, bend * pbrPresence4.y), bandE);
                // Dense edge: at the edge-on limit the look-through saturates into an opaque scatter surface (rough cut edge,
                // bevel at grazing) that replaces what lies behind; its reflections stay on top (dense, shiny)
                const float dense = (1.0 - smoothstep(PRES_DENSE_C1, PRES_DENSE_C0, pCos)) * saturate(pbrScatter * (1.0 / PRES_DENSE_FULL));

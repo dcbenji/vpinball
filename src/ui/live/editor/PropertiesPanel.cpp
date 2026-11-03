@@ -1678,6 +1678,10 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             [](const Material *material) { return material->m_fScatterWidth; }, //
             [](Material *material, float v) { material->m_fScatterWidth = v <= 0.f ? 0.f : clamp(v, 0.05f, 1.f); }, 0.f, 1.f, 2); // 0 = no band
          props.SliderFloat<Material>(
+            material, "Scatter Bend"s, //
+            [](const Material *material) { return material->m_fScatterBend; }, //
+            [](Material *material, float v) { material->m_fScatterBend = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+         props.SliderFloat<Material>(
             material, "Scatter Saturation"s, //
             [](const Material *material) { return material->m_fScatterSaturation; }, //
             [](Material *material, float v) { material->m_fScatterSaturation = clamp(v, 0.f, 2.f); }, 0.f, 2.f, 2);
