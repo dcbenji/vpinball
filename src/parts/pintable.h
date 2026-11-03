@@ -782,6 +782,17 @@ public:
 
    vector<std::pair<string, string>> m_customInfo;
 
+   // Properties pinned to the live editor's "Pinned" overlay (editor state, saved in table.json of packs only)
+   struct EditorPin
+   {
+      string kind; // "table", "material" or "part"
+      string name; // Object name (empty for the table)
+      string prop; // Property pane label
+   };
+   vector<EditorPin> m_editorPins;
+   // Live editor workspaces (panel layout and pin set presets), kept as their JSON text ("editor_workspaces" of table.json)
+   string m_editorWorkspaces;
+
    LightSource m_Light[MAX_LIGHT_SOURCES];
    COLORREF m_lightAmbient;
    float m_lightHeight;
