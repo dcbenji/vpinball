@@ -195,6 +195,7 @@ void SearchPalette::BuildOperators()
    add("Object" + sep + "Edit Points", "Tab", [&ed]() { return ed.CanEnterPointEdit(); }, [&ed]() { ed.EnterPointEditMode(); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::Geometry); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry Bottom", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::GeometryBottom); });
+   add("Tools" + sep + "Convert to PBR...", "", editable, [&ed]() { ed.m_pbrConvertModal.Show(); });
    add("Debug" + sep + "Renderer Inspection", "", unlocked, [&ed]() { ed.m_inspectionModal.Show(); });
    for (int i = 0; i < PinnedPanel::WorkspaceCount; ++i)
    {

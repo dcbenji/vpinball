@@ -5414,6 +5414,7 @@ void EditorUI::ImportUnityPrefab(const std::filesystem::path &path)
       part->AddRef(); // Created parts keep a creation reference, released by the undo record (see PinTable::Uncreate)
       m_undo.MarkForCreate(part);
    }
+   m_undo.SetLabel("Import Unity Prefab");
    m_undo.EndUndo();
 
    // Player side setup, same as part creation

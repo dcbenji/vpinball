@@ -37,7 +37,7 @@ constexpr int kPanelTypeCount = 4; // types offered in editor-type menus (Camera
 struct AreaViewSettings
 {
    bool freeOrbit = false; // Camera: false = Player view (the table view setup previewView), true = its own orbit camera
-   bool wireframe = false; // Shading: false = shaded, true = wireframe (lite path)
+   bool wireframe = false; // Shading: false = full PBR, true = wireframe (lite path)
    bool live = true; // Re-rendered continuously (every 2nd frame), else after changes only
    bool orbitValid = false; // The orbit camera below was set (else it frames the table when first shown)
    bool ortho = false;

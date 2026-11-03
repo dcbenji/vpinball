@@ -2373,7 +2373,8 @@ bool Renderer::IsUsingStaticPrepass() const
 bool Renderer::IsUsingDepthPrepass() const
 {
    // The VR desktop mirror scene shares this renderer but its own render targets: keep it on the legacy path
-   return m_depthPrepassMode != 0 && !m_desktopScenePass;
+   // Same for the editor camera preview (the prepass targets are kept per main scene target)
+   return m_depthPrepassMode != 0 && !m_desktopScenePass && !m_editorPreviewPass;
 }
 
 bool Renderer::IsTemporalAccumulationInProgress() const
@@ -2619,9 +2620,14 @@ void Renderer::PreparePBRPasses()
       return;
 
    // Forward+ light list: light states animate per frame so the cluster grid is rebuilt and uploaded each frame
+   // Both are view independent (light space shadow pages over the table bounds, a world XY light grid): built once per frame by the main
+   // scene, the editor secondary views (recorded after it in the same frame) reuse them
 #ifdef ENABLE_BGFX
-   UpdateVirtualShadowMaps();
-   BuildPBRLightList();
+   if (!m_editorPreviewPass)
+   {
+      UpdateVirtualShadowMaps();
+      BuildPBRLightList();
+   }
 #endif
 
    // PBR parts write their specular resolve inputs to 2 sideband attachments of the scene framebuffer. Clearing them
@@ -3883,7 +3889,7 @@ RenderTarget* Renderer::ApplyAdditiveScreenSpaceReflection(RenderTarget* rendere
    // FIXME check if size should not be taken from renderdevice to account for stereo (double width/height) or supersampling
    m_renderDevice->m_FBShader->SetVector(
       ShaderUniform::w_h_height, (float)(1.0 / renderedRT->GetWidth()), (float)(1.0 / renderedRT->GetHeight()), 1.0f /*radical_inverse(m_overall_frames%2048)*/, 1.0f);
-   const float rotation = m_table->GetViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight());
+   const float rotation = GetRenderViewSetup().GetRotation(m_stereo3D, m_renderDevice->GetOutputBackBuffer()->GetWidth(), m_renderDevice->GetOutputBackBuffer()->GetHeight());
    m_renderDevice->m_FBShader->SetVector(ShaderUniform::SSR_bumpHeight_fresnelRefl_scale_FS, 0.3f, 0.3f, m_table->m_SSRScale, rotation);
 #ifdef ENABLE_BGFX
    const bool pbrMask = m_renderDevice->m_pbrActive && GetBackBufferTexture()->GetPBRSidebandSampler(1) != nullptr;
@@ -5185,6 +5191,11 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    const Matrix3D vrPlayfieldView[2] = { m_playfieldView[0], m_playfieldView[1] };
    const bool vrNoBackdrop = m_noBackdrop;
    const unsigned int vrVisibilityMask = m_visibilityMask;
+   // Device settings recorded by RenderStatics and read when the frame is executed: restored for the VR scene's depth prepass
+   RenderTarget* const vrDepthPrepassTarget = m_renderDevice->m_depthPrepassTarget;
+   const bool vrDepthPrepassNormals = m_renderDevice->m_depthPrepassNormals;
+   const bool vrDepthPrepassMotion = m_renderDevice->m_depthPrepassMotion;
+   const bool vrPBRAOEnabled = m_renderDevice->m_pbrAOEnabled;
 
    SwapSceneTargets(0);
    m_desktopScenePass = true;
@@ -5299,6 +5310,10 @@ void Renderer::RenderDesktopScene(RenderTarget* outputRT)
    m_playfieldView[1] = vrPlayfieldView[1];
    m_noBackdrop = vrNoBackdrop;
    m_visibilityMask = vrVisibilityMask;
+   m_renderDevice->m_depthPrepassTarget = vrDepthPrepassTarget;
+   m_renderDevice->m_depthPrepassNormals = vrDepthPrepassNormals;
+   m_renderDevice->m_depthPrepassMotion = vrDepthPrepassMotion;
+   m_renderDevice->m_pbrAOEnabled = vrPBRAOEnabled;
    m_renderDevice->m_basicShader->SetVector(
       ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
    m_renderDevice->m_ballShader->SetVector(
@@ -5360,9 +5375,11 @@ void Renderer::ForgetRenderTargetSamplers(const vector<RenderTarget*>& targets)
    vector<const Sampler*> gone;
    for (const RenderTarget* rt : targets)
    {
-      for (const std::shared_ptr<Sampler>& sampler : { rt->GetColorSampler(), rt->GetDepthSampler() })
+      for (const std::shared_ptr<Sampler>& sampler : { rt->GetColorSampler(), rt->GetDepthSampler(), rt->GetPBRSidebandSampler(0), rt->GetPBRSidebandSampler(1), rt->GetPBRDataSampler() })
          if (sampler != nullptr)
             gone.push_back(sampler.get());
+      if (const RenderTarget* const sideband = rt->GetPBRSidebandTarget(); sideband != nullptr && sideband->GetColorSampler() != nullptr)
+         gone.push_back(sideband->GetColorSampler().get());
    }
    if (gone.empty())
       return;
@@ -5424,10 +5441,12 @@ void Renderer::ReleaseSwappedInSceneTargets()
 }
 
 // Editor secondary view: the scene rendered a second time, into the slot's own scene target set, with the view's camera: the table's view
-// setup (the player view, as the editor's Preview Camera shows it) or a free camera. Full views are tonemapped into the slot's output target;
+// setup (the player view, as the editor's Preview Camera shows it) or a free camera. Full PBR views are tonemapped into the slot's output target;
 // lite (wireframe) views draw the editor's hidden line wireframe straight into an LDR back buffer pair, without post processing. Derived from
 // RenderDesktopScene; all the per frame state the second render touches is saved and restored, so the main view is unaffected.
-// Ancillary windows are not composited.
+// Like the VR desktop display, it is rendered without the depth prepass, so the PBR specular resolve (planar probes, screen space
+// march) is not applied and PBR AO falls back to the post scene AO. Ancillary windows are not composited. The virtual shadow maps and
+// the light list of the main scene are reused (see PreparePBRPasses).
 void Renderer::RenderEditorView(const int slot)
 {
    EditorView& v = m_editorViews[slot];
@@ -5477,6 +5496,11 @@ void Renderer::RenderEditorView(const int slot)
          m_pOffscreenBackBufferTexture1 = new RenderTarget(m_renderDevice, mainBackBuffer->m_type, "PreviewBuffer1"s, width, height, mainBackBuffer->GetColorFormat(), true,
             mainBackBuffer->GetMSAASamples(), "Fatal Error: unable to create editor preview back buffer");
          m_pOffscreenBackBufferTexture2 = m_pOffscreenBackBufferTexture1->Duplicate("PreviewBuffer2"s, false);
+         if (m_renderDevice->m_pbrActive)
+         {
+            m_pOffscreenBackBufferTexture1->CreatePBRSideband();
+            m_pOffscreenBackBufferTexture2->CreatePBRSideband();
+         }
          if (mainMSAABackBuffer != nullptr)
             m_pOffscreenMSAABackBufferTexture = new RenderTarget(m_renderDevice, mainMSAABackBuffer->m_type, "PreviewMSAABackBuffer"s, width, height, mainMSAABackBuffer->GetColorFormat(), true,
                mainMSAABackBuffer->GetMSAASamples(), "Fatal Error: unable to create editor preview MSAA back buffer");
@@ -5497,11 +5521,26 @@ void Renderer::RenderEditorView(const int slot)
    const bool mainNoBackdrop = m_noBackdrop;
    const unsigned int mainVisibilityMask = m_visibilityMask;
    const bool mainWasUsingStaticPrepass = m_wasUsingStaticPrepass;
+   const unsigned int mainCamViewProjMask = m_curFrameCamViewProjMask;
+   Matrix3D mainCamViewProj[4][2];
+   vec4 mainCamPos[4][2];
+   for (int i = 0; i < 4; i++)
+      for (int eye = 0; eye < 2; eye++)
+      {
+         mainCamViewProj[i][eye] = m_curFrameCamViewProj[i][eye];
+         mainCamPos[i][eye] = m_curFrameCamPos[i][eye];
+      }
    vector<vec4> mainEmbeddedRegions;
    mainEmbeddedRegions.swap(m_embeddedRegions);
    const vec4 ballLighting = m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting); // Keep the 'disable lighting for balls' state (z)
 
    const ShadeMode mainShadeMode = m_shadeMode;
+   // Device settings recorded by RenderStatics and read when the frame is executed (after the main scene AND this pass are recorded):
+   // the main scene's depth prepass clones its draws into m_depthPrepassTarget at execution, so they must be the main scene's again
+   RenderTarget* const mainDepthPrepassTarget = m_renderDevice->m_depthPrepassTarget;
+   const bool mainDepthPrepassNormals = m_renderDevice->m_depthPrepassNormals;
+   const bool mainDepthPrepassMotion = m_renderDevice->m_depthPrepassMotion;
+   const bool mainPBRAOEnabled = m_renderDevice->m_pbrAOEnabled;
    const unsigned int mainRenderMask = m_render_mask;
    m_shadeMode = lite ? ShadeMode::Wireframe : ShadeMode::Default; // The secondary view's own shading, whatever the editor view's
    m_editorPreviewPass = true;
@@ -5571,9 +5610,10 @@ void Renderer::RenderEditorView(const int slot)
    if (!lite)
    {
       RenderTarget* renderedRT = GetBackBufferTexture();
+      renderedRT = ApplyPBRSpecularResolve(renderedRT); // No-op without the depth prepass
       renderedRT = ApplyAdditiveScreenSpaceReflection(renderedRT);
-      if (GetAOMode() == 2) // Only process for dynamic AO
-         UpdateAmbientOcclusion(GetBackBufferTexture(), g_pplayer->m_overall_frames % 2048);
+      if (GetAOMode() == 2 && !m_renderDevice->m_pbrAOEnabled) // Only process for dynamic AO
+         UpdateAmbientOcclusion(GetBackBufferTexture(), g_pplayer->m_overall_frames % 2048, m_renderDevice->m_depthPrepassNormals);
       UpdateBloom(renderedRT);
       // Post processed antialiasing as the main view (the preview targets are LDR as the main post process targets); no sharpening, no upscaling
       if (m_FXAA != Disabled)
@@ -5589,6 +5629,10 @@ void Renderer::RenderEditorView(const int slot)
    m_editorLitePass = false;
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
+   m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
+   m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;
+   m_renderDevice->m_depthPrepassMotion = mainDepthPrepassMotion;
+   m_renderDevice->m_pbrAOEnabled = mainPBRAOEnabled;
    m_render_mask = mainRenderMask;
    SwapSceneTargets(slot);
    m_mvp = mainMVP;

@@ -337,11 +337,11 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
       nextItem(comboWidth("Wireframe"));
       ImGui::SetNextItemWidth(comboWidth("Wireframe"));
-      if (ImGui::BeginCombo("##ViewShading", m_settings.wireframe ? "Wireframe" : "Shaded"))
+      if (ImGui::BeginCombo("##ViewShading", m_settings.wireframe ? "Wireframe" : "PBR"))
       {
-         if (ImGui::Selectable("Shaded", !m_settings.wireframe))
+         if (ImGui::Selectable("PBR", !m_settings.wireframe))
             m_settings.wireframe = false;
-         ImGui::SetItemTooltip("Full shading, as the player renders it (at most 2 shaded views)");
+         ImGui::SetItemTooltip("Full shading, as the player renders it (at most 2 PBR views)");
          if (ImGui::Selectable("Wireframe", m_settings.wireframe))
             m_settings.wireframe = true;
          ImGui::SetItemTooltip("The editor's hidden line wireframe, without post processing (cheap)");
@@ -440,11 +440,11 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          Renderer *const renderer = m_editor.m_renderer.get();
          const bool pbrRefused = !m_settings.wireframe && !renderer->CanRenderEditorPBRView(m_slot);
          m_hasImage = true;
-         // The views alternate on the half rate frames (2 shaded views cost one view per frame); a wireframe view renders every 4th frame (the editor's
-         // wireframe draws every part twice, CPU side it costs more than a shaded view: ~8 ms a render on Police Force); the camera of this view
+         // The views alternate on the half rate frames (2 PBR views cost one view per frame); a wireframe view renders every 4th frame (the editor's
+         // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
          // being moved renders every frame
-         // One global frame counter, each view phased by its rank among the shown views of its shading (set by EditorUI::RenderAreas): shaded rank r on
-         // the frames (F + r) even, so 2 shaded views never render on the same frame; wireframe rank w on the phases 1, 3 (mod 4, off the first shaded view's
+         // One global frame counter, each view phased by its rank among the shown views of its shading (set by EditorUI::RenderAreas): PBR rank r on
+         // the frames (F + r) even, so 2 PBR views never render on the same frame; wireframe rank w on the phases 1, 3 (mod 4, off the first PBR view's
          // frames), then 0, 2, so no two wireframe views share a frame
          static constexpr unsigned int kWirePhases[4] = { 1u, 3u, 0u, 2u };
          const unsigned int frame = static_cast<unsigned int>(ImGui::GetFrameCount());
@@ -483,7 +483,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             drawList->AddRectFilled(imgMin, imgMax, IM_COL32(20, 20, 20, 255));
          if (pbrRefused)
          {
-            const char *const msg = "2 shaded views at most: set this one to Wireframe";
+            const char *const msg = "2 PBR views at most: set this one to Wireframe";
             const ImVec2 ts = ImGui::CalcTextSize(msg);
             drawList->AddText(ImVec2(0.5f * (imgMin.x + imgMax.x - ts.x), 0.5f * (imgMin.y + imgMax.y - ts.y)), EditorTheme::TextDim, msg);
          }
