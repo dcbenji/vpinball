@@ -1705,6 +1705,10 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
             material, "Edge Glow Tint"s, //
             [](const Material *material) { return material->m_fEdgeGlowTint; }, //
             [](Material *material, float v) { material->m_fEdgeGlowTint = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+         props.SliderFloat<Material>(
+            material, "Edge Glow View"s, //
+            [](const Material *material) { return material->m_fEdgeGlowView; }, //
+            [](Material *material, float v) { material->m_fEdgeGlowView = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
       }
       props.EndSection();
    }

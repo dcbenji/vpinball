@@ -156,6 +156,7 @@ uniform vec4 refractionParams2; // x: forming wave strength (refraction_wave, 0 
 uniform vec4 pbrPresence; // x: scatter floor, y: env/ambient share, z: rim gain, w: dense edge albedo (material sliders; defaults = the old constants)
 uniform vec4 pbrPresence2; // x: rim width (1 = as is, < 1 chokes the rim band thinner), y: bevel / light-guide brightening scale (1 = as is), z: scatter locality (0 = as is), w: scatter width (1 = as is)
 uniform vec4 pbrPresence3; // x: absorption light tint (0 = as is), y: scatter saturation (1 = as is), z: edge glow gain (0 = off), w: edge glow tint (0 = white)
+uniform vec4 pbrPresence4; // x: edge glow view falloff 0..1 (0 = view-independent, 1 = dark face-on), yzw: unused
 uniform vec4 pbrAbsorption; // rgb: material absorption colour (transmittance through one thickness), w: strength (0 = off)
 #endif
 
@@ -1608,9 +1609,14 @@ void main() {
          {
             const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
             const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
-            const vec3 gather = pbr_scatter_light(v_tablePos, wNg, 0.0) * (1.0 / PI) + pbrPresence.y * envIrr;
+            // Scatter Locality (shared with the scatter lobe, round 8): the lamps go local and unwrapped (|N.L| on the cut normal:
+            // light travelling along the sheet into the cut counts, a lamp beside the wall less) and the env share fades out,
+            // so the cut is bright next to a bulb and dull away from it instead of one even line
+            const vec3 gather = pbr_scatter_light(v_tablePos, wNg, pbrPresence2.z) * (1.0 / PI) + ((1.0 - pbrPresence2.z) * pbrPresence.y) * envIrr;
             const vec3 glowC = mix(vec3_splat(1.0), pbrAbsorption.rgb, pbrPresence3.w);
-            spec += (0.1 * pbrPresence3.z * dot(gather, vec3(0.2126, 0.7152, 0.0722))) * glowC; // 0.1: slider 0..5 maps to a sane range under full GI (round 7d: gain 1 clipped 76% of the band)
+            // Edge Glow View (0..1): a frosted cut reads dimmer looked at face-on than along the sheet; 1 - view x |N.V|
+            const float glowV = 1.0 - pbrPresence4.x * abs(dot(Ng, V));
+            spec += (0.1 * pbrPresence3.z * glowV * dot(gather, vec3(0.2126, 0.7152, 0.0722))) * glowC; // 0.1: slider 0..5 maps to a sane range under full GI (round 7d: gain 1 clipped 76% of the band)
          }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
          if (pbrLightGrid2.w == 1.0)

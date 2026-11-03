@@ -163,6 +163,7 @@ public:
       , m_fScatterSaturation(pmat->m_fScatterSaturation)
       , m_fEdgeGlow(pmat->m_fEdgeGlow)
       , m_fEdgeGlowTint(pmat->m_fEdgeGlowTint)
+      , m_fEdgeGlowView(pmat->m_fEdgeGlowView)
    {
    }
 
@@ -259,6 +260,7 @@ public:
    float m_fScatterSaturation = 1.0f; // saturation of the light colour in the scatter and rim lobes (1 = as is, 0 = grey, 2 = boosted)
    float m_fEdgeGlow = 0.0f; // 0 = off; > 0 = view-independent edge-lit emission (frosted cut faces): gain x the light gathered at the sheet (lamps from both sides + env share), up to 5
    float m_fEdgeGlowTint = 0.0f; // colour of the edge glow: 0 = white, 1 = the absorption colour
+   float m_fEdgeGlowView = 0.0f; // 0 = view-independent (as is); 1 = the glow fades to nothing looked at face-on (1 - view x |N.V|)
    
    void Save(IObjectWriter& writer, const bool saveForUndo)
    {
@@ -304,6 +306,7 @@ public:
       writer.WriteFloat(FID(PSSA), m_fScatterSaturation);
       writer.WriteFloat(FID(PEGL), m_fEdgeGlow);
       writer.WriteFloat(FID(PEGT), m_fEdgeGlowTint);
+      writer.WriteFloat(FID(PEGV), m_fEdgeGlowView);
       writer.EndObject();
    }
 
@@ -354,6 +357,7 @@ public:
             case FID(PSSA): m_fScatterSaturation = reader.AsFloat(); break;
             case FID(PEGL): m_fEdgeGlow = reader.AsFloat(); break;
             case FID(PEGT): m_fEdgeGlowTint = reader.AsFloat(); break;
+            case FID(PEGV): m_fEdgeGlowView = reader.AsFloat(); break;
             }
             return true;
          },
