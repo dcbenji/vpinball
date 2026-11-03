@@ -924,8 +924,8 @@ void PartLibraryPanel::PumpThumbnails()
       std::error_code ec;
       std::filesystem::create_directories(item.thumbFile.parent_path(), ec);
       RenderDevice *const rd = renderer->m_renderDevice;
-      m_thumbReadCount = rd->m_directScreenshotCount;
-      rd->AddEndOfFrameCmd([rd, rt, file = item.thumbFile]() { rd->RequestVRScreenshot(rt, file, true); });
+      m_thumbTicket = ++m_readSeq == 0 ? ++m_readSeq : m_readSeq; // Never 0 (the VR screenshot ticket)
+      rd->AddEndOfFrameCmd([rd, rt, file = item.thumbFile, ticket = m_thumbTicket]() { rd->RequestVRScreenshot(rt, file, ticket); });
       ReleaseScratch();
       m_thumbStage = ThumbStage::ReadBack;
       break;
@@ -934,15 +934,14 @@ void PartLibraryPanel::PumpThumbnails()
    case ThumbStage::ReadBack:
    {
       RenderDevice *const rd = renderer->m_renderDevice;
-      if (rd->m_directScreenshotCount == m_thumbReadCount)
+      if (rd->m_directScreenshotDone != m_thumbTicket) // A read back aborted earlier completes with its own ticket
          return;
       LibraryItem &item = m_items[m_thumbQueue.back()];
       m_thumbQueue.pop_back();
       m_thumbStage = ThumbStage::Idle;
       item.thumb = nullptr;
       item.thumbLoaded = false;
-      std::error_code ec;
-      if (!std::filesystem::exists(item.thumbFile, ec))
+      if (!rd->m_directScreenshotSaved)
       {
          m_thumbsFailed++;
          return;

@@ -292,11 +292,13 @@ private:
    void OnScreenshotCaptured(const char* filePath, uint32_t width, uint32_t height, uint32_t pitch, bgfx::TextureFormat::Enum format, const void* data, uint32_t size, bool yflip);
 
 public:
-   // Render target read back to a file, render thread only. VR screenshots, and (direct = true) the editor part library thumbnails on desktop:
-   // saved as is, outside of the screenshot request bookkeeping, then m_directScreenshotCount is incremented (read by the logic thread)
+   // Render target read back to a file, render thread only. VR screenshots (ticket 0), and the editor part library thumbnails on desktop (ticket > 0):
+   // saved as is, outside of the screenshot request bookkeeping, then m_directScreenshotSaved and m_directScreenshotDone = ticket are set (read by
+   // the logic thread). A request replaces a pending one, whose ticket then never completes
    // ponytail: named after its first user, rename if more users come
-   void RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, bool direct = false);
-   std::atomic<uint32_t> m_directScreenshotCount { 0 };
+   void RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, uint32_t ticket = 0);
+   std::atomic<uint32_t> m_directScreenshotDone { 0 };
+   std::atomic<bool> m_directScreenshotSaved { false }; // Save result of the request m_directScreenshotDone names
 
 private:
    void ProcessVRScreenshot();
@@ -306,7 +308,7 @@ private:
    uint16_t m_vrScreenshotWidth = 0;
    uint16_t m_vrScreenshotHeight = 0;
    bool m_vrScreenshotRGB10 = false;
-   bool m_vrScreenshotDirect = false;
+   uint32_t m_vrScreenshotTicket = 0;
    std::filesystem::path m_vrScreenshotFilename;
    #endif
 

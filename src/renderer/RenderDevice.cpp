@@ -714,7 +714,7 @@ void RenderDevice::BGFXOpenXRRenderLoop(const bgfx::Init& init)
 
 #endif
 
-void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, const bool direct)
+void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename, const uint32_t ticket)
 {
    const uint16_t width = static_cast<uint16_t>(vrRenderTarget->GetWidth());
    const uint16_t height = static_cast<uint16_t>(vrRenderTarget->GetHeight());
@@ -746,7 +746,7 @@ void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::
    bgfx::blit(m_activeViewId, dst, src);
    m_vrScreenshotReadyFrame = bgfx::read(dst, m_vrScreenshotData.data());
    m_vrScreenshotFilename = filename;
-   m_vrScreenshotDirect = direct;
+   m_vrScreenshotTicket = ticket;
 }
 
 void RenderDevice::ProcessVRScreenshot()
@@ -755,27 +755,29 @@ void RenderDevice::ProcessVRScreenshot()
       return;
    const std::filesystem::path filename = m_vrScreenshotFilename;
    m_vrScreenshotFilename.clear();
-   if (m_vrScreenshotDirect)
+   // An RGBA10 target was read back as is (a blit keeps the format): converted to RGBA8 in place, for both paths
+   if (m_vrScreenshotRGB10)
+      for (size_t i = 0; i < static_cast<size_t>(m_vrScreenshotWidth) * m_vrScreenshotHeight; i++)
+      {
+         uint8_t* const px = m_vrScreenshotData.data() + i * 4;
+         const uint32_t c = px[0] | (px[1] << 8) | (px[2] << 16) | (static_cast<uint32_t>(px[3]) << 24);
+         px[0] = static_cast<uint8_t>((c & 1023u) >> 2);
+         px[1] = static_cast<uint8_t>(((c >> 10) & 1023u) >> 2);
+         px[2] = static_cast<uint8_t>(((c >> 20) & 1023u) >> 2);
+         px[3] = static_cast<uint8_t>((c >> 30) * 85u);
+      }
+   if (m_vrScreenshotTicket != 0)
    {
+      bool saved = false;
       if (auto tex = BaseTexture::Create(m_vrScreenshotWidth, m_vrScreenshotHeight, BaseTexture::SRGBA); tex)
       {
-         uint8_t* const dst = static_cast<uint8_t*>(tex->data());
-         if (m_vrScreenshotRGB10)
-            for (size_t i = 0; i < static_cast<size_t>(m_vrScreenshotWidth) * m_vrScreenshotHeight; i++)
-            {
-               const uint32_t c = reinterpret_cast<const uint32_t*>(m_vrScreenshotData.data())[i];
-               dst[i * 4 + 0] = static_cast<uint8_t>((c & 1023u) >> 2);
-               dst[i * 4 + 1] = static_cast<uint8_t>(((c >> 10) & 1023u) >> 2);
-               dst[i * 4 + 2] = static_cast<uint8_t>(((c >> 20) & 1023u) >> 2);
-               dst[i * 4 + 3] = static_cast<uint8_t>((c >> 30) * 85u);
-            }
-         else
-            memcpy(dst, m_vrScreenshotData.data(), m_vrScreenshotData.size());
+         memcpy(tex->data(), m_vrScreenshotData.data(), m_vrScreenshotData.size());
          if (bgfx::getCaps()->originBottomLeft)
             tex->FlipY();
-         tex->Save(filename);
+         saved = tex->Save(filename);
       }
-      m_directScreenshotCount++;
+      m_directScreenshotSaved = saved;
+      m_directScreenshotDone = m_vrScreenshotTicket;
       return;
    }
    const string path = PathToUTF8(filename);

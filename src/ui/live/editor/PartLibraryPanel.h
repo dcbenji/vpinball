@@ -159,7 +159,7 @@ private:
    std::map<std::filesystem::path, std::pair<string, int>> m_packKeys; // Pack -> (key, items left to render)
    enum class ThumbStage { Idle, Requested, ReadBack } m_thumbStage = ThumbStage::Idle;
    int m_thumbSlot = -1; // Renderer view slot held while thumbnails are rendered
-   uint32_t m_thumbReadCount = 0;
+   uint32_t m_thumbTicket = 0, m_readSeq = 0; // Read back of the item in flight (RenderDevice::RequestVRScreenshot ticket)
    CComObject<PinTable> *m_scratch = nullptr; // Never saved
    vector<IEditable *> m_scratchParts;
    int m_lastShownFrame = -1;
