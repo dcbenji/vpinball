@@ -3768,7 +3768,7 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
    if (auto *const scriptable = pie->GetIScriptable(); scriptable)
    {
       if (wireform)
-         scriptable->m_name = m_table->GetUniqueName("Wireform"s);
+         scriptable->m_name = m_table->GetUniqueName("MetalWireGuide"s);
       else
          m_table->GetUniqueName(type, scriptable->m_name);
    }
@@ -3789,7 +3789,7 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
 
    m_undo.BeginUndo();
    m_undo.MarkForCreate(pie);
-   m_undo.SetLabel(wireform ? "Add Wireform"s : "Add " + pie->GetName());
+   m_undo.SetLabel(wireform ? "Add Metal Wire Guide"s : "Add " + pie->GetName());
    m_undo.EndUndo();
    Report("Added " + pie->GetName());
 
@@ -3806,11 +3806,13 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
          GetSelectionTransform(placed);
          SetLastOperation(LastOperation::Type::Wireform, placed);
          const PrimitiveData &d = static_cast<Primitive *>(pie)->m_d;
-         m_lastOp.diameter = d.m_wireDiameter;
+         m_lastOp.wireHeight = d.m_wireHeight;
+         m_lastOp.thickness = d.m_wireThickness;
+         m_lastOp.standHeight = d.m_wireStandHeight;
+         m_lastOp.bendRadius = d.m_wireBendRadius;
+         m_lastOp.ends = d.m_wireEnds;
          m_lastOp.rails = d.m_wireRails;
          m_lastOp.spacing = d.m_wireSpacing;
-         m_lastOp.caps = d.m_wireCaps;
-         m_lastOp.sides = d.m_wireSides;
       }
       else if (Matrix3D placed; GetSelectionTransform(placed))
       {
@@ -5443,7 +5445,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    switch (type)
    {
    case LastOperation::Type::Add: return "Add Part";
-   case LastOperation::Type::Wireform: return "Add Wireform";
+   case LastOperation::Type::Wireform: return "Add Metal Wire Guide";
    case LastOperation::Type::Paste: return "Paste";
    case LastOperation::Type::Duplicate: return "Duplicate";
    case LastOperation::Type::Move: return "Move";
@@ -5510,11 +5512,13 @@ void EditorUI::ApplyLastOperation()
          return;
       {
          Primitive *const prim = static_cast<Primitive *>(m_lastOp.selection.front()->GetEditable());
-         prim->m_d.m_wireDiameter = m_lastOp.diameter;
+         prim->m_d.m_wireHeight = m_lastOp.wireHeight;
+         prim->m_d.m_wireThickness = m_lastOp.thickness;
+         prim->m_d.m_wireStandHeight = m_lastOp.standHeight;
+         prim->m_d.m_wireBendRadius = m_lastOp.bendRadius;
+         prim->m_d.m_wireEnds = m_lastOp.ends;
          prim->m_d.m_wireRails = m_lastOp.rails;
          prim->m_d.m_wireSpacing = m_lastOp.spacing;
-         prim->m_d.m_wireCaps = m_lastOp.caps;
-         prim->m_d.m_wireSides = m_lastOp.sides;
          prim->UpdateWire();
       }
       return;
@@ -5588,8 +5592,17 @@ bool EditorUI::RenderAdjustParameters()
       break;
    case LastOperation::Type::Wireform:
    {
-      row("Diameter");
-      changed |= ImGui::DragFloat("##WDia", &m_lastOp.diameter, 0.1f, 0.5f, 50.f, "%.2f");
+      row("Height");
+      changed |= ImGui::DragFloat("##WHgt", &m_lastOp.wireHeight, 0.1f, -1000.f, 2000.f, "%.2f");
+      row("Thickness");
+      changed |= ImGui::DragFloat("##WThk", &m_lastOp.thickness, 0.1f, 0.1f, 50.f, "%.2f");
+      row("Stand Height");
+      changed |= ImGui::DragFloat("##WStH", &m_lastOp.standHeight, 0.1f, 0.f, 1000.f, "%.2f");
+      row("Bend Radius");
+      changed |= ImGui::DragFloat("##WBnd", &m_lastOp.bendRadius, 0.1f, 0.f, 200.f, "%.2f");
+      row("Ends");
+      static constexpr const char *ends[] = { "Stands", "Round", "Flat", "None" };
+      changed |= ImGui::Combo("##WEnds", &m_lastOp.ends, ends, 4);
       row("Rails");
       changed |= ImGui::SliderInt("##WRails", &m_lastOp.rails, 1, 3);
       if (m_lastOp.rails > 1)
@@ -5597,11 +5610,6 @@ bool EditorUI::RenderAdjustParameters()
          row("Spacing");
          changed |= ImGui::DragFloat("##WSpc", &m_lastOp.spacing, 0.1f, 0.f, 200.f, "%.2f");
       }
-      row("Caps");
-      static constexpr const char *caps[] = { "None", "Flat", "Round" };
-      changed |= ImGui::Combo("##WCaps", &m_lastOp.caps, caps, 3);
-      row("Sides");
-      changed |= ImGui::SliderInt("##WSides", &m_lastOp.sides, 3, 32);
       break;
    }
    case LastOperation::Type::Rotate:

@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// Tube sweep along a 3D centerline (parallel-transported ring frame), used by the Wireform primitive generator.
+// Tube sweep along a 3D centerline (parallel-transported ring frame), used by the Metal Wire Guide primitive generator.
 // Header only and templated on the vertex / point types so it can be checked standalone (tools/wiresweep_check.cpp).
 // Vertex needs x,y,z,nx,ny,nz,tu,tv floats (Vertex3D_NoTex2), Point needs x,y,z floats (Vertex3Ds, RenderVertex3D).
 // The ring/quad layout follows Ramp::CreateWire / Ramp::GenerateWireMesh (Ramp itself does not call this).
@@ -13,7 +13,8 @@
 namespace WireSweep
 {
 
-enum class Caps { None = 0, Flat = 1, Round = 2 };
+// Stands: no cap, the rail bends down at both ends into a vertical leg (VPE Metal Wire Guide, see WithStands)
+enum class Caps { None = 0, Flat = 1, Round = 2, Stands = 3 };
 
 struct V3
 {
@@ -209,9 +210,50 @@ bool SweepTube(const std::vector<Point>& centerline, const float radius, int sid
    return true;
 }
 
+// VPE MetalWireGuideMeshGenerator ends: the line is extended at both ends by a quarter circle of radius 'bend' (centre 'bend' below the end point,
+// running on along the horizontal end tangent) that turns down into a vertical leg whose bottom is 'standHeight' below the end point.
+// Ring counts match VPE: (int)(bend + 1) rings in each bend, plus one for the leg bottom (a stand shorter than the bend is clamped to it).
+inline std::vector<V3> WithStands(const std::vector<V3>& line, const float standHeight, const float bend)
+{
+   const int n = (int)line.size();
+   const int nb = (int)(bend + 1.f);
+   const auto horiz = [](const V3 a, const V3 b) { return Norm(V3 { b.x - a.x, b.y - a.y, 0.f }); };
+   V3 ts { 1.f, 0.f, 0.f }, te { 1.f, 0.f, 0.f };
+   for (int k = 1; k < n; k++)
+      if (Len(V3 { line[k].x - line[0].x, line[k].y - line[0].y, 0.f }) > 1e-4f)
+      {
+         ts = horiz(line[0], line[k]);
+         break;
+      }
+   for (int k = n - 2; k >= 0; k--)
+      if (Len(V3 { line[n - 1].x - line[k].x, line[n - 1].y - line[k].y, 0.f }) > 1e-4f)
+      {
+         te = horiz(line[k], line[n - 1]);
+         break;
+      }
+   const V3 up { 0.f, 0.f, 1.f };
+   const float sh = standHeight > bend ? standHeight : bend;
+   const float halfPi = 1.57079632679489661923f;
+   std::vector<V3> out;
+   out.push_back(line[0] - ts * bend - up * sh);
+   for (int i = nb; i >= 1; i--)
+   {
+      const float a = halfPi * (float)i / (float)nb;
+      out.push_back(line[0] - up * bend + (up * cosf(a) - ts * sinf(a)) * bend);
+   }
+   out.insert(out.end(), line.begin(), line.end());
+   for (int i = 1; i <= nb; i++)
+   {
+      const float a = halfPi * (float)i / (float)nb;
+      out.push_back(line[n - 1] - up * bend + (up * cosf(a) + te * sinf(a)) * bend);
+   }
+   out.push_back(line[n - 1] + te * bend - up * sh);
+   return out;
+}
+
 // Wireform mesh: 'rails' parallel tubes (1: offset 0, 2: +-spacing/2, 3: -spacing, 0, +spacing) offset along the horizontal normal of the path
 template <class Vertex, class Point>
-bool BuildWireform(const std::vector<Point>& path, const float radius, int sides, const int rails, const float spacing, const Caps caps, std::vector<Vertex>& verts, std::vector<unsigned>& idx)
+bool BuildWireform(const std::vector<Point>& path, const float radius, int sides, const int rails, const float spacing, const Caps caps, const float standHeight, const float bendRadius, std::vector<Vertex>& verts, std::vector<unsigned>& idx)
 {
    const int numRails = rails < 1 ? 1 : (rails > 3 ? 3 : rails);
    const int n = (int)path.size();
@@ -236,7 +278,10 @@ bool BuildWireform(const std::vector<Point>& path, const float radius, int sides
       std::vector<V3> line(n);
       for (int i = 0; i < n; i++)
          line[i] = V3 { path[i].x, path[i].y, path[i].z } + hn[i] * off;
-      any |= SweepTube<Vertex>(line, radius, sides, caps, verts, idx);
+      if (caps == Caps::Stands)
+         any |= SweepTube<Vertex>(WithStands(line, standHeight, bendRadius), radius, sides, Caps::None, verts, idx);
+      else
+         any |= SweepTube<Vertex>(line, radius, sides, caps, verts, idx);
    }
    return any;
 }

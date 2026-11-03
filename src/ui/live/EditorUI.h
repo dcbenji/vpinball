@@ -268,11 +268,13 @@ private:
       int rbThickness = 8; // Guided rubber: the created or bound rubber is the selection, adjusting refits it in place
       float rbHeight = 25.f;
       float rbRoundness = 0.f;
-      int rails = 1; // Wireform profile
-      float diameter = 6.f;
+      int rails = 1; // Metal Wire Guide profile
+      float wireHeight = 25.f;
+      float thickness = 3.f;
+      float standHeight = 30.f;
+      float bendRadius = 8.f;
       float spacing = 12.f;
-      int caps = 2;
-      int sides = 8;
+      int ends = 0;
       bool expanded = true;
    } m_lastOp;
    bool m_adjustPopupOpen = false; // F9

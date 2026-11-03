@@ -17,8 +17,9 @@ public:
 
    void RenderOverlay(const EditorRenderContext& ctx) override;
 
-   // Wireforms (primitives with the wire generator on) are edited through their wire points, in table coordinates
+   // Metal Wire Guides (primitives with the wire generator on) are edited through their wire points, in table coordinates
    DragPointCurve* GetDragPointCurve() const override { return m_part->m_d.m_wireGen ? &m_part->m_wireCurve : nullptr; }
+   float GetDragPointZ(const DragPoint* point) const override { return point->GetZ() + (m_part->m_d.m_wireGen ? m_part->m_d.m_wireHeight : 0.f); }
 
 protected:
    void InsertPointOnCurve(const Vertex2D& pos) override;

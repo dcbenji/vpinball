@@ -104,10 +104,13 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_meshFileName.clear();
    const PrimitiveData wireDefaults {}; // Wire generator state back to defaults (a Load into an existing object must not keep stale state)
    m_d.m_wireGen = wireDefaults.m_wireGen;
-   m_d.m_wireDiameter = wireDefaults.m_wireDiameter;
+   m_d.m_wireHeight = wireDefaults.m_wireHeight;
+   m_d.m_wireThickness = wireDefaults.m_wireThickness;
+   m_d.m_wireStandHeight = wireDefaults.m_wireStandHeight;
+   m_d.m_wireBendRadius = wireDefaults.m_wireBendRadius;
+   m_d.m_wireEnds = wireDefaults.m_wireEnds;
    m_d.m_wireRails = wireDefaults.m_wireRails;
    m_d.m_wireSpacing = wireDefaults.m_wireSpacing;
-   m_d.m_wireCaps = wireDefaults.m_wireCaps;
    m_d.m_wireSides = wireDefaults.m_wireSides;
    m_d.m_rubberGuideRadius = wireDefaults.m_rubberGuideRadius;
    m_wireCurve.ClearPoints();
@@ -1942,7 +1945,7 @@ Vertex2D Primitive::GetCenter() const
 }
 
 //////////////////////////////
-// Wireform generator
+// Metal Wire Guide generator
 //////////////////////////////
 
 void Primitive::RegenerateWire()
@@ -1951,9 +1954,13 @@ void Primitive::RegenerateWire()
       return;
    vector<RenderVertex3D> path;
    m_wireCurve.GetRgVertex(path, false, 4.f);
+   for (RenderVertex3D &v : path)
+      v.z += m_d.m_wireHeight; // point z is an offset from the wire height (0 = VPE)
    m_mesh.Clear();
-   WireSweep::BuildWireform<Vertex3D_NoTex2>(path, 0.5f * max(m_d.m_wireDiameter, 0.1f), m_d.m_wireSides, m_d.m_wireRails, m_d.m_wireSpacing, static_cast<WireSweep::Caps>(clamp(m_d.m_wireCaps, 0, 2)),
-      m_mesh.m_vertices, m_mesh.m_indices);
+   // ends: 0 stands, 1 round, 2 flat, 3 none -> WireSweep::Caps
+   static constexpr WireSweep::Caps endCaps[4] = { WireSweep::Caps::Stands, WireSweep::Caps::Round, WireSweep::Caps::Flat, WireSweep::Caps::None };
+   WireSweep::BuildWireform<Vertex3D_NoTex2>(path, max(m_d.m_wireThickness, 0.1f), m_d.m_wireSides, m_d.m_wireRails, m_d.m_wireSpacing, endCaps[clamp(m_d.m_wireEnds, 0, 3)],
+      m_d.m_wireStandHeight, m_d.m_wireBendRadius, m_mesh.m_vertices, m_mesh.m_indices);
    // The mesh is in table coordinates: identity transform
    m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f);
    m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
@@ -1981,15 +1988,15 @@ void Primitive::InitWireform(const Vertex2D &pos)
    m_d.m_collidable = true;
    m_d.m_toy = false;
    m_d.m_overwritePhysics = true;
-   m_d.m_elasticity = 0.3f;
+   m_d.m_elasticity = 0.f; // MetalWireGuideData defaults
    m_d.m_elasticityFalloff = 0.f;
-   m_d.m_friction = 0.1f;
+   m_d.m_friction = 0.f;
    m_d.m_scatter = 0.f;
    m_wireCurve.ClearPoints();
-   // 3 point arc, ~100 VP units span, at z 25
-   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x - 50.f, pos.y, 25.f, true));
-   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y + 25.f, 25.f, true));
-   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x + 50.f, pos.y, 25.f, true));
+   // 3 point arc, ~100 VP units span, z offset 0 (the wire sits at Height)
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x - 50.f, pos.y, 0.f, true));
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y + 25.f, 0.f, true));
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x + 50.f, pos.y, 0.f, true));
    RegenerateWire();
 }
 
@@ -2118,10 +2125,13 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    if (m_d.m_wireGen) // Optional fields: only written for wireforms, so other primitives save byte-identical
    {
       writer.WriteBool(FID(WGEN), true);
-      writer.WriteFloat(FID(WDIA), m_d.m_wireDiameter);
+      writer.WriteFloat(FID(WHGT), m_d.m_wireHeight);
+      writer.WriteFloat(FID(WTHK), m_d.m_wireThickness);
+      writer.WriteFloat(FID(WSTH), m_d.m_wireStandHeight);
+      writer.WriteFloat(FID(WBND), m_d.m_wireBendRadius);
+      writer.WriteInt(FID(WEND), m_d.m_wireEnds);
       writer.WriteInt(FID(WRLS), m_d.m_wireRails);
       writer.WriteFloat(FID(WSPC), m_d.m_wireSpacing);
-      writer.WriteInt(FID(WCAP), m_d.m_wireCaps);
       writer.WriteInt(FID(WSEG), m_d.m_wireSides);
       m_wireCurve.SavePoints(writer);
    }
@@ -2241,10 +2251,13 @@ void Primitive::Load(IObjectReader& reader)
          case FID(CLBF): m_d.m_cullBackfaces = reader.AsBool(); break;
          case FID(RGRD): { const float v = reader.AsFloat(); m_d.m_rubberGuideRadius = v > 0.f ? v : 0.f; break; }
          case FID(WGEN): m_d.m_wireGen = reader.AsBool(); break;
-         case FID(WDIA): m_d.m_wireDiameter = reader.AsFloat(); break;
+         case FID(WHGT): m_d.m_wireHeight = reader.AsFloat(); break;
+         case FID(WTHK): m_d.m_wireThickness = reader.AsFloat(); break;
+         case FID(WSTH): m_d.m_wireStandHeight = reader.AsFloat(); break;
+         case FID(WBND): m_d.m_wireBendRadius = reader.AsFloat(); break;
+         case FID(WEND): m_d.m_wireEnds = clamp(reader.AsInt(), 0, 3); break;
          case FID(WRLS): m_d.m_wireRails = clamp(reader.AsInt(), 1, 3); break;
          case FID(WSPC): m_d.m_wireSpacing = reader.AsFloat(); break;
-         case FID(WCAP): m_d.m_wireCaps = clamp(reader.AsInt(), 0, 2); break;
          case FID(WSEG): m_d.m_wireSides = clamp(reader.AsInt(), 3, 32); break;
          case FID(DPNT): m_wireCurve.LoadPointToken(reader); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;

@@ -104,13 +104,17 @@ public:
    bool m_toy = false;
    bool m_backfacesEnabled = false;
    bool m_cullBackfaces = false; // depth mask off: draw front faces only instead of both (closed, double-walled transparent meshes)
-   // Wireform generator (editor operator): when on, m_mesh is generated from the wire curve points (table coordinates, identity transform)
+   // Metal Wire Guide generator (editor operator): when on, m_mesh is generated from the wire curve points (table coordinates, identity transform)
    bool m_wireGen = false;
-   float m_wireDiameter = 6.f;
-   int m_wireRails = 1; // 1..3
+   // Metal Wire Guide (freezy's VPE defaults); per-point z is an offset added to m_wireHeight
+   float m_wireHeight = 25.f; // wire centre above the playfield
+   float m_wireThickness = 3.f; // wire radius
+   float m_wireStandHeight = 30.f; // Stands: leg length below the wire
+   float m_wireBendRadius = 8.f; // Stands: radius of the bend into the leg
+   int m_wireEnds = 0; // 0 stands, 1 round, 2 flat, 3 none
+   int m_wireRails = 1; // 1..3 (addition to VPE)
    float m_wireSpacing = 12.f; // between rails
-   int m_wireCaps = 2; // 0 none, 1 flat, 2 round
-   int m_wireSides = 8;
+   int m_wireSides = 12;
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -380,9 +384,9 @@ public:
 
    PrimitiveData m_d;
 
-   // Wireform generator: the wire path (3D points) and the mesh built from it
+   // Metal Wire Guide generator: the wire path (3D points, z = offset from Height) and the mesh built from it
    DragPointCurve m_wireCurve;
-   void InitWireform(const Vertex2D &pos); // Turns this (new) primitive into a wireform: 3 point arc at pos, defaults
+   void InitWireform(const Vertex2D &pos); // Turns this (new) primitive into a Metal Wire Guide: 3 point arc at pos, VPE defaults
    void UpdateWire(); // RegenerateWire + renderable / collider refresh (after a parameter change)
    void RegenerateWire(); // Rebuilds m_mesh from m_wireCurve and the wire parameters (no-op unless m_d.m_wireGen)
 

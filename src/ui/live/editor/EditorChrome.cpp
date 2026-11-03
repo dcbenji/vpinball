@@ -274,7 +274,7 @@ void EditorChrome::RenderMenuBar()
                RubberBetweenPosts::Detach(editor);
             ImGui::EndMenu();
          }
-         if (ImGui::MenuItem("Add Wireform", nullptr, false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
+         if (ImGui::MenuItem("Add Metal Wire Guide", nullptr, false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
          {
             editor.m_addPartType = eItemPrimitive;
             editor.m_addWireform = true;
@@ -781,7 +781,7 @@ void EditorChrome::RenderToolbar()
             { eItemPrimitive, "Primitive", "editor/primitive.png" }, //
             { eItemFlasher, "Flasher", "editor/flasher.png" }, //
             { eItemRubber, "Rubber", "editor/rubber.png" }, //
-            { eItemPrimitive, "Wireform", "editor/ramp.png", true }, // Primitive with the wire generator (no dedicated icon yet)
+            { eItemPrimitive, "Metal Wire Guide", "editor/ramp.png", true }, // Primitive with the wire generator (no dedicated icon yet)
          };
          for (const auto &def : addParts)
          {
@@ -1270,9 +1270,9 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       }
    }
    else if (editor.m_addPartType != eItemInvalid)
-      hints = { { "LMB", editor.m_addWireform ? "Place Wireform" : "Place Part" }, { "Esc", "Cancel" } };
+      hints = { { "LMB", editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireGen)
-      hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Wire Profile" } };
+      hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Metal Wire Guide" } };
    else if (editor.m_pointEditPart)
       hints = { { "LMB", "Select Point" }, { "Shift+LMB", "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
    else

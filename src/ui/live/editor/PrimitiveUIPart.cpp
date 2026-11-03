@@ -19,12 +19,12 @@ PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform
 {
    if (m_part->m_d.m_wireGen)
    {
-      // Wireform: the wire points are in table coordinates, the gizmo works on them like on a ramp curve
+      // Metal Wire Guide: the wire points are in table coordinates, the gizmo works on them like on a ramp curve
       const auto& pts = m_part->m_wireCurve.GetPoints();
       float z = 0.f;
       for (const auto& pt : pts)
          z += pt->GetZ();
-      return GetCurveTransform(transform, pts.empty() ? 0.f : z / (float)pts.size());
+      return GetCurveTransform(transform, (pts.empty() ? 0.f : z / (float)pts.size()) + m_part->m_d.m_wireHeight);
    }
    const Matrix3D Smatrix = Matrix3D::MatrixScale(m_part->m_d.m_vSize.x, m_part->m_d.m_vSize.y, m_part->m_d.m_vSize.z);
    const Matrix3D Tmatrix = Matrix3D::MatrixTranslate(m_part->m_d.m_vPosition);
@@ -43,7 +43,7 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
       float z = 0.f;
       for (const auto& pt : pts)
          z += pt->GetZ();
-      z = pts.empty() ? 0.f : z / (float)pts.size();
+      z = (pts.empty() ? 0.f : z / (float)pts.size()) + m_part->m_d.m_wireHeight;
       SetCurveTransform(pos, scale, rot);
       if (fabsf(pos.z - z) > 1e-4f)
       {
@@ -89,23 +89,39 @@ void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
 void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
 {
    props.InputFloat<DragPoint>(
-      point, "Z"s, //
+      point, "Z Offset"s, //
       [](const DragPoint* p) { return p->GetZ(); }, //
-      [](DragPoint* p, float v) { p->SetZ(v); }, PropertyPane::Unit::VPLength, 1, "Height of this point of the wire (the gizmo moves points in the XY plane only)");
+      [](DragPoint* p, float v) { p->SetZ(v); }, PropertyPane::Unit::VPLength, 1, "Height of this point of the wire above the wire Height (the gizmo moves points in the XY plane only)");
 }
 
 void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 {
-   props.EditableHeader(m_part->m_d.m_wireGen ? "Wireform"s : "Primitive"s, m_part);
+   props.EditableHeader(m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
 
    UpdateCurveSection(props);
 
-   if (m_part->m_d.m_wireGen && props.BeginSection("Wireform"s))
+   if (m_part->m_d.m_wireGen && props.BeginSection("Metal Wire Guide"s))
    {
       props.InputFloat<Primitive>(
-         m_part, "Diameter"s, //
-         [](const Primitive* p) { return p->m_d.m_wireDiameter; }, //
-         [](Primitive* p, float v) { p->m_d.m_wireDiameter = clamp(v, 0.1f, 100.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2);
+         m_part, "Height"s, //
+         [](const Primitive* p) { return p->m_d.m_wireHeight; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireHeight = clamp(v, -1000.f, 2000.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2, "Wire height above the playfield (point Z values are offsets from it)");
+      props.InputFloat<Primitive>(
+         m_part, "Thickness"s, //
+         [](const Primitive* p) { return p->m_d.m_wireThickness; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireThickness = clamp(v, 0.1f, 50.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2, "Wire radius");
+      props.InputFloat<Primitive>(
+         m_part, "Stand Height"s, //
+         [](const Primitive* p) { return p->m_d.m_wireStandHeight; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireStandHeight = clamp(v, 0.f, 1000.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2, "Stands: length of the leg below the wire");
+      props.InputFloat<Primitive>(
+         m_part, "Bend Radius"s, //
+         [](const Primitive* p) { return p->m_d.m_wireBendRadius; }, //
+         [](Primitive* p, float v) { p->m_d.m_wireBendRadius = clamp(v, 0.f, 200.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 2, "Stands: radius of the bend into the leg");
+      props.Combo<Primitive>(
+         m_part, "Ends"s, vector<string> { "Stands"s, "Round"s, "Flat"s, "None"s }, //
+         [](const Primitive* p) { return p->m_d.m_wireEnds; }, //
+         [](Primitive* p, int v) { p->m_d.m_wireEnds = clamp(v, 0, 3); p->UpdateWire(); });
       props.InputInt<Primitive>(
          m_part, "Rails"s, //
          [](const Primitive* p) { return p->m_d.m_wireRails; }, //
@@ -114,10 +130,6 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Rail Spacing"s, //
          [](const Primitive* p) { return p->m_d.m_wireSpacing; }, //
          [](Primitive* p, float v) { p->m_d.m_wireSpacing = max(v, 0.f); p->UpdateWire(); }, PropertyPane::Unit::VPLength, 1);
-      props.Combo<Primitive>(
-         m_part, "Caps"s, vector<string> { "None"s, "Flat"s, "Round"s }, //
-         [](const Primitive* p) { return p->m_d.m_wireCaps; }, //
-         [](Primitive* p, int v) { p->m_d.m_wireCaps = clamp(v, 0, 2); p->UpdateWire(); });
       props.InputInt<Primitive>(
          m_part, "Sides"s, //
          [](const Primitive* p) { return p->m_d.m_wireSides; }, //

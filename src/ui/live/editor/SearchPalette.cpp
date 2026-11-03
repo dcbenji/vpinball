@@ -188,7 +188,7 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
    add("Object" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
    add("Object" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
-   add("Object" + sep + "Add Wireform", "", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; },
+   add("Object" + sep + "Add Metal Wire Guide", "", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; },
       [&ed]()
       {
          ed.m_addPartType = eItemPrimitive;
