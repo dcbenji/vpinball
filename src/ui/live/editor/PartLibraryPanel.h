@@ -102,6 +102,16 @@ private:
       bool thumbLoaded = false; // Load attempted
    };
 
+   // The Traced card's look parameters the lightbox edits (per pack, kept for the session, applied to the placed card)
+   struct InsertLook
+   {
+      float gain = 8.f, depth = 0.f, spot = 1.f, bright = 1.f, ox = 0.f, oy = 0.f;
+      bool operator==(const InsertLook &) const = default;
+   };
+   static bool PackLook(PinTable *table, InsertLook &look); // The first Traced card's values
+   static void ApplyLook(PinTable *table, const InsertLook &look); // To every Traced card of the table
+   InsertLook ResolveLook(const std::filesystem::path &pack, PinTable *table); // The session override of the pack, else the card's own values
+
    static constexpr unsigned int kRigVersion = 5; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
    // Insert previews are normalized: the card's alpha is scaled (never up) until the 90th percentile display luminance of the item's pixels reaches this value
@@ -213,6 +223,12 @@ private:
    float m_lbState = 1.f; // 0..1 lit level, 2 blinking
    double m_lbClock = 0.0; // ms, the lights' time base (Light blinks on Player::m_time_msec, which does not run while editing)
    double m_lbAnimUntil = 0.0; // Lit / Unlit: animate until the fade settled or this time
+   InsertLook m_lbLook, m_lbPackLook; // Edited look, and the pack's own
+   bool m_lbHasCard = false; // The scratch table has a Traced card
+   bool m_lbReal = false; // 'Table brightness': the normalization is off
+   std::map<std::filesystem::path, InsertLook> m_looks; // Overrides of the packs, for the session (never written to a pack)
+   std::map<string, float> m_hookLook; // VPX_LIBRARY_PREVIEW look fields (gain, depth, spot, bright, ox, oy)
+   std::filesystem::path m_hookLookPack;
    bool m_lbOpening = false; // Open the popup this frame
    string m_hookPreview, m_hookPreviewLog; // VPX_LIBRARY_PREVIEW: the pack path as given
    float m_hookYaw = 35.f;

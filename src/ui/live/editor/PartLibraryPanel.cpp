@@ -163,6 +163,53 @@ static vector<Light *> ExtractLights(vector<IEditable *> &parts)
    return lights;
 }
 
+bool PartLibraryPanel::PackLook(PinTable *const table, InsertLook &look)
+{
+   for (IEditable *const part : table->GetParts())
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsTracedInsert())
+      {
+         const PrimitiveData &d = static_cast<Primitive *>(part)->m_d;
+         look = { d.m_tracedGain, d.m_bulbDepth, d.m_bulbScale, d.m_bulbBrightness, d.m_bulbOffsetX, d.m_bulbOffsetY };
+         return true;
+      }
+   return false;
+}
+
+void PartLibraryPanel::ApplyLook(PinTable *const table, const InsertLook &look)
+{
+   for (IEditable *const part : table->GetParts())
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsTracedInsert())
+      {
+         PrimitiveData &d = static_cast<Primitive *>(part)->m_d;
+         d.m_tracedGain = look.gain;
+         d.m_bulbDepth = look.depth;
+         d.m_bulbScale = look.spot;
+         d.m_bulbBrightness = look.bright;
+         d.m_bulbOffsetX = look.ox;
+         d.m_bulbOffsetY = look.oy;
+      }
+}
+
+PartLibraryPanel::InsertLook PartLibraryPanel::ResolveLook(const std::filesystem::path &pack, PinTable *const table)
+{
+   InsertLook look;
+   PackLook(table, look);
+   if (const auto it = m_looks.find(pack); it != m_looks.end())
+      look = it->second;
+   else if (!m_hookLook.empty() && pack == m_hookLookPack)
+   {
+      // Test hook fields over the card's values, kept as the pack's override
+      for (const auto &[key, value] : m_hookLook)
+      {
+         float &field = key == "gain" ? look.gain : key == "depth" ? look.depth : key == "spot" ? look.spot : key == "bright" ? look.bright : key == "ox" ? look.ox : look.oy;
+         if (key == "gain" || key == "depth" || key == "spot" || key == "bright" || key == "ox" || key == "oy")
+            field = value;
+      }
+      m_looks[pack] = look;
+   }
+   return look;
+}
+
 static void SetLightsState(const vector<Light *> &lights, const double clock, const float state) // 0 unlit, 1 lit, 2 blinking
 {
    const PlayerClock pc(clock);
@@ -223,15 +270,31 @@ PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
    if (const char *const preview = std::getenv("VPX_LIBRARY_PREVIEW"); preview != nullptr && *preview != '\0')
    {
       // <pack path>;<state>;<yaw>, split from the right
-      string spec = preview, tail[2];
+      // (optionally followed by the look fields, gain=..,depth=..,spot=..,bright=..,ox=..,oy=..)
+      string spec = preview, tail[3];
       int n = 0;
-      for (size_t semi; n < 2 && (semi = spec.rfind(';')) != string::npos; n++)
+      for (size_t semi; n < 3 && (semi = spec.rfind(';')) != string::npos; n++)
       {
          tail[n] = spec.substr(semi + 1);
          spec.resize(semi);
       }
+      if (n > 0 && tail[0].find('=') != string::npos)
+      {
+         for (size_t pos = 0; pos < tail[0].size();)
+         {
+            const size_t end = min(tail[0].find(',', pos), tail[0].size()), eq = tail[0].find('=', pos);
+            if (eq < end)
+               m_hookLook[tail[0].substr(pos, eq - pos)] = static_cast<float>(atof(tail[0].substr(eq + 1, end - eq - 1).c_str()));
+            pos = end + 1;
+         }
+         for (int i = 1; i < n; i++)
+            tail[i - 1] = tail[i];
+         n--;
+      }
       const string state = lowerCase(tail[n - 1 < 0 ? 0 : n - 1]);
       m_hookPreview = spec;
+      if (!m_hookLook.empty())
+         m_hookLookPack = PathFromUTF8(spec);
       m_hookState = state == "unlit" ? 0.f : state == "blink" ? 2.f : 1.f;
       if (n == 2)
          m_hookYaw = static_cast<float>(atof(tail[0].c_str()));
@@ -1351,7 +1414,7 @@ void PartLibraryPanel::RenderLightbox()
    {
       ImGui::OpenPopup("###PartLibLightbox");
       m_lbOpening = false;
-      ImGui::SetNextWindowSize(ImVec2(480.f * dpi, 520.f * dpi), ImGuiCond_Appearing);
+      ImGui::SetNextWindowSize(ImVec2(480.f * dpi, (m_lbItem.kind == ItemKind::Insert ? 720.f : 520.f) * dpi), ImGuiCond_Appearing);
       ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
    }
    ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(FLT_MAX, FLT_MAX));
@@ -1404,6 +1467,13 @@ void PartLibraryPanel::RenderLightbox()
          }
          else
          {
+            m_lbHasCard = m_lbItem.kind == ItemKind::Insert && PackLook(m_lbScratch, m_lbPackLook);
+            m_lbReal = false;
+            if (m_lbHasCard)
+            {
+               m_lbLook = ResolveLook(m_lbItem.pack, m_lbScratch);
+               ApplyLook(m_lbScratch, m_lbLook);
+            }
             m_lbBounds = ScratchBounds(m_lbParts);
             m_lbCam = AreaViewSettings();
             FrameLightbox(true);
@@ -1450,6 +1520,54 @@ void PartLibraryPanel::RenderLightbox()
       ImGui::EndDisabled();
       if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("This pack has no Light");
+   }
+   // The card's look, live in the preview and carried into the placed part (kept per pack for the session; the pack is never written)
+   if (m_lbHasCard && m_lbScratch != nullptr)
+   {
+      const auto slider = [](const char *label, float *value, const float lo, const float hi, const char *format, const char *tip)
+      {
+         const bool changed = ImGui::SliderFloat(label, value, lo, hi, format);
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tip);
+         return changed;
+      };
+      bool changed = false;
+      changed |= slider("Glow Gain", &m_lbLook.gain, 0.f, 20.f, "%.1f", "Gain on the card's glow when lit");
+      changed |= slider("Bulb Depth (mm)", &m_lbLook.depth, 0.f, 30.f, "%.1f", "A soft hot spot in the lit insert over the bulb, this far below the top, shifting with the view (0 = off)");
+      changed |= slider("Bulb Spot Size", &m_lbLook.spot, 0.2f, 2.f, "%.2f", "Hot spot size (1 = about 19 mm across at half height)");
+      changed |= slider("Bulb Brightness", &m_lbLook.bright, 0.f, 4.f, "%.2f", "Hot spot brightness (1 = +80 % of the glow's peak at its centre)");
+      changed |= slider("Bulb Offset X (mm)", &m_lbLook.ox, -25.f, 25.f, "%.1f", "Moves the hot spot along the card's X (the bulb is not under the insert's centre)");
+      changed |= slider("Bulb Offset Y (mm)", &m_lbLook.oy, -25.f, 25.f, "%.1f", "Moves the hot spot along the card's Y");
+      if (ImGui::Button("Reset"))
+      {
+         m_lbLook = m_lbPackLook;
+         changed = true;
+      }
+      ImGui::SameLine();
+      if (ImGui::Checkbox("Table brightness", &m_lbReal))
+      {
+         // Normalization off: the card as placed (its alpha is the pack's, times the normalization factor otherwise)
+         for (IEditable *const part : m_lbScratch->GetParts())
+            if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsTracedInsert())
+               static_cast<Primitive *>(part)->m_d.m_alpha *= m_lbReal ? 1.f / m_lbItem.norm : m_lbItem.norm;
+         m_lbDirty = true;
+      }
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Shows the card at the brightness it will have on the table, not the normalized preview level");
+      if (!(m_lbLook == m_lbPackLook))
+      {
+         ImGui::SameLine();
+         ImGui::TextDisabled("Modified, applies on place");
+      }
+      if (changed)
+      {
+         ApplyLook(m_lbScratch, m_lbLook);
+         if (m_lbLook == m_lbPackLook)
+            m_looks.erase(m_lbItem.pack);
+         else
+            m_looks[m_lbItem.pack] = m_lbLook;
+         m_lbDirty = true;
+      }
    }
    if (ImGui::Button("Reset View") && m_lbScratch != nullptr)
       FrameLightbox(true);
@@ -1684,6 +1802,7 @@ void PartLibraryPanel::StartPlacement()
       return;
    }
 
+   ApplyLook(temp, ResolveLook(m_placementPack, temp)); // The look edited in the lightbox (set before the parts are created on commit)
    m_previewTable = temp;
    for (RenderProbe *const probe : temp->m_vrenderprobe)
       probe->RenderSetup(m_editor.m_renderer.get()); // The ghost parts draw with them; the ones merged on commit stay set up
@@ -1923,7 +2042,18 @@ bool PartLibraryPanel::PlaceItem(const LibraryItem &item)
    PlaceAt(pos);
    CommitPlacement();
    if (Matrix3D placed; m_editor.GetSelectionTransform(placed) && getenv("VPX_LIBRARY_PLACE") != nullptr)
-      PLOGI << "LIBPLACE " << PathToUTF8(item.pack) << " parts=" << m_placedCount << " at=" << placed._41 << ',' << placed._42 << ',' << placed._43;
+   {
+      // The look the placed Traced card ended up with
+      string look;
+      for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
+         if (uiPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(uiPart->GetEditable())->IsTracedInsert())
+         {
+            const PrimitiveData &d = static_cast<Primitive *>(uiPart->GetEditable())->m_d;
+            look = std::format(" look=gain={:g},depth={:g},spot={:g},bright={:g},ox={:g},oy={:g}", d.m_tracedGain, d.m_bulbDepth, d.m_bulbScale, d.m_bulbBrightness, d.m_bulbOffsetX, d.m_bulbOffsetY);
+            break;
+         }
+      PLOGI << "LIBPLACE " << PathToUTF8(item.pack) << " parts=" << m_placedCount << " at=" << placed._41 << ',' << placed._42 << ',' << placed._43 << look;
+   }
    return true;
 }
 
