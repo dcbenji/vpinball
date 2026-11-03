@@ -188,18 +188,94 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       CHECK(!(b == a));
    }
 
-   SUBCASE("the preview's view setup follows the preview through SetType swaps and is dropped when it stops being one")
+   SUBCASE("the preview's view setup and settings follow the preview through SetType swaps and are dropped when it stops being one")
    if (AreaLayout::cameraPreviewEnabled)
    {
       AreaLayout a = FromLegacy(kLayout);
       const int outliner = a.FindLeaf(AreaType::Outliner), props = a.FindLeaf(AreaType::Properties);
       REQUIRE(a.SetType(outliner, AreaType::CameraPreview));
       REQUIRE(a.SetPreviewView(outliner, 1));
-      REQUIRE(a.SetType(props, AreaType::CameraPreview)); // swap: the preview moves to the Properties leaf with its view
+      AreaViewSettings v;
+      v.freeOrbit = true;
+      v.wireframe = true;
+      REQUIRE(a.SetViewSettings(outliner, v));
+      REQUIRE(a.SetType(outliner, AreaType::Properties)); // swap: the preview moves to the Properties leaf with its view and settings
+      CHECK(a.Find(props)->type == AreaType::CameraPreview);
       CHECK(a.Find(props)->previewView == 1);
+      CHECK(a.Find(props)->view.freeOrbit);
+      CHECK(a.Find(props)->view.wireframe);
       CHECK(a.Find(outliner)->previewView == -1);
+      CHECK_FALSE(a.Find(outliner)->view.freeOrbit);
       REQUIRE(a.SetType(props, AreaType::Script)); // not a preview any more
       CHECK(a.Find(props)->previewView == -1);
+      CHECK_FALSE(a.Find(props)->view.wireframe);
+      CHECK_FALSE(a.SetViewSettings(props, v)); // only for previews
+   }
+
+   SUBCASE("view settings round trip; the defaults write no key; malformed values load as the defaults")
+   if (AreaLayout::cameraPreviewEnabled)
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      const int leaf = a.FindLeaf(AreaType::Outliner);
+      REQUIRE(a.SetType(leaf, AreaType::CameraPreview));
+      const std::string plain = a.ToJson().dump();
+      CHECK(plain.find("view_camera") == std::string::npos);
+      CHECK(plain.find("view_shading") == std::string::npos);
+      CHECK(plain.find("\"live\"") == std::string::npos);
+      CHECK(plain.find("orbit") == std::string::npos);
+      AreaViewSettings v;
+      v.freeOrbit = true;
+      v.wireframe = true;
+      v.live = false;
+      v.orbitValid = true;
+      v.ortho = true;
+      v.yaw = -30.f;
+      v.pitch = 45.f;
+      v.distance = 1234.f;
+      v.target[0] = 10.f;
+      v.target[1] = 20.f;
+      v.target[2] = 30.f;
+      REQUIRE(a.SetViewSettings(leaf, v));
+      AreaLayout b;
+      REQUIRE(b.FromJson(a.ToJson()));
+      CHECK(b == a);
+      const AreaViewSettings& r = b.Find(b.FindLeaf(AreaType::CameraPreview))->view;
+      CHECK(r.freeOrbit);
+      CHECK(r.wireframe);
+      CHECK_FALSE(r.live);
+      CHECK(r.orbitValid);
+      CHECK(r.ortho);
+      CHECK(r.yaw == -30.f);
+      CHECK(r.pitch == 45.f);
+      CHECK(r.distance == 1234.f);
+      CHECK(r.target[2] == 30.f);
+
+      // The orbit camera is not part of the structural equality (it moves with every drag), the choices are
+      AreaViewSettings moved = v;
+      moved.yaw = 10.f;
+      REQUIRE(b.SetViewSettings(b.FindLeaf(AreaType::CameraPreview), moved));
+      CHECK(b == a);
+      moved.wireframe = false;
+      REQUIRE(b.SetViewSettings(b.FindLeaf(AreaType::CameraPreview), moved));
+      CHECK(!(b == a));
+
+      AreaViewSettings bad = v;
+      bad.distance = std::numeric_limits<float>::quiet_NaN();
+      CHECK_FALSE(a.SetViewSettings(leaf, bad));
+
+      // Unknown values, wrong types, a broken orbit: the layout loads, with the defaults for what is broken
+      json j = Leaf("CameraPreview");
+      j["view_camera"] = "drone";
+      j["view_shading"] = 3;
+      j["live"] = "no";
+      j["orbit"] = { { "yaw", 1 }, { "pitch", 2 }, { "distance", -5 }, { "target", { 1, 2, 3 } } };
+      AreaLayout c;
+      REQUIRE(c.FromJson(Split("vertical", "first", 200, j, Leaf("Viewport"))));
+      const AreaViewSettings& d = c.Find(c.FindLeaf(AreaType::CameraPreview))->view;
+      CHECK_FALSE(d.freeOrbit);
+      CHECK_FALSE(d.wireframe);
+      CHECK(d.live);
+      CHECK_FALSE(d.orbitValid);
    }
 
    SUBCASE("Close replaces the parent split by the sibling")
@@ -645,7 +721,7 @@ TEST_CASE("AreaLayout set type and hidden")
       CHECK(l.Validate());
    }
 
-   SUBCASE("CameraPreview: chosen by type only, single instance, never in the legacy keys")
+   SUBCASE("CameraPreview: chosen by type only, up to kMaxViewLeaves leaves, never in the legacy keys")
    {
       AreaLayout l = FromLegacy(kLayout);
       const int out = l.FindLeaf(AreaType::Outliner);
@@ -654,15 +730,31 @@ TEST_CASE("AreaLayout set type and hidden")
       CHECK(l.Validate());
       CHECK(l.FindLeaf(AreaType::CameraPreview) == out);
       CHECK_FALSE(l.IsHosted(AreaType::Outliner));
-      REQUIRE(l.SetType(props, AreaType::CameraPreview)); // swaps with the leaf that has it
-      CHECK(l.FindLeaf(AreaType::CameraPreview) == props);
-      CHECK(l.Find(out)->type == AreaType::Properties);
       Legacy legacy {};
       Legacy2(l, legacy);
-      CHECK(legacy.left == static_cast<int>(AreaType::Properties));
-      CHECK(legacy.right != static_cast<int>(AreaType::CameraPreview));
-      CHECK(legacy.right >= 0);
-      CHECK(legacy.right < kPanelTypeCount);
+      CHECK(legacy.left != static_cast<int>(AreaType::CameraPreview));
+      CHECK(legacy.right == static_cast<int>(AreaType::Properties));
+      CHECK(legacy.left >= 0);
+      CHECK(legacy.left < kPanelTypeCount);
+      REQUIRE(l.SetType(props, AreaType::CameraPreview)); // a second view: no swap below the cap
+      CHECK(l.CountLeaves(AreaType::CameraPreview) == 2);
+      CHECK(l.Find(out)->type == AreaType::CameraPreview);
+      CHECK(l.Validate());
+      // A third one (split of the Viewport), then a fourth request swaps with the first view instead
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, true, 200.f));
+      const int third = l.FindLeaf(AreaType::Outliner); // the split's new leaf: the first free type
+      REQUIRE(third >= 0);
+      REQUIRE(l.SetType(third, AreaType::CameraPreview));
+      CHECK(l.CountLeaves(AreaType::CameraPreview) == AreaLayout::kMaxViewLeaves);
+      CHECK(l.Validate());
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, true, 200.f));
+      const int fourth = l.FindLeaf(AreaType::Outliner);
+      REQUIRE(fourth >= 0);
+      REQUIRE(l.SetType(fourth, AreaType::CameraPreview));
+      CHECK(l.CountLeaves(AreaType::CameraPreview) == AreaLayout::kMaxViewLeaves);
+      CHECK(l.Find(fourth)->type == AreaType::CameraPreview);
+      CHECK(l.CountLeaves(AreaType::Outliner) == 1); // one of the views took the type the fourth leaf left
+      CHECK(l.Validate());
    }
 }
 
@@ -716,7 +808,7 @@ TEST_CASE("AreaLayout invalid JSON is rejected")
          j = Split("vertical", "second", 100, j, Leaf(n));
       CheckRejected(j);
    }
-   SUBCASE("CameraPreview is accepted once (rejected by builds where it is disabled)")
+   SUBCASE("CameraPreview is accepted up to 3 times (rejected by builds where it is disabled)")
    {
       if (!AreaLayout::cameraPreviewEnabled)
          CheckRejected(Split("vertical", "first", 200, Leaf("CameraPreview"), Leaf("Viewport")));
@@ -726,7 +818,12 @@ TEST_CASE("AreaLayout invalid JSON is rejected")
          CHECK(l.FromJson(Split("vertical", "first", 200, Leaf("CameraPreview"), Leaf("Viewport"))));
          CHECK(l.Validate());
          CHECK(l.FindLeaf(AreaType::CameraPreview) >= 0);
-         CheckRejected(Split("vertical", "first", 200, Leaf("CameraPreview"), Split("vertical", "second", 200, Leaf("Viewport"), Leaf("CameraPreview"))));
+         json three = Leaf("Viewport");
+         for (int i = 0; i < 3; ++i)
+            three = Split("vertical", "second", 200, three, Leaf("CameraPreview"));
+         CHECK(l.FromJson(three));
+         CHECK(l.CountLeaves(AreaType::CameraPreview) == 3);
+         CheckRejected(Split("vertical", "second", 200, three, Leaf("CameraPreview")), "CameraPreview");
       }
    }
    SUBCASE("hidden Viewport")

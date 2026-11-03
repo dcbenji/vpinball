@@ -184,6 +184,18 @@ nlohmann::json NodeToJson(const std::vector<AreaNode>& nodes, const int idx)
          j["hidden"] = true;
       if (n.type == AreaType::CameraPreview && n.previewView >= 0 && n.previewView < 3)
          j["preview_view"] = kPreviewViewNames[n.previewView];
+      if (n.type == AreaType::CameraPreview)
+      {
+         const AreaViewSettings& v = n.view;
+         if (v.freeOrbit)
+            j["view_camera"] = "orbit";
+         if (v.wireframe)
+            j["view_shading"] = "wireframe";
+         if (!v.live)
+            j["live"] = false;
+         if (v.orbitValid)
+            j["orbit"] = { { "yaw", v.yaw }, { "pitch", v.pitch }, { "distance", v.distance }, { "target", { v.target[0], v.target[1], v.target[2] } }, { "ortho", v.ortho } };
+      }
    }
    return j;
 }
@@ -265,6 +277,36 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
             for (int v = 0; v < 3; v++)
                if (n["preview_view"].get<std::string>() == kPreviewViewNames[v])
                   tmp.m_nodes[idx].previewView = v;
+         if (type == AreaType::CameraPreview)
+         {
+            // View settings: malformed or unknown values mean the default (never a reason to reject the layout)
+            AreaViewSettings& v = tmp.m_nodes[idx].view;
+            v.freeOrbit = n.contains("view_camera") && n["view_camera"].is_string() && n["view_camera"].get<std::string>() == "orbit";
+            v.wireframe = n.contains("view_shading") && n["view_shading"].is_string() && n["view_shading"].get<std::string>() == "wireframe";
+            v.live = !(n.contains("live") && n["live"].is_boolean() && !n["live"].get<bool>());
+            if (const auto o = n.find("orbit"); o != n.end() && o->is_object())
+            {
+               const auto num = [&](const char* key, float& out) {
+                  const auto it = o->find(key);
+                  if (it == o->end() || !it->is_number() || !std::isfinite(it->get<double>()))
+                     return false;
+                  out = static_cast<float>(it->get<double>());
+                  return true;
+               };
+               const auto t = o->find("target");
+               bool ok = num("yaw", v.yaw) && num("pitch", v.pitch) && num("distance", v.distance) && v.distance > 0.f && t != o->end() && t->is_array() && t->size() == 3;
+               for (int c = 0; ok && c < 3; c++)
+               {
+                  ok = (*t)[c].is_number() && std::isfinite((*t)[c].get<double>());
+                  if (ok)
+                     v.target[c] = static_cast<float>((*t)[c].get<double>());
+               }
+               v.orbitValid = ok;
+               v.ortho = ok && o->contains("ortho") && (*o)["ortho"].is_boolean() && (*o)["ortho"].get<bool>();
+               if (!ok)
+                  v = AreaViewSettings { v.freeOrbit, v.wireframe, v.live };
+            }
+         }
       }
       return idx;
    };
@@ -310,7 +352,7 @@ bool AreaLayout::ValidateImpl(std::string& why) const
       return false;
    }
    std::vector<uint8_t> seen(count, 0);
-   int visited = 0, leaves = 0, viewports = 0;
+   int visited = 0, leaves = 0, viewports = 0, views = 0;
    bool typeSeen[static_cast<size_t>(AreaType::Count)] = {};
 
    auto walk = [&](auto&& self, const int idx, const int depth) -> bool {
@@ -365,6 +407,16 @@ bool AreaLayout::ValidateImpl(std::string& why) const
             return false;
          }
       }
+      if (n.type == AreaType::CameraPreview)
+      {
+         // The secondary 3D views are the only type with more than one leaf
+         if (++views > kMaxViewLeaves)
+         {
+            why = "more than " + std::to_string(kMaxViewLeaves) + " CameraPreview editors";
+            return false;
+         }
+         return true;
+      }
       if (typeSeen[static_cast<size_t>(n.type)])
       {
          why = std::string("duplicate editor ") + AreaTypeJsonName(n.type);
@@ -416,6 +468,14 @@ int AreaLayout::FindLeaf(const AreaType type) const
    return -1;
 }
 
+int AreaLayout::CountLeaves(const AreaType type) const
+{
+   int c = 0;
+   for (const AreaNode& n : m_nodes)
+      c += !n.isSplit && n.type == type ? 1 : 0;
+   return c;
+}
+
 int AreaLayout::ParentId(const int id) const
 {
    const int i = IndexOf(id);
@@ -440,7 +500,7 @@ bool AreaLayout::operator==(const AreaLayout& other) const
       if (x.isSplit != y.isSplit)
          return false;
       if (!x.isSplit)
-         return x.type == y.type && x.hidden == y.hidden && (x.type != AreaType::CameraPreview || x.previewView == y.previewView);
+         return x.type == y.type && x.hidden == y.hidden && (x.type != AreaType::CameraPreview || (x.previewView == y.previewView && x.view.SameChoices(y.view)));
       return x.axis == y.axis && x.fixed == y.fixed && x.size == y.size && self(self, x.child[0], y.child[0]) && self(self, x.child[1], y.child[1]);
    };
    return eq(eq, m_root, other.m_root);
@@ -806,17 +866,30 @@ bool AreaLayout::SetType(const int leaf, const AreaType type)
    AreaNode& n = m_nodes[i];
    if (n.type == type)
       return true;
-   const int o = IndexOf(FindLeaf(type));
+   // Up to kMaxViewLeaves secondary views: below the cap, a leaf becomes one without taking it from another leaf
+   const int o = type == AreaType::CameraPreview && CountLeaves(AreaType::CameraPreview) < kMaxViewLeaves ? -1 : IndexOf(FindLeaf(type));
    if (o >= 0)
    {
       m_nodes[o].type = n.type; // each panel is a single instance: the other leaf takes the type this leaf leaves
-      std::swap(m_nodes[o].previewView, n.previewView); // the preview's view setup follows the preview
+      std::swap(m_nodes[o].previewView, n.previewView); // the preview's view setup and view settings follow the preview
+      std::swap(m_nodes[o].view, n.view);
       if (m_nodes[o].type != AreaType::CameraPreview)
+      {
          m_nodes[o].previewView = -1;
+         m_nodes[o].view = AreaViewSettings {};
+      }
+   }
+   else if (type == AreaType::CameraPreview)
+   {
+      n.previewView = -1; // a new view: the default settings
+      n.view = AreaViewSettings {};
    }
    n.type = type;
    if (n.type != AreaType::CameraPreview)
+   {
       n.previewView = -1;
+      n.view = AreaViewSettings {};
+   }
    return true;
 }
 
@@ -826,6 +899,19 @@ bool AreaLayout::SetPreviewView(const int leaf, const int view)
    if (i < 0 || m_nodes[i].isSplit || view < -1 || view > 2)
       return false;
    m_nodes[i].previewView = view;
+   return true;
+}
+
+bool AreaLayout::SetViewSettings(const int leaf, const AreaViewSettings& settings)
+{
+   const int i = IndexOf(leaf);
+   if (i < 0 || m_nodes[i].isSplit || m_nodes[i].type != AreaType::CameraPreview)
+      return false;
+   if (settings.orbitValid
+      && (!std::isfinite(settings.yaw) || !std::isfinite(settings.pitch) || !std::isfinite(settings.distance) || settings.distance <= 0.f || !std::isfinite(settings.target[0])
+         || !std::isfinite(settings.target[1]) || !std::isfinite(settings.target[2])))
+      return false;
+   m_nodes[i].view = settings;
    return true;
 }
 

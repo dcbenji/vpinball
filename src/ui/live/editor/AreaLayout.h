@@ -31,6 +31,21 @@ enum class AreaType : uint8_t
 
 constexpr int kPanelTypeCount = 4; // types offered in editor-type menus (CameraPreview added only by task 5)
 
+// Settings of a CameraPreview leaf (a secondary 3D view), saved with the leaf. JSON keys, all optional (absent = the default; builds
+// before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" (default "pbr"),
+// "live": false, "orbit": { "yaw", "pitch", "distance", "target": [x, y, z], "ortho" } (absent = framed on the table when first shown)
+struct AreaViewSettings
+{
+   bool freeOrbit = false; // Camera: false = Player view (the table view setup previewView), true = its own orbit camera
+   bool wireframe = false; // Shading: false = full PBR, true = wireframe (lite path)
+   bool live = true; // Re-rendered continuously (every 2nd frame), else after changes only
+   bool orbitValid = false; // The orbit camera below was set (else it frames the table when first shown)
+   bool ortho = false;
+   float yaw = 0.f, pitch = 0.f, distance = 0.f; // Degrees, degrees, VPX units
+   float target[3] = { 0.f, 0.f, 0.f };
+   bool SameChoices(const AreaViewSettings& o) const { return freeOrbit == o.freeOrbit && wireframe == o.wireframe && live == o.live; }
+};
+
 // Names used in the workspace JSON ("Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview")
 const char* AreaTypeJsonName(AreaType type);
 bool AreaTypeFromJsonName(const std::string& name, AreaType& type);
@@ -63,6 +78,7 @@ struct AreaNode
    AreaType type = AreaType::Viewport;
    bool hidden = false;
    int previewView = -1; // CameraPreview leaf: view setup shown (-1 Auto, else 0 desktop / 1 cabinet / 2 fss); JSON key "preview_view", absent = Auto
+   AreaViewSettings view; // CameraPreview leaf: camera, shading, live, orbit camera (see AreaViewSettings)
 };
 
 // Result of AreaLayout::Compute for one leaf. Hidden leaves, leaves of an invisible subtree and leaves not
@@ -98,6 +114,7 @@ public:
 
    static constexpr int kMaxDepth = 8;  // split levels from the root to a leaf
    static constexpr int kMaxLeaves = 6;
+   static constexpr int kMaxViewLeaves = 3; // CameraPreview leaves (secondary 3D views): the only type that may have more than one leaf
 
    // Minimum sizes, logical px (multiplied by dpi in Compute)
    static constexpr float kPanelMinW = 140.f, kPanelMinH = 100.f;
@@ -127,8 +144,8 @@ public:
    nlohmann::json ToJson() const;
    const std::string& LastError() const { return m_lastError; }
 
-   // Exactly one Viewport; at most one leaf per other type; depth <= kMaxDepth; <= kMaxLeaves leaves; split
-   // sizes finite and > 0; consistent links; Viewport not hidden; no CameraPreview unless cameraPreviewEnabled.
+   // Exactly one Viewport; at most one leaf per other type, but up to kMaxViewLeaves CameraPreview leaves; depth <= kMaxDepth;
+   // <= kMaxLeaves leaves; split sizes finite and > 0; consistent links; Viewport not hidden; no CameraPreview unless cameraPreviewEnabled.
    bool Validate() const;
    bool Validate(std::string& why) const;
 
@@ -137,11 +154,12 @@ public:
    const std::vector<AreaNode>& Nodes() const { return m_nodes; }
    int Root() const { return m_root; } // index into Nodes()
    const AreaNode* Find(int id) const; // null if the id is not in the tree
-   int FindLeaf(AreaType type) const;  // id of the leaf of that type (hidden or not), -1 if none
+   int FindLeaf(AreaType type) const;  // id of the (first) leaf of that type (hidden or not), -1 if none
+   int CountLeaves(AreaType type) const; // leaves of that type, hidden or not
    int ParentId(int id) const;         // id of the parent split, -1 for the root or an unknown id
    int LeafCount() const;
    bool IsHosted(AreaType type) const { return FindLeaf(type) >= 0; }
-   // Structural equality (types, axes, sizes, hidden flags), ignoring node ids
+   // Structural equality (types, axes, sizes, hidden flags, view choices but not the orbit cameras), ignoring node ids
    bool operator==(const AreaLayout& other) const;
    bool operator!=(const AreaLayout& other) const { return !(*this == other); }
 
@@ -173,12 +191,15 @@ public:
    bool Close(int leaf);
    // Swaps the children (whole subtrees) of a split and sets fixed = 1 - fixed, so each side keeps its size
    bool Swap(int split);
-   // Not for the Viewport leaf, nor to Viewport/Count/CameraPreview(disabled). If another leaf has the type, the two swap types.
+   // Not for the Viewport leaf, nor to Viewport/Count/CameraPreview(disabled). If another leaf has the type, the two swap types (with their
+   // view settings); a leaf becomes a CameraPreview without a swap (default view settings) while fewer than kMaxViewLeaves exist.
    bool SetType(int leaf, AreaType type);
    // Not for the Viewport (refused)
    bool SetHidden(int leaf, bool hidden);
    // Camera preview view setup of a leaf (-1 Auto, 0..2); no-op for out of range values
    bool SetPreviewView(int leaf, int view);
+   // View settings of a CameraPreview leaf (non finite orbit values are refused)
+   bool SetViewSettings(int leaf, const AreaViewSettings& settings);
    // Stored size (logical px) of child[fixed] of a split, clamped to a positive finite value
    bool SetSplitSize(int split, float logicalPx);
 
