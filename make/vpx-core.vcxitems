@@ -968,6 +968,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PartLibraryPanel.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PinnedPanel.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/AreaLayout.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/SearchPalette.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PartGroupUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PlungerUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PrimitiveUIPart.cpp" />
@@ -1924,6 +1925,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/PartLibraryPanel.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/PinnedPanel.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/AreaLayout.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/SearchPalette.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/EditorTheme.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/IconsLucide.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/LucideFont.h" />
