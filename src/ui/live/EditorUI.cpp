@@ -1785,6 +1785,16 @@ void EditorUI::RenderAreas()
             {
                if (m_cameraPreviews[k].GetLeaf() != leaf.id)
                   m_cameraPreviews[k].Bind(leaf.id, node->previewView, node->view);
+               // Render phase: rank among the shown views of the same shading, in leaf order (2 PBR views never render on the same frame)
+               int rank = 0;
+               for (const LeafRect &other : leaves)
+               {
+                  if (other.id == leaf.id)
+                     break;
+                  if (const AreaNode *const o = other.visible && other.type == AreaEditor::CameraPreview ? m_areas.Find(other.id) : nullptr; o != nullptr && o->view.wireframe == node->view.wireframe)
+                     rank++;
+               }
+               m_cameraPreviews[k].SetRank(rank);
                m_cameraPreviews[k].RenderInArea(pos, size);
                viewDrawn[k] = true;
             }

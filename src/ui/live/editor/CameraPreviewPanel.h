@@ -24,7 +24,7 @@ class EditorUI;
 //
 // Cost: nothing is rendered while no area shows it. When shown, it is rendered at the displayed image size (capped at 1280 px wide)
 // and only when something changed (undo history, size, camera, Refresh, end of an interactive edit), at half rate (every 2nd frame,
-// the views alternating; every 4th frame for Wireframe, whose draw is the more expensive one CPU side) while a gizmo, a G/R/S modal transform
+// the views alternating by rank on one global frame counter; every 4th frame for Wireframe, whose draw is the more expensive one CPU side) while a gizmo, a G/R/S modal transform
 // or a field drag runs and all the time when Live is on, and every frame while its own camera is being moved.
 class CameraPreviewPanel
 {
@@ -37,6 +37,7 @@ public:
    // Layout leaf whose settings the panel shows (and writes back on every change), -1 if none
    int GetLeaf() const { return m_leafId; }
    void Bind(int leafId, int previewView, const AreaViewSettings &settings);
+   void SetRank(int rank) { m_rank = rank; } // Rank among the shown views of the same shading (PBR / Wireframe), sets the render phase
 
    // View setup shown by the Player camera: -1 = Auto (the one the player uses, the table's active view mode), else BG_DESKTOP / BG_FULLSCREEN / BG_FSS.
    // Rendering another one never changes the table's or the player's view mode. JSON names (per workspace layout leaf): "desktop",
@@ -53,6 +54,7 @@ private:
    void WriteBack(); // Settings to the layout leaf
    void HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered, bool active);
    void HandleViewKeys(float aspect);
+   bool GameOwnsInput() const;
    void ComputeOrbit(float aspect, Matrix3D &view, Matrix3D &proj) const;
    void FrameBounds(const FRect3D &bounds, float aspect);
    void FrameAll(float aspect);
@@ -73,7 +75,7 @@ private:
    uint64_t m_lastUndoId = ~0ull;
    int m_width = 0, m_height = 0; // Requested render size (px)
    int m_pendingWidth = 0, m_pendingHeight = 0, m_pendingFrames = 0;
-   unsigned int m_frame = 0;
+   int m_rank = 0;
 };
 
 }

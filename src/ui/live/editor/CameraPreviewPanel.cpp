@@ -11,6 +11,10 @@
 #include "renderer/RenderTarget.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "imgui/imgui_internal.h"
+#if defined(ENABLE_BGFX)
+#include "bgfx/bgfx.h"
+#endif
 
 namespace VPX::EditorUI
 {
@@ -157,9 +161,20 @@ void CameraPreviewPanel::FrameAll(const float aspect)
    FrameBounds(FRect3D(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight), aspect);
 }
 
+bool CameraPreviewPanel::GameOwnsInput() const
+{
+   // As the editor's game keys: inspecting the running game, keys and mouse are the game's
+   return m_editor.IsInspectMode() && m_editor.m_player->IsGameRunning();
+}
+
 void CameraPreviewPanel::HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, const bool hovered, const bool active)
 {
    (void)imgMin;
+   if (GameOwnsInput())
+   {
+      m_navDragging = false;
+      return;
+   }
    const ImGuiIO &io = ImGui::GetIO();
    const EditorUI &e = m_editor;
    const float halfH = m_settings.distance * tanf(0.5f * ANGTORAD(e.m_navFovY)); // View half height at the target (perspective and orthographic)
@@ -213,7 +228,7 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
 {
    // The view commands of the editor view, for the view under the mouse (the editor view ignores them meanwhile, see m_secondaryViewHovered)
    const ImGuiIO &io = ImGui::GetIO();
-   if (io.WantTextInput || m_editor.m_fileOp != nullptr || m_editor.m_modal.active)
+   if (io.WantTextInput || m_editor.m_fileOp != nullptr || m_editor.m_modal.active || GameOwnsInput())
       return;
    EditorUI &e = m_editor;
    if (e.IsNumpadPressed(0))
@@ -256,7 +271,6 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
 
 void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
-   m_frame++;
    m_camMoved = false;
    const AreaViewSettings before = m_settings;
    const int viewBefore = m_view;
@@ -416,7 +430,10 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = true;
          }
          // An interactive edit (gizmo drag, G/R/S modal transform, field drag; not a focused text field) keeps one undo record from its start: render while it runs, and once when it ends
-         const bool dragging = ImGuizmo::IsUsingAny() || m_editor.m_modal.active || (ImGui::IsAnyItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !imgActive);
+         // (not the navigation of a secondary view: its image, or Alt + left orbit, is an active item of a CAMERAPREVIEW window)
+         const ImGuiWindow *const activeWindow = ImGui::GetCurrentContext()->ActiveIdWindow;
+         const bool viewActive = imgActive || (activeWindow != nullptr && strncmp(activeWindow->RootWindow->Name, "CAMERAPREVIEW", 13) == 0);
+         const bool dragging = ImGuizmo::IsUsingAny() || m_editor.m_modal.active || (ImGui::IsAnyItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !viewActive);
          if (m_wasDragging && !dragging)
             m_refresh = true;
          m_wasDragging = dragging;
@@ -427,8 +444,11 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          // The views alternate on the half rate frames (2 PBR views cost one view per frame); a wireframe view renders every 4th frame (the editor's
          // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
          // being moved renders every frame
-         const unsigned int period = m_settings.wireframe ? 4u : 2u;
-         if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && ((m_frame + static_cast<unsigned int>(m_slot)) % period) == 0)))
+         // One global frame counter, each view phased by its rank among the shown views of its shading (set by EditorUI::RenderAreas): PBR rank r on
+         // the frames (F + r) even, so 2 PBR views never render on the same frame; wireframe rank w on the odd frames 1 + 2w (mod 4), off the first PBR view's
+         const unsigned int frame = static_cast<unsigned int>(ImGui::GetFrameCount());
+         const bool scheduled = m_settings.wireframe ? (frame % 4u) == ((1u + 2u * static_cast<unsigned int>(m_rank)) % 4u) : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0;
+         if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
          {
             Renderer::EditorViewRequest req;
             req.width = m_width;
@@ -447,7 +467,17 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
          if (RenderTarget *const rt = renderer->GetEditorView(m_slot); rt != nullptr && !pbrRefused)
-            drawList->AddImage(rt->GetColorSampler(), imgMin, imgMax);
+         {
+            // Render targets are stored bottom-left first on OpenGL / GLES (the scene shaders' TEX_V_IS_UP): flip them for ImGui there only
+#if defined(ENABLE_BGFX)
+            const bool flipV = bgfx::getCaps()->originBottomLeft;
+#elif defined(ENABLE_OPENGL)
+            const bool flipV = true;
+#else
+            const bool flipV = false;
+#endif
+            drawList->AddImage(rt->GetColorSampler(), imgMin, imgMax, ImVec2(0.f, flipV ? 1.f : 0.f), ImVec2(1.f, flipV ? 0.f : 1.f));
+         }
          else
             drawList->AddRectFilled(imgMin, imgMax, IM_COL32(20, 20, 20, 255));
          if (pbrRefused)
