@@ -327,6 +327,13 @@ public:
    void OnMeshVerticesChanged();
    void TransformVertices();
 
+#if defined(ENABLE_BGFX)
+   // PBR static shadow cache receiver (Renderer::UpdatePBRShadowCache, the playfield): the table space bounds of the mesh, and its
+   // draw with the shader's current technique (false when it is not drawn as a plain mesh, or before its first render)
+   bool GetShadowCacheBounds(Vertex3Ds &boundsMin, Vertex3Ds &boundsMax);
+   bool DrawShadowCacheMesh();
+#endif
+
    // Fills 'triangles' with 3 consecutive 2D vertices per mesh triangle, in reversed winding order
    // (for top-down editor display). TransformVertices() must have been called beforehand.
    void GetEditorTriangles(vector<Vertex2D> &triangles) const;

@@ -175,6 +175,7 @@ enum class ShaderTechnique : unsigned int
    SHADER_TECHNIQUE(pbr_is_notex),
    SHADER_TECHNIQUE(pbr_shadow_trans),
    SHADER_TECHNIQUE(pbr_shadow_trans_notex),
+   SHADER_TECHNIQUE(pbr_shadow_bake), // static shadow cache bake (one light over the playfield mesh, layer uv space)
    // Lottes-CRT
    SHADER_TECHNIQUE(display_CRT_world),
    // Same as above but built with the Nuance-CRT filter, the renderer picking between them per display (see Renderer::SetupCRTRender)
@@ -398,6 +399,13 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMParams, 32), // per shadowed light: x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMBox, 32), // per shadowed light: x/y: world->virtual-uv scale (1/ortho box extents)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: unused
+   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrShadowCache, 32), // per shadowed light: static shadow cache uv = table xy * x + (y, z), w: cache layer + 1 (0 = not cached)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowCacheDraw, 1), // x: 1 = this draw (the playfield) reads the static shadow cache
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeLight, 1), // shadow cache bake: light position, range
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeParams, 1), // shadow cache bake: x: light sphere radius, y: penumbra radius
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeMap, 1), // shadow cache bake: table xy -> layer uv (xy * x + (y, z))
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeRect, 1), // shadow cache bake: the light's tile (uv min, max)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeVSM, 1), // shadow cache bake: the light's pbrVSMParams entry
    SHADER_SAMPLER(tex_pbr_orm, 8, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // packed occlusion/roughness/metallic
    SHADER_SAMPLER(tex_pbr_emission, 9, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // emission map
    SHADER_SAMPLER(tex_pbr_ao, 10, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // screenspace ambient occlusion
@@ -410,6 +418,7 @@ enum class ShaderUniform : unsigned int
    SHADER_SAMPLER(tex_vsm_pagetables, 5, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_NONE), // VSM virtual->physical page table per light
    SHADER_SAMPLER(
       tex_vsm_trans, 6, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // VSM page pool transmittance (translucent casters: absorbance + nearness)
+   SHADER_SAMPLER(tex_pbr_shadow_cache, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // static shadow cache (RGBA8 array: baked cube shadows over the playfield)
    SHADER_SAMPLER(tex_pbr_mask, 7, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP,
       SamplerFilter::SF_BILINEAR), // PBR pixel mask (sideband attachment alpha), masks the tonemap AO application
    SHADER_SAMPLER(tex_pbr_att1, 8, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // sideband att1: probe radiance + coverage
@@ -556,6 +565,7 @@ public:
       bool inShaderSpecular = false;
       bool transparent = false;
       float ownLampRadius = 0.f; // a flasher dome body: its own dome lamp (closer than this, table units) does not light it
+      bool shadowCache = false; // the playfield: reads the static shadow cache of the lights that have one (Renderer::UpdatePBRShadowCache)
    };
    void SetTechniqueMaterial(ShaderTechnique technique, const Material& mat, const bool doAlphaTest = false, const bool doNormalMapping = false, const bool doReflection = false,
       const bool doRefraction = false, const PBRTextureSet* const pbrMaps = nullptr);

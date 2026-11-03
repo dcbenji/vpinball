@@ -327,6 +327,9 @@ public:
       const unsigned int renderMask, RenderTarget* const refrProbe = nullptr);
 #if defined(ENABLE_BGFX)
    const class Light* m_vsmShadowLight = nullptr; // light whose shadow map pages are being rendered (a flasher dome stays out of its own lamp's map)
+   bool IsPBRShadowCacheOn() const { return m_shadowCacheOn; } // the playfield draw reads the static shadow cache (UpdatePBRShadowCache)
+#else
+   bool IsPBRShadowCacheOn() const { return false; }
 #endif
 
 private:
@@ -366,6 +369,33 @@ private:
    unsigned int m_vsmContentSerial = 0, m_vsmLastContentSerial = 0; // Bumped when shadow caster content changed (editor moves), forces a rebuild of the cached shadow pages
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame
    int m_vsmPageBudget = 32; // dirty pages rendered per frame (Player_PBRShadowPagesPerFrame)
+   unsigned int m_vsmRebuildSerial = 0; // bumped when the shadow caster content changed (every cached map and shadow bake is stale)
+
+   // Static shadow cache: a static light's shadow (cube map, static casters only: shadow modes PBR_STATIC_SHADOWS and
+   // PBR_STATIC_N_BALL_SHADOWS) is a fixed function of the receiver point, so the playfield reads it from a per light bake in
+   // table xy (one bilinear read) instead of running the cube filter per pixel. Bakes run once the light's map is complete,
+   // one light per frame, and stay valid until the light or the casters change. VPX_FLASH_CACHE=0 turns it off.
+   void UpdatePBRShadowCache();
+   struct ShadowCacheEntry
+   {
+      const class Light* light = nullptr;
+      float rect[4] {}; // baked table xy rect (min x, min y, max x, max y): the light's range square over the playfield bounds
+      int layer = 0, x0 = 0, y0 = 0, w = 0, h = 0; // tile in the cache texture array (texels)
+      vec4 map; // table xy -> layer uv: xy * x + (y, z)
+      bool baked = false;
+      uint64_t validFrame = 0; // published from this VSM frame on (the frame after its bake: every pass of it sees the bake)
+      Vertex3Ds pos; // light state the bake was made for
+      float range = 0.f, penumbra = 0.f, sphereRadius = 0.f;
+      int mode = -1;
+      unsigned int serial = 0;
+   };
+   static constexpr int SHADOW_CACHE_LAYER_SIZE = 2048; // cache layer edge (texels, RGBA8: 16 MB per layer)
+   std::vector<ShadowCacheEntry> m_shadowCache;
+   bgfx::TextureHandle m_shadowCacheTex = BGFX_INVALID_HANDLE; // RGBA8 texture array (a 1x1 placeholder while off)
+   std::shared_ptr<Sampler> m_shadowCacheSampler;
+   int m_shadowCacheLayers = 0; // layer count of m_shadowCacheTex (0 = placeholder)
+   std::vector<uint8_t> m_shadowCacheCleared; // per layer: cleared before its first bake
+   bool m_shadowCacheOn = false;
 #endif
    void RenderDynamics(); // Render static parts if not IsUsingStaticPrepass, then render dynamic parts
    void DrawBackground();

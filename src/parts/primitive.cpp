@@ -1178,6 +1178,35 @@ bool Primitive::GetFlasherDomeCookie(vec3 &cookie)
 
 bool Primitive::IsTracedInsert() const { return m_d.m_addBlend && lowerCase(m_d.m_szImage).rfind("traced_", 0) == 0; }
 
+#if defined(ENABLE_BGFX)
+bool Primitive::GetShadowCacheBounds(Vertex3Ds &boundsMin, Vertex3Ds &boundsMax)
+{
+   if (m_mesh.NumIndices() == 0)
+      return false;
+   m_mesh.UpdateBounds();
+   const Matrix3D &m = RecalculateMatrices();
+   boundsMin = Vertex3Ds(FLT_MAX, FLT_MAX, FLT_MAX);
+   boundsMax = Vertex3Ds(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+   for (int i = 0; i < 8; i++)
+   {
+      const Vertex3Ds p = m * Vertex3Ds(i & 1 ? m_mesh.m_maxAABound.x : m_mesh.m_minAABound.x, i & 2 ? m_mesh.m_maxAABound.y : m_mesh.m_minAABound.y, i & 4 ? m_mesh.m_maxAABound.z : m_mesh.m_minAABound.z);
+      boundsMin = Vertex3Ds(min(boundsMin.x, p.x), min(boundsMin.y, p.y), min(boundsMin.z, p.z));
+      boundsMax = Vertex3Ds(max(boundsMax.x, p.x), max(boundsMax.y, p.y), max(boundsMax.z, p.z));
+   }
+   return boundsMax.x > boundsMin.x && boundsMax.y > boundsMin.y;
+}
+
+bool Primitive::DrawShadowCacheMesh()
+{
+   if (m_renderer == nullptr || !m_d.m_visible || m_skipRendering || m_meshBuffer == nullptr || m_groupdRendering || m_vertexBufferRegenerate || m_mesh.NumIndices() == 0)
+      return false;
+   m_renderer->UpdateBasicShaderMatrix(RecalculateMatrices());
+   m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, m_d.m_vPosition, 0.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, (uint32_t)m_mesh.NumIndices());
+   m_renderer->UpdateBasicShaderMatrix();
+   return true;
+}
+#endif
+
 void Primitive::Render(const unsigned int renderMask)
 {
    assert(m_renderer != nullptr);
@@ -1630,6 +1659,8 @@ void Primitive::Render(const unsigned int renderMask)
       // by its own lamp inside it: the dome layer draws that, and the lit look is tuned on it alone
       if (flasherDome && m_dome.valid && mat->m_bOpacityActive)
          pbrMaps.ownLampRadius = 1.5f * max(m_dome.height, m_dome.radius) * m_fullMatrix.MultiplyVectorNoTranslate(Vertex3Ds(0.f, 0.f, 1.f)).Length();
+      // The playfield reads the baked static shadows of the lights that have one (Renderer::UpdatePBRShadowCache)
+      pbrMaps.shadowCache = m_useAsPlayfield && m_renderer->IsPBRShadowCacheOn();
       m_renderer->m_renderDevice->m_basicShader->SetTechniqueMaterial(img ? ShaderTechnique::basic_with_texture : ShaderTechnique::basic_without_texture, *mat,
          img ? pinAlphaTest >= 0.f && !img->IsOpaque() : false, nMap, reflections, refractions, isPBR ? &pbrMaps : nullptr);
 

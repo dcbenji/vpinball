@@ -42,6 +42,9 @@ uniform mat4 matWorld;
 #ifdef CLIP
     uniform vec4 clip_plane;
 #endif
+#ifdef SHADOW_BAKE
+    uniform vec4 pbrShadowBakeMap; // table xy -> static shadow cache layer uv: xy * x + (y, z)
+#endif
 
 void main()
 {
@@ -61,8 +64,19 @@ void main()
     // Camera-relative clip-space transform: subtract the camera's world position from the world-space
     // vertex position and apply (viewRotation x proj). This avoids GPU f32 precision loss on Adreno (Quest)
     // that comes from baking the large camera translation into matWorldViewProj on the CPU.
-    vec3 wpos_rel = tpos.xyz - cCameraPosWorld;
-    gl_Position = mul(mRotViewProj, vec4(wpos_rel, 1.0));
+    #ifdef SHADOW_BAKE
+        // Static shadow cache bake (fs_pbr SHADOW_BAKE): rasterized over the cache layer at the vertex's table xy (the varyings
+        // above stay those of the camera pass, so the fragment sees the same position and normal as the playfield draw)
+        const vec2 buv = tpos.xy * pbrShadowBakeMap.x + pbrShadowBakeMap.yz;
+        #if TEX_V_IS_UP
+            gl_Position = vec4(buv.x * 2.0 - 1.0, buv.y * 2.0 - 1.0, 0.5, 1.0);
+        #else
+            gl_Position = vec4(buv.x * 2.0 - 1.0, 1.0 - buv.y * 2.0, 0.5, 1.0);
+        #endif
+    #else
+        vec3 wpos_rel = tpos.xyz - cCameraPosWorld;
+        gl_Position = mul(mRotViewProj, vec4(wpos_rel, 1.0));
+    #endif
     v_texcoord0 = a_texcoord0;
     // Per-vertex curvature for the PBR refraction options, stored in the normal length (Primitive::UploadMeshToVB); only read
     // when refractionParams.w says the part's vertex buffer carries it

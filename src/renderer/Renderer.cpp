@@ -471,6 +471,7 @@ void Renderer::SetTable(PinTable *const table)
 #if defined(ENABLE_BGFX)
    m_vsmLights.clear(); // all virtual maps are table-dependent: re-mark and re-bake from scratch
    m_vsmPool.Reset(m_vsmPool.LayerCount());
+   m_shadowCache.clear(); // repacked and rebaked for the new table
 #endif
 
    // The environment map sampler and its precomputed radiance are kept: base tables and their
@@ -492,6 +493,7 @@ Renderer::~Renderer()
    m_vsmPoolSampler = nullptr;
    m_vsmTransSampler = nullptr;
    m_vsmPageTableSampler = nullptr;
+   m_shadowCacheSampler = nullptr; // owns m_shadowCacheTex
    if (bgfx::isValid(m_vsmPoolTex))
       bgfx::destroy(m_vsmPoolTex);
    if (bgfx::isValid(m_vsmTransTex))
@@ -2646,6 +2648,7 @@ void Renderer::PreparePBRPasses()
    // Forward+ light list: light states animate per frame so the cluster grid is rebuilt and uploaded each frame
 #ifdef ENABLE_BGFX
    UpdateVirtualShadowMaps();
+   UpdatePBRShadowCache();
    BuildPBRLightList();
 #endif
 
@@ -2899,6 +2902,8 @@ void Renderer::UpdateVirtualShadowMaps()
    const bool contentDirty = tableDirty != m_vsmLastTableDirty || m_vsmContentSerial != m_vsmLastContentSerial;
    m_vsmLastTableDirty = tableDirty;
    m_vsmLastContentSerial = m_vsmContentSerial;
+   if (contentDirty)
+      m_vsmRebuildSerial++;
    for (Matrix3D& vp : m_vsmShadowVP)
       vp.SetIdentity();
    for (vec4& v : m_vsmParams)
@@ -3129,6 +3134,7 @@ void Renderer::UpdateVirtualShadowMaps()
             light->m_pbrShadowBakedFalloff = light->m_d.m_falloff;
             light->m_pbrShadowBakedSlot = index;
             light->m_pbrShadowBakedMode = (int)light->m_d.m_shadows;
+            light->m_pbrShadowBakedSerial = m_vsmRebuildSerial;
          }
          light->m_pbrShadowLayout = VSM::LAYOUT_ORTHO;
          m_vsmShadowVP[index] = view * proj;
@@ -3176,6 +3182,7 @@ void Renderer::UpdateVirtualShadowMaps()
             light->m_pbrShadowBakedFalloff = light->m_d.m_falloff;
             light->m_pbrShadowBakedSlot = index;
             light->m_pbrShadowBakedMode = (int)light->m_d.m_shadows;
+            light->m_pbrShadowBakedSerial = m_vsmRebuildSerial;
          }
          light->m_pbrShadowLayout = VSM::LAYOUT_CUBE;
          m_vsmParams[index] = vec4((float)map.ptBase, (float)VSM::CUBE_FACE_GRID, (float)VSM::CUBE_FACE_GRID, zFar);
@@ -3380,6 +3387,278 @@ void Renderer::UpdateVirtualShadowMaps()
 #endif
 
 #if defined(ENABLE_BGFX)
+// Light record values shared by the Forward+ light list and the static shadow cache bake (which must see the light as the live
+// path does). VPX_T11=0 disables the sphere light radius (punctual specular) and the Traced insert proxy lights (A/B tests).
+static bool PBRAreaLights()
+{
+   static const bool areaLights = std::getenv("VPX_T11") == nullptr || std::string(std::getenv("VPX_T11")) != "0";
+   return areaLights;
+}
+static float PBRLightRange(const Light* const light) { return max(light->m_d.m_falloff, 1.f); }
+static float PBRLightSphereRadius(const Light* const light) { return PBRAreaLights() ? max(light->m_d.m_bulbRadius, 0.f) : 0.f; }
+static int PBRPenumbraHalfUnits(const Light* const light) { return clamp(static_cast<int>(light->m_d.m_bulbRadius * 2.f + 0.5f), 4, 255); }
+
+// Static shadow cache. A light whose cube map holds static casters only (PBR_STATIC_SHADOWS, PBR_STATIC_N_BALL_SHADOWS: flippers,
+// targets, gates, spinners, plunger, triggers and the ball are not in it) and that does not move has a fixed filtered shadow at
+// every point of a static receiver: the cube filter of fs_pbr (pbr_cube_shadow) gives the same rgb frame after frame, a GI bulb
+// always and a flasher at every fire (its pages stay parked between fires). The playfield, the receiver covering most of the
+// screen, reads it instead from a bake: per light, one tile of a RGBA8 texture array over the light's range square on the
+// playfield in table xy (rgb = the shadow, a = 1 where baked), one bilinear read per pixel and light.
+// - Bake: once the light's map is complete (every needed page resident and rendered, the 'warm' state of
+//   UpdateVirtualShadowMaps) and the bake is missing or stale (light moved, range, penumbra or mode changed, caster edit), the
+//   playfield mesh is drawn over the tile (vs/fs_pbr SHADOW_BAKE) evaluating pbr_cube_shadow with the inputs the live path
+//   gives it. One light per frame; published the frame after (every pass of the bake frame has run by then).
+// - Live: fs_pbr reads the tile for the playfield draw (pbrShadowCacheDraw) and the lights with a published bake
+//   (pbrShadowCache[VSM index]); texels without a bake (off the mesh, steep faces, tile gutters) and every other receiver run the
+//   live filter. The ball shadows (mode 3) stay live on top.
+// Env: VPX_FLASH_CACHE=0 off (bit-identical to the live path); VPX_FLASH_CACHE_RANGE=<VPU> only lights with at least this falloff
+// (default 0: every static cube light); VPX_FLASH_CACHE_VPT=<VPU per texel> (default 1, the cube maps' texels are 1.7-4.7 VPU on
+// the playfield); VPX_FLASH_CACHE_LAYERS=<n> cache layers at most (2048^2 RGBA8, 16 MB each, default 8). Lights that do not fit
+// keep the live filter. Mono only (the bake pass is not instanced).
+void Renderer::UpdatePBRShadowCache()
+{
+   struct Config
+   {
+      bool on;
+      float minRange, vpt;
+      int maxLayers;
+   };
+   static const Config cfg = []()
+   {
+      Config c;
+      const char* v = std::getenv("VPX_FLASH_CACHE");
+      c.on = v == nullptr || v[0] != '0';
+      v = std::getenv("VPX_FLASH_CACHE_RANGE");
+      c.minRange = v ? (float)atof(v) : 0.f;
+      v = std::getenv("VPX_FLASH_CACHE_VPT");
+      c.vpt = v ? max((float)atof(v), 0.25f) : 1.f;
+      v = std::getenv("VPX_FLASH_CACHE_LAYERS");
+      c.maxLayers = v ? clamp(atoi(v), 1, 64) : 8;
+      return c;
+   }();
+   static const uint64_t setupStart = usec();
+   m_shadowCacheOn = cfg.on && m_mvp.m_nEyes == 1;
+   Shader* const shader = m_renderDevice->m_basicShader;
+
+   // The sampler always holds an array texture (a 1x1 placeholder until the cache has layers): the opaque PBR variants declare it
+   if (!bgfx::isValid(m_shadowCacheTex))
+   {
+      m_shadowCacheTex = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+      m_shadowCacheSampler = std::make_shared<Sampler>(m_renderDevice, "PBR Shadow Cache"s, SurfaceType::RT_DEFAULT, m_shadowCacheTex, bgfx::TextureFormat::RGBA8, 1, 1, true);
+      shader->SetTexture(ShaderUniform::tex_pbr_shadow_cache, m_shadowCacheSampler);
+      m_shadowCacheLayers = 0;
+   }
+
+   vec4 table[VSM::MAX_LIGHTS];
+   for (vec4& v : table)
+      v = vec4(0.f, 0.f, 0.f, 0.f);
+   const auto publish = [shader, &table]() { shader->SetVector(ShaderUniform::pbrShadowCache, table, VSM::MAX_LIGHTS); };
+   if (!m_shadowCacheOn)
+   {
+      publish();
+      return;
+   }
+
+   // The receiver: the playfield mesh
+   Primitive* receiver = nullptr;
+   for (IEditable* const part : m_table->GetParts())
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive*>(part)->IsPlayfield())
+      {
+         receiver = static_cast<Primitive*>(part);
+         break;
+      }
+   Vertex3Ds bMin, bMax;
+   if (receiver == nullptr || !receiver->GetShadowCacheBounds(bMin, bMax))
+   {
+      publish();
+      return;
+   }
+
+   // Cached lights: static tier cube lights (below the glass top: above it they take the ortho layout), range square on the playfield
+   struct Candidate
+   {
+      const Light* light;
+      float rect[4];
+   };
+   vector<Candidate> candidates;
+   for (IEditable* const part : m_table->GetParts())
+   {
+      if (part->GetItemType() != eItemLight)
+         continue;
+      const Light* const l = static_cast<const Light*>(part);
+      if (l->m_d.m_type != LightType::PBR || !l->m_d.m_visible || l->m_desktopBackdrop
+         || (l->m_d.m_shadows != ShadowMode::PBR_STATIC_SHADOWS && l->m_d.m_shadows != ShadowMode::PBR_STATIC_N_BALL_SHADOWS) || l->m_d.m_falloff < cfg.minRange
+         || l->GetCurrentHeight() > m_table->m_glassTopHeight)
+         continue;
+      const float range = PBRLightRange(l);
+      Candidate c { l, { max(l->m_d.m_vCenter.x - range, bMin.x), max(l->m_d.m_vCenter.y - range, bMin.y), min(l->m_d.m_vCenter.x + range, bMax.x), min(l->m_d.m_vCenter.y + range, bMax.y) } };
+      if (c.rect[2] > c.rect[0] && c.rect[3] > c.rect[1])
+         candidates.push_back(c);
+   }
+
+   // (Re)pack the tiles when the cached set or a rect changed: shelves of tiles (tallest first), 2 texel gutters, new layer when full
+   bool samePack = candidates.size() == m_shadowCache.size();
+   for (size_t i = 0; samePack && i < candidates.size(); i++)
+      samePack = candidates[i].light == m_shadowCache[i].light && std::equal(candidates[i].rect, candidates[i].rect + 4, m_shadowCache[i].rect);
+   if (!samePack)
+   {
+      constexpr int L = SHADOW_CACHE_LAYER_SIZE, gutter = 2;
+      vector<ShadowCacheEntry> entries(candidates.size());
+      vector<float> vpts(candidates.size());
+      for (size_t i = 0; i < candidates.size(); i++)
+      {
+         ShadowCacheEntry& e = entries[i];
+         e.light = candidates[i].light;
+         std::copy(candidates[i].rect, candidates[i].rect + 4, e.rect);
+         const float rw = e.rect[2] - e.rect[0], rh = e.rect[3] - e.rect[1];
+         vpts[i] = max(cfg.vpt, max(rw, rh) / (float)(L - 1)); // a tile never exceeds a layer
+         e.w = (int)ceilf(rw / vpts[i]) + 1;
+         e.h = (int)ceilf(rh / vpts[i]) + 1;
+      }
+      vector<size_t> order(entries.size());
+      for (size_t i = 0; i < order.size(); i++)
+         order[i] = i;
+      std::stable_sort(order.begin(), order.end(), [&entries](size_t a, size_t b) { return entries[a].h > entries[b].h; });
+      int layer = 0, shelfX = 0, shelfY = 0, shelfH = 0, layersUsed = 0, packed = 0;
+      for (const size_t i : order)
+      {
+         ShadowCacheEntry& e = entries[i];
+         if (shelfX + e.w > L)
+         {
+            shelfX = 0;
+            shelfY += shelfH + gutter;
+            shelfH = 0;
+         }
+         if (shelfY + e.h > L)
+         {
+            layer++;
+            shelfX = shelfY = shelfH = 0;
+         }
+         if (layer >= cfg.maxLayers)
+         {
+            e.layer = -1; // no room: live filter
+            continue;
+         }
+         e.layer = layer;
+         e.x0 = shelfX;
+         e.y0 = shelfY;
+         shelfX += e.w + gutter;
+         shelfH = max(shelfH, e.h);
+         layersUsed = layer + 1;
+         packed++;
+         // Texel (i, j) of the tile holds the table point rect.min + (i, j) * vpt
+         const float scale = 1.f / (vpts[i] * (float)L);
+         e.map = vec4(scale, ((float)e.x0 + 0.5f) / (float)L - e.rect[0] * scale, ((float)e.y0 + 0.5f) / (float)L - e.rect[1] * scale, vpts[i]);
+      }
+      m_shadowCache = std::move(entries);
+      if (layersUsed != m_shadowCacheLayers && layersUsed > 0)
+      {
+         // The previous texture is released with its sampler, once no recorded frame references it anymore
+         m_shadowCacheTex = bgfx::createTexture2D(L, L, false, static_cast<uint16_t>(layersUsed), bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+         m_shadowCacheSampler = std::make_shared<Sampler>(m_renderDevice, "PBR Shadow Cache"s, SurfaceType::RT_DEFAULT, m_shadowCacheTex, bgfx::TextureFormat::RGBA8, L, L, true);
+         shader->SetTexture(ShaderUniform::tex_pbr_shadow_cache, m_shadowCacheSampler);
+         m_shadowCacheLayers = layersUsed;
+      }
+      m_shadowCacheCleared.assign(m_shadowCacheLayers, 0); // a repack moves tiles: every layer is cleared before its next bake
+      PLOGI << "PBR shadow cache: " << packed << " of " << candidates.size() << " static cube lights in " << layersUsed << " layer(s) of " << L << "x" << L << " RGBA8 ("
+            << layersUsed * L * L * 4 / (1024 * 1024) << " MB), " << cfg.vpt << " VPU per texel";
+   }
+
+   // Stale bakes (light moved, range, penumbra or tier changed, caster content edited) and the publication of the valid ones
+   ShadowCacheEntry* toBake = nullptr;
+   for (ShadowCacheEntry& e : m_shadowCache)
+   {
+      if (e.layer < 0)
+         continue;
+      const Light* const l = e.light;
+      const Vertex3Ds pos(l->m_d.m_vCenter.x, l->m_d.m_vCenter.y, l->GetCurrentHeight());
+      if (e.baked
+         && (e.pos.x != pos.x || e.pos.y != pos.y || e.pos.z != pos.z || e.range != PBRLightRange(l) || e.penumbra != (float)PBRPenumbraHalfUnits(l) * 0.5f
+            || e.sphereRadius != PBRLightSphereRadius(l) || e.mode != (int)l->m_d.m_shadows || e.serial != m_vsmRebuildSerial))
+         e.baked = false;
+      const int slot = l->m_pbrShadowSlot;
+      const bool hasMap = slot >= 0 && slot < m_vsmMaxLights && l->m_pbrShadowLayout == VSM::LAYOUT_CUBE;
+      if (e.baked && hasMap && e.validFrame <= m_vsmFrame)
+         table[slot] = vec4(e.map.x, e.map.y, e.map.z, (float)(e.layer + 1));
+      if (e.baked || toBake != nullptr || !hasMap || l->m_pbrShadowBakedSlot != slot || l->m_pbrShadowBakedSerial != m_vsmRebuildSerial || l->m_pbrShadowBakedPos.x != pos.x
+         || l->m_pbrShadowBakedPos.y != pos.y || l->m_pbrShadowBakedPos.z != pos.z || l->m_pbrShadowBakedFalloff != l->m_d.m_falloff || l->m_pbrShadowBakedMode != (int)l->m_d.m_shadows)
+         continue;
+      // Complete map: every page the casters need is resident, rendered and published in the page table
+      const VSM::LightMap& map = m_vsmLights[slot];
+      bool warm = map.layout == VSM::LAYOUT_CUBE && map.EntryCount() > 0;
+      for (int vp = 0; vp < map.EntryCount() && warm; vp++)
+         warm = !map.needed[vp] || (map.phys[vp] != 0 && !map.dirty[vp] && m_vsmPageTableData[(map.ptBase + vp) * 4] == (float)map.phys[vp]);
+      if (warm)
+         toBake = &e;
+   }
+
+   if (toBake != nullptr && receiver != nullptr)
+   {
+      const uint64_t t0 = usec();
+      ShadowCacheEntry& e = *toBake;
+      const Light* const l = e.light;
+      const int slot = l->m_pbrShadowSlot;
+      constexpr int L = SHADOW_CACHE_LAYER_SIZE;
+      bgfx::Attachment attachment;
+      attachment.init(m_shadowCacheTex, bgfx::Access::Write, static_cast<uint16_t>(e.layer), 1, 0, BGFX_ATTACHMENT_NONE);
+      const bgfx::FrameBufferHandle fbh = bgfx::createFrameBuffer(1, &attachment);
+      if (bgfx::isValid(fbh))
+      {
+         RenderTarget* const rt = new RenderTarget(m_renderDevice, SurfaceType::RT_DEFAULT, fbh, BGFX_INVALID_HANDLE, bgfx::TextureFormat::Count, BGFX_INVALID_HANDLE,
+            bgfx::TextureFormat::Count, "PBRShadowBake"s, L, L, colorFormat::RGBA8);
+         m_renderDevice->AddEndOfFrameCmd([rt]() { delete rt; });
+         m_renderDevice->SetRenderTarget("PBR Shadow Bake"s, rt, false);
+         for (RenderTarget* const page : m_vsmTouchedRTs) // pages rendered this frame (the map may have completed with them)
+            m_renderDevice->AddRenderTargetDependency(page);
+         if (!m_shadowCacheCleared[e.layer])
+         {
+            m_renderDevice->Clear(clearType::TARGET, 0x00000000);
+            m_shadowCacheCleared[e.layer] = 1;
+         }
+         m_renderDevice->ResetRenderState();
+         m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
+         m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+         m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+         m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+         m_renderDevice->SetRenderState(RenderState::COLORWRITEENABLE, RenderState::RGBMASK_RGBA);
+         shader->SetTechnique(ShaderTechnique::pbr_shadow_bake);
+         const Vertex3Ds pos(l->m_d.m_vCenter.x, l->m_d.m_vCenter.y, l->GetCurrentHeight());
+         const float range = PBRLightRange(l), penumbra = (float)PBRPenumbraHalfUnits(l) * 0.5f, sphereRadius = PBRLightSphereRadius(l);
+         const VSM::LightMap& map = m_vsmLights[slot];
+         shader->SetVector(ShaderUniform::pbrShadowBakeLight, pos.x, pos.y, pos.z, range);
+         shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, penumbra, 0.f, 0.f);
+         shader->SetVector(ShaderUniform::pbrShadowBakeMap, e.map.x, e.map.y, e.map.z, 0.f);
+         shader->SetVector(ShaderUniform::pbrShadowBakeRect, (float)e.x0 / (float)L, (float)e.y0 / (float)L, (float)(e.x0 + e.w) / (float)L, (float)(e.y0 + e.h) / (float)L);
+         // The light's pbrVSMParams entry (UpdateVirtualShadowMaps leaves a parked light's empty)
+         shader->SetVector(ShaderUniform::pbrShadowBakeVSM, (float)map.ptBase, (float)VSM::CUBE_FACE_GRID, (float)VSM::CUBE_FACE_GRID, max(l->m_d.m_falloff, 60.f));
+         // Same view as the playfield draw (its vertex normal goes through the view transforms to the world, as in the live path)
+         const PartGroupData::SpaceReference prevSpaceRef = m_mvpSpaceReference;
+         SetSpaceReference(receiver->GetPartGroup() ? receiver->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD, false);
+         const bool drawn = receiver->DrawShadowCacheMesh();
+         SetSpaceReference(prevSpaceRef, false);
+         if (drawn)
+         {
+            m_vsmTouchedRTs.push_back(rt); // the scene pass depends on it (else the frame sort drops the pass)
+            e.baked = true;
+            e.validFrame = m_vsmFrame + 1;
+            e.pos = pos;
+            e.range = range;
+            e.penumbra = penumbra;
+            e.sphereRadius = sphereRadius;
+            e.mode = (int)l->m_d.m_shadows;
+            e.serial = m_vsmRebuildSerial;
+            PLOGI << "PBR shadow cache: baked " << l->GetName() << " (tile " << e.w << "x" << e.h << " at " << e.map.w << " VPU per texel, layer " << e.layer << "), submitted in "
+                  << (double)(usec() - t0) / 1000.0 << " ms, " << (double)(usec() - setupStart) / 1000.0 << " ms after cache setup (GPU time: 'PBR Shadow Bake' in VPX_FRAME_LOG)";
+         }
+      }
+      else
+         PLOGE << "PBR shadow cache: bake framebuffer creation failed";
+   }
+   publish();
+}
+#endif
+
+#if defined(ENABLE_BGFX)
 // Builds the Forward+ light list: a world-space XY cluster grid over the table bounds, packed into a RGBA32F
 // texture (256x32 texels): [0,512) light records ((pos,range) then (radiance,mode)), [512,1024) grid cells
 // (start,count), [1024,+) the light index list (light index, light source sphere radius, upward emitter flag). The
@@ -3415,7 +3694,7 @@ void Renderer::BuildPBRLightList()
       float cookie = 0.f; // flasher dome light: flute count + root angle / 2pi (0 = none)
       float cut = 0.f; // flasher dome light: elevation below which the dome base blocks the light (deg)
    };
-   static const bool areaLights = std::getenv("VPX_T11") == nullptr || std::string(std::getenv("VPX_T11")) != "0";
+   const bool areaLights = PBRAreaLights();
    LightEntry entries[maxLights];
    int lightCount = 0;
    vector<uint8_t> counts(cellCount, 0);
@@ -3452,7 +3731,7 @@ void Renderer::BuildPBRLightList()
       }
       LightEntry& e = entries[lightCount];
       e.pos = Vertex3Ds(light->m_d.m_vCenter.x, light->m_d.m_vCenter.y, light->GetCurrentHeight());
-      e.range = max(light->m_d.m_falloff, 1.f);
+      e.range = PBRLightRange(light);
       // A room light (window, ceiling key) follows the scene lighting level (Day/Night) as the env and ambient do; lamps (GI,
       // inserts, flashers) keep their intensity, as legacy lights do, so the room darkens or brightens around them
       const float radiance = light->m_currentIntensity * intensityToLinear * (light->m_d.m_roomLight ? m_sceneLighting.GetGlobalEmissionScale() : 1.f);
@@ -3460,9 +3739,9 @@ void Renderer::BuildPBRLightList()
       // the map layout (bits 12-15, 0 = ortho, 2 = cube) and the quantized penumbra radius in 0.5 VPU units (bits 16+)
       const int shadowIndex = light->m_pbrShadowSlot;
       const int shadowInfo = static_cast<int>(light->m_d.m_shadows) | ((shadowIndex + 1) << 4) | (light->m_pbrShadowLayout << 12)
-         | (clamp(static_cast<int>(light->m_d.m_bulbRadius * 2.f + 0.5f), 4, 255) << 16); // bulb radius as the PCSS penumbra (>= 2 VPU, 255 keeps the float exact)
+         | (PBRPenumbraHalfUnits(light) << 16); // bulb radius as the PCSS penumbra (>= 2 VPU, 255 keeps the float exact)
       e.radiance = vec4(tint.x * radiance, tint.y * radiance, tint.z * radiance, (float)shadowInfo);
-      e.radius = areaLights ? max(light->m_d.m_bulbRadius, 0.f) : 0.f;
+      e.radius = PBRLightSphereRadius(light);
       e.upward = false;
       e.index = lightCount;
       if (const auto dome = domeCookies.find(light); dome != domeCookies.end())

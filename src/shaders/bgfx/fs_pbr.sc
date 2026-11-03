@@ -19,7 +19,8 @@
 //
 // Defines: TEX (base color texture), AT (alpha test), TRANSPARENT (premultiplied blend output),
 //          INSHADERSPEC (in-shader envmap specular, used in probe contexts and before the resolve pass),
-//          SIDEBAND (write specular sideband attachments), CLIP, STEREO
+//          SIDEBAND (write specular sideband attachments), SHADOW_TRANS (translucent shadow caster page pass),
+//          SHADOW_BAKE (static shadow cache bake of one light, with vs_pbr SHADOW_BAKE), CLIP, STEREO
 
 $input v_worldPos, v_tablePos, v_normal, v_texcoord0, v_refrCurv
 #ifdef STEREO
@@ -130,6 +131,22 @@ uniform mat4 matShadowVP[32];   // ortho virtual map view-projection per shadowe
 uniform vec4 pbrVSMParams[32];  // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
 uniform vec4 pbrVSMBox[32];     // x/y: world->virtual-uv scale (1/ortho box extents), z: ortho near depth (used CPU side)
 uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z/w: page render linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness quantization step
+// Static shadow cache (Renderer::UpdatePBRShadowCache): per cached light, its cube shadow (rgb, as pbr_cube_shadow returns it)
+// baked over the playfield mesh in table xy, alpha 1 where baked. The opaque variants only (sampler 7 is the transparent
+// variants' probe depth)
+#ifndef TRANSPARENT
+SAMPLER2DARRAY(tex_pbr_shadow_cache, 7);
+#endif
+uniform vec4 pbrShadowCache[32]; // per shadowed light (VSM index): cache uv = table xy * x + (y, z), w = cache layer + 1 (0 = not cached)
+uniform vec4 pbrShadowCacheDraw; // x: 1 = this draw (the playfield) reads the cache, 0 = live filter only
+#define PBR_SHADOW_CACHE_MIN_NZ 0.7 // receivers steeper than ~45 deg are not cached (a wall shares the table xy of its floor)
+#ifdef SHADOW_BAKE
+uniform vec4 pbrShadowBakeLight;  // the baked light: xyz position, w range (as its light record)
+uniform vec4 pbrShadowBakeParams; // x: light source sphere radius, y: penumbra radius (light record quantization)
+uniform vec4 pbrShadowBakeMap;    // table xy -> layer uv: xy * x + (y, z)
+uniform vec4 pbrShadowBakeRect;   // the light's tile in the layer (uv min xy, max xy): the rest of the layer is left as is
+uniform vec4 pbrShadowBakeVSM;    // the light's pbrVSMParams entry (a parked light has none in the frame's array)
+#endif
 
 #ifdef TRANSPARENT
 uniform vec4 refractionTint_thickness;
@@ -705,6 +722,93 @@ float pbr_aa_roughness(const vec3 n, const float roughness)
    return sqrt(sqrt(min(a * a + min(pbrLightGrid2.z * 0.31831 * (dot(dx, dx) + dot(dy, dy)), 0.18), 1.0)));
 }
 
+// VSM shadow kernel: a 16-tap Poisson disk on the unit circle, rotated per pixel by a hash of the
+// fragment coords. The previous axis-aligned 3x3 grid quantized the penumbra into ~10 visibly banded
+// levels; the rotated disk spreads the taps so the residual quantization reads as fine noise instead.
+// (elementwise init: shaderc has no array literals, same pattern as the SMAA offset[] declarations)
+#define PBR_VSM_DISK(d) \
+   vec2 d[16]; \
+   d[0] = vec2(-0.94201624, -0.39906216); \
+   d[1] = vec2(0.94558609, -0.76890725); \
+   d[2] = vec2(-0.09418410, -0.92938870); \
+   d[3] = vec2(0.34495938, 0.29387760); \
+   d[4] = vec2(-0.91588581, 0.45771432); \
+   d[5] = vec2(-0.81544232, -0.87912464); \
+   d[6] = vec2(-0.38277543, 0.27676845); \
+   d[7] = vec2(0.97484398, 0.75648379); \
+   d[8] = vec2(0.44323325, -0.97511554); \
+   d[9] = vec2(0.53742981, -0.47373420); \
+   d[10] = vec2(-0.26496911, -0.41893023); \
+   d[11] = vec2(0.79197514, 0.19090188); \
+   d[12] = vec2(-0.24188840, 0.99706507); \
+   d[13] = vec2(-0.81409955, 0.91437590); \
+   d[14] = vec2(0.19984126, 0.78641367); \
+   d[15] = vec2(0.14383161, -0.14100790);
+
+// Cube virtual shadow map lookup of one light at a receiver: the soft (PCSS-lite, 16 tap Poisson disk rotated by vsmRot) opaque shadow times the
+// translucent casters' tint, 1 = lit. Shared by the live path (pbr_direct_light) and the shadow cache bake (SHADOW_BAKE below),
+// so a cached shadow is the same function of the receiver. vsmP = the light's pbrVSMParams entry, lPos = (position, range),
+// wNg = the geometric normal (either facing: the lookup goes to the light's side), gNdotLraw = dot(wNg, l) and dist2 = the clamped
+// squared distance of pbr_direct_light, vsmRot = the kernel rotation (cos, sin). Derivative free (safe in UV-space rasterization and in non uniform control flow).
+vec3 pbr_cube_shadow(const vec4 vsmP, const vec4 lPos, const float lightRadius, const vec3 wPos, const vec3 wNg, const float gNdotLraw, const float dist2, const vec2 vsmRot)
+{
+   vec3 shadow = vec3_splat(1.0);
+   const float NdotLs = max(abs(gNdotLraw), 1e-3);
+   // Cube layout: 6 faces of faceGrid^2 pages each, rasterized as regular 90 deg perspective
+   // depth and reconstructed to the projected distance along the face's forward axis (world units).
+   // PCF taps offset the lookup direction so they cross face edges cleanly.
+   // Contact-shadow fix: offset the shading point along the surface normal before computing
+   // the light->fragment direction, so the cube lookup samples deeper inside the caster
+   // silhouette instead of grazing its edge (removes light leaks at caster contact points)
+   const float faceGrid = vsmP.y;
+   const vec3 shadowPos = wPos + (gNdotLraw < 0.0 ? -wNg : wNg) * (0.5 + 0.04 * sqrt(dist2));
+   const vec3 sdl = lPos.xyz - shadowPos;
+   const float sdist = inversesqrt(dot(sdl, sdl));
+   const vec3 ldir = -sdl * sdist; // normalized light -> fragment direction
+   const float dist = 1.0 / sdist;
+   const float zN = 2.0; // near plane, must match the renderer's cube face projection
+   const float zF = max(lPos.w, 60.0);
+   const vec4 cl = pbr_shadow_cube_lookup(ldir);
+   const int cpage = pbr_vsm_cube_page(vsmP.x, faceGrid, cl);
+   const float cphys = texelFetch(tex_vsm_pagetables, ivec2(cpage & 511, cpage >> 9), 0).x;
+   const float blockerNdc = pbr_vsm_page_depth(cphys, faceGrid, cl);
+   if (blockerNdc >= 0.0)
+   {
+      const float blocker = zN * zF / (zF - blockerNdc * (zF - zN));
+      const float worldGap = dist * cl.w - blocker;
+      // PCSS-lite penumbra in direction space (a uv offset of 1.0 maps to ~2 direction units);
+      // the face's virtual texel size is 1/(faceGrid * PAGE_DIM) of a direction unit
+      const float invFaceRes = 1.0 / (faceGrid * 128.0);
+      const float filterRadius = clamp(lightRadius * worldGap / max(blocker, 1.0) * invFaceRes * 2.0, invFaceRes, 8.0 * invFaceRes);
+      const float bias = min(0.5 + 2.0 * (1.0 - NdotLs) / max(NdotLs, 0.05), 8.0);
+      const vec3 upRef = abs(ldir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+      const vec3 tX = normalize(cross(upRef, ldir));
+      const vec3 tY = cross(ldir, tX);
+      // Soft compare window: ~one face texel projected at the receiver distance in world units
+      const float cmpWin = max(0.25, dist * 2.0 * invFaceRes) / max(NdotLs, 0.3);
+      PBR_VSM_DISK(vsmDisk);
+      float shadowAcc = 0.0;
+      UNROLL for (int t = 0; t < 16; t++)
+      {
+         const vec2 toff = pbr_vsm_rot(vsmDisk[t], vsmRot);
+         const vec3 tdir = normalize(ldir + (toff.x * tX + toff.y * tY) * filterRadius);
+         const vec4 tl = pbr_shadow_cube_lookup(tdir);
+         const int tpage = pbr_vsm_cube_page(vsmP.x, faceGrid, tl);
+         const float tphys = texelFetch(tex_vsm_pagetables, ivec2(tpage & 511, tpage >> 9), 0).x;
+         const float tapNdc = pbr_vsm_page_depth(tphys, faceGrid, tl);
+         const float tapBlocker = tapNdc < 0.0 ? -1.0 : zN * zF / (zF - tapNdc * (zF - zN));
+         shadowAcc += tapBlocker < 0.0 ? 1.0 : smoothstep(-cmpWin, cmpWin, tapBlocker - (dist * tl.w - bias));
+      }
+      // Translucent casters: receiver 2 VPU behind them at least, plus the nearness quantization step and half a texel of slope
+      const float slopeW = dist * invFaceRes * min(sqrt(1.0 - NdotLs * NdotLs) / NdotLs, 8.0);
+      const float transMargin = max((2.0 + slopeW) / zF, 1.5 * pbrShadowParams.z);
+      shadow = vec3_splat(shadowAcc * (1.0 / 16.0));
+      BRANCH if (shadowAcc > 0.0) // fully shadowed: no light left to tint
+         shadow *= pbr_vsm_tint_phys(cphys, fract(cl.xy * vec2_splat(faceGrid)), 1.0 - dist * cl.w / zF + transMargin);
+   }
+   return shadow;
+}
+
 // Returns the diffuse (and transmitted) direct light; the specular reflection is accumulated apart in specOut, since a
 // see-through part reflects it whatever its coverage (it is not modulated by alpha like the diffuse, as the indirect specular)
 vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 wV, const vec3 wPos, const vec3 diffuse, const vec3 F0, const float roughness, const float alpha, const float transmission, const vec2 vsmRot, out vec3 specOut)
@@ -737,27 +841,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       coatExit = 1.0 - coatStrength * (0.04 + 0.96 * pow(1.0 - cNdotV, 5.0));
    }
    vec3 acc = vec3_splat(0.0);
-   // VSM shadow kernel: a 16-tap Poisson disk on the unit circle, rotated per pixel by a hash of the
-   // fragment coords. The previous axis-aligned 3x3 grid quantized the penumbra into ~10 visibly banded
-   // levels; the rotated disk spreads the taps so the residual quantization reads as fine noise instead.
-   // (elementwise init: shaderc has no array literals, same pattern as the SMAA offset[] declarations)
-   vec2 vsmDisk[16];
-   vsmDisk[0] = vec2(-0.94201624, -0.39906216);
-   vsmDisk[1] = vec2(0.94558609, -0.76890725);
-   vsmDisk[2] = vec2(-0.09418410, -0.92938870);
-   vsmDisk[3] = vec2(0.34495938, 0.29387760);
-   vsmDisk[4] = vec2(-0.91588581, 0.45771432);
-   vsmDisk[5] = vec2(-0.81544232, -0.87912464);
-   vsmDisk[6] = vec2(-0.38277543, 0.27676845);
-   vsmDisk[7] = vec2(0.97484398, 0.75648379);
-   vsmDisk[8] = vec2(0.44323325, -0.97511554);
-   vsmDisk[9] = vec2(0.53742981, -0.47373420);
-   vsmDisk[10] = vec2(-0.26496911, -0.41893023);
-   vsmDisk[11] = vec2(0.79197514, 0.19090188);
-   vsmDisk[12] = vec2(-0.24188840, 0.99706507);
-   vsmDisk[13] = vec2(-0.81409955, 0.91437590);
-   vsmDisk[14] = vec2(0.19984126, 0.78641367);
-   vsmDisk[15] = vec2(0.14383161, -0.14100790);
+   PBR_VSM_DISK(vsmDisk);
    for (int i = 0; i < count; i++)
    {
       const vec4 lIdx = pbr_light_texel(1024 + start + i);
@@ -913,58 +997,24 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       }
       BRANCH if (shadowIndex >= 0 && shadowLayout == 2)
       {
-         // Cube layout: 6 faces of faceGrid^2 pages each, rasterized as regular 90 deg perspective
-         // depth and reconstructed to the projected distance along the face's forward axis (world units).
-         // PCF taps offset the lookup direction so they cross face edges cleanly.
-         // Contact-shadow fix: offset the shading point along the surface normal before computing
-         // the light->fragment direction, so the cube lookup samples deeper inside the caster
-         // silhouette instead of grazing its edge (removes light leaks at caster contact points)
-         const vec4 vsmP = pbrVSMParams[shadowIndex];
-         const float faceGrid = vsmP.y;
-         const vec3 shadowPos = wPos + (gNdotLraw < 0.0 ? -wNg : wNg) * (0.5 + 0.04 * sqrt(dist2));
-         const vec3 sdl = lPos.xyz - shadowPos;
-         const float sdist = inversesqrt(dot(sdl, sdl));
-         const vec3 ldir = -sdl * sdist; // normalized light -> fragment direction
-         const float dist = 1.0 / sdist;
-         const float zN = 2.0; // near plane, must match the renderer's cube face projection
-         const float zF = max(lPos.w, 60.0);
-         const vec4 cl = pbr_shadow_cube_lookup(ldir);
-         const int cpage = pbr_vsm_cube_page(vsmP.x, faceGrid, cl);
-         const float cphys = texelFetch(tex_vsm_pagetables, ivec2(cpage & 511, cpage >> 9), 0).x;
-         const float blockerNdc = pbr_vsm_page_depth(cphys, faceGrid, cl);
-         if (blockerNdc >= 0.0)
+         // Static shadow cache (playfield draw only, pbrShadowCacheDraw): the light's shadow baked over the receiver, one bilinear
+         // read at the table position instead of the filter. Texels the bake did not cover (alpha 0: off the mesh, steep faces,
+         // tile gutters) fall back to the live filter, as do steep receivers (a wall shares its floor's table xy).
+         bool cached = false;
+         #ifndef TRANSPARENT
+         BRANCH if (pbrShadowCacheDraw.x > 0.0 && pbrShadowCache[shadowIndex].w > 0.0 && abs(wNg.z) > PBR_SHADOW_CACHE_MIN_NZ)
          {
-            const float blocker = zN * zF / (zF - blockerNdc * (zF - zN));
-            const float worldGap = dist * cl.w - blocker;
-            // PCSS-lite penumbra in direction space (a uv offset of 1.0 maps to ~2 direction units);
-            // the face's virtual texel size is 1/(faceGrid * PAGE_DIM) of a direction unit
-            const float invFaceRes = 1.0 / (faceGrid * 128.0);
-            const float filterRadius = clamp(lightRadius * worldGap / max(blocker, 1.0) * invFaceRes * 2.0, invFaceRes, 8.0 * invFaceRes);
-            const float bias = min(0.5 + 2.0 * (1.0 - NdotLs) / max(NdotLs, 0.05), 8.0);
-            const vec3 upRef = abs(ldir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-            const vec3 tX = normalize(cross(upRef, ldir));
-            const vec3 tY = cross(ldir, tX);
-            // Soft compare window: ~one face texel projected at the receiver distance in world units
-            const float cmpWin = max(0.25, dist * 2.0 * invFaceRes) / max(NdotLs, 0.3);
-            float shadowAcc = 0.0;
-            UNROLL for (int t = 0; t < 16; t++)
+            const vec4 sc = pbrShadowCache[shadowIndex];
+            const vec4 cs = texture2DArrayLod(tex_pbr_shadow_cache, vec3(wPos.xy * sc.x + vec2(sc.y, sc.z), sc.w - 1.0), 0.0);
+            if (cs.a > 0.999)
             {
-               const vec2 toff = pbr_vsm_rot(vsmDisk[t], vsmRot);
-               const vec3 tdir = normalize(ldir + (toff.x * tX + toff.y * tY) * filterRadius);
-               const vec4 tl = pbr_shadow_cube_lookup(tdir);
-               const int tpage = pbr_vsm_cube_page(vsmP.x, faceGrid, tl);
-               const float tphys = texelFetch(tex_vsm_pagetables, ivec2(tpage & 511, tpage >> 9), 0).x;
-               const float tapNdc = pbr_vsm_page_depth(tphys, faceGrid, tl);
-               const float tapBlocker = tapNdc < 0.0 ? -1.0 : zN * zF / (zF - tapNdc * (zF - zN));
-               shadowAcc += tapBlocker < 0.0 ? 1.0 : smoothstep(-cmpWin, cmpWin, tapBlocker - (dist * tl.w - bias));
+               shadow = cs.rgb;
+               cached = true;
             }
-            // Translucent casters: receiver 2 VPU behind them at least, plus the nearness quantization step and half a texel of slope
-            const float slopeW = dist * invFaceRes * min(sqrt(1.0 - NdotLs * NdotLs) / NdotLs, 8.0);
-            const float transMargin = max((2.0 + slopeW) / zF, 1.5 * pbrShadowParams.z);
-            shadow = vec3_splat(shadowAcc * (1.0 / 16.0));
-            BRANCH if (shadowAcc > 0.0) // fully shadowed: no light left to tint
-               shadow *= pbr_vsm_tint_phys(cphys, fract(cl.xy * vec2_splat(faceGrid)), 1.0 - dist * cl.w / zF + transMargin);
          }
+         #endif
+         BRANCH if (!cached)
+            shadow = pbr_cube_shadow(pbrVSMParams[shadowIndex], lPos, lightRadius, wPos, wNg, gNdotLraw, dist2, vsmRot);
       }
       BRANCH if (shadowMode == 1 || shadowMode >= 3) // RAYTRACED_BALL_SHADOWS or PBR ball shadow tiers
          shadow *= get_light_ball_shadow(lPos.xyz, -dl, sqrt(dist2));
@@ -1034,6 +1084,33 @@ void main() {
    #ifdef CLIP
    if (v_clipDistance < 0.0)
       discard;
+   #endif
+
+   #ifdef SHADOW_BAKE
+      // Static shadow cache bake: the receiver mesh rasterized over the cache layer (vs_pbr SHADOW_BAKE maps its table xy to the
+      // layer), one light's pbr_cube_shadow per texel from the inputs pbr_direct_light gives it: table position, geometric
+      // normal (the vertex normal through the same view transforms; its facing does not change the lookup), clamped distance
+      {
+         const vec2 buv = v_tablePos.xy * pbrShadowBakeMap.x + pbrShadowBakeMap.yz;
+         if (any(lessThan(buv, pbrShadowBakeRect.xy)) || any(greaterThan(buv, pbrShadowBakeRect.zw)))
+            discard; // another light's tile
+         const vec3 wNg = mul(vec4(normalize(v_normal), 0.0), mView).xyz;
+         if (abs(wNg.z) <= PBR_SHADOW_CACHE_MIN_NZ)
+         {
+            gl_FragData[0] = vec4_splat(0.0); // steep face: not cached (alpha 0, the live path filters around it)
+            return;
+         }
+         const vec3 dl = pbrShadowBakeLight.xyz - v_tablePos;
+         const float dist2 = max(dot(dl, dl), max(pbrShadowBakeParams.x * pbrShadowBakeParams.x, 1.0));
+         if (dist2 >= pbrShadowBakeLight.w * pbrShadowBakeLight.w)
+         {
+            gl_FragData[0] = vec4_splat(1.0); // beyond the light's range: never shaded by it
+            return;
+         }
+         const float gNdotLraw = dot(wNg, dl * inversesqrt(dist2));
+         gl_FragData[0] = vec4(pbr_cube_shadow(pbrShadowBakeVSM, pbrShadowBakeLight, pbrShadowBakeParams.y, v_tablePos, wNg, gNdotLraw, dist2, vec2(1.0, 0.0)), 1.0); // No per-pixel rotation: its noise would be baked in
+         return;
+      }
    #endif
 
    // Base color & coverage
