@@ -3621,6 +3621,16 @@ std::unique_ptr<JSONSerializer::Deserializer> PinTable::CreateImportDeserializer
          return nlohmann::json();
       }
    };
+   // The pack document of an asset as the engine would write it: loaded into an object and saved again, like the table asset it is compared to (the
+   // pack may hold shorter numbers than the saved floats, or omit keys at their default)
+   const auto roundTrip = [&pack](const nlohmann::json &packDoc, const string &name, int, const char *, const auto &load) -> nlohmann::json
+   {
+      if (!packDoc.is_object())
+         return nlohmann::json();
+      nlohmann::ordered_json doc = nlohmann::ordered_json::parse(packDoc.dump());
+      doc["name"] = name;
+      return load(doc, pack.get());
+   };
    const auto sameData = [&pack, &files](const std::filesystem::path &sidecarFile, const uint8_t *const data, const size_t size)
    {
       const std::filesystem::path dataFile = PackSidecarDataFile(sidecarFile, files);
@@ -3735,7 +3745,13 @@ std::unique_ptr<JSONSerializer::Deserializer> PinTable::CreateImportDeserializer
       Material *const mat = *it;
       nlohmann::json packDoc = readJSON(docFile);
       const nlohmann::json tableDoc = BuildPackDoc(nullptr, JSONSerializer::kMaterialNode, "material", [mat](JSONObjectWriter &w) { mat->Save(w, false); });
-      packDoc.erase("name"); // The name is the file name, not part of the compared content
+      packDoc = roundTrip(packDoc, name, JSONSerializer::kMaterialNode, "material", [](const nlohmann::ordered_json &doc, const JSONSerializer::Deserializer *p) -> nlohmann::json
+         {
+            Material loaded;
+            JSONObjectReader reader(doc, JSONSerializer::kMaterialNode, p, CURRENT_FILE_FORMAT_VERSION);
+            loaded.Load(reader);
+            return reader.HasError() ? nlohmann::json() : nlohmann::json(BuildPackDoc(nullptr, JSONSerializer::kMaterialNode, "material", [&loaded](JSONObjectWriter &w) { loaded.Save(w, false); }));
+         });
       if (!packDoc.is_object() || !PackDocContentsEqual(packDoc, tableDoc))
          addRename("materials"s, name,
             uniqueName(name, fileStems("materials"s),
@@ -3751,7 +3767,13 @@ std::unique_ptr<JSONSerializer::Deserializer> PinTable::CreateImportDeserializer
          continue;
       nlohmann::json packDoc = readJSON(docFile);
       const nlohmann::json tableDoc = BuildPackDoc(nullptr, JSONSerializer::kRenderProbeNode, "renderprobe", [probe](JSONObjectWriter &w) { probe->Save(w, false); });
-      packDoc.erase("name"); // The name is the file name, not part of the compared content
+      packDoc = roundTrip(packDoc, name, JSONSerializer::kRenderProbeNode, "renderprobe", [](const nlohmann::ordered_json &doc, const JSONSerializer::Deserializer *p) -> nlohmann::json
+         {
+            RenderProbe loaded;
+            JSONObjectReader reader(doc, JSONSerializer::kRenderProbeNode, p, CURRENT_FILE_FORMAT_VERSION);
+            loaded.Load(reader);
+            return reader.HasError() ? nlohmann::json() : nlohmann::json(BuildPackDoc(nullptr, JSONSerializer::kRenderProbeNode, "renderprobe", [&loaded](JSONObjectWriter &w) { loaded.Save(w, false); }));
+         });
       if (!packDoc.is_object() || !PackDocContentsEqual(packDoc, tableDoc))
          addRename("renderprobes"s, name, uniqueName(name, fileStems("renderprobes"s), [this](const string &n) { return GetRenderProbe(n) != nullptr; }));
    }
