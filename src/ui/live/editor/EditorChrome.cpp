@@ -175,8 +175,8 @@ void EditorChrome::RenderMenuBar()
    constexpr float menuBarHeight = 28.f;
    constexpr float tabHeight = 24.f;
    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, max(ImGui::GetStyle().FramePadding.y, 0.5f * (menuBarHeight * dpi - ImGui::GetFontSize()))));
-   ImGui::PushStyleColor(ImGuiCol_MenuBarBg, EditorTheme::V(EditorTheme::Bar));
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_MenuBarBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
    if (ImGui::BeginMainMenuBar())
    {
       if (!editor.IsInspectMode() && ImGui::BeginMenu("File"))
@@ -518,7 +518,10 @@ void EditorChrome::RenderMenuBar()
       }
       if (barIconButton(ICON_LC_X, EditorTheme::Rgb(200, 60, 60)))
          editor.RequestClose(editor.IsInspectMode() ? Player::CS_STOP_PLAY : Player::CS_CLOSE_APP);
-      Tip("Close Editor");
+      if (editor.IsInspectMode())
+         Tip("Stop Play Test", "Shift+F5");
+      else
+         Tip("Close Editor");
       m_menuBarHeight = ImGui::GetWindowSize().y;
       ImGui::EndMainMenuBar();
    }
@@ -539,7 +542,7 @@ void EditorChrome::RenderToolbar()
       = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * s_toolDpi, 2.f * s_toolDpi));
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
    ImGui::Begin("TOOLBAR", nullptr, window_flags);
    ImGui::PopStyleColor();
    ImGui::PopStyleVar(2);
@@ -554,6 +557,10 @@ void EditorChrome::RenderToolbar()
       if (ToolButton(ICON_LC_SKIP_FORWARD))
          editor.m_player->m_step = true;
       ImGui::EndDisabled();
+      ImGui::SameLine(0.f, toolGap);
+      if (ToolButton(ICON_LC_SQUARE))
+         editor.RequestClose(Player::CS_STOP_PLAY);
+      Tip("Stop Play Test", "Shift+F5");
    }
    else
    {
@@ -1024,6 +1031,27 @@ void EditorChrome::RenderStatusOverlay()
    ImGui::Begin("text overlay", nullptr, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
    const float labelAlign = ImGui::GetCursorPosX() + lockToggleWidth + ImGui::GetStyle().ItemSpacing.x;
    ImGui::SetCursorPos(ImVec2(labelAlign, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
+   // Area header: what this window is, and the state of the play test being inspected
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+   ShadowedText("3D Viewport");
+   ImGui::PopStyleColor();
+   ImGui::SameLine(0.f, 8.f * dpi);
+   if (editor.IsInspectMode())
+   {
+      const char *const badge = editor.m_player->IsPlaying() ? "Playing" : "Paused";
+      const ImVec2 textSize = ImGui::CalcTextSize(badge);
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      const float padX = 6.f * dpi;
+      ImDrawList *const dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(ImVec2(at.x, at.y - 1.f * dpi), ImVec2(at.x + textSize.x + 2.f * padX, at.y + textSize.y + 1.f * dpi), EditorTheme::Accent, 3.f * dpi);
+      dl->AddText(ImVec2(at.x + padX, at.y), IM_COL32(20, 20, 22, 255), badge);
+      ImGui::Dummy(ImVec2(textSize.x + 2.f * padX, textSize.y));
+      ImGui::SameLine(0.f, 8.f * dpi);
+   }
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+   ShadowedText("|");
+   ImGui::PopStyleColor();
+   ImGui::SameLine(0.f, 8.f * dpi);
    switch (editor.m_camMode)
    {
    case ViewMode::PreviewCam: ShadowedText("Preview Camera"); break;
@@ -1228,6 +1256,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       {
          hints.push_back({ mod + "+S", "Save Changes" });
          hints.push_back({ "F3", "Menu Search" });
+         hints.push_back({ "Shift+F5", "Stop Play Test" });
       }
       else
       {
@@ -1251,7 +1280,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
    ImGui::Begin("STATUSBAR", nullptr,
       ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav
          | ImGuiWindowFlags_NoFocusOnAppearing);

@@ -169,6 +169,33 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       CHECK(b.Find(b.FindLeaf(AreaType::Outliner))->hidden);
       CHECK(AreaLayout().ToJson() == FromLegacy(kLayout).ToJson()); // default constructed == legacy default
    }
+
+   SUBCASE("camera preview view setup round trips; Auto writes no key")
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      REQUIRE(a.SetType(a.FindLeaf(AreaType::Outliner), AreaType::CameraPreview));
+      const int leaf = a.FindLeaf(AreaType::CameraPreview);
+      CHECK(a.ToJson().dump().find("preview_view") == std::string::npos);
+      REQUIRE(a.SetPreviewView(leaf, 1));
+      CHECK(a.ToJson().dump().find("\"cabinet\"") != std::string::npos);
+      AreaLayout b;
+      REQUIRE(b.FromJson(a.ToJson()));
+      CHECK(b == a);
+      CHECK(b.Find(b.FindLeaf(AreaType::CameraPreview))->previewView == 1);
+      CHECK_FALSE(a.SetPreviewView(leaf, 3));
+      REQUIRE(a.SetPreviewView(leaf, -1));
+      CHECK(!(b == a));
+   }
+
+   SUBCASE("Close replaces the parent split by the sibling")
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      CHECK_FALSE(a.CanClose(a.FindLeaf(AreaType::Viewport)));
+      REQUIRE(a.Close(a.FindLeaf(AreaType::Outliner)));
+      CHECK(a.LeafCount() == 2);
+      CHECK_FALSE(a.IsHosted(AreaType::Outliner));
+      CHECK(a.Validate());
+   }
 }
 
 TEST_CASE("AreaLayout migration of the old workspace keys")
