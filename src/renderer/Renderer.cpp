@@ -6019,7 +6019,14 @@ void Renderer::RenderEditorView(const int slot)
       // computed once on the CPU (the GPU path submits a frame, not possible while recording one)
       if (m_lookdevEnvSampler == nullptr)
       {
-         const std::shared_ptr<BaseTexture> env = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "EnvMap.webp"));
+         // The preview stage's own environment: VPX_LIBRARY_ENV (a file, to compare candidates), else assets/library/_preview/env.hdr, else the app's EnvMap.webp
+         std::shared_ptr<BaseTexture> env;
+         if (const char* const envFile = std::getenv("VPX_LIBRARY_ENV"); envFile != nullptr && *envFile != '\0')
+            env = BaseTexture::CreateFromFile(PathFromUTF8(envFile));
+         if (env == nullptr)
+            env = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "library" / "_preview" / "env.hdr");
+         if (env == nullptr)
+            env = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "EnvMap.webp"));
          if (env != nullptr)
          {
             const unsigned int irrHeight = min(env->height(), 256u) / 8;
