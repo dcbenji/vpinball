@@ -167,7 +167,7 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       REQUIRE(b.FromJson(a.ToJson()));
       CHECK(b == a);
       CHECK(b.Find(b.FindLeaf(AreaType::Outliner))->hidden);
-      CHECK(AreaLayout().ToJson() == FromLegacy(kLayout).ToJson()); // default constructed == legacy default
+      CHECK(AreaLayout().ToJson() == AreaLayout::FromLegacy(true, true, 0.f, 0.f, 0, 1).ToJson()); // default constructed == legacy default (stored widths absent)
    }
 
    SUBCASE("camera preview view setup round trips; Auto writes no key")
@@ -203,9 +203,10 @@ TEST_CASE("AreaLayout migration of the old workspace keys")
    SUBCASE("missing or zero widths mean the defaults")
    {
       const AreaLayout a = AreaLayout::FromLegacy(true, true, 0.f, -5.f, 0, 1);
-      CheckLegacy(a, kLayout);
+      const Legacy defaults { true, true, AreaLayout::kDefaultOutlinerWidth, AreaLayout::kDefaultPropertiesWidth, 0, 1 };
+      CheckLegacy(a, defaults);
       const AreaLayout b = AreaLayout::FromLegacy(true, true, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 0, 1);
-      CheckLegacy(b, kLayout);
+      CheckLegacy(b, defaults);
       CHECK(a == b);
    }
 
@@ -236,14 +237,14 @@ TEST_CASE("AreaLayout migration of the old workspace keys")
       if (!l.FromJson(ws["layout"]))
          l = AreaLayout::FromLegacy(ws.value("outliner", true), ws.value("properties", true), ws.value("outliner_width", 0.f), ws.value("properties_width", 0.f),
             ws.value("left_editor", 0), ws.value("right_editor", 1));
-      CheckLegacy(l, { false, true, 200.f, 400.f, 2, 1 });
+      CheckLegacy(l, { false, true, AreaLayout::kDefaultOutlinerWidth, 400.f, 2, 1 });
    }
 
    SUBCASE("ToLegacy with panels on one side only")
    {
       AreaLayout l;
       REQUIRE(l.FromJson(Split("vertical", "second", 300, Leaf("Viewport"), Leaf("Properties"))));
-      CheckLegacy(l, { false, true, 200.f, 300.f, 0, 1 });
+      CheckLegacy(l, { false, true, AreaLayout::kDefaultOutlinerWidth, 300.f, 0, 1 });
       REQUIRE(l.FromJson(Split("vertical", "first", 300, Leaf("Script"), Leaf("Viewport"))));
       CheckLegacy(l, { true, false, 300.f, 360.f, 2, 1 });
    }
