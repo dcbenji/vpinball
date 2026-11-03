@@ -15,13 +15,19 @@ public:
    TransformMask GetTransform(Matrix3D& transform) override;
    void SetTransform(const vec3& pos, const vec3& scale, const vec3& rot) override;
 
+   // PBR lights have no outline curve: edition is performed on the bulb center only
    DragPointCurve* GetDragPointCurve() const override { return &m_part->m_curve; }
    float GetDragPointZ(const DragPoint* point) const override { return point->GetZ() + m_part->m_surfaceHeight; }
 
    // The bulb center (m_d.m_vCenter) is editable independently of the outline curve
    bool HasEditCenter() const override { return true; }
-   Vertex3Ds GetEditCenter() const override { return Vertex3Ds(m_part->m_d.m_vCenter.x, m_part->m_d.m_vCenter.y, m_part->m_surfaceHeight); }
+   Vertex3Ds GetEditCenter() const override
+   {
+      return Vertex3Ds(m_part->m_d.m_vCenter.x, m_part->m_d.m_vCenter.y, m_part->m_surfaceHeight);
+   }
    void SetEditCenter(const Vertex2D& pos) override { m_part->m_d.m_vCenter = pos; }
+
+   bool UIHideAffectsRender() const override { return false; } // Hiding a light in the editor must not switch its illumination off
 
    void RenderOverlay(const EditorRenderContext& ctx) override;
 
