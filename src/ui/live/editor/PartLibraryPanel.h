@@ -177,6 +177,8 @@ private:
    float m_previewZ = 0.f;
    int m_placedCount = 0; // Parts of the last commit
    bool m_dragActive = false; // A tile is being dragged: released over the 3D view commits
+   bool m_dragCancelled = false; // Esc pressed during the drag: the release cancels
+   bool m_dragLatch = false; // A drag started with this mouse press (no second one before the release)
    // Tile clicks: a single click opens the lightbox once the double click interval passed, a double click places instead
    LibraryItem m_pendingItem;
    bool m_pendingOpen = false;

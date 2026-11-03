@@ -269,16 +269,23 @@ void PartLibraryPanel::Update()
       CancelPlacement();
    if (m_dragActive && !IsPlacementArmed())
       m_dragActive = false;
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      m_dragLatch = false;
    if (IsPlacementArmed())
    {
-      UpdatePlacement(ImGui::GetIO().MousePos);
+      if (m_dragActive && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+         m_dragCancelled = true; // The ghost goes, the release (or the editor's Esc handling, whichever comes first) cancels
+      if (m_dragCancelled)
+         m_previewVisible = false;
+      else
+         UpdatePlacement(ImGui::GetIO().MousePos);
       if (m_dragActive)
       {
          ImGui::SetTooltip("Place %s", PathToUTF8(m_placementPack.stem()).c_str());
          if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
          {
             m_dragActive = false;
-            if (m_previewVisible)
+            if (m_previewVisible && !m_dragCancelled)
                CommitPlacement();
             else
                CancelPlacement(); // Released over the UI
@@ -601,12 +608,14 @@ void PartLibraryPanel::RenderGrid(const float height)
          }
       }
       // Dragging a tile starts the placement: released over the 3D view commits it, over the UI or Esc cancels it
-      if (ImGui::IsItemActive() && !m_dragActive && item.kind != ItemKind::Material && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.f * dpi) && !m_editor.m_table->IsLocked() && !m_editor.IsInspectMode())
+      if (ImGui::IsItemActive() && !m_dragActive && !m_dragLatch && item.kind != ItemKind::Material && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.f * dpi) && !m_editor.m_table->IsLocked() && !m_editor.IsInspectMode())
       {
          m_pendingOpen = false;
          m_placementPack = item.pack;
          StartPlacement();
          m_dragActive = IsPlacementArmed();
+         m_dragLatch = true;
+         m_dragCancelled = false;
       }
       if (hovered)
          ImGui::SetTooltip("%s%s%s", PathToUTF8(item.pack).c_str(), item.material.empty() ? "" : "\nMaterial: ", item.material.c_str());
@@ -1623,6 +1632,7 @@ void PartLibraryPanel::StartPlacement()
 void PartLibraryPanel::CancelPlacement()
 {
    m_dragActive = false;
+   m_dragCancelled = false;
    m_placementPack.clear();
    ClearPreview();
 }
