@@ -1520,7 +1520,7 @@ void main() {
             const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
             const vec3 gather = pbr_scatter_light(v_tablePos, wNg, 0.0) * (1.0 / PI) + pbrPresence.y * envIrr;
             const vec3 glowC = mix(vec3_splat(1.0), pbrAbsorption.rgb, pbrPresence3.w);
-            spec += (pbrPresence3.z * dot(gather, vec3(0.2126, 0.7152, 0.0722))) * glowC;
+            spec += (0.1 * pbrPresence3.z * dot(gather, vec3(0.2126, 0.7152, 0.0722))) * glowC; // 0.1: slider 0..5 maps to a sane range under full GI (round 7d: gain 1 clipped 76% of the band)
          }
          gl_FragData[0] = vec4(color.rgb * alpha + behind * (1.0 - alpha) + spec, 1.0);
          if (pbrLightGrid2.w == 1.0)
