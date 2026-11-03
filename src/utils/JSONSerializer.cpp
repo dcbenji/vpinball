@@ -470,6 +470,12 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(VPOS), "position" },
             { FID(VSIZ), "size" },
             { FID(ZMSK), "use_depth_mask" },
+            { FID(WGEN), "wire_gen" },
+            { FID(WDIA), "wire_diameter" },
+            { FID(WRLS), "wire_rails" },
+            { FID(WSPC), "wire_spacing" },
+            { FID(WCAP), "wire_caps" },
+            { FID(WSEG), "wire_sides" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
