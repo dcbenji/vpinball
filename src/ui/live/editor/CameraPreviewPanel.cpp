@@ -88,9 +88,9 @@ int CameraPreviewPanel::ViewFromJsonName(const char *const name)
 }
 
 // Turntable orbit camera, table space (VPX units, Z up): yaw 0 looks from the front (the player side, +Y), pitch 90 from the top
-void CameraPreviewPanel::CameraVectors(float dir[3], float up[3], float right[3]) const
+void CameraPreviewPanel::CameraVectors(const AreaViewSettings &s, float dir[3], float up[3], float right[3])
 {
-   const float yaw = ANGTORAD(m_settings.yaw), pitch = ANGTORAD(m_settings.pitch);
+   const float yaw = ANGTORAD(s.yaw), pitch = ANGTORAD(s.pitch);
    dir[0] = sinf(yaw) * cosf(pitch);
    dir[1] = cosf(yaw) * cosf(pitch);
    dir[2] = sinf(pitch);
@@ -102,27 +102,27 @@ void CameraPreviewPanel::CameraVectors(float dir[3], float up[3], float right[3]
    right[2] = 0.f;
 }
 
-void CameraPreviewPanel::ComputeOrbit(const float aspect, Matrix3D &view, Matrix3D &proj) const
+void CameraPreviewPanel::ComputeOrbit(const AreaViewSettings &s, const float fovY, const float aspect, Matrix3D &view, Matrix3D &proj)
 {
    float dir[3], up[3], right[3];
-   CameraVectors(dir, up, right);
-   const float d = m_settings.distance;
-   const float *const t = m_settings.target;
+   CameraVectors(s, dir, up, right);
+   const float d = s.distance;
+   const float *const t = s.target;
    // The live editor camera's convention (EditorUI): right handed look at in a table space mirrored along Z, then converted to VPX's left
    // handed view / projection pair (as Renderer::SetLookAtCamera)
    const Matrix3D RH2LH = Matrix3D::MatrixScale(1.f, 1.f, -1.f);
    const Matrix3D YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
    const Matrix3D camView = Matrix3D::MatrixLookAtRH(Vertex3Ds(t[0] + dir[0] * d, t[1] + dir[1] * d, -(t[2] + dir[2] * d)), Vertex3Ds(t[0], t[1], -t[2]), Vertex3Ds(up[0], up[1], -up[2]));
    Matrix3D camProj;
-   if (!m_settings.ortho)
+   if (!s.ortho)
    {
       const float zNear = clamp(d * 0.05f, 5.f, 250.f); // As the editor view
-      camProj = Matrix3D::MatrixPerspectiveFovRH(m_editor.m_navFovY, aspect, zNear, 50000.f);
+      camProj = Matrix3D::MatrixPerspectiveFovRH(fovY, aspect, zNear, 50000.f);
    }
    else
    {
       // Same view height at the target as the perspective camera, so numpad 5 keeps the framing
-      const float viewHeight = d * tanf(0.5f * ANGTORAD(m_editor.m_navFovY)), viewWidth = viewHeight * aspect;
+      const float viewHeight = d * tanf(0.5f * ANGTORAD(fovY)), viewWidth = viewHeight * aspect;
       camProj = Matrix3D::MatrixOrthoOffCenterRH(-viewWidth, viewWidth, -viewHeight, viewHeight, 0.5f, -50000.f);
    }
    view = RH2LH * camView * YAxis;
@@ -131,11 +131,17 @@ void CameraPreviewPanel::ComputeOrbit(const float aspect, Matrix3D &view, Matrix
 
 void CameraPreviewPanel::FrameBounds(const FRect3D &bounds, const float aspect)
 {
+   FrameBounds(m_settings, bounds, m_editor.m_navFovY, aspect);
+   m_camMoved = true;
+}
+
+void CameraPreviewPanel::FrameBounds(AreaViewSettings &s, const FRect3D &bounds, const float fovY, const float aspect)
+{
    // As the editor view's FrameBounds: the camera orientation is kept, the distance fits the bounds corners (whole image, no UI margin)
    float dir[3], up[3], right[3];
-   CameraVectors(dir, up, right);
+   CameraVectors(s, dir, up, right);
    const float c[3] = { 0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), 0.5f * (bounds.zlow + bounds.zhigh) };
-   const float tanHalfFovY = tanf(0.5f * ANGTORAD(m_editor.m_navFovY));
+   const float tanHalfFovY = tanf(0.5f * ANGTORAD(fovY));
    float distance = 0.f;
    for (int i = 0; i < 8; i++)
    {
@@ -143,16 +149,15 @@ void CameraPreviewPanel::FrameBounds(const FRect3D &bounds, const float aspect)
       const float dx = fabsf(right[0] * v[0] + right[1] * v[1] + right[2] * v[2]);
       const float dy = fabsf(up[0] * v[0] + up[1] * v[1] + up[2] * v[2]);
       const float dz = dir[0] * v[0] + dir[1] * v[1] + dir[2] * v[2];
-      distance = max(distance, m_settings.ortho ? max(dy, dx / aspect) / tanHalfFovY : dz + max(dy / tanHalfFovY, dx / (tanHalfFovY * aspect)));
+      distance = max(distance, s.ortho ? max(dy, dx / aspect) / tanHalfFovY : dz + max(dy / tanHalfFovY, dx / (tanHalfFovY * aspect)));
    }
    for (int i = 0; i < 3; i++)
-      m_settings.target[i] = c[i];
+      s.target[i] = c[i];
    if (distance > 0.f) // Keep the current distance for degenerate (point) selections
-      m_settings.distance = distance * 1.1f;
-   if (!(m_settings.distance > 0.f))
-      m_settings.distance = 1000.f;
-   m_settings.orbitValid = true;
-   m_camMoved = true;
+      s.distance = distance * 1.1f;
+   if (!(s.distance > 0.f))
+      s.distance = 1000.f;
+   s.orbitValid = true;
 }
 
 void CameraPreviewPanel::FrameAll(const float aspect)
@@ -180,7 +185,7 @@ void CameraPreviewPanel::HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &im
    const float halfH = m_settings.distance * tanf(0.5f * ANGTORAD(e.m_navFovY)); // View half height at the target (perspective and orthographic)
    const float unitsPerPixel = 2.f * halfH / max(1.f, imgSize.y);
    float dir[3], up[3], right[3];
-   CameraVectors(dir, up, right);
+   CameraVectors(m_settings, dir, up, right);
    const auto pan = [&](const float dx, const float dy) {
       for (int i = 0; i < 3; i++)
          m_settings.target[i] += (-right[i] * dx + up[i] * dy) * unitsPerPixel;
@@ -458,7 +463,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             req.viewSetup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : BG_INVALID;
             req.wireframe = m_settings.wireframe;
             if (m_settings.freeOrbit)
-               ComputeOrbit(static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
+               ComputeOrbit(m_settings, m_editor.m_navFovY, static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
             if (renderer->RequestEditorView(m_slot, req))
             {
                m_requested = true;

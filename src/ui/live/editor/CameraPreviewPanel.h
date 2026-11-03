@@ -31,6 +31,11 @@ class CameraPreviewPanel
 public:
    CameraPreviewPanel(EditorUI &editor, int slot);
 
+   // Turntable orbit camera helpers over view settings (also used by the part library thumbnails)
+   static void CameraVectors(const AreaViewSettings &s, float dir[3], float up[3], float right[3]); // Table space (Z up): view target to eye, screen up, screen right
+   static void ComputeOrbit(const AreaViewSettings &s, float fovY, float aspect, Matrix3D &view, Matrix3D &proj);
+   static void FrameBounds(AreaViewSettings &s, const FRect3D &bounds, float fovY, float aspect); // Fits target and distance, orientation kept
+
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
    void NotHosted(); // Every frame the area is not shown: releases the view's render targets (once), and the leaf binding
 
@@ -56,10 +61,8 @@ private:
    void HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered, bool active);
    void HandleViewKeys(float aspect);
    bool GameOwnsInput() const;
-   void ComputeOrbit(float aspect, Matrix3D &view, Matrix3D &proj) const;
    void FrameBounds(const FRect3D &bounds, float aspect);
    void FrameAll(float aspect);
-   void CameraVectors(float dir[3], float up[3], float right[3]) const; // Table space (Z up): view target to eye, screen up, screen right
 
    EditorUI &m_editor;
    const int m_slot; // Renderer view slot
