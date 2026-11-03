@@ -3,6 +3,8 @@
 #pragma once
 
 #include "imgui/imgui.h"
+#include "AreaLayout.h"
+#include "math/bbox.h"
 #include "parts/pintable.h"
 
 #include <filesystem>
@@ -13,6 +15,7 @@
 
 struct ImVec2;
 class Sampler;
+class Light;
 
 namespace VPX::EditorUI
 {
@@ -27,6 +30,9 @@ class EditorUIPart;
 // Thumbnails are rendered while the area is shown, one at a time, from a scratch table drawn alone through a renderer secondary view slot
 // (Renderer::EditorViewRequest::isolated), and cached beside the pack: thumbs/ inside a folder pack, a '<name>.vpz.thumbs' folder beside a zip.
 // Test hook: VPX_LIBRARY_THUMBS=<folder> renders the missing thumbnails of that library folder at startup, without showing the area.
+// Clicking a tile opens a lightbox (modal, resizable): the item live in its own view slot (its own scratch table, drawn alone), orbited with the left
+// button, wheel zoom, double click to frame; inserts have Lit / Unlit / Blink buttons driving the pack's own Light (a state driver only: the pass has no light).
+// Test hook: VPX_LIBRARY_PREVIEW=<pack path>;<lit|unlit|blink>;<yaw> opens the lightbox on that pack at startup, logging 'LIBPREVIEW open <pack>' once rendered.
 //
 // Pack placement: selecting a pack in the library loads its whole content in a temporary
 // table and previews it as ghost parts following the mouse over the 3D view (resting on the
@@ -100,7 +106,7 @@ private:
       bool thumbLoaded = false; // Load attempted
    };
 
-   static constexpr unsigned int kRigVersion = 1; // Bump when the thumbnail rig changes: every thumbnail is rendered again
+   static constexpr unsigned int kRigVersion = 2; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
 
    void RescanLibrary();
@@ -108,6 +114,15 @@ private:
    void PumpThumbnails(); // Renders the missing thumbnails, one at a time
    bool LoadScratch(const LibraryItem &item);
    void ReleaseScratch();
+   bool LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
+   void ReleaseScratch(CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
+   static FRect3D ScratchBounds(const vector<IEditable *> &parts);
+   void OpenLightbox(const LibraryItem &item);
+   void CloseLightbox();
+   void RenderLightbox(); // Every frame (Update): the modal while open
+   void SetLightboxState(float state); // 0 unlit, 1 lit, 2 blinking (Light::setInPlayState)
+   bool AnimateLights(float dtMs); // True when a light's intensity changed
+   void FrameLightbox(bool resetAngles);
    void AbortThumbnail();
    static uint64_t PackKey(const std::filesystem::path &pack);
    static std::filesystem::path ThumbFolder(const std::filesystem::path &pack);
@@ -164,6 +179,27 @@ private:
    vector<IEditable *> m_scratchParts;
    int m_lastShownFrame = -1;
    int m_thumbsRendered = 0, m_thumbsCached = 0, m_thumbsFailed = 0;
+   // Lightbox: own scratch table and view slot (independent of the thumbnails, which pause while it is open)
+   bool m_lbOpen = false;
+   LibraryItem m_lbItem;
+   CComObject<PinTable> *m_lbScratch = nullptr;
+   vector<IEditable *> m_lbParts; // Rendered parts (the lights are state drivers, not drawn)
+   vector<Light *> m_lbLights;
+   FRect3D m_lbBounds;
+   AreaViewSettings m_lbCam;
+   int m_lbSlot = -1;
+   int m_lbWidth = 0, m_lbHeight = 0, m_lbPendingW = 0, m_lbPendingH = 0, m_lbPendingFrames = 0; // Render size (px), a new size adopted once stable
+   bool m_lbDirty = true; // A render is wanted
+   bool m_lbRequested = false, m_lbLogged = false, m_lbFailed = false;
+   PackInfo m_lbInfo;
+   float m_lbWantYaw = 35.f, m_lbWantState = 1.f; // Applied when the scratch table is set up
+   float m_lbState = 1.f; // 0..1 lit level, 2 blinking
+   double m_lbClock = 0.0; // ms, the lights' time base (Light blinks on Player::m_time_msec, which does not run while editing)
+   double m_lbAnimUntil = 0.0; // Lit / Unlit: animate until the fade settled or this time
+   bool m_lbOpening = false; // Open the popup this frame
+   string m_hookPreview, m_hookPreviewLog; // VPX_LIBRARY_PREVIEW: the pack path as given
+   float m_hookYaw = 35.f;
+   float m_hookState = -1.f;
    bool m_hookActive = false; // VPX_LIBRARY_THUMBS test hook running
    std::filesystem::path m_hookFolder;
 };

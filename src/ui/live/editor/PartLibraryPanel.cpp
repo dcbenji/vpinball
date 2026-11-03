@@ -9,6 +9,7 @@
 #include "core/VPApp.h"
 #include "fonts/IconsForkAwesome.h"
 #include "parts/ball.h"
+#include "parts/light.h"
 #include "parts/pintable.h"
 #include "parts/primitive.h"
 #include "physics/PhysicsEngine.h"
@@ -16,6 +17,7 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/editor/EditorUIPartRegistry.h"
 #include "PropertyPane.h"
+#include "CameraPreviewPanel.h"
 #include "EditorTheme.h"
 #include "ui/live/LiveUI.h"
 #include "ui/VPXFileFeedback.h"
@@ -76,6 +78,63 @@ static bool PaddedButton(const char *label, const float width, const float dpi)
    return pressed;
 }
 
+// The lights read Player::m_time_msec (blink pattern), which does not advance while editing: library previews run them on their own clock
+struct PlayerClock
+{
+   explicit PlayerClock(const double msec)
+      : saved(g_pplayer->m_time_msec)
+   {
+      g_pplayer->m_time_msec = static_cast<uint32_t>(msec);
+   }
+   ~PlayerClock() { g_pplayer->m_time_msec = saved; }
+   const uint32_t saved;
+};
+
+// The Light of an insert pack is a state driver: taken out of the parts to draw (the pass has no light either way)
+static vector<Light *> ExtractLights(vector<IEditable *> &parts)
+{
+   vector<Light *> lights;
+   std::erase_if(parts,
+      [&lights](IEditable *const part)
+      {
+         if (part->GetItemType() != eItemLight)
+            return false;
+         lights.push_back(static_cast<Light *>(part));
+         return true;
+      });
+   return lights;
+}
+
+static void SetLightsState(const vector<Light *> &lights, const double clock, const float state) // 0 unlit, 1 lit, 2 blinking
+{
+   const PlayerClock pc(clock);
+   for (Light *const light : lights)
+      light->setInPlayState(state);
+}
+
+// dt in milliseconds, as Player::PrepareFrame passes it to UpdateAnimation. True when an intensity changed
+static bool StepLights(const vector<Light *> &lights, double &clock, const float dtMs)
+{
+   clock += dtMs;
+   const PlayerClock pc(clock);
+   bool changed = false;
+   for (Light *const light : lights)
+   {
+      const float before = light->m_currentIntensity;
+      light->UpdateAnimation(dtMs);
+      changed |= light->m_currentIntensity != before;
+   }
+   return changed;
+}
+
+// Lit and settled at once (the fader run to its end)
+static void SettleLit(const vector<Light *> &lights, double &clock)
+{
+   SetLightsState(lights, clock, 1.f);
+   for (int i = 0; i < 100; i++)
+      StepLights(lights, clock, 16.f);
+}
+
 PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
    : m_editor(editor)
 {
@@ -84,14 +143,30 @@ PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
       m_hookFolder = PathFromUTF8(folder);
       m_hookActive = true;
    }
+   if (const char *const preview = std::getenv("VPX_LIBRARY_PREVIEW"); preview != nullptr && *preview != '\0')
+   {
+      // <pack path>;<state>;<yaw>, split from the right
+      string spec = preview, tail[2];
+      int n = 0;
+      for (size_t semi; n < 2 && (semi = spec.rfind(';')) != string::npos; n++)
+      {
+         tail[n] = spec.substr(semi + 1);
+         spec.resize(semi);
+      }
+      const string state = lowerCase(tail[n - 1 < 0 ? 0 : n - 1]);
+      m_hookPreview = spec;
+      m_hookState = state == "unlit" ? 0.f : state == "blink" ? 2.f : 1.f;
+      if (n == 2)
+         m_hookYaw = static_cast<float>(atof(tail[0].c_str()));
+   }
 }
 
 PartLibraryPanel::~PartLibraryPanel()
 {
    ClearPreview();
    ReleaseScratch();
+   ReleaseScratch(m_lbScratch, m_lbParts);
 }
-
 
 bool PartLibraryPanel::CanExportSelection() const
 {
@@ -142,6 +217,30 @@ void PartLibraryPanel::Update()
    // The area is no longer shown: stop rendering thumbnails and give the view slot back
    else if ((m_thumbSlot >= 0 || m_scratch != nullptr) && ImGui::GetFrameCount() > m_lastShownFrame + 1)
       AbortThumbnail();
+
+   // Test hook: open the lightbox on a pack
+   if (!m_hookPreview.empty() && m_editor.m_renderer != nullptr)
+   {
+      LibraryItem item;
+      item.pack = PathFromUTF8(m_hookPreview);
+      m_hookPreviewLog = m_hookPreview;
+      m_hookPreview.clear();
+      const PackInfo info = ScanPack(item.pack);
+      if (info.valid)
+      {
+         item.kind = info.kind;
+         item.label = PathToUTF8(item.pack.stem());
+         if (info.kind == ItemKind::Material && !info.materialNames.empty())
+            item.material = item.label = info.materialNames[0];
+         item.thumbFile = ThumbFolder(item.pack) / (JSONSerializer::SanitizeFileName(item.label) + (info.kind == ItemKind::Material ? "_0"s : ""s) + ".png"s);
+         OpenLightbox(item);
+         m_lbWantYaw = m_hookYaw;
+         m_lbWantState = m_hookState;
+      }
+      else
+         PLOGW << "LIBPREVIEW failed " << PathToUTF8(item.pack);
+   }
+   RenderLightbox();
 
    // Apply the file picked by the asynchronous 'Export' save dialog (deferred to the main thread)
    if (m_pendingExportPath && !m_pendingExportPath->empty())
@@ -330,8 +429,10 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::TreePop();
       }
 
-      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 5.f + 40.f * dpi;
-      if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, -footerHeight), ImGuiChildFlags_Borders))
+      // The grid fills the area height left under the folder tree, above the Import section (a section header, 2 text lines and a button)
+      const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 2.f + ImGui::GetTextLineHeightWithSpacing() * 2.f + ImGui::GetFrameHeight() + 24.f * dpi;
+      const float gridHeight = max(ImGui::GetContentRegionAvail().y - footerHeight, 150.f * dpi); // At least a row and a half of tiles
+      if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, gridHeight), ImGuiChildFlags_Borders))
          RenderGrid(ImGui::GetContentRegionAvail().y);
       ImGui::EndChild();
       sections.EndSection();
@@ -382,7 +483,7 @@ void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const st
 void PartLibraryPanel::RenderGrid(const float height)
 {
    const float dpi = m_editor.m_liveUI.GetDPI();
-   const float tile = 96.f * dpi, labelH = ImGui::GetTextLineHeight() + 4.f * dpi;
+   const float tile = 96.f * dpi, labelH = ImGui::GetTextLineHeight() + 6.f * dpi;
    const ImGuiStyle &style = ImGui::GetStyle();
    const int columns = max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + style.ItemSpacing.x) / (tile + style.ItemSpacing.x)));
    const string filter = m_filterFolder.empty() ? ""s : PathToUTF8(m_filterFolder / ""); // Trailing separator: /lib/foo does not match /lib/foobar
@@ -404,6 +505,7 @@ void PartLibraryPanel::RenderGrid(const float height)
       {
          m_selectedPack = item.pack;
          m_selectedPackInfo = ScanPack(item.pack);
+         OpenLightbox(item);
       }
       if (hovered)
          ImGui::SetTooltip("%s%s%s", PathToUTF8(item.pack).c_str(), item.material.empty() ? "" : "\nMaterial: ", item.material.c_str());
@@ -746,11 +848,36 @@ uint64_t PartLibraryPanel::PackKey(const std::filesystem::path &pack)
    return h;
 }
 
+// Item bounds: the primitives' mesh bounds; only when no primitive has any, the other parts by their position +/- 100 VPU
+FRect3D PartLibraryPanel::ScratchBounds(const vector<IEditable *> &parts)
+{
+   FRect3D bounds(FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX);
+   bool any = false;
+#if defined(ENABLE_BGFX)
+   for (IEditable *const part : parts)
+   {
+      Vertex3Ds bMin, bMax;
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->GetShadowCacheBounds(bMin, bMax))
+      {
+         bounds.Extend(FRect3D(bMin.x, bMax.x, bMin.y, bMax.y, bMin.z, bMax.z));
+         any = true;
+      }
+   }
+#endif
+   if (!any)
+      for (IEditable *const part : parts)
+      {
+         const Vertex2D c = part->GetCenter();
+         bounds.Extend(FRect3D(c.x - 100.f, c.x + 100.f, c.y - 100.f, c.y + 100.f, 0.f, 100.f));
+      }
+   return bounds;
+}
+
 // Loads the item into a scratch table (never saved, the live table is not consulted) and sets its parts up with the live renderer, as the
 // placement ghost does. Material items: the built-in preview sphere wearing the material
-bool PartLibraryPanel::LoadScratch(const LibraryItem &item)
+bool PartLibraryPanel::LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts)
 {
-   ReleaseScratch();
+   ReleaseScratch(scratch, scratchParts);
    const auto load = [](const std::filesystem::path &path) -> CComObject<PinTable> *
    {
       CComObject<PinTable> *table;
@@ -766,44 +893,44 @@ bool PartLibraryPanel::LoadScratch(const LibraryItem &item)
       }
       return table;
    };
-   m_scratch = load(item.pack);
-   if (m_scratch == nullptr)
+   scratch = load(item.pack);
+   if (scratch == nullptr)
       return false;
    if (item.kind == ItemKind::Material)
    {
       CComObject<PinTable> *const sphere = load(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "library" / "_preview" / "sphere.vpz");
       if (sphere == nullptr)
          return false;
-      const vector<IEditable *> parts = m_scratch->ImportParts(sphere, nullptr);
+      const vector<IEditable *> parts = scratch->ImportParts(sphere, nullptr);
       sphere->Release();
       for (IEditable *const part : parts)
          if (part->GetItemType() == eItemPrimitive)
             static_cast<Primitive *>(part)->m_d.m_szMaterial = item.material;
    }
    // ponytail: the scratch table's render probes are dropped (never set up with the renderer), probe reflection/refraction is not previewed
-   for (RenderProbe *const probe : m_scratch->m_vrenderprobe)
+   for (RenderProbe *const probe : scratch->m_vrenderprobe)
       delete probe;
-   m_scratch->m_vrenderprobe.clear();
-   for (IEditable *const part : m_scratch->GetParts())
+   scratch->m_vrenderprobe.clear();
+   for (IEditable *const part : scratch->GetParts())
    {
       if (part->GetIRenderable() == nullptr)
          continue;
       part->GetIRenderable()->RenderSetup(m_editor.m_renderer.get());
       if (part->GetItemType() != eItemPartGroup)
-         m_scratchParts.push_back(part);
+         scratchParts.push_back(part);
    }
-   return !m_scratchParts.empty();
+   return !scratchParts.empty();
 }
 
-void PartLibraryPanel::ReleaseScratch()
+void PartLibraryPanel::ReleaseScratch(CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts)
 {
    if (m_editor.m_renderer != nullptr)
-      m_editor.m_renderer->CancelIsolatedEditorView(&m_scratchParts);
-   m_scratchParts.clear();
-   if (m_scratch == nullptr)
+      m_editor.m_renderer->CancelIsolatedEditorView(&scratchParts);
+   scratchParts.clear();
+   if (scratch == nullptr)
       return;
    if (m_editor.m_renderer != nullptr)
-      for (IEditable *const edit : m_scratch->GetParts())
+      for (IEditable *const edit : scratch->GetParts())
       {
          if (edit->GetIRenderable() == nullptr)
             continue;
@@ -821,11 +948,15 @@ void PartLibraryPanel::ReleaseScratch()
       }
    // The table's images are deleted with it: drop them from the texture manager (recorded draws keep their samplers alive)
    if (m_editor.m_renderer != nullptr)
-      for (Texture *const image : m_scratch->GetImageList())
+      for (Texture *const image : scratch->GetImageList())
          m_editor.m_renderer->m_renderDevice->m_texMan.UnloadTexture(image);
-   m_scratch->Release();
-   m_scratch = nullptr;
+   scratch->Release();
+   scratch = nullptr;
 }
+
+bool PartLibraryPanel::LoadScratch(const LibraryItem &item) { return LoadScratch(item, m_scratch, m_scratchParts); }
+
+void PartLibraryPanel::ReleaseScratch() { ReleaseScratch(m_scratch, m_scratchParts); }
 
 void PartLibraryPanel::AbortThumbnail()
 {
@@ -843,8 +974,8 @@ void PartLibraryPanel::PumpThumbnails()
    m_thumbQueue.clear(); // ponytail: the read back (RenderDevice::RequestVRScreenshot) is BGFX only
 #else
    Renderer *const renderer = m_editor.m_renderer.get();
-   if (renderer == nullptr || (m_thumbQueue.empty() && m_thumbStage == ThumbStage::Idle && m_thumbSlot < 0))
-      return;
+   if (renderer == nullptr || m_lbOpen || (m_thumbQueue.empty() && m_thumbStage == ThumbStage::Idle && m_thumbSlot < 0))
+      return; // The lightbox has the view slot and the editor's attention: the thumbnails wait (OpenLightbox aborted the one in flight)
    // A Camera Preview area took the slot over: start again with another one
    if (m_thumbSlot >= 0 && m_editor.m_cameraPreviews[m_thumbSlot].GetLeaf() >= 0)
    {
@@ -879,20 +1010,12 @@ void PartLibraryPanel::PumpThumbnails()
          return;
       }
       // Fixed 3/4 camera framed on the item bounds: primitives by their mesh bounds, other parts by their position +/- 100 VPU
-      FRect3D bounds(FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX);
-      for (IEditable *const part : m_scratchParts)
+      if (item.kind == ItemKind::Insert)
       {
-         Vertex3Ds bMin, bMax;
-#if defined(ENABLE_BGFX)
-         if (part->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(part)->GetShadowCacheBounds(bMin, bMax))
-#endif
-         {
-            const Vertex2D c = part->GetCenter();
-            bMin = Vertex3Ds(c.x - 100.f, c.y - 100.f, 0.f);
-            bMax = Vertex3Ds(c.x + 100.f, c.y + 100.f, 100.f);
-         }
-         bounds.Extend(FRect3D(bMin.x, bMax.x, bMin.y, bMax.y, bMin.z, bMax.z));
+         double clock = 1000.0;
+         SettleLit(ExtractLights(m_scratchParts), clock); // Lit, not drawn
       }
+      const FRect3D bounds = ScratchBounds(m_scratchParts);
       AreaViewSettings cam;
       cam.yaw = 35.f;
       cam.pitch = 30.f;
@@ -958,6 +1081,303 @@ void PartLibraryPanel::PumpThumbnails()
    }
    }
 #endif
+}
+
+void PartLibraryPanel::OpenLightbox(const LibraryItem &item)
+{
+   CloseLightbox();
+   AbortThumbnail(); // The thumbnails pause while the lightbox is open
+   m_lbItem = item;
+   m_lbInfo = ScanPack(item.pack);
+   m_lbOpen = m_lbOpening = true;
+   m_lbDirty = true;
+   m_lbRequested = m_lbLogged = m_lbFailed = false;
+   m_lbWidth = m_lbHeight = m_lbPendingFrames = 0;
+   m_lbWantYaw = 35.f;
+   m_lbWantState = 1.f;
+   m_lbState = 1.f;
+   m_lbClock = 1000.0;
+   m_lbAnimUntil = 0.0;
+}
+
+void PartLibraryPanel::CloseLightbox()
+{
+   ReleaseScratch(m_lbScratch, m_lbParts); // Also drops the pending request and unloads the scratch images
+   m_lbLights.clear();
+   if (m_lbSlot >= 0 && m_editor.m_renderer != nullptr && m_editor.m_cameraPreviews[m_lbSlot].GetLeaf() < 0)
+      m_editor.m_renderer->ReleaseEditorView(m_lbSlot);
+   m_lbSlot = -1;
+   m_lbOpen = m_lbOpening = false;
+   m_lbItem = LibraryItem();
+}
+
+void PartLibraryPanel::FrameLightbox(const bool resetAngles)
+{
+   if (resetAngles)
+   {
+      m_lbCam.yaw = 35.f;
+      m_lbCam.pitch = 30.f;
+   }
+   CameraPreviewPanel::FrameBounds(m_lbCam, m_lbBounds, m_editor.m_navFovY, m_lbHeight > 0 ? static_cast<float>(m_lbWidth) / static_cast<float>(m_lbHeight) : 1.f);
+   m_lbCam.orbitValid = true;
+   m_lbDirty = true;
+}
+
+void PartLibraryPanel::SetLightboxState(const float state)
+{
+   m_lbState = state;
+   SetLightsState(m_lbLights, m_lbClock, state);
+   m_lbAnimUntil = m_lbClock + 4000.0; // The fade settles in well under a second; the cap stops a float that never quite converges
+   m_lbDirty = true;
+}
+
+bool PartLibraryPanel::AnimateLights(const float dtMs) { return StepLights(m_lbLights, m_lbClock, dtMs); }
+
+void PartLibraryPanel::RenderLightbox()
+{
+   if (!m_lbOpen)
+      return;
+   Renderer *const renderer = m_editor.m_renderer.get();
+   if (renderer == nullptr)
+   {
+      CloseLightbox();
+      return;
+   }
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   const ImGuiIO &io = ImGui::GetIO();
+   const bool justOpened = m_lbOpening; // The click that opened it is still this frame's click
+   if (m_lbOpening)
+   {
+      ImGui::OpenPopup("###PartLibLightbox");
+      m_lbOpening = false;
+      ImGui::SetNextWindowSize(ImVec2(480.f * dpi, 520.f * dpi), ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+   }
+   ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(FLT_MAX, FLT_MAX));
+   bool open = true;
+   if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+   {
+      CloseLightbox();
+      return;
+   }
+   // Esc or a click outside closes it
+   if (!open || ImGui::IsKeyPressed(ImGuiKey_Escape) || (!justOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)))
+   {
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+      CloseLightbox();
+      return;
+   }
+
+   // View slot (one no Camera Preview area uses, with PBR room under the cap), then the scratch table of the item
+   bool refused = false;
+   const bool desktop = g_pplayer->m_vrDevice == nullptr && renderer->m_stereo3D == STEREO_OFF;
+   if (m_lbSlot >= 0 && m_editor.m_cameraPreviews[m_lbSlot].GetLeaf() >= 0)
+   {
+      m_lbSlot = -1; // A Camera Preview area took it over
+      m_lbDirty = true;
+   }
+   if (m_lbSlot < 0 && desktop && !m_lbFailed)
+      for (int i = AreaLayout::kMaxViewLeaves - 1; i >= 0 && m_lbSlot < 0; i--)
+         if (m_editor.m_cameraPreviews[i].GetLeaf() < 0 && renderer->CanRenderEditorPBRView(i))
+            m_lbSlot = i;
+   if (m_lbSlot >= 0 && m_lbScratch == nullptr && !m_lbFailed)
+   {
+      vector<IEditable *> all;
+      if (!LoadScratch(m_lbItem, m_lbScratch, all))
+      {
+         ReleaseScratch(m_lbScratch, all);
+         m_lbFailed = true;
+         PLOGW << "LIBPREVIEW failed " << PathToUTF8(m_lbItem.pack);
+      }
+      else
+      {
+         if (m_lbItem.kind == ItemKind::Insert)
+            m_lbLights = ExtractLights(all);
+         m_lbParts = all;
+         if (m_lbParts.empty())
+         {
+            ReleaseScratch(m_lbScratch, all);
+            m_lbLights.clear();
+            m_lbFailed = true;
+         }
+         else
+         {
+            m_lbBounds = ScratchBounds(m_lbParts);
+            m_lbCam = AreaViewSettings();
+            FrameLightbox(true);
+            m_lbCam.yaw = m_lbWantYaw;
+            if (!m_lbLights.empty())
+            {
+               SettleLit(m_lbLights, m_lbClock); // A click opens an insert lit, not fading in
+               if (m_lbWantState != 1.f)
+               {
+                  SetLightboxState(m_lbWantState);
+                  for (int i = 0; i < 100 && m_lbWantState == 0.f; i++) // Unlit settled too; blinking starts from its own pattern
+                     AnimateLights(16.f);
+               }
+               m_lbState = m_lbWantState;
+               m_lbAnimUntil = 0.0;
+            }
+         }
+      }
+   }
+
+   // Header: name, kind and counts
+   static constexpr const char *kKinds[] = { "Part", "Material", "Insert" };
+   ImGui::TextUnformatted(m_lbItem.label.c_str());
+   ImGui::SameLine();
+   ImGui::TextDisabled("%s", kKinds[static_cast<int>(m_lbItem.kind)]);
+   ImGui::TextDisabled("%d part(s), %d material(s), %d image(s)%s%s", m_lbInfo.parts, m_lbInfo.materials, m_lbInfo.images, m_lbItem.material.empty() ? "" : ", material ", m_lbItem.material.c_str());
+
+   // Insert states, through the pack's own Light
+   if (m_lbItem.kind == ItemKind::Insert)
+   {
+      ImGui::BeginDisabled(m_lbLights.empty());
+      static constexpr struct { const char *label; float state; } kStates[] = { { "Lit", 1.f }, { "Unlit", 0.f }, { "Blink", 2.f } };
+      for (const auto &st : kStates)
+      {
+         const bool active = m_lbState == st.state;
+         if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+         if (ImGui::Button(st.label) && !active)
+            SetLightboxState(st.state);
+         if (active)
+            ImGui::PopStyleColor();
+         ImGui::SameLine();
+      }
+      ImGui::EndDisabled();
+      if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("This pack has no Light");
+   }
+   if (ImGui::Button("Reset View") && m_lbScratch != nullptr)
+      FrameLightbox(true);
+
+   // The light fades are stepped while the lightbox is open, and re-rendered only while they move (blinking: always)
+   if (m_lbScratch != nullptr && !m_lbLights.empty())
+   {
+      const bool changed = AnimateLights(min(io.DeltaTime * 1000.f, 100.f));
+      if (m_lbState == 2.f || (changed && m_lbClock < m_lbAnimUntil))
+         m_lbDirty = true;
+   }
+
+   // Image area, orbited like a Sketchfab model: left drag, wheel zoom, double click frames
+   const float hintH = ImGui::GetTextLineHeightWithSpacing();
+   const ImVec2 avail = ImGui::GetContentRegionAvail();
+   const ImVec2 size(max(32.f, avail.x), max(32.f, avail.y - hintH));
+   const ImVec2 imgMin = ImGui::GetCursorScreenPos(), imgMax(imgMin.x + size.x, imgMin.y + size.y);
+   ImGui::InvisibleButton("##view", size);
+   const bool hovered = ImGui::IsItemHovered();
+   if (m_lbScratch != nullptr)
+   {
+      if (ImGui::IsItemActive() && (io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f))
+      {
+         constexpr float radPerPixel = 0.01f * (180.f / static_cast<float>(M_PI));
+         m_lbCam.yaw = fmodf(m_lbCam.yaw - io.MouseDelta.x * radPerPixel * m_editor.m_navOrbitSensitivity, 360.f);
+         m_lbCam.pitch = clamp(m_lbCam.pitch + io.MouseDelta.y * radPerPixel * m_editor.m_navOrbitSensitivity, -89.f, 89.f);
+         m_lbDirty = true;
+      }
+      if (hovered && io.MouseWheel != 0.f)
+      {
+         m_lbCam.distance = clamp(m_lbCam.distance * powf(1.1f, (m_editor.m_navInvertZoom ? 1.f : -1.f) * io.MouseWheel), 1.f, 40000.f);
+         m_lbDirty = true;
+      }
+      if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+         FrameLightbox(false);
+   }
+
+   // Render size: the image in pixels, a new size adopted once stable (no target churn while the window is resized)
+   const int w = clamp(static_cast<int>(size.x * io.DisplayFramebufferScale.x) & ~15, 64, 1024), h = clamp(static_cast<int>(size.y * io.DisplayFramebufferScale.y) & ~15, 64, 1024);
+   if (m_lbWidth == 0)
+   {
+      m_lbWidth = w;
+      m_lbHeight = h;
+      if (m_lbScratch != nullptr)
+         FrameLightbox(false); // Framed for the real aspect
+   }
+   else if (w != m_lbWidth || h != m_lbHeight)
+   {
+      if (w != m_lbPendingW || h != m_lbPendingH)
+         m_lbPendingFrames = 0;
+      m_lbPendingW = w;
+      m_lbPendingH = h;
+      if (++m_lbPendingFrames >= 10)
+      {
+         m_lbWidth = w;
+         m_lbHeight = h;
+         m_lbDirty = true;
+      }
+   }
+   else
+      m_lbPendingFrames = 0;
+
+   if (m_lbSlot >= 0 && m_lbScratch != nullptr && m_lbDirty && !renderer->IsEditorViewPending(m_lbSlot))
+   {
+      Renderer::EditorViewRequest req;
+      req.width = m_lbWidth;
+      req.height = m_lbHeight;
+      req.playerCamera = false;
+      CameraPreviewPanel::ComputeOrbit(m_lbCam, m_editor.m_navFovY, static_cast<float>(m_lbWidth) / static_cast<float>(m_lbHeight), req.view, req.proj);
+      req.isolated = &m_lbParts;
+      req.isolatedTable = m_lbScratch;
+      if (renderer->RequestEditorView(m_lbSlot, req))
+      {
+         m_lbDirty = false;
+         m_lbRequested = true;
+      }
+      else
+         refused = true; // An info mode is on: retried every frame
+   }
+
+   ImDrawList *const drawList = ImGui::GetWindowDrawList();
+   RenderTarget *const rt = m_lbSlot >= 0 && m_lbScratch != nullptr ? renderer->GetEditorView(m_lbSlot) : nullptr;
+   const char *note = nullptr;
+   drawList->AddRectFilled(imgMin, imgMax, IM_COL32(46, 46, 46, 255));
+   if (rt != nullptr)
+   {
+#if defined(ENABLE_BGFX)
+      const bool flipV = bgfx::getCaps()->originBottomLeft;
+#elif defined(ENABLE_OPENGL)
+      const bool flipV = true;
+#else
+      const bool flipV = false;
+#endif
+      // Aspect kept: the render size is the image size rounded down to 16 px (capped at 1024)
+      const float fit = min(size.x / static_cast<float>(m_lbWidth), size.y / static_cast<float>(m_lbHeight));
+      const ImVec2 half(0.5f * fit * static_cast<float>(m_lbWidth), 0.5f * fit * static_cast<float>(m_lbHeight)), mid(0.5f * (imgMin.x + imgMax.x), 0.5f * (imgMin.y + imgMax.y));
+      drawList->AddImage(rt->GetColorSampler(), ImVec2(mid.x - half.x, mid.y - half.y), ImVec2(mid.x + half.x, mid.y + half.y), ImVec2(0.f, flipV ? 1.f : 0.f), ImVec2(1.f, flipV ? 0.f : 1.f));
+      if (refused)
+         note = "Not available while an info mode is on";
+      else if (m_lbRequested && !m_lbLogged && !renderer->IsEditorViewPending(m_lbSlot))
+      {
+         m_lbLogged = true;
+         PLOGI << "LIBPREVIEW open " << (m_hookPreviewLog.empty() ? PathToUTF8(m_lbItem.pack) : m_hookPreviewLog);
+      }
+   }
+   else
+   {
+      // No live render: the cached thumbnail
+      if (!m_lbItem.thumb && !m_lbItem.thumbLoaded)
+      {
+         m_lbItem.thumbLoaded = true;
+         std::error_code ec;
+         if (std::filesystem::exists(m_lbItem.thumbFile, ec))
+            if (std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(m_lbItem.thumbFile))
+               m_lbItem.thumb = std::make_shared<Sampler>(renderer->m_renderDevice, "Library Thumbnail"s, tex, false);
+      }
+      if (m_lbItem.thumb)
+      {
+         const float side = min(size.x, size.y);
+         const ImVec2 c(0.5f * (imgMin.x + imgMax.x), 0.5f * (imgMin.y + imgMax.y));
+         drawList->AddImage(m_lbItem.thumb, ImVec2(c.x - 0.5f * side, c.y - 0.5f * side), ImVec2(c.x + 0.5f * side, c.y + 0.5f * side));
+      }
+      note = m_lbFailed ? "Nothing to render in this pack" : !desktop ? "Live view needs the desktop renderer" : m_lbSlot < 0 ? "No free PBR view: showing the thumbnail" : nullptr;
+   }
+   if (note != nullptr)
+      drawList->AddText(ImVec2(imgMin.x + 6.f * dpi, imgMax.y - ImGui::GetTextLineHeight() - 4.f * dpi), EditorTheme::TextDim, note);
+   drawList->AddRect(imgMin, imgMax, hovered ? EditorTheme::Accent : EditorTheme::WorkspaceOff, 0.f, 0, 1.f);
+   ImGui::TextDisabled("Drag: orbit   Wheel: zoom   Double click: frame   Esc: close");
+   ImGui::EndPopup();
 }
 
 // Imports the parts and referenced assets of a VPZ pack into the edited table, merging them
