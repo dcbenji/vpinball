@@ -542,6 +542,11 @@ void InputManager::PushButtonEvent(uint16_t deviceId, uint16_t buttonId, uint64_
    if (deviceId == m_keyboardDeviceId && ImGui::GetIO().WantCaptureKeyboard)
       return;
 
+   // Discard top row digit presses consumed by the editor's numpad emulation (view navigation while the game is not running) so that they do not reach the game (coin, start...)
+   if (isPressed && deviceId == m_keyboardDeviceId && m_player->m_liveUI && buttonId >= SDL_SCANCODE_1 && buttonId <= SDL_SCANCODE_0
+      && m_player->m_liveUI->IsEditorDigitNavKey(buttonId == SDL_SCANCODE_0 ? 0 : buttonId - SDL_SCANCODE_1 + 1))
+      return;
+
    uint32_t id = deviceId << 16 | buttonId;
    if (auto it = m_buttonMappings.find(id); it != m_buttonMappings.end())
       for (ButtonMapping* mapping : it->second)
@@ -944,7 +949,7 @@ void InputManager::CreateInputActions()
       [this](const InputAction&, bool, bool isPressed)
       {
          m_gameStartedOnce = true; // disable autostart as player as requested debugger instead
-         if (m_player->m_liveUI->IsInGameUIOpened() || !isPressed)
+         if (m_player->m_liveUI->IsInGameUIOpened() || (m_player->m_liveUI->IsEditorUIOpened() && !(m_player->m_liveUI->IsEditorInspectMode() && m_player->IsGameRunning())) || !isPressed) // D is an editor key (Shift+D duplicates); kept only while inspecting the running game (editor shortcuts are off then)
             return;
          m_player->m_showDebugger = true;
       }));
