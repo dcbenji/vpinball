@@ -1387,11 +1387,13 @@ void EditorUI::RenderAreaCorners()
          const float ly = (corner & 2) ? y + side - mouse.y : mouse.y - y;
          char name[40];
          snprintf(name, sizeof(name), "##Corner%d_%d", leaf.id, corner); // Keyed by the stable node id
+         // Item ids of other windows are hashed from the window id (what GetID does right after Begin): ImGuiWindow::GetID reads the window's ID stack, which
+         // ImGui's memory compaction empties for windows not drawn for a while (a hidden or maximized-away area): crash at IDStack.back() (11-02 18:57)
          // A widget under the pointer (header search field, buttons, scrollbar ends) keeps the click: ImGui's hovered item of the last frame, which is
          // the corner's own button while the zone is the one hovered
          ImGuiWindow *const cornerWindow = ImGui::FindWindowByName(name);
          const ImGuiID hoveredId = ImGui::GetHoveredID();
-         bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != cornerWindow->GetID("##corner"));
+         bool overWidget = hoveredId != 0 && (cornerWindow == nullptr || hoveredId != ImHashStr("##corner", 0, cornerWindow->ID));
          ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
          const char *const hwName = hw != nullptr ? hw->RootWindow->Name : "";
          const bool overStrip = strncmp(hwName, "##Split", 7) == 0;
