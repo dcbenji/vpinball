@@ -952,8 +952,10 @@ void Shader::SetTechniqueMaterial(
       SetVector(ShaderUniform::pbrEmission, &emission);
       // PBR materials use the (legacy) wrap lighting as their thin surface transmission (back lit translucency)
       SetVector(ShaderUniform::pbrMapFlags, pbrMaps->ormMap != nullptr ? 1.f : 0.f, pbrMaps->emissionMap != nullptr ? 1.f : 0.f, saturate(mat.m_fWrapLighting), 0.f);
-      // x: the playfield reads the static shadow cache
-      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, 0.f, 0.f, 0.f);
+      // x: the playfield reads the static shadow cache; flasher shadows (Shader.h): y penumbra radius, z see-through mode of this draw,
+      // w the falloff from which a cube light counts as a flasher
+      SetVector(ShaderUniform::pbrShadowCacheDraw, pbrMaps->shadowCache ? 1.f : 0.f, PBR_FLASH_SHADOW_PENUMBRA, pbrMaps->transparent ? PBR_FLASH_SHADOW_SEETHRU : 0.f,
+         PBR_FLASH_SHADOW_RANGE);
       // Clear coat layer: a zero strength skips the coat lobe in the shaders
       SetVector(ShaderUniform::pbrCoat, saturate(mat.m_fClearcoat), clamp(mat.m_fClearcoatRoughness, 0.02f, 1.f), 0.f, 0.f);
       // See-through parts use the transparent shading (premultiplied: their reflections are not modulated by their

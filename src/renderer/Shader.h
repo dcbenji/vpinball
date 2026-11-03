@@ -1080,3 +1080,10 @@ private:
    int* m_stateOffsets; // Position of each uniform inside the state data block
    const bool m_useLowPrecision;
 };
+
+// Flasher (wide cube light) PBR shadows: hard (penumbra 0 = one shadow texel; the bulb radius still sizes the hot spot and the
+// specular), and no flasher shadow lookup on see-through parts (0 = full, 1 = hard, 2 = none). A cube light whose falloff is at
+// least PBR_FLASH_SHADOW_RANGE counts as a flasher. Read by the main pass (pbrShadowCacheDraw.yzw) and the static shadow cache bake.
+constexpr float PBR_FLASH_SHADOW_PENUMBRA = 0.f;
+constexpr float PBR_FLASH_SHADOW_SEETHRU = 2.f;
+constexpr float PBR_FLASH_SHADOW_RANGE = 600.f;
