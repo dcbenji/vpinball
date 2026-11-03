@@ -8,10 +8,23 @@
 #include "core/SettingsService.h"
 #include "core/VPApp.h"
 #include "fonts/IconsForkAwesome.h"
+#include "parts/Material.h"
 #include "parts/ball.h"
+#include "parts/bumper.h"
+#include "parts/decal.h"
+#include "parts/flipper.h"
+#include "parts/gate.h"
+#include "parts/hittarget.h"
+#include "parts/kicker.h"
+#include "parts/plunger.h"
 #include "parts/light.h"
 #include "parts/pintable.h"
 #include "parts/primitive.h"
+#include "parts/ramp.h"
+#include "parts/rubber.h"
+#include "parts/spinner.h"
+#include "parts/surface.h"
+#include "parts/trigger.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/RenderDevice.h"
 #include "ui/live/EditorUI.h"
@@ -24,6 +37,7 @@
 #include "utils/JSONSerializer.h"
 
 #include <miniz/miniz.h>
+
 namespace
 {
 
@@ -143,6 +157,25 @@ PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
       m_hookFolder = PathFromUTF8(folder);
       m_hookActive = true;
    }
+   if (const char *const place = std::getenv("VPX_LIBRARY_PLACE"); place != nullptr && *place != '\0')
+   {
+      // <pack path>[;x;y]: the position when the last two fields are numbers, else the double click rule
+      string spec = place;
+      const size_t semiY = spec.rfind(';'), semiX = semiY == string::npos || semiY == 0 ? string::npos : spec.rfind(';', semiY - 1);
+      if (semiX != string::npos)
+      {
+         char *endX = nullptr, *endY = nullptr;
+         const string xs = spec.substr(semiX + 1, semiY - semiX - 1), ys = spec.substr(semiY + 1);
+         const float x = strtof(xs.c_str(), &endX), y = strtof(ys.c_str(), &endY);
+         if (!xs.empty() && !ys.empty() && *endX == '\0' && *endY == '\0')
+         {
+            m_hookPlaceHasPos = true;
+            m_hookPlacePos = Vertex2D(x, y);
+            spec.resize(semiX);
+         }
+      }
+      m_hookPlace = spec;
+   }
    if (const char *const preview = std::getenv("VPX_LIBRARY_PREVIEW"); preview != nullptr && *preview != '\0')
    {
       // <pack path>;<state>;<yaw>, split from the right
@@ -224,6 +257,63 @@ void PartLibraryPanel::Update()
    else if ((m_thumbSlot >= 0 || m_scratch != nullptr) && ImGui::GetFrameCount() > m_lastShownFrame + 1)
       AbortThumbnail();
 
+   // Placement mode housekeeping: it is only available while the table is editable and the playfield view is interactive (not in drag point edit mode,
+   // not hidden by the fly mode), and is dropped while the part library area is hidden
+   if (!m_editor.IsAreaEditorShown(EditorUI::AreaEditor::PartLibrary))
+   {
+      m_placementPack.clear();
+      ClearPreview();
+   }
+   if (IsPlacementArmed() && (m_editor.IsInspectMode() || m_editor.m_table->IsLocked() || m_editor.m_pointEditPart != nullptr || m_editor.m_flyMode))
+      CancelPlacement();
+   if (m_dragActive && !IsPlacementArmed())
+      m_dragActive = false;
+   if (IsPlacementArmed())
+   {
+      UpdatePlacement(ImGui::GetIO().MousePos);
+      if (m_dragActive)
+      {
+         ImGui::SetTooltip("Place %s", PathToUTF8(m_placementPack.stem()).c_str());
+         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+         {
+            m_dragActive = false;
+            if (m_previewVisible)
+               CommitPlacement();
+            else
+               CancelPlacement(); // Released over the UI
+         }
+      }
+   }
+   else
+      m_previewVisible = false;
+
+   // Tile clicks: a double click places (a material is applied), a single click opens the lightbox once the double click interval passed
+   if (m_doubleClicked)
+   {
+      m_doubleClicked = false;
+      if (m_doubleItem.kind == ItemKind::Material)
+         ApplyMaterialItem(m_doubleItem);
+      else
+         PlaceItem(m_doubleItem);
+   }
+   if (m_pendingOpen && !m_dragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::GetTime() - m_pendingTime > ImGui::GetIO().MouseDoubleClickTime + 0.03)
+   {
+      m_pendingOpen = false;
+      OpenLightbox(m_pendingItem);
+   }
+
+   // Test hook: place a pack once the editor is up
+   if (!m_hookPlace.empty() && m_editor.m_renderer != nullptr && m_editor.m_player->m_physics != nullptr && ++m_hookPlaceFrames > 30)
+   {
+      LibraryItem item;
+      item.pack = PathFromUTF8(m_hookPlace);
+      const PackInfo info = ScanPack(item.pack);
+      item.kind = info.kind;
+      m_hookPlace.clear();
+      if (!info.valid || !PlaceItem(item))
+         PLOGW << "LIBPLACE failed " << PathToUTF8(item.pack);
+   }
+
    // Test hook: open the lightbox on a pack
    if (!m_hookPreview.empty() && m_editor.m_renderer != nullptr)
    {
@@ -292,22 +382,6 @@ void PartLibraryPanel::Update()
       AddLibraryFolder(PathFromUTF8(*m_pendingFolderPath));
       m_pendingFolderPath = nullptr;
    }
-
-   // Placement mode housekeeping: it is only available while the table is editable and the
-   // playfield view is interactive (not in drag point edit mode, not hidden by the fly mode), and is
-   // dropped while the part library area is hidden
-   if (!m_editor.IsAreaEditorShown(EditorUI::AreaEditor::PartLibrary))
-   {
-      m_placementPack.clear();
-      ClearPreview();
-      return;
-   }
-   if (IsPlacementArmed() && (m_editor.IsInspectMode() || m_editor.m_table->IsLocked() || m_editor.m_pointEditPart != nullptr || m_editor.m_flyMode))
-      CancelPlacement();
-   if (IsPlacementArmed())
-      UpdatePlacement(ImGui::GetIO().MousePos);
-   else
-      m_previewVisible = false;
 }
 
 void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
@@ -511,7 +585,28 @@ void PartLibraryPanel::RenderGrid(const float height)
       {
          m_selectedPack = item.pack;
          m_selectedPackInfo = ScanPack(item.pack);
-         OpenLightbox(item);
+         if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+         {
+            // Double click places (no lightbox), once the panels are done
+            m_pendingOpen = false;
+            m_doubleItem = item;
+            m_doubleClicked = true;
+         }
+         else
+         {
+            // Single click: the lightbox, unless a second click follows within the double click interval (see Update)
+            m_pendingItem = item;
+            m_pendingOpen = true;
+            m_pendingTime = ImGui::GetTime();
+         }
+      }
+      // Dragging a tile starts the placement: released over the 3D view commits it, over the UI or Esc cancels it
+      if (ImGui::IsItemActive() && !m_dragActive && item.kind != ItemKind::Material && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.f * dpi) && !m_editor.m_table->IsLocked() && !m_editor.IsInspectMode())
+      {
+         m_pendingOpen = false;
+         m_placementPack = item.pack;
+         StartPlacement();
+         m_dragActive = IsPlacementArmed();
       }
       if (hovered)
          ImGui::SetTooltip("%s%s%s", PathToUTF8(item.pack).c_str(), item.material.empty() ? "" : "\nMaterial: ", item.material.c_str());
@@ -1466,7 +1561,7 @@ void PartLibraryPanel::SetupPlayerSide(IEditable *part, const bool initRenderabl
 
 // Pack placement: the selected pack is loaded in a scratch table so that it never pollutes the
 // edited one until it is committed. Its parts are kept invisible and only rendered as ghosts by
-// Render3D while the mouse hovers the 3D playfield view, positioned by UpdatePlacement.
+// Render3D while the pointer hovers the 3D playfield view, positioned by UpdatePlacement.
 void PartLibraryPanel::StartPlacement()
 {
    ClearPreview();
@@ -1484,6 +1579,7 @@ void PartLibraryPanel::StartPlacement()
    {
       temp->Release();
       m_editor.m_liveUI.PushNotification("Failed to load '"s + PathToUTF8(m_placementPack) + '\'', 10000);
+      m_placementPack.clear();
       return;
    }
 
@@ -1504,6 +1600,7 @@ void PartLibraryPanel::StartPlacement()
 
 void PartLibraryPanel::CancelPlacement()
 {
+   m_dragActive = false;
    m_placementPack.clear();
    ClearPreview();
 }
@@ -1511,17 +1608,23 @@ void PartLibraryPanel::CancelPlacement()
 void PartLibraryPanel::UpdatePlacement(const ImVec2 &mousePos)
 {
    const ImGuiIO &io = ImGui::GetIO();
-   const bool hovering = !io.WantCaptureMouse && m_editor.m_camMode != ViewMode::DesktopBackdrop && m_editor.m_fileOp == nullptr && m_editor.m_player->m_playfieldWnd != nullptr;
+   // While a tile is dragged the pointer is captured by the panel: the 3D view is then the viewport area
+   const AreaRect &view = m_editor.m_viewportContentRect;
+   const bool overView = m_dragActive ? (m_editor.m_viewportVisible && mousePos.x >= view.x0 && mousePos.x < view.x1 && mousePos.y >= view.y0 && mousePos.y < view.y1) : !io.WantCaptureMouse;
+   const bool hovering = overView && m_editor.m_camMode != ViewMode::DesktopBackdrop && m_editor.m_fileOp == nullptr && m_editor.m_player->m_playfieldWnd != nullptr;
    if (!hovering)
    {
-      // Re-hide the ghost parts when the mouse leaves the 3D view (or the view is not 3D)
+      // Re-hide the ghost parts when the pointer leaves the 3D view (or the view is not 3D)
       m_previewVisible = false;
       return;
    }
+   PlaceAt(m_editor.UnprojectToPlane(mousePos, 0.f));
+}
 
-   // Project the pointed point on the playfield XY plane, then drop a vertical ray on it: the parts
-   // rest on the topmost surface it hits (the UI quadtree holds all parts, collidable or not)
-   const Vertex2D pos = m_editor.UnprojectToPlane(mousePos, 0.f);
+// Moves the pack content to the given playfield XY point, resting on the topmost surface under it (a vertical ray cast: the UI quadtree holds all
+// parts, collidable or not)
+void PartLibraryPanel::PlaceAt(const Vertex2D &pos)
+{
    const float zTop = m_editor.m_table->m_glassTopHeight + 500.f;
    const float zBottom = -500.f;
    vector<HitTestResult> hits;
@@ -1603,9 +1706,12 @@ void PartLibraryPanel::CommitPlacement()
    // the assets of the edited table (pack assets skipped by the merge are released with the scratch table)
    for (IEditable *const part : imported)
       SetupPlayerSide(part, false);
+   m_editor.m_undo.SetLabel("Place " + PathToUTF8(m_placementPack.stem()));
    m_editor.m_undo.EndUndo();
    m_previewTable->Release();
    m_previewTable = nullptr;
+   m_previewVisible = false;
+   m_placedCount = static_cast<int>(imported.size());
 
    // Select the imported parts
    m_editor.UpdateEditableList();
@@ -1617,13 +1723,19 @@ void PartLibraryPanel::CommitPlacement()
    if (!m_editor.m_multiSel.empty())
       m_editor.m_selection = Selection(m_editor.m_multiSel.back());
 
+   // F9 repeats the placement with an offset, as for an added part (the offset is relative to the base: Z of the surface it rests on)
+   if (Matrix3D placed; m_editor.GetSelectionTransform(placed))
+   {
+      m_editor.SetLastOperation(EditorUI::LastOperation::Type::Add, placed);
+      m_editor.m_lastOp.base = vec3(0.f, 0.f, placed._43);
+      m_editor.m_lastOp.offset = vec3(placed._41, placed._42, 0.f);
+   }
+
    m_editor.m_liveUI.PushNotification("Placed "s + std::to_string(imported.size()) + " part(s) from '"s + PathToUTF8(m_placementPack.filename()) + "' into '"s
          + (target != nullptr ? target->GetName() : "(table root)"s) + '\'',
       10000);
-
-   // Stay armed: reload the preview so that another copy can be placed on the next click
-   if (!m_placementPack.empty())
-      StartPlacement();
+   m_placementPack.clear(); // ponytail: not armed for another copy, the next placement is a new drag or double click
+   m_dragActive = false;
 }
 
 void PartLibraryPanel::ClearPreview()
@@ -1662,4 +1774,101 @@ void PartLibraryPanel::Render3D()
          if (part->GetIRenderable() != nullptr)
             m_editor.m_renderer->RenderItem(part, false);
 }
+
+// The double click position: the centre of the selection bounds if there is a selection, else the table centre
+Vertex2D PartLibraryPanel::DefaultPlacementPos() const
+{
+   if (FRect3D bounds; !m_editor.m_multiSel.empty() && m_editor.GetSelectionBounds(bounds))
+      return Vertex2D(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom));
+   return Vertex2D(0.5f * (m_editor.m_table->m_left + m_editor.m_table->m_right), 0.5f * (m_editor.m_table->m_top + m_editor.m_table->m_bottom));
+}
+
+bool PartLibraryPanel::PlaceItem(const LibraryItem &item)
+{
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr)
+      return false;
+   // The default position is read before the placement replaces the selection
+   const Vertex2D pos = m_hookPlaceHasPos ? m_hookPlacePos : DefaultPlacementPos();
+   m_hookPlaceHasPos = false;
+   CancelPlacement();
+   m_placementPack = item.pack;
+   StartPlacement();
+   if (!IsPlacementArmed())
+      return false;
+   PlaceAt(pos);
+   CommitPlacement();
+   if (Matrix3D placed; m_editor.GetSelectionTransform(placed) && getenv("VPX_LIBRARY_PLACE") != nullptr)
+      PLOGI << "LIBPLACE " << PathToUTF8(item.pack) << " parts=" << m_placedCount << " at=" << placed._41 << ',' << placed._42 << ',' << placed._43;
+   return true;
+}
+
+static bool SetPartMaterial(IEditable *const part, const string &name)
+{
+   switch (part->GetItemType())
+   {
+   case eItemPrimitive: static_cast<Primitive *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemRamp: static_cast<Ramp *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemSurface: static_cast<Surface *>(part)->m_d.m_szTopMaterial = name; return true;
+   case eItemDecal: static_cast<Decal *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemFlipper: static_cast<Flipper *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemHitTarget: static_cast<HitTarget *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemPlunger: static_cast<Plunger *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemRubber: static_cast<Rubber *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemSpinner: static_cast<Spinner *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemKicker: static_cast<Kicker *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemTrigger: static_cast<Trigger *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemGate: static_cast<Gate *>(part)->m_d.m_szMaterial = name; return true;
+   case eItemBumper: static_cast<Bumper *>(part)->m_d.m_szCapMaterial = name; return true;
+   default: return false;
+   }
+}
+
+// Imports the material pack through the same merge path as a part pack, then assigns the material to the selected parts, in the same undo step
+void PartLibraryPanel::ApplyMaterialItem(const LibraryItem &item)
+{
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode())
+      return;
+   CComObject<PinTable> *temp;
+   CComObject<PinTable>::CreateInstance(&temp);
+   temp->AddRef();
+   VPXFileFeedback feedback;
+   const std::unique_ptr<JSONSerializer::Deserializer> pack = m_editor.m_table->CreateImportDeserializer(item.pack, m_mergeStrategy);
+   const HRESULT hr = pack != nullptr ? temp->LoadGameFromJSONPack(*pack, feedback) : E_FAIL;
+   if (FAILED(hr) && (hr != APPX_E_BLOCK_HASH_INVALID) && (hr != APPX_E_CORRUPT_CONTENT))
+   {
+      temp->Release();
+      m_editor.m_liveUI.PushNotification("Failed to import '"s + PathToUTF8(item.pack) + '\'', 10000);
+      return;
+   }
+   // The name the material has after the merge (renamed when a different table material has the same name)
+   string name = item.material;
+   for (const Material *const mat : temp->GetMaterialList())
+      if (mat->m_name == item.material)
+      {
+         name = mat->m_name;
+         break;
+      }
+      else if (mat->m_name.starts_with(item.material))
+         name = mat->m_name;
+   PinTable *const table = m_editor.m_table;
+   m_editor.m_undo.BeginUndo();
+   const vector<IEditable *> imported = table->ImportParts(temp, nullptr);
+   temp->Release();
+   int assigned = 0;
+   if (table->GetMaterial(name) != nullptr)
+      for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
+      {
+         IEditable *const part = uiPart->GetEditable();
+         m_editor.m_undo.MarkForUndo(part);
+         if (SetPartMaterial(part, name))
+            assigned++;
+      }
+   m_editor.m_undo.SetLabel("Apply material " + name);
+   m_editor.m_undo.EndUndo();
+   for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
+      m_editor.m_renderer->ReinitRenderable(uiPart->GetEditable()->GetIRenderable());
+   m_editor.m_liveUI.PushNotification("Imported material '"s + name + (assigned > 0 ? "', applied to "s + std::to_string(assigned) + " part(s)"s : "'"s), 10000);
+   (void)imported;
+}
+
 }

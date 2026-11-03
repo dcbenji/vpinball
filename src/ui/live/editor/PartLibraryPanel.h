@@ -33,11 +33,6 @@ class EditorUIPart;
 // Clicking a tile opens a lightbox (modal, resizable): the item live in its own view slot (its own scratch table, drawn alone), orbited with the left
 // button, wheel zoom, double click to frame; inserts have Lit / Unlit / Blink buttons driving the pack's own Light (a state driver only: the pass has no light).
 // Test hook: VPX_LIBRARY_PREVIEW=<pack path>;<lit|unlit|blink>;<yaw> opens the lightbox on that pack at startup, logging 'LIBPREVIEW open <pack>' once rendered.
-//
-// Pack placement: selecting a pack in the library loads its whole content in a temporary
-// table and previews it as ghost parts following the mouse over the 3D view (resting on the
-// topmost surface under the pointer). Clicking commits the pack content to the edited table;
-// unselecting or closing the dialog discards it.
 class PartLibraryPanel
 {
 public:
@@ -51,18 +46,16 @@ public:
    void ExportSelection();
 
    void OnEditorClosed(); // EditorUI::Close: drops the lightbox and the thumbnail in flight (scratch tables, view slots)
-   void Update(); // Every frame, whether the editor is shown or not: applies the results of the asynchronous file dialogs
-   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
-
-   // Pack placement mode: a pack of the library is selected for preview & placement
+   // Pack placement (a tile dragged into the 3D view, or double clicked): the pack is loaded in a scratch table and previewed as ghost parts resting on the
+   // topmost surface under the pointer; commit moves its content to the edited table (one undo step, 'Place <pack>').
    bool IsPlacementArmed() const { return !m_previewParts.empty(); }
    void CancelPlacement();
    void CommitPlacement();
-
    void Render3D(); // Renders the ghost preview parts into the 3D scene (called by EditorUI::Render3D)
+   void ClearPreview(); // Drops the preview parts, e.g. when the edited table is switched or the editor is closed
 
-   // Drops the preview parts, e.g. when the edited table is switched or the editor is closed
-   void ClearPreview();
+   void Update(); // Every frame, whether the editor is shown or not: applies the results of the asynchronous file dialogs
+   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
 
 private:
    // A library folder, recursively scanned for importable VPZ packs
@@ -118,6 +111,15 @@ private:
    bool LoadScratch(const LibraryItem &item, CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
    void ReleaseScratch(CComObject<PinTable> *&scratch, vector<IEditable *> &scratchParts);
    static FRect3D ScratchBounds(const vector<IEditable *> &parts);
+   // Pack placement: the pack is loaded in a scratch table so that it never pollutes the edited one (no outliner entry, no undo, not in the picking
+   // quadtree) until it is committed. Its authored positions are overridden by PlaceAt (moved as a rigid group)
+   void StartPlacement();
+   void UpdatePlacement(const ImVec2 &mousePos);
+   void PlaceAt(const Vertex2D &pos);
+   Vertex2D DefaultPlacementPos() const; // Centre of the selection bounds, else the table centre
+   bool PlaceItem(const LibraryItem &item); // Double click: placed at the default position
+   void ApplyMaterialItem(const LibraryItem &item); // Double click on a material: imported, and assigned to the selected parts in the same undo step
+   void SetupPlayerSide(IEditable *part, bool initRenderable);
    void OpenLightbox(const LibraryItem &item);
    void CloseLightbox();
    void RenderLightbox(); // Every frame (Update): the modal while open
@@ -135,13 +137,6 @@ private:
    PackInfo ScanPack(const std::filesystem::path &path);
    void ImportPack(const std::filesystem::path &path);
 
-   // Pack preview: the selected pack is loaded in a scratch table so that it never pollutes the
-   // edited one (no outliner entry, no undo, not in the picking quadtree) until it is committed.
-   // Its authored positions are overridden by UpdatePlacement (moved as a rigid group)
-   void StartPlacement();
-   void UpdatePlacement(const ImVec2 &mousePos);
-   void SetupPlayerSide(IEditable *part, bool initRenderable);
-
    EditorUI &m_editor;
 
    // Results of the asynchronous SDL file dialogs, applied on the main thread in Update
@@ -157,16 +152,6 @@ private:
    vector<LibraryFolder> m_library;
    std::filesystem::path m_selectedPack;
    PackInfo m_selectedPackInfo;
-
-   // Pack placement preview (see class comment): m_placementPack is the armed pack, the preview
-   // table holds its loaded content (non group parts are tracked for translation & rendering)
-   std::filesystem::path m_placementPack;
-   CComObject<PinTable> *m_previewTable = nullptr;
-   vector<IEditable *> m_previewParts;
-   vector<std::shared_ptr<EditorUIPart>> m_previewUIParts;
-   bool m_previewVisible = false; // Ghost currently rendered (mouse over the 3D view)
-   Vertex2D m_previewPos;
-   float m_previewZ = 0.f;
    vector<LibraryItem> m_items;
    std::filesystem::path m_filterFolder; // Tiles shown: the packs under this folder, all if empty
 
@@ -180,6 +165,28 @@ private:
    vector<IEditable *> m_scratchParts;
    int m_lastShownFrame = -1;
    int m_thumbsRendered = 0, m_thumbsCached = 0, m_thumbsFailed = 0;
+   // Placement preview (see above): m_placementPack is the armed pack, the preview table holds its loaded content (non group parts are tracked for
+   // translation & rendering)
+   std::filesystem::path m_placementPack;
+   CComObject<PinTable> *m_previewTable = nullptr;
+   vector<IEditable *> m_previewParts;
+   vector<std::shared_ptr<EditorUIPart>> m_previewUIParts;
+   bool m_previewVisible = false; // Ghost currently rendered (pointer over the 3D view)
+   Vertex2D m_previewPos;
+   float m_previewZ = 0.f;
+   int m_placedCount = 0; // Parts of the last commit
+   bool m_dragActive = false; // A tile is being dragged: released over the 3D view commits
+   // Tile clicks: a single click opens the lightbox once the double click interval passed, a double click places instead
+   LibraryItem m_pendingItem;
+   bool m_pendingOpen = false;
+   double m_pendingTime = 0.0;
+   LibraryItem m_doubleItem;
+   bool m_doubleClicked = false; // Handled in Update, outside of the panels' undo records
+   string m_hookPlace; // VPX_LIBRARY_PLACE=<pack path>[;x;y]
+   bool m_hookPlaceHasPos = false;
+   Vertex2D m_hookPlacePos;
+   int m_hookPlaceFrames = 0;
+
    // Lightbox: own scratch table and view slot (independent of the thumbnails, which pause while it is open)
    bool m_lbOpen = false;
    LibraryItem m_lbItem;
