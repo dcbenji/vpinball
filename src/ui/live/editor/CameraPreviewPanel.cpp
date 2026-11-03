@@ -272,7 +272,7 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
 void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
    m_camMoved = false;
-   m_onSchedule = false;
+   m_hasImage = false;
    const AreaViewSettings before = m_settings;
    const int viewBefore = m_view;
    char windowName[32];
@@ -430,11 +430,8 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_lastUndoId = undoId;
             m_refresh = true;
          }
-         // An interactive edit (gizmo drag, G/R/S modal transform, field drag; not a focused text field) keeps one undo record from its start: render while it runs, and once when it ends
-         // (not the navigation of a secondary view: its image, or Alt + left orbit, is an active item of a CAMERAPREVIEW window)
-         const ImGuiWindow *const activeWindow = ImGui::GetCurrentContext()->ActiveIdWindow;
-         const bool viewActive = imgActive || (activeWindow != nullptr && strncmp(activeWindow->RootWindow->Name, "CAMERAPREVIEW", 13) == 0);
-         const bool dragging = ImGuizmo::IsUsingAny() || m_editor.m_modal.active || (ImGui::IsAnyItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !viewActive);
+         // An interactive edit keeps one undo record from its start: render while it runs (on the schedule), and once when it ends
+         const bool dragging = m_editor.IsSecondaryViewEditDrag(); // Same rule as the schedule's ranking (EditorUI::RenderAreas)
          if (m_wasDragging && !dragging)
             m_refresh = true;
          m_wasDragging = dragging;
@@ -442,7 +439,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = true;
          Renderer *const renderer = m_editor.m_renderer.get();
          const bool pbrRefused = !m_settings.wireframe && !renderer->CanRenderEditorPBRView(m_slot);
-         m_onSchedule = m_settings.live && !pbrRefused;
+         m_hasImage = true;
          // The views alternate on the half rate frames (2 PBR views cost one view per frame); a wireframe view renders every 4th frame (the editor's
          // wireframe draws every part twice, CPU side it costs more than a PBR view: ~8 ms a render on Police Force); the camera of this view
          // being moved renders every frame
