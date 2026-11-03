@@ -5,6 +5,7 @@
 #include "gpuprofiler.h"
 #include "math/matrix.h"
 #include "math/ModelViewProj.h"
+#include "renderer/ViewSetup.h"
 #include "renderer/Renderable.h"
 #include "renderer/RenderDevice.h"
 #include "renderer/Texture.h"
@@ -120,6 +121,31 @@ public:
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
    void Render3DScene(); // Records the passes of a full frame rendering the 3D scene to the output backbuffer
+
+   // Live editor secondary views (the Camera Preview areas): up to kMaxEditorViews extra scenes rendered offscreen beside the edit viewport,
+   // each with its own camera (a table view setup, the player view, or a free camera given as view/projection) and shading (full render, or
+   // the lite wireframe path: hidden line wireframe drawn straight into an LDR target, no post processing, no HDR target set).
+   // A request made while recording the UI of frame N is rendered by the Render3DScene of frame N+1, before its UI pass, so the UI of
+   // frame N+1 samples a finished target. Nothing is rendered (and nothing costs) without a request. Each slot has its own scene target
+   // set (slot 0's is also the VR desktop display's: secondary views are never rendered in VR); at most kMaxEditorPBRViews slots hold a
+   // full set at once.
+   static constexpr int kMaxEditorViews = 3;
+   static constexpr int kMaxEditorPBRViews = 2;
+   struct EditorViewRequest
+   {
+      int width = 0, height = 0;
+      bool playerCamera = true; // true: the table view setup viewSetup (BG_INVALID: the active one, the player's), without changing it
+      ViewSetupID viewSetup = BG_INVALID;
+      Matrix3D view, proj; // Free camera (playerCamera false): VPX left handed view and projection, as SetViewProj takes them
+      bool wireframe = false; // Lite path
+   };
+   bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full view beyond kMaxEditorPBRViews
+   bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full view
+   RenderTarget* GetEditorView(int slot) const; // Last render of the slot, null before the first one
+   void ReleaseEditorView(int slot); // Releases the slot's targets (the area was closed), recreated on the next request
+   // View setup of the scene being recorded: the table's active one, or the one the editor camera preview renders (rotation dependent passes use it)
+   const ViewSetup& GetRenderViewSetup() const;
+   void InvalidateShadowContent() { } // Hook for cached shadow content invalidation after the editor moves a caster: no-op on master (the PBR branch has the shadow page cache)
    void RenderUIScene(); // Records a frame containing only the LiveUI (used while the initial table content is being loaded)
 
    enum ColorSpace
@@ -457,21 +483,35 @@ private:
    // the playfield, the scene is rendered a second time into a dedicated set of render targets, swapped
    // in/out to avoid interfering with the VR render targets
    void RenderDesktopScene(RenderTarget* outputRT);
-   void SwapDesktopTargets();
-   bool m_desktopScenePass = false; // True while recording the scene render passes for the desktop display
-   int m_desktopRenderWidth = 0, m_desktopRenderHeight = 0;
-   RenderTarget* m_desktopMSAABackBuffer = nullptr;
-   RenderTarget* m_desktopBackBuffer1 = nullptr;
-   RenderTarget* m_desktopBackBuffer2 = nullptr;
-   RenderTarget* m_desktopPostProcess1 = nullptr;
-   RenderTarget* m_desktopPostProcess2 = nullptr;
-   RenderTarget* m_desktopPostProcess3 = nullptr;
-   RenderTarget* m_desktopBloom = nullptr;
-   RenderTarget* m_desktopBloomTmp = nullptr;
-   RenderTarget* m_desktopReflection = nullptr;
-   RenderTarget* m_desktopMotionBlur = nullptr;
-   RenderTarget* m_desktopAO1 = nullptr;
-   RenderTarget* m_desktopAO2 = nullptr;
+   bool m_desktopScenePass = false; // True while recording the scene render passes for the desktop display (VR desktop mirror)
+   // Alternate scene target sets, swapped in for a second scene render: one per editor secondary view slot, set 0 also for the VR desktop display
+   struct SceneTargetSet
+   {
+      RenderTarget *msaaBackBuffer = nullptr, *backBuffer1 = nullptr, *backBuffer2 = nullptr, *postProcess1 = nullptr, *postProcess2 = nullptr, *postProcess3 = nullptr,
+         *bloom = nullptr, *bloomTmp = nullptr, *reflection = nullptr, *motionBlur = nullptr, *ao1 = nullptr, *ao2 = nullptr;
+      int width = 0, height = 0;
+   };
+   SceneTargetSet m_sceneTargetSets[kMaxEditorViews];
+   void SwapSceneTargets(int set); // Swaps the main scene targets (and the render probes' ones) with the given set
+   void ReleaseSceneTargetSet(int set);
+   // Editor secondary views (see RequestEditorView)
+   struct EditorView
+   {
+      EditorViewRequest request;
+      bool requested = false;
+      bool rendered = false;
+      bool lite = false; // The slot's target set holds lite (LDR, wireframe) targets
+      bool pbr = false; // The slot's target set holds full PBR targets
+      RenderTarget* out = nullptr; // Tonemapped output of a full PBR view (a lite view's output is its set's back buffer)
+   };
+   EditorView m_editorViews[kMaxEditorViews];
+   void RenderEditorView(int slot);
+   void ReleaseSwappedInSceneTargets(); // Deferred release of the scene targets currently swapped in (lazily recreated)
+   void ForgetRenderTargetSamplers(const vector<RenderTarget*>& targets); // No shader keeps a sampler of these (released) targets bound
+   bool m_editorPreviewPass = false; // True while recording an editor secondary view (not the main editor view)
+   bool m_editorPreviewPlayerCam = false; // ... with a table view setup (the player view): drawn as the player sees it, not as the editor view
+   bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)
+   const ViewSetup* m_editorPreviewViewSetup = nullptr; // Setup rendered by the preview pass while it records, null otherwise (see GetRenderViewSetup)
 
    PinTable* m_table;
 
