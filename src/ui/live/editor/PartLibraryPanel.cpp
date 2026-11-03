@@ -1526,8 +1526,12 @@ void PartLibraryPanel::ImportPack(const std::filesystem::path &path)
 
    // Move the parts, collections and assets of the pack to the edited table (merged by name)
    m_editor.m_undo.BeginUndo();
+   const vector<RenderProbe *> probesBefore = table->m_vrenderprobe;
    const vector<IEditable *> imported = table->ImportParts(temp, target);
    temp->Release();
+   for (RenderProbe *const probe : table->m_vrenderprobe) // Probes new to the table are never set up by the merge
+      if (std::ranges::find(probesBefore, probe) == probesBefore.end())
+         probe->RenderSetup(m_editor.m_renderer.get());
    for (IEditable *const part : imported)
    {
       part->AddRef(); // Created parts keep a creation reference, released by the undo record (see PinTable::Uncreate)
@@ -1594,6 +1598,8 @@ void PartLibraryPanel::StartPlacement()
    }
 
    m_previewTable = temp;
+   for (RenderProbe *const probe : temp->m_vrenderprobe)
+      probe->RenderSetup(m_editor.m_renderer.get()); // The ghost parts draw with them; the ones merged on commit stay set up
    for (IEditable *const part : temp->GetParts())
    {
       if (part->GetItemType() == eItemPartGroup)
@@ -1722,6 +1728,8 @@ void PartLibraryPanel::CommitPlacement()
       SetupPlayerSide(part, false);
    m_editor.m_undo.SetLabel("Place " + PathToUTF8(m_placementPack.stem()));
    m_editor.m_undo.EndUndo();
+   for (RenderProbe *const probe : m_previewTable->m_vrenderprobe) // The ones the merge left (duplicates): the merged ones moved to the table, set up
+      probe->RenderRelease();
    UnloadImages(m_previewTable); // Only the images the merge left in it (the merged ones moved to the edited table and stay loaded)
    m_previewTable->Release();
    m_previewTable = nullptr;
@@ -1787,6 +1795,8 @@ void PartLibraryPanel::ClearPreview()
                   edit->Release();
                });
          }
+      for (RenderProbe *const probe : m_previewTable->m_vrenderprobe)
+         probe->RenderRelease();
       UnloadImages(m_previewTable);
       m_previewTable->Release();
       m_previewTable = nullptr;
@@ -1888,22 +1898,24 @@ void PartLibraryPanel::ApplyMaterialItem(const LibraryItem &item)
    const string stem = JSONSerializer::SanitizeFileName(item.material), renamed = pack->RenamedAsset("materials", stem);
    const string name = StrCompareNoCase(renamed, stem) ? item.material : renamed;
    PinTable *const table = m_editor.m_table;
-   m_editor.m_undo.BeginUndo();
-   table->ImportParts(temp, nullptr);
+   table->ImportParts(temp, nullptr); // Assets only (no parts in a material pack): not part of the undo step, as for a part import
    temp->Release();
-   int assigned = 0;
-   if (table->GetMaterial(name) != nullptr)
-      for (IEditable *const part : targets)
-      {
-         m_editor.m_undo.MarkForUndo(part);
-         SetPartMaterial(part, name);
-         assigned++;
-      }
+   if (table->GetMaterial(name) == nullptr)
+   {
+      m_editor.m_liveUI.PushNotification("Material '"s + name + "' not found after the import"s, 6000);
+      return; // No undo step
+   }
+   m_editor.m_undo.BeginUndo();
+   for (IEditable *const part : targets)
+   {
+      m_editor.m_undo.MarkForUndo(part);
+      SetPartMaterial(part, name);
+   }
    m_editor.m_undo.SetLabel("Apply material " + name);
    m_editor.m_undo.EndUndo();
    for (IEditable *const part : targets)
       m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
-   m_editor.m_liveUI.PushNotification("Imported material '"s + name + "', applied to "s + std::to_string(assigned) + " part(s)"s, 10000);
+   m_editor.m_liveUI.PushNotification("Imported material '"s + name + "', applied to "s + std::to_string(targets.size()) + " part(s)"s, 10000);
 }
 
 }
