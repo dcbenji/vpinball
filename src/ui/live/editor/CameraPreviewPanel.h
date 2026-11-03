@@ -25,12 +25,22 @@ public:
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
    void NotHosted(); // Every frame the area is not shown: releases the preview render targets (once)
 
+   // View setup shown: -1 = Auto (the one the player uses, the table's active view mode), else BG_DESKTOP / BG_FULLSCREEN / BG_FSS.
+   // Rendering another one never changes the table's or the player's view mode. JSON names (per workspace layout leaf): "desktop",
+   // "cabinet", "fss"; Auto is written as no key.
+   int GetView() const { return m_view; }
+   void SetView(int view);
+   static const char *ViewJsonName(int view); // nullptr for Auto
+   static int ViewFromJsonName(const char *name); // -1 (Auto) for null or unknown names
+
 private:
    static constexpr int kMaxWidth = 1280;
    static constexpr int kStableFrames = 10; // A new size is adopted after being stable this many frames (no target churn while a splitter is dragged)
 
    EditorUI &m_editor;
    bool m_live = true;
+   int m_view = -1; // See GetView
+   int m_lastShownView = -1; // Effective view setup of the last request (Auto follows the player's mode changes)
    bool m_refresh = true;
    bool m_wasDragging = false;
    bool m_requested = false; // A preview was requested since the last release

@@ -9,6 +9,7 @@ namespace EditorTheme
 
    // Surfaces
    constexpr ImU32 Bar = Rgb(36, 36, 37);           // menu bar + toolbar
+   constexpr ImU32 PlayBar = Rgb(62, 44, 32);       // menu bar + toolbar + status bar while inspecting a running play test (warm tint of Bar)
    constexpr ImU32 Strip = Rgb(30, 30, 31);         // vertical tab strip / column backgrounds
    constexpr ImU32 Raised = Rgb(66, 66, 66);        // active tab / active toolbar button
    constexpr ImU32 Hover = Rgb(80, 80, 80);         // hovered button

@@ -366,6 +366,7 @@ public:
    // Closes the session with the given Player::CloseState, first asking to discard unsaved changes when they would be lost
    void RequestClose(int closeState);
 private:
+   int m_deferredStop = -1; // Close state of a stop request refused while a save was running, replayed when it finishes
    std::optional<int> m_pendingClose; // Close state awaiting the 'discard unsaved changes' confirmation
 
    // Clipboard (copy/paste of parts through the OS clipboard, and of drag point coordinates in point edit mode)
@@ -518,6 +519,7 @@ private:
          Split, // leaf, axis, newOnSecondSide, size
          Join, // leaf (kept), leaf2 (consumed)
          Swap, // leaf: id of the split
+         Close, // leaf: close the area, its sibling takes the space
          Maximize // leaf: leaf to maximize, -1 to restore
       };
       Kind kind = Kind::SetType;
@@ -546,6 +548,7 @@ private:
    void WidenArea(int leafId, AreaType type); // Switching the editor of a too narrow area widens it (once, the splitter can shrink it again afterwards)
    AreaLayout m_areas;
    std::vector<PendingAreaOp> m_pendingAreaOps;
+   int m_syncedPreviewView = -1; // Camera preview view setup last exchanged between the panel and the layout leaf (see RenderAreas)
    int m_maximizedLeafId = -1; // Transient (not saved): only this leaf is laid out, on the whole tree rect
    // Rects of the last ComputeAreaRects (physical pixels): leaves, splitters, the viewport leaf and its content (the leaf without the N-panel).
    // The 3D view is the full window, the viewport leaf is a window onto it.
@@ -577,7 +580,7 @@ private:
       int corner = 0; // 0 top left, 1 top right, 2 bottom left, 3 bottom right
       ImVec2 start = ImVec2(0.f, 0.f);
       bool decided = false; // Moved far enough: split inside the area, join in another one
-      bool axisChosen = false; // The split axis stays locked once chosen
+      bool axisChosen = false; // The split axis is re-evaluated until the drag passes 20 px, then stays locked
       SplitAxis axis = SplitAxis::Vertical;
    };
    enum class AreaModalKind

@@ -12,6 +12,7 @@
 #include "parts/PartGroup.h"
 #include "renderer/RenderProbe.h"
 #include "renderer/Sampler.h"
+#include "renderer/ViewSetup.h"
 #include "renderer/VSMPagePool.h"
 
 class IEditable;
@@ -125,9 +126,12 @@ public:
    // Live editor camera preview: the table's player view rendered into an offscreen target shown by an editor area.
    // A request made while recording the UI of frame N is rendered by the Render3DScene of frame N+1, before its UI
    // pass, so the UI of frame N+1 samples a finished target. Nothing is rendered (and nothing costs) without a request.
-   void RequestEditorPreview(int width, int height);
+   // view: the table view setup to render (BG_DESKTOP, BG_FULLSCREEN, BG_FSS), BG_INVALID for the active one (the player's), without changing it
+   void RequestEditorPreview(int width, int height, ViewSetupID view = BG_INVALID);
    RenderTarget* GetEditorPreview() const { return m_editorPreviewRendered ? m_editorPreviewRT : nullptr; } // Last rendered preview, null before the first one
    void ReleaseEditorPreview(); // Releases the preview targets (the area was closed), recreated on the next request
+   // View setup of the scene being recorded: the table's active one, or the one the editor camera preview renders (rotation dependent passes use it)
+   const ViewSetup& GetRenderViewSetup() const;
    void RenderUIScene(); // Records a frame containing only the LiveUI (used while the initial table content is being loaded)
 
    enum ColorSpace
@@ -478,6 +482,8 @@ private:
    bool m_editorPreviewRequested = false;
    bool m_editorPreviewRendered = false;
    int m_editorPreviewWidth = 0, m_editorPreviewHeight = 0;
+   ViewSetupID m_editorPreviewView = BG_INVALID;
+   const ViewSetup* m_editorPreviewViewSetup = nullptr; // Setup rendered by the preview pass while it records, null otherwise (see GetRenderViewSetup)
    RenderTarget* m_editorPreviewRT = nullptr;
    int m_desktopRenderWidth = 0, m_desktopRenderHeight = 0;
    RenderTarget* m_desktopMSAABackBuffer = nullptr;

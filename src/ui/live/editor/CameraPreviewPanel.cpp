@@ -30,6 +30,36 @@ void CameraPreviewPanel::NotHosted()
       m_editor.m_renderer->ReleaseEditorPreview();
 }
 
+namespace
+{
+   constexpr const char *kViewNames[] = { "Desktop", "Cabinet", "FSS" }; // Indexed by ViewSetupID (BG_DESKTOP, BG_FULLSCREEN, BG_FSS)
+   constexpr const char *kViewJsonNames[] = { "desktop", "cabinet", "fss" };
+}
+
+void CameraPreviewPanel::SetView(const int view)
+{
+   const int v = (view >= BG_DESKTOP && view < BG_INVALID) ? view : -1;
+   if (v != m_view)
+   {
+      m_view = v;
+      m_refresh = true;
+   }
+}
+
+const char *CameraPreviewPanel::ViewJsonName(const int view)
+{
+   return (view >= BG_DESKTOP && view < BG_INVALID) ? kViewJsonNames[view] : nullptr;
+}
+
+int CameraPreviewPanel::ViewFromJsonName(const char *const name)
+{
+   if (name != nullptr)
+      for (int i = 0; i < BG_INVALID; i++)
+         if (strcmp(name, kViewJsonNames[i]) == 0)
+            return i;
+   return -1;
+}
+
 void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
    m_frame++;
@@ -48,6 +78,31 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::SameLine();
       ImGui::Checkbox("Live", &m_live);
       ImGui::SetItemTooltip("Render the player view continuously (every 2nd frame). Off: only after a change (click Refresh).");
+
+      // View setup: Auto (the player's) or a fixed one of the table's three view setups
+      const int activeView = static_cast<int>(m_editor.m_table->GetViewMode());
+      const int shownView = m_view >= 0 ? m_view : activeView;
+      ImGui::SameLine();
+      const string autoLabel = "Auto ("s + kViewNames[clamp(activeView, 0, 2)] + ')';
+      const char *const comboLabel = m_view >= 0 ? kViewNames[m_view] : autoLabel.c_str();
+      ImGui::SetNextItemWidth(min(ImGui::CalcTextSize(autoLabel.c_str()).x + ImGui::GetFrameHeight() + 2.f * ImGui::GetStyle().FramePadding.x,
+         max(40.f * dpi, rightEdge - refreshW - ImGui::GetStyle().ItemSpacing.x - ImGui::GetCursorPosX())));
+      if (ImGui::BeginCombo("##CameraPreviewView", comboLabel))
+      {
+         if (ImGui::Selectable(autoLabel.c_str(), m_view < 0))
+            SetView(-1);
+         ImGui::SetItemTooltip("The view setup the player uses (the table's active view mode)");
+         for (int i = 0; i < BG_INVALID; i++)
+            if (ImGui::Selectable(kViewNames[i], m_view == i))
+               SetView(i);
+         ImGui::EndCombo();
+      }
+      ImGui::SetItemTooltip("View setup shown by the preview: Desktop, Cabinet (fullscreen) or FSS. Does not change the table's or the player's view mode.");
+      if (shownView != m_lastShownView)
+      {
+         m_lastShownView = shownView;
+         m_refresh = true;
+      }
       ImGui::SameLine(max(ImGui::GetCursorPosX(), rightEdge - refreshW));
       if (ImGui::Button(ICON_LC_REFRESH_CW "##CameraPreviewRefresh"))
          m_refresh = true;
@@ -105,7 +160,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          m_wasDragging = dragging;
          if (m_refresh || ((m_live || dragging) && (m_frame & 1u) == 0))
          {
-            m_editor.m_renderer->RequestEditorPreview(m_width, m_height);
+            m_editor.m_renderer->RequestEditorPreview(m_width, m_height, m_view >= 0 ? static_cast<ViewSetupID>(m_view) : BG_INVALID);
             m_requested = true;
             m_refresh = false;
          }

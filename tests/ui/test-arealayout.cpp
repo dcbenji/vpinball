@@ -167,7 +167,49 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       REQUIRE(b.FromJson(a.ToJson()));
       CHECK(b == a);
       CHECK(b.Find(b.FindLeaf(AreaType::Outliner))->hidden);
-      CHECK(AreaLayout().ToJson() == FromLegacy(kLayout).ToJson()); // default constructed == legacy default
+      CHECK(AreaLayout().ToJson() == AreaLayout::FromLegacy(true, true, 0.f, 0.f, 0, 1).ToJson()); // default constructed == legacy default (stored widths absent)
+   }
+
+   SUBCASE("camera preview view setup round trips; Auto writes no key")
+   if (AreaLayout::cameraPreviewEnabled)
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      REQUIRE(a.SetType(a.FindLeaf(AreaType::Outliner), AreaType::CameraPreview));
+      const int leaf = a.FindLeaf(AreaType::CameraPreview);
+      CHECK(a.ToJson().dump().find("preview_view") == std::string::npos);
+      REQUIRE(a.SetPreviewView(leaf, 1));
+      CHECK(a.ToJson().dump().find("\"cabinet\"") != std::string::npos);
+      AreaLayout b;
+      REQUIRE(b.FromJson(a.ToJson()));
+      CHECK(b == a);
+      CHECK(b.Find(b.FindLeaf(AreaType::CameraPreview))->previewView == 1);
+      CHECK_FALSE(a.SetPreviewView(leaf, 3));
+      REQUIRE(a.SetPreviewView(leaf, -1));
+      CHECK(!(b == a));
+   }
+
+   SUBCASE("the preview's view setup follows the preview through SetType swaps and is dropped when it stops being one")
+   if (AreaLayout::cameraPreviewEnabled)
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      const int outliner = a.FindLeaf(AreaType::Outliner), props = a.FindLeaf(AreaType::Properties);
+      REQUIRE(a.SetType(outliner, AreaType::CameraPreview));
+      REQUIRE(a.SetPreviewView(outliner, 1));
+      REQUIRE(a.SetType(props, AreaType::CameraPreview)); // swap: the preview moves to the Properties leaf with its view
+      CHECK(a.Find(props)->previewView == 1);
+      CHECK(a.Find(outliner)->previewView == -1);
+      REQUIRE(a.SetType(props, AreaType::Script)); // not a preview any more
+      CHECK(a.Find(props)->previewView == -1);
+   }
+
+   SUBCASE("Close replaces the parent split by the sibling")
+   {
+      AreaLayout a = FromLegacy(kLayout);
+      CHECK_FALSE(a.CanClose(a.FindLeaf(AreaType::Viewport)));
+      REQUIRE(a.Close(a.FindLeaf(AreaType::Outliner)));
+      CHECK(a.LeafCount() == 2);
+      CHECK_FALSE(a.IsHosted(AreaType::Outliner));
+      CHECK(a.Validate());
    }
 }
 
@@ -176,9 +218,10 @@ TEST_CASE("AreaLayout migration of the old workspace keys")
    SUBCASE("missing or zero widths mean the defaults")
    {
       const AreaLayout a = AreaLayout::FromLegacy(true, true, 0.f, -5.f, 0, 1);
-      CheckLegacy(a, kLayout);
+      const Legacy defaults { true, true, AreaLayout::kDefaultOutlinerWidth, AreaLayout::kDefaultPropertiesWidth, 0, 1 };
+      CheckLegacy(a, defaults);
       const AreaLayout b = AreaLayout::FromLegacy(true, true, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), 0, 1);
-      CheckLegacy(b, kLayout);
+      CheckLegacy(b, defaults);
       CHECK(a == b);
    }
 
@@ -209,14 +252,14 @@ TEST_CASE("AreaLayout migration of the old workspace keys")
       if (!l.FromJson(ws["layout"]))
          l = AreaLayout::FromLegacy(ws.value("outliner", true), ws.value("properties", true), ws.value("outliner_width", 0.f), ws.value("properties_width", 0.f),
             ws.value("left_editor", 0), ws.value("right_editor", 1));
-      CheckLegacy(l, { false, true, 200.f, 400.f, 2, 1 });
+      CheckLegacy(l, { false, true, AreaLayout::kDefaultOutlinerWidth, 400.f, 2, 1 });
    }
 
    SUBCASE("ToLegacy with panels on one side only")
    {
       AreaLayout l;
       REQUIRE(l.FromJson(Split("vertical", "second", 300, Leaf("Viewport"), Leaf("Properties"))));
-      CheckLegacy(l, { false, true, 200.f, 300.f, 0, 1 });
+      CheckLegacy(l, { false, true, AreaLayout::kDefaultOutlinerWidth, 300.f, 0, 1 });
       REQUIRE(l.FromJson(Split("vertical", "first", 300, Leaf("Script"), Leaf("Viewport"))));
       CheckLegacy(l, { true, false, 300.f, 360.f, 2, 1 });
    }
