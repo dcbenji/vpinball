@@ -118,13 +118,35 @@ std::vector<Vec2> Walk(const std::vector<Circle> &c, const float maxStep)
 
 std::vector<Vec2> Fit(const std::vector<Post> &posts, const float thickness, const float slack, const Wrap wrap)
 {
-   if (posts.size() < 2)
+   if (posts.size() < 2 || !std::isfinite(thickness) || !std::isfinite(slack))
       return {};
    std::vector<Circle> c;
    for (const Post &p : posts)
-      c.push_back({ p.x, p.y, std::max(p.r + 0.5f * thickness + slack, 0.01f), 1 });
+   {
+      if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.r))
+         return {};
+      const Circle n { p.x, p.y, std::max(p.r + 0.5f * thickness + slack, 0.01f), 1 };
+      // Near identical circles (posts stacked on each other) are one: keep the bigger
+      const auto same = std::find_if(c.begin(), c.end(), [&n](const Circle &o) { return std::fabs(o.x - n.x) < 0.01f && std::fabs(o.y - n.y) < 0.01f; });
+      if (same == c.end())
+         c.push_back(n);
+      else
+         same->r = std::max(same->r, n.r);
+   }
+   if (c.size() < 2)
+      return {};
+   // The selection order polygon can not wrap a post inside another one's circle: use the hull
+   const auto contains = [](const Circle &a, const Circle &b) { return std::hypot(a.x - b.x, a.y - b.y) + b.r <= a.r; };
+   Wrap mode = wrap;
+   for (size_t i = 0; i < c.size() && mode == SelectionOrder; i++)
+      for (size_t j = 0; j < c.size(); j++)
+         if (i != j && contains(c[i], c[j]))
+         {
+            mode = Hull;
+            break;
+         }
 
-   if (wrap == Hull)
+   if (mode == Hull)
    {
       const std::vector<int> order = HullOrder(c);
       std::vector<Circle> ring;

@@ -47,6 +47,14 @@ int main()
    for (const Vec2 &p : d) // No point of the band falls inside a post
       for (const Post &c : poly)
          assert(distTo(p, c) >= c.r + 4.f - 1e-2f);
+   // Stacked posts are one, bad input gives nothing
+   assert(Fit({ { 0, 0, 10 }, { 0, 0, 10 }, { 100, 0, 10 } }, 8.f, 0.f, Hull).size() == a.size());
+   assert(Fit({ { 0, 0, 10 }, { 0, 0, 5 } }, 8.f, 0.f, Hull).empty());
+   assert(Fit({ { 0, 0, 10 }, { NAN, 0, 10 } }, 8.f, 0.f, Hull).empty());
+   // A post inside another one's circle: selection order falls back to the hull (no point inside a post)
+   const std::vector<Post> nest = { { 0, 0, 10 }, { 100, 0, 10 }, { 50, 80, 10 }, { 3, 0, 2 } };
+   const auto e = Fit(nest, 8.f, 0.f, SelectionOrder);
+   assert(e.size() == Fit({ nest.begin(), nest.begin() + 3 }, 8.f, 0.f, Hull).size());
    std::puts("RubberFit ok");
    return 0;
 }

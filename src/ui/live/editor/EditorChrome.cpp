@@ -1270,7 +1270,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       // Navigation hints follow the navigation preferences
       hints.push_back({ "LMB", "Select" });
       if (!editor.IsInspectMode() && RubberBetweenPosts::CanApply(editor))
-         hints.push_back({ "Shift+A", "Rubber Between Posts" });
+         hints.push_back({ "Shift+A", "Add Part > Rubber Between Posts" });
       hints.push_back({ editor.m_navAltMiddleButton ? "MMB / Alt+LMB" : "MMB", "Orbit" });
       hints.push_back({ "Shift+MMB", "Pan" });
       if (editor.m_navTrackpad)

@@ -17,7 +17,7 @@ namespace VPX::EditorUI
 
 namespace
 {
-// Footprint of a post: centre = position XY, radius = half the mean of the X and Y extents of the mesh in table space
+// Footprint of a post: centre = centre of the XY bounds, radius = half the mean of the X and Y extents of the mesh in table space
 bool Footprint(Primitive *const prim, RubberFit::Post &post)
 {
    const Matrix3D &m = prim->RecalculateMatrices();
@@ -30,9 +30,11 @@ bool Footprint(Primitive *const prim, RubberFit::Post &post)
       loy = min(loy, w.y);
       hiy = max(hiy, w.y);
    }
-   post.x = prim->m_d.m_vPosition.x;
-   post.y = prim->m_d.m_vPosition.y;
-   post.r = lox <= hix ? 0.25f * ((hix - lox) + (hiy - loy)) : 0.f;
+   // Centre of the bounds (a mesh post's origin is not always at its middle)
+   const bool any = lox <= hix;
+   post.x = any ? 0.5f * (lox + hix) : prim->m_d.m_vPosition.x;
+   post.y = any ? 0.5f * (loy + hiy) : prim->m_d.m_vPosition.y;
+   post.r = any ? 0.25f * ((hix - lox) + (hiy - loy)) : 0.f;
    return true;
 }
 
@@ -77,15 +79,31 @@ bool RubberBetweenPosts::CanApply(const EditorUI &ed)
    return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr && SelectedPosts(ed).size() >= 2;
 }
 
-bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber)
+RubberBetweenPosts::PostMap RubberBetweenPosts::PostsByName(const EditorUI &ed)
+{
+   PostMap posts;
+   for (IEditable *const part : ed.m_table->GetParts())
+      if (part->GetItemType() == eItemPrimitive)
+         posts[lowerCase(part->GetName())] = static_cast<Primitive *>(part);
+   return posts;
+}
+
+bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap *const posts)
 {
    vector<Primitive *> prims;
    for (const string &name : rubber->m_d.m_postRefs)
    {
-      IEditable *const edit = ed.m_table->GetElementByName(name.c_str());
-      if (edit == nullptr || edit->GetItemType() != eItemPrimitive)
+      Primitive *prim = nullptr;
+      if (posts != nullptr)
+      {
+         if (const auto it = posts->find(lowerCase(name)); it != posts->end())
+            prim = it->second;
+      }
+      else if (IEditable *const edit = ed.m_table->GetElementByName(name.c_str()); edit != nullptr && edit->GetItemType() == eItemPrimitive)
+         prim = static_cast<Primitive *>(edit);
+      if (prim == nullptr)
          return false;
-      prims.push_back(static_cast<Primitive *>(edit));
+      prims.push_back(prim);
    }
    const vector<RubberFit::Vec2> pts = FitPosts(prims, rubber->m_d.m_thickness, rubber->m_d.m_postSlack, rubber->m_d.m_postWrap);
    if (pts.empty())
@@ -105,6 +123,12 @@ void RubberBetweenPosts::Apply(EditorUI &ed)
       return;
    }
    const vector<Primitive *> prims = SelectedPosts(ed);
+   for (Primitive *const prim : prims)
+      if (RubberFit::Post post; Footprint(prim, post) && post.r > kMaxPostRadius)
+      {
+         ed.Report(prim->GetName() + " is too big to be a post");
+         return;
+      }
    const int thickness = kDefaultThickness;
    const float height = kDefaultHeight;
    const vector<RubberFit::Vec2> pts = FitPosts(prims, thickness, 0.f, 0);

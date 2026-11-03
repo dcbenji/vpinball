@@ -297,7 +297,10 @@ private:
    vector<Rubber *> DependentRubbers(const vector<IEditable *> &posts) const;
    vector<IEditable *> SelectedEditables() const;
    void MarkDependentsForUndo(); // Rubbers following the selected parts, in the open undo record
+   void MarkDependentsForUndo(const vector<IEditable *> &touched);
+   void DetachSelectedRubbersFromUnselectedPosts(); // A linked rubber moved without its posts stops following them
    void RefitDependents(const vector<IEditable *> &touched);
+   void ClearSelectionTransform(const Matrix3D &transform, bool clearPosition, bool clearScale, bool clearRotation, const char *label);
    void RefitSelectionDependents() { RefitDependents(SelectedEditables()); }
    void DetachRubberRefs(IEditable *part); // The points of a linked rubber were edited by hand: it stops following its posts
    void DropDeletedPostRefs(const vector<IEditable *> &deleted); // In the open undo record of the deletion

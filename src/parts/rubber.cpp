@@ -730,6 +730,12 @@ void Rubber::Load(IObjectReader& reader)
       });
    if (m_d.m_hitHeight == -1.0f)
       m_d.m_hitHeight = m_d.m_height;
+   if (m_d.m_postRefs.size() < 2) // A band needs two posts to follow
+   {
+      m_d.m_postRefs.clear();
+      m_d.m_postWrap = 0;
+      m_d.m_postSlack = 0.f;
+   }
 }
 
 void Rubber::FlipY(const Vertex2D &pvCenter) { m_curve.FlipPointY(pvCenter); }

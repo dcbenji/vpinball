@@ -52,6 +52,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <unordered_set>
 
 #if defined(ENABLE_DX9)
 #include <shellapi.h>
@@ -3069,7 +3070,7 @@ void EditorUI::RenderUI()
          {
             Matrix3D tmp;
             if (GetSelectionTransform(tmp))
-               SetSelectionTransform(tmp, true, false, false);
+               ClearSelectionTransform(tmp, true, false, false, "Clear Location");
          }
          else if (!io.KeyCtrl && (m_navBlenderTransform != io.KeyShift)) // Shift picks the other scheme
             BeginModalTransform(ModalOp::Grab);
@@ -3088,7 +3089,7 @@ void EditorUI::RenderUI()
             {
                Matrix3D tmp;
                if (GetSelectionTransform(tmp))
-                  SetSelectionTransform(tmp, false, true, false);
+                  ClearSelectionTransform(tmp, false, true, false, "Clear Scale");
             }
             else if (m_navBlenderTransform != io.KeyShift)
                BeginModalTransform(ModalOp::Scale);
@@ -3105,7 +3106,7 @@ void EditorUI::RenderUI()
          {
             Matrix3D tmp;
             if (GetSelectionTransform(tmp))
-               SetSelectionTransform(tmp, false, false, true);
+               ClearSelectionTransform(tmp, false, false, true, "Clear Rotation");
          }
          else if (!io.KeyCtrl && (m_navBlenderTransform != io.KeyShift)) // Shift picks the other scheme
             BeginModalTransform(ModalOp::Rotate);
@@ -4052,34 +4053,55 @@ vector<IEditable *> EditorUI::SelectedEditables() const
    return parts;
 }
 
-// Rubbers (other than the touched parts themselves) that follow one of the touched primitives
+// Linked rubbers that follow one of the touched primitives, or are themselves touched (their own fields changed)
 vector<Rubber *> EditorUI::DependentRubbers(const vector<IEditable *> &posts) const
 {
    vector<Rubber *> rubbers;
+   std::unordered_set<string> names; // Lowercase names of the touched primitives
+   for (const IEditable *const post : posts)
+      if (post->GetItemType() == eItemPrimitive)
+         names.insert(lowerCase(post->GetName()));
    for (IEditable *const part : m_table->GetParts())
    {
       if (part->GetItemType() != eItemRubber || static_cast<Rubber *>(part)->m_d.m_postRefs.empty())
          continue;
       Rubber *const rubber = static_cast<Rubber *>(part);
-      const bool follows = std::ranges::any_of(posts, [rubber](const IEditable *post)
-         { return post->GetItemType() == eItemPrimitive && std::ranges::any_of(rubber->m_d.m_postRefs, [post](const string &ref) { return StrCompareNoCase(ref, post->GetName()); }); });
-      if (follows)
+      if (std::ranges::find(posts, part) != posts.end() || std::ranges::any_of(rubber->m_d.m_postRefs, [&names](const string &ref) { return names.contains(lowerCase(ref)); }))
          rubbers.push_back(rubber);
    }
    return rubbers;
 }
 
-void EditorUI::MarkDependentsForUndo()
+void EditorUI::MarkDependentsForUndo() { MarkDependentsForUndo(SelectedEditables()); }
+
+void EditorUI::MarkDependentsForUndo(const vector<IEditable *> &touched)
 {
-   for (Rubber *const rubber : DependentRubbers(SelectedEditables()))
+   for (Rubber *const rubber : DependentRubbers(touched))
       m_undo.MarkForUndo(rubber);
+}
+
+void EditorUI::DetachSelectedRubbersFromUnselectedPosts()
+{
+   const vector<IEditable *> selected = SelectedEditables();
+   std::unordered_set<string> names;
+   for (const IEditable *const part : selected)
+      if (part->GetItemType() == eItemPrimitive)
+         names.insert(lowerCase(part->GetName()));
+   for (IEditable *const part : selected)
+      if (part->GetItemType() == eItemRubber)
+         if (const auto &refs = static_cast<Rubber *>(part)->m_d.m_postRefs; !refs.empty() && !std::ranges::all_of(refs, [&names](const string &ref) { return names.contains(lowerCase(ref)); }))
+            DetachRubberRefs(part);
 }
 
 // The record of the edit already holds the rubbers (MarkDependentsForUndo before it, DropDeletedPostRefs for a deletion)
 void EditorUI::RefitDependents(const vector<IEditable *> &touched)
 {
-   for (Rubber *const rubber : DependentRubbers(touched))
-      RubberBetweenPosts::Refit(*this, rubber);
+   const vector<Rubber *> rubbers = DependentRubbers(touched);
+   if (rubbers.empty())
+      return;
+   const RubberBetweenPosts::PostMap posts = RubberBetweenPosts::PostsByName(*this);
+   for (Rubber *const rubber : rubbers)
+      RubberBetweenPosts::Refit(*this, rubber, &posts);
 }
 
 void EditorUI::DetachRubberRefs(IEditable *const part)
@@ -4090,7 +4112,7 @@ void EditorUI::DetachRubberRefs(IEditable *const part)
    d.m_postRefs.clear();
    d.m_postWrap = 0;
    d.m_postSlack = 0.f;
-   Report(part->GetName() + " no longer follows its posts (points edited)");
+   Report(part->GetName() + " no longer follows its posts");
 }
 
 void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
@@ -4101,6 +4123,7 @@ void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
          names.push_back(part->GetName());
    if (names.empty())
       return;
+   const RubberBetweenPosts::PostMap posts = RubberBetweenPosts::PostsByName(*this);
    for (IEditable *const part : m_table->GetParts()) // The deleted parts are no longer in the table
    {
       if (part->GetItemType() != eItemRubber)
@@ -4119,7 +4142,7 @@ void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
          rubber->m_d.m_postSlack = 0.f;
       }
       else
-         RubberBetweenPosts::Refit(*this, rubber);
+         RubberBetweenPosts::Refit(*this, rubber, &posts);
    }
 }
 
@@ -4985,6 +5008,21 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
    return bounds.left <= bounds.right;
 }
 
+// Alt+G / Alt+S / Alt+R: one undo step for the reset (the transform funnel itself does not record)
+void EditorUI::ClearSelectionTransform(const Matrix3D &transform, bool clearPosition, bool clearScale, bool clearRotation, const char *label)
+{
+   if (m_table->m_liveBaseTable == nullptr)
+   {
+      m_undo.BeginUndo();
+      for (const auto &part : m_multiSel)
+         m_undo.MarkForUndo(part->GetEditable());
+      MarkDependentsForUndo();
+      m_undo.SetLabel(CountLabel(label, m_multiSel.size(), m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName()));
+      m_undo.EndUndo();
+   }
+   SetSelectionTransform(transform, clearPosition, clearScale, clearRotation);
+}
+
 void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation)
 {
    if (m_pointEditPart)
@@ -5092,6 +5130,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             continue;
          applyTransform(part, partTransform, clearPosition, clearScale, clearRotation);
       }
+      DetachSelectedRubbersFromUnselectedPosts();
       RefitSelectionDependents();
       return;
    }
@@ -5108,6 +5147,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          continue;
       applyTransform(part, partTransform * delta, false, false, false);
    }
+   DetachSelectedRubbersFromUnselectedPosts();
    RefitSelectionDependents();
 }
 

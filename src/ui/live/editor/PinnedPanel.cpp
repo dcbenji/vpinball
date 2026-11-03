@@ -256,8 +256,13 @@ void PinnedPanel::FlushPendingCopy()
       return;
    // One undo step for all the parts: they are snapshotted before the value is written
    editor.m_undo.BeginUndo();
+   vector<IEditable *> touched;
    for (const std::shared_ptr<EditorUIPart> &part : targets)
+   {
       editor.m_undo.MarkForUndo(part->GetEditable());
+      touched.push_back(part->GetEditable());
+   }
+   editor.MarkDependentsForUndo(touched); // Rubbers following the edited posts (Rubber Between Posts)
    for (const std::shared_ptr<EditorUIPart> &part : targets)
       def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
    editor.m_undo.SetFieldLabel("Copy to Selected: " + (def->label.empty() ? key.prop : def->label));
@@ -270,6 +275,7 @@ void PinnedPanel::FlushPendingCopy()
       editor.m_player->m_physics->Update(part->GetEditable());
       part->SyncVisibilityOverrides();
    }
+   editor.RefitDependents(touched);
    editor.m_liveUI.PushNotification("Copied '"s + (def->label.empty() ? key.prop : def->label) + "' to " + std::to_string(targets.size()) + (targets.size() == 1 ? " part"s : " parts"s), 2500);
 }
 
@@ -820,6 +826,7 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       if (altApply)
          for (const std::shared_ptr<EditorUIPart> &selected : editor.m_multiSel)
             editor.m_undo.MarkForUndo(selected->GetEditable());
+      editor.MarkDependentsForUndo(altApply ? editor.SelectedEditables() : vector<IEditable *> { part }); // Rubbers following an edited post
    }
    m_applyArmed = altApply;
    // Material edits are undoable too (outside of an inspection session): the material is snapshotted before the rows are drawn
@@ -925,6 +932,8 @@ void PinnedPanel::RenderObjectRows(PropertyPane &props, PinKind kind, const stri
       {
          editor.m_renderer->ReinitRenderable(part->GetIRenderable());
          editor.m_player->m_physics->Update(part);
+         if (withUndo) // The rubbers were marked in the record above
+            editor.RefitDependents(altApply ? editor.SelectedEditables() : vector<IEditable *> { part });
       }
       if (inspect)
       {
