@@ -34,6 +34,8 @@ public:
          m_part->m_d.m_vCenter = pos;
    }
 
+   bool UIHideAffectsRender() const override { return false; } // Hiding a light in the editor must not switch its illumination off
+
    void RenderOverlay(const EditorRenderContext& ctx) override;
 
    void UpdatePropertyPane(PropertyPane& props) override;
