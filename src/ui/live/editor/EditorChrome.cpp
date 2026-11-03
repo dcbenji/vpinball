@@ -262,8 +262,18 @@ void EditorChrome::RenderMenuBar()
             editor.DeleteAction();
          if (ImGui::MenuItem("Add Part...", "Shift+A", false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
             RequestAddPartPopup(ImGui::GetMousePos());
-         if (ImGui::MenuItem("Rubber Between Posts", nullptr, false, RubberBetweenPosts::CanApply(editor)))
-            RubberBetweenPosts::Apply(editor);
+         if (ImGui::BeginMenu("Rubber", !editor.m_table->IsLocked() && !editor.IsInspectMode() && editor.m_pointEditPart == nullptr))
+         {
+            if (ImGui::MenuItem("Create Rubber Around Selected Posts", nullptr, false, RubberBetweenPosts::CanCreate(editor)))
+               RubberBetweenPosts::Create(editor);
+            if (ImGui::MenuItem("Bind Selected", nullptr, false, RubberBetweenPosts::CanBind(editor)))
+               RubberBetweenPosts::Bind(editor);
+            if (ImGui::MenuItem("Autofit Now", nullptr, false, RubberBetweenPosts::CanAutofit(editor)))
+               RubberBetweenPosts::Autofit(editor);
+            if (ImGui::MenuItem("Detach From Posts", nullptr, false, RubberBetweenPosts::CanDetach(editor)))
+               RubberBetweenPosts::Detach(editor);
+            ImGui::EndMenu();
+         }
          if (ImGui::MenuItem("Add Wireform", nullptr, false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
          {
             editor.m_addPartType = eItemPrimitive;
@@ -860,11 +870,11 @@ void EditorChrome::RenderToolbar()
             column = (column + 1) % 5;
          }
          ImGui::Separator();
-         const bool canRubber = RubberBetweenPosts::CanApply(editor);
+         const bool canRubber = RubberBetweenPosts::CanCreate(editor);
          ImGui::BeginDisabled(!canRubber);
-         if (ImGui::Selectable("Rubber Between Posts"))
+         if (ImGui::Selectable("Create Rubber Around Selected Posts"))
          {
-            RubberBetweenPosts::Apply(editor);
+            RubberBetweenPosts::Create(editor);
             ImGui::CloseCurrentPopup();
          }
          ImGui::EndDisabled();
@@ -1269,8 +1279,8 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    {
       // Navigation hints follow the navigation preferences
       hints.push_back({ "LMB", "Select" });
-      if (!editor.IsInspectMode() && RubberBetweenPosts::CanApply(editor))
-         hints.push_back({ "Shift+A", "Add Part > Rubber Between Posts" });
+      if (!editor.IsInspectMode() && RubberBetweenPosts::CanCreate(editor))
+         hints.push_back({ "Shift+A", "Create Rubber Around Selected Posts" });
       hints.push_back({ editor.m_navAltMiddleButton ? "MMB / Alt+LMB" : "MMB", "Orbit" });
       hints.push_back({ "Shift+MMB", "Pan" });
       if (editor.m_navTrackpad)

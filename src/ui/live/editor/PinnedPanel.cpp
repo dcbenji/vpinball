@@ -262,7 +262,7 @@ void PinnedPanel::FlushPendingCopy()
       editor.m_undo.MarkForUndo(part->GetEditable());
       touched.push_back(part->GetEditable());
    }
-   editor.MarkDependentsForUndo(touched); // Rubbers following the edited posts (Rubber Between Posts)
+   editor.MarkDependentsForUndo(touched); // Rubbers following the edited posts (guided rubbers)
    for (const std::shared_ptr<EditorUIPart> &part : targets)
       def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
    editor.m_undo.SetFieldLabel("Copy to Selected: " + (def->label.empty() ? key.prop : def->label));

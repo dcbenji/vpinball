@@ -476,6 +476,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(WSPC), "wire_spacing" },
             { FID(WCAP), "wire_caps" },
             { FID(WSEG), "wire_sides" },
+            { FID(RGRD), "rubber_guide_radius" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
@@ -539,8 +540,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(RVIS), "visible" },
          { FID(WDTP), "thickness" },
          { FID(RPST), "post_refs" },
-         { FID(RPWR), "post_wrap" },
-         { FID(RPSL), "post_slack" },
+         { FID(RPRN), "post_roundness" },
       },
       { FID(RPST) });
 

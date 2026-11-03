@@ -28,11 +28,10 @@ public:
    float m_rotZ;
    bool m_staticRendering;
    bool m_showInEditor;
-   // Rubber Between Posts (editor generator): names of the posts (primitives) the band follows, empty when not linked. Only saved when
-   // not empty, so tables without it save the same bytes.
+   // Guided rubber (editor generator, see RubberBetweenPosts): names of the posts (primitives) the band follows, empty when not linked, and
+   // the roundness (0..1) of its free spans. Only saved when linked, so tables without it save the same bytes.
    vector<string> m_postRefs;
-   int m_postWrap = 0; // RubberFit::Wrap
-   float m_postSlack = 0.f;
+   float m_postRoundness = 0.f;
 };
 
 class Rubber :

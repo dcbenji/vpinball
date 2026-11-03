@@ -2,31 +2,34 @@
 
 #pragma once
 
+#include <string>
 #include <vector>
 
 namespace VPX::EditorUI::RubberFit
 {
 
-struct Vec2
-{
-   float x, y;
-};
-
-// A post: centre and radius of its footprint (table XY)
+// A post (guide): circle of its footprint in table XY
 struct Post
 {
    float x, y, r;
 };
 
-enum Wrap
+// A baked rubber drag point
+struct Point
 {
-   Hull = 0, // Convex hull of the post circles (inner posts are ignored)
-   SelectionOrder = 1 // Closed polygon through the posts in the given order, wrapped on the outside of convex corners and on the inside of concave ones
+   float x, y;
+   bool smooth;
 };
 
-// Centreline of a rubber band stretched between circular posts: the posts' circles grown by thickness/2 + slack, tangent lines between
-// consecutive circles, and one smooth point on each arc every 45 degrees at most (the two tangent points at least).
-// Returns the closed loop of points (not repeating the first one), empty if no loop can be fit (fewer than 2 posts).
-std::vector<Vec2> Fit(const std::vector<Post> &posts, float thickness, float slack, Wrap wrap);
+// Rubber around circular posts, a port of Visual Pinball Engine's guided rubber (VisualPinball.Unity Rubber/Guide: RubberCircleHullSolver and
+// RubberPathSplineBaker).
+// The path is the convex hull of the post circles grown by thickness/2: supported arcs on the circles joined by free spans (cubic Beziers,
+// straight at roundness 0, relaxed towards a rounded curve up to roundness 1). Posts inside the hull are ignored, a single post gives its full
+// circle. The path may not cut a post. It is then baked to drag points sampled so that VPX's own Catmull-Rom curve through them stays within
+// kRenderTolerance of the exact path.
+// Returns false and sets error if no path can be fit (points untouched).
+bool Fit(const std::vector<Post> &posts, float thickness, float roundness, std::vector<Point> &points, std::string &error);
+
+constexpr float kRenderTolerance = 0.05f; // VPU
 
 }

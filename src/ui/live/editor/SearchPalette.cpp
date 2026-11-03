@@ -195,7 +195,10 @@ void SearchPalette::BuildOperators()
          ed.m_addWireform = true;
       });
    add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
-   add("Object" + sep + "Rubber Between Posts", "", [&ed]() { return RubberBetweenPosts::CanApply(ed); }, [&ed]() { RubberBetweenPosts::Apply(ed); });
+   add("Object" + sep + "Rubber" + sep + "Create Rubber Around Selected Posts", "", [&ed]() { return RubberBetweenPosts::CanCreate(ed); }, [&ed]() { RubberBetweenPosts::Create(ed); });
+   add("Object" + sep + "Rubber" + sep + "Bind Selected", "", [&ed]() { return RubberBetweenPosts::CanBind(ed); }, [&ed]() { RubberBetweenPosts::Bind(ed); });
+   add("Object" + sep + "Rubber" + sep + "Autofit Now", "", [&ed]() { return RubberBetweenPosts::CanAutofit(ed); }, [&ed]() { RubberBetweenPosts::Autofit(ed); });
+   add("Object" + sep + "Rubber" + sep + "Detach From Posts", "", [&ed]() { return RubberBetweenPosts::CanDetach(ed); }, [&ed]() { RubberBetweenPosts::Detach(ed); });
    add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
    add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
    add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });

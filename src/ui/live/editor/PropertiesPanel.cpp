@@ -884,7 +884,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
          else
             editor.m_undo.MarkForUndo(editable);
-         editor.MarkDependentsForUndo(); // Rubbers following an edited post (Rubber Between Posts)
+         editor.MarkDependentsForUndo(); // Rubbers following an edited post (guided rubbers)
          // Alt held while editing: the fields also write to the other selected parts, snapshotted in the same record
          const bool areaActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
             || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsAnyItemActive());

@@ -109,6 +109,7 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_wireSpacing = wireDefaults.m_wireSpacing;
    m_d.m_wireCaps = wireDefaults.m_wireCaps;
    m_d.m_wireSides = wireDefaults.m_wireSides;
+   m_d.m_rubberGuideRadius = wireDefaults.m_rubberGuideRadius;
    m_wireCurve.ClearPoints();
    m_inPlayState = m_d.m_visible;
 }
@@ -2124,6 +2125,8 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteInt(FID(WSEG), m_d.m_wireSides);
       m_wireCurve.SavePoints(writer);
    }
+   if (m_d.m_rubberGuideRadius > 0.f) // Optional field, other primitives save byte-identical
+      writer.WriteFloat(FID(RGRD), m_d.m_rubberGuideRadius);
    writer.WriteFloat(FID(PIDB), m_d.m_depthBias);
    writer.WriteFloat(FID(TRGN), m_d.m_tracedGain);
    writer.WriteFloat(FID(TRHS), m_d.m_tracedHaloSize);
@@ -2236,6 +2239,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(U3DM): m_d.m_use3DMesh = reader.AsBool(); break;
          case FID(EBFC): m_d.m_backfacesEnabled = reader.AsBool(); break;
          case FID(CLBF): m_d.m_cullBackfaces = reader.AsBool(); break;
+         case FID(RGRD): { const float v = reader.AsFloat(); m_d.m_rubberGuideRadius = v > 0.f ? v : 0.f; break; }
          case FID(WGEN): m_d.m_wireGen = reader.AsBool(); break;
          case FID(WDIA): m_d.m_wireDiameter = reader.AsFloat(); break;
          case FID(WRLS): m_d.m_wireRails = clamp(reader.AsInt(), 1, 3); break;

@@ -265,10 +265,9 @@ private:
       bool plane = false; // Scale: the axes perpendicular to the axis
       float angle = 0.f; // Degrees
       float factor = 1.f;
-      int rbThickness = 8; // Rubber Between Posts: the created rubber is the selection, adjusting refits it in place
+      int rbThickness = 8; // Guided rubber: the created or bound rubber is the selection, adjusting refits it in place
       float rbHeight = 25.f;
-      int rbWrap = 0; // RubberFit::Wrap
-      float rbSlack = 0.f;
+      float rbRoundness = 0.f;
       int rails = 1; // Wireform profile
       float diameter = 6.f;
       float spacing = 12.f;
@@ -292,7 +291,7 @@ private:
    unsigned int m_lastUndoId = 0;
    bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc
 
-   // Rubber Between Posts (see RubberBetweenPosts): the rubbers that follow primitives by name. A record that moves posts must hold the rubbers too
+   // Guided rubbers (see RubberBetweenPosts): the rubbers that follow primitives by name. A record that moves posts must hold the rubbers too
    // (MarkDependentsForUndo, with the record open, before the move), the move then refits them (RefitDependents), so that one undo reverts both.
    vector<Rubber *> DependentRubbers(const vector<IEditable *> &posts) const;
    vector<IEditable *> SelectedEditables() const;

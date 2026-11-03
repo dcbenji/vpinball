@@ -3998,8 +3998,7 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       else
       {
          d.m_postRefs.clear();
-         d.m_postWrap = 0;
-         d.m_postSlack = 0.f;
+         d.m_postRoundness = 0.f;
       }
    }
    if (!pasted.empty())
@@ -4110,8 +4109,7 @@ void EditorUI::DetachRubberRefs(IEditable *const part)
       return;
    RubberData &d = static_cast<Rubber *>(part)->m_d;
    d.m_postRefs.clear();
-   d.m_postWrap = 0;
-   d.m_postSlack = 0.f;
+   d.m_postRoundness = 0.f;
    Report(part->GetName() + " no longer follows its posts");
 }
 
@@ -4135,12 +4133,8 @@ void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
          continue;
       m_undo.MarkForUndo(rubber);
       std::erase_if(refs, gone);
-      if (refs.size() < 2) // Nothing left to follow: keeps its shape
-      {
-         refs.clear();
-         rubber->m_d.m_postWrap = 0;
-         rubber->m_d.m_postSlack = 0.f;
-      }
+      if (refs.empty()) // Nothing left to follow: keeps its shape
+         rubber->m_d.m_postRoundness = 0.f;
       else
          RubberBetweenPosts::Refit(*this, rubber, &posts);
    }
@@ -5455,7 +5449,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    case LastOperation::Type::Move: return "Move";
    case LastOperation::Type::Rotate: return "Rotate";
    case LastOperation::Type::Scale: return "Scale";
-   case LastOperation::Type::RubberBetweenPosts: return "Rubber Between Posts";
+   case LastOperation::Type::RubberBetweenPosts: return "Rubber Around Posts";
    case LastOperation::Type::None: break;
    }
    return "";
@@ -5507,10 +5501,8 @@ void EditorUI::ApplyLastOperation()
       rubber->m_d.m_thickness = m_lastOp.rbThickness;
       rubber->m_d.m_height = m_lastOp.rbHeight;
       rubber->m_d.m_hitHeight = m_lastOp.rbHeight;
-      rubber->m_d.m_postWrap = m_lastOp.rbWrap;
-      rubber->m_d.m_postSlack = m_lastOp.rbSlack;
-      if (!RubberBetweenPosts::Refit(*this, rubber))
-         Report("Rubber Between Posts: no loop fits these posts");
+      rubber->m_d.m_postRoundness = m_lastOp.rbRoundness;
+      RubberBetweenPosts::Refit(*this, rubber); // Reports why if no path fits (the shape stays)
       return;
    }
    case LastOperation::Type::Wireform:
@@ -5651,11 +5643,8 @@ bool EditorUI::RenderAdjustParameters()
       changed |= ImGui::DragInt("##RbThickness", &m_lastOp.rbThickness, 0.2f, 1, 200);
       row("Height");
       changed |= ImGui::DragFloat("##RbHeight", &m_lastOp.rbHeight, 0.5f, 0.f, 0.f, "%.1f");
-      row("Wrap");
-      static constexpr const char *wraps[] = { "Hull", "Selection Order" };
-      changed |= ImGui::Combo("##RbWrap", &m_lastOp.rbWrap, wraps, 2);
-      row("Slack");
-      changed |= ImGui::DragFloat("##RbSlack", &m_lastOp.rbSlack, 0.1f, -50.f, 50.f, "%.2f");
+      row("Roundness");
+      changed |= ImGui::SliderFloat("##RbRoundness", &m_lastOp.rbRoundness, 0.f, 1.f, "%.2f");
       break;
    }
    case LastOperation::Type::None: break;

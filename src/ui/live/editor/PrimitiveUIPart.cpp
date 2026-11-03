@@ -614,6 +614,16 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
+   if (!m_part->m_d.m_wireGen && props.BeginSection("Rubber Guide"s))
+   {
+      props.InputFloat<Primitive>(
+         m_part, "Rubber Guide Radius"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_rubberGuideRadius; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_rubberGuideRadius = v > 0.f ? v : 0.f; }, PropertyPane::Unit::VPLength, 2,
+         "Radius of this primitive as a post of a guided rubber (0 = from the size of the mesh). Rubbers around it are refit");
+      props.EndSection();
+   }
+
    //props.TimerSection(m_part);
 }
 

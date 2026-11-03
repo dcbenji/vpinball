@@ -668,12 +668,11 @@ void Rubber::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteBool(FID(REEN), m_d.m_reflectionEnabled);
    writer.WriteString(FID(MAPH), m_d.m_szPhysicsMaterial);
    writer.WriteBool(FID(OVPH), m_d.m_overwritePhysics);
-   if (m_d.m_postRefs.size() >= 2)
+   if (!m_d.m_postRefs.empty())
    {
       for (const string &name : m_d.m_postRefs)
          writer.WriteWideString(FID(RPST), MakeWString(name));
-      writer.WriteInt(FID(RPWR), m_d.m_postWrap);
-      writer.WriteFloat(FID(RPSL), m_d.m_postSlack);
+      writer.WriteFloat(FID(RPRN), m_d.m_postRoundness);
    }
    SaveSharedEditableFields(writer);
    m_curve.SavePoints(writer);
@@ -684,8 +683,7 @@ void Rubber::Load(IObjectReader& reader)
 {
    SetDefaults(false);
    m_d.m_postRefs.clear();
-   m_d.m_postWrap = 0;
-   m_d.m_postSlack = 0.f;
+   m_d.m_postRoundness = 0.f;
    m_d.m_hitHeight = -1.0f;
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
@@ -720,8 +718,7 @@ void Rubber::Load(IObjectReader& reader)
          case FID(MAPH): m_d.m_szPhysicsMaterial = reader.AsString(); break;
          case FID(OVPH): m_d.m_overwritePhysics = reader.AsBool(); break;
          case FID(RPST): m_d.m_postRefs.push_back(MakeString(reader.AsWideString())); break;
-         case FID(RPWR): m_d.m_postWrap = reader.AsInt(); break;
-         case FID(RPSL): m_d.m_postSlack = reader.AsFloat(); break;
+         case FID(RPRN): m_d.m_postRoundness = reader.AsFloat(); break;
          case FID(PNTS): break; // Empty tag placed before drag point data (unused)
          case FID(DPNT): m_curve.LoadPointToken(reader); break;
          default: LoadSharedEditableField(tag, reader); break;
@@ -730,12 +727,7 @@ void Rubber::Load(IObjectReader& reader)
       });
    if (m_d.m_hitHeight == -1.0f)
       m_d.m_hitHeight = m_d.m_height;
-   if (m_d.m_postRefs.size() < 2) // A band needs two posts to follow
-   {
-      m_d.m_postRefs.clear();
-      m_d.m_postWrap = 0;
-      m_d.m_postSlack = 0.f;
-   }
+   m_d.m_postRoundness = std::isfinite(m_d.m_postRoundness) && !m_d.m_postRefs.empty() ? clamp(m_d.m_postRoundness, 0.f, 1.f) : 0.f;
 }
 
 void Rubber::FlipY(const Vertex2D &pvCenter) { m_curve.FlipPointY(pvCenter); }

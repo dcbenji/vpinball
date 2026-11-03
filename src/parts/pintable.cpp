@@ -5929,7 +5929,7 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
       return;
    if (surface->GetItemType() == eItemPrimitive)
    {
-      // Rubbers following a post (Rubber Between Posts) hold the names of their posts
+      // Rubbers following a post (guided rubbers) hold the names of their posts
       for (IEditable *const pedit : m_vedit)
          if (pedit->GetItemType() == eItemRubber)
             for (string &ref : static_cast<Rubber *>(pedit)->m_d.m_postRefs)

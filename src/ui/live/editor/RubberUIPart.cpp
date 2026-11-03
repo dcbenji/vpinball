@@ -3,6 +3,7 @@
 #include "RubberUIPart.h"
 
 #include "math/matrix.h"
+#include "imgui/imgui.h"
 
 namespace VPX::EditorUI
 {
@@ -30,6 +31,19 @@ void RubberUIPart::UpdatePropertyPane(PropertyPane& props)
    props.EditableHeader("Rubber"s, m_part);
 
    UpdateCurveSection(props);
+
+   if (!m_part->m_d.m_postRefs.empty() && props.BeginSection("Posts"s))
+   {
+      props.InputFloat<Rubber>(
+         m_part, "Roundness"s, //
+         [](const Rubber* rubber) { return rubber->m_d.m_postRoundness; }, //
+         [](Rubber* rubber, float v) { rubber->m_d.m_postRoundness = clamp(v, 0.f, 1.f); }, PropertyPane::Unit::None, 2,
+         "0 = straight between the posts, 1 = fully relaxed (the rubber follows its posts and is refit when they change)");
+      if (!props.IsHarvest())
+         for (const string &name : m_part->m_d.m_postRefs)
+            ImGui::TextDisabled("%s", name.c_str());
+      props.EndSection();
+   }
 
    if (props.BeginSection("Visuals"s))
    {

@@ -111,6 +111,7 @@ public:
    float m_wireSpacing = 12.f; // between rails
    int m_wireCaps = 2; // 0 none, 1 flat, 2 round
    int m_wireSides = 8;
+   float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
 };

@@ -17,8 +17,9 @@ namespace VPX::EditorUI
 
 namespace
 {
-// Footprint of a post: centre = centre of the XY bounds, radius = half the mean of the X and Y extents of the mesh in table space
-bool Footprint(Primitive *const prim, RubberFit::Post &post)
+// Footprint of a post: the Rubber Guide Radius if set, else half the mean of the X and Y extents of the mesh in table space; the centre is
+// the centre of the XY bounds (a mesh post's origin is not always at its middle)
+bool Footprint(Primitive *const prim, RubberFit::Post &post, string &error)
 {
    const Matrix3D &m = prim->RecalculateMatrices();
    float lox = FLT_MAX, loy = FLT_MAX, hix = -FLT_MAX, hiy = -FLT_MAX;
@@ -30,14 +31,55 @@ bool Footprint(Primitive *const prim, RubberFit::Post &post)
       loy = min(loy, w.y);
       hiy = max(hiy, w.y);
    }
-   // Centre of the bounds (a mesh post's origin is not always at its middle)
    const bool any = lox <= hix;
    post.x = any ? 0.5f * (lox + hix) : prim->m_d.m_vPosition.x;
    post.y = any ? 0.5f * (loy + hiy) : prim->m_d.m_vPosition.y;
-   post.r = any ? 0.25f * ((hix - lox) + (hiy - loy)) : 0.f;
+   if (prim->m_d.m_rubberGuideRadius > 0.f)
+      post.r = prim->m_d.m_rubberGuideRadius;
+   else
+   {
+      post.r = any ? 0.25f * ((hix - lox) + (hiy - loy)) : 0.f;
+      if (post.r > RubberBetweenPosts::kMaxAutoPostRadius)
+      {
+         error = prim->GetName() + " is too big to be a post (set its Rubber Guide Radius)";
+         return false;
+      }
+   }
+   if (!(post.r > 0.f))
+   {
+      error = prim->GetName() + " has no footprint (set its Rubber Guide Radius)";
+      return false;
+   }
    return true;
 }
 
+bool FitPosts(const vector<Primitive *> &prims, const float thickness, const float roundness, vector<RubberFit::Point> &pts, string &error)
+{
+   vector<RubberFit::Post> posts;
+   for (Primitive *const prim : prims)
+   {
+      RubberFit::Post post;
+      if (!Footprint(prim, post, error))
+         return false;
+      posts.push_back(post);
+   }
+   return RubberFit::Fit(posts, thickness, roundness, pts, error);
+}
+
+void SetPoints(Rubber *const rubber, const vector<RubberFit::Point> &pts, const float z)
+{
+   rubber->m_curve.ClearPoints();
+   for (const RubberFit::Point &p : pts)
+      rubber->m_curve.PushPoint(std::make_unique<DragPoint>(&rubber->m_curve, p.x, p.y, z, p.smooth));
+}
+
+}
+
+void RubberBetweenPosts::Refresh(EditorUI &ed, Rubber *const rubber)
+{
+   ed.m_renderer->ReinitRenderable(rubber);
+   ed.m_renderer->InvalidateShadowContent();
+   ed.m_player->m_physics->Update(rubber);
 }
 
 vector<Primitive *> RubberBetweenPosts::SelectedPosts(const EditorUI &ed)
@@ -50,34 +92,29 @@ vector<Primitive *> RubberBetweenPosts::SelectedPosts(const EditorUI &ed)
    return posts;
 }
 
-namespace
+vector<Rubber *> RubberBetweenPosts::SelectedLinkedRubbers(const EditorUI &ed)
 {
-// Drag points of the band around the posts, empty if no loop can be fit
-vector<RubberFit::Vec2> FitPosts(const vector<Primitive *> &prims, const int thickness, const float slack, const int wrap)
-{
-   vector<RubberFit::Post> posts;
-   for (Primitive *const prim : prims)
-   {
-      RubberFit::Post post;
-      Footprint(prim, post);
-      posts.push_back(post);
-   }
-   vector<RubberFit::Vec2> pts = RubberFit::Fit(posts, static_cast<float>(thickness), slack, wrap == 1 ? RubberFit::SelectionOrder : RubberFit::Hull);
-   return pts.size() >= 3 ? pts : vector<RubberFit::Vec2>();
+   vector<Rubber *> rubbers;
+   for (const auto &part : ed.m_multiSel)
+      if (IEditable *const edit = part ? part->GetEditable() : nullptr; edit && edit->GetItemType() == eItemRubber && !static_cast<Rubber *>(edit)->m_d.m_postRefs.empty())
+         rubbers.push_back(static_cast<Rubber *>(edit));
+   return rubbers;
 }
 
-void SetPoints(Rubber *const rubber, const vector<RubberFit::Vec2> &pts, const float z)
+bool RubberBetweenPosts::CanCreate(const EditorUI &ed) { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr && SelectedPosts(ed).size() >= 2; }
+
+bool RubberBetweenPosts::CanBind(const EditorUI &ed)
 {
-   rubber->m_curve.ClearPoints();
-   for (const RubberFit::Vec2 &p : pts)
-      rubber->m_curve.PushPoint(std::make_unique<DragPoint>(&rubber->m_curve, p.x, p.y, z, true));
-}
+   if (ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_pointEditPart != nullptr || SelectedPosts(ed).empty())
+      return false;
+   size_t rubbers = 0;
+   for (const auto &part : ed.m_multiSel)
+      if (IEditable *const edit = part ? part->GetEditable() : nullptr; edit && edit->GetItemType() == eItemRubber)
+         rubbers++;
+   return rubbers == 1;
 }
 
-bool RubberBetweenPosts::CanApply(const EditorUI &ed)
-{
-   return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr && SelectedPosts(ed).size() >= 2;
-}
+bool RubberBetweenPosts::CanAutofit(const EditorUI &ed) { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr && !SelectedLinkedRubbers(ed).empty(); }
 
 RubberBetweenPosts::PostMap RubberBetweenPosts::PostsByName(const EditorUI &ed)
 {
@@ -90,6 +127,8 @@ RubberBetweenPosts::PostMap RubberBetweenPosts::PostsByName(const EditorUI &ed)
 
 bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap *const posts)
 {
+   if (ed.IsInspectMode()) // Not while playing: the live table is only inspected
+      return false;
    vector<Primitive *> prims;
    for (const string &name : rubber->m_d.m_postRefs)
    {
@@ -102,43 +141,43 @@ bool RubberBetweenPosts::Refit(EditorUI &ed, Rubber *const rubber, const PostMap
       else if (IEditable *const edit = ed.m_table->GetElementByName(name.c_str()); edit != nullptr && edit->GetItemType() == eItemPrimitive)
          prim = static_cast<Primitive *>(edit);
       if (prim == nullptr)
+      {
+         ed.Report(rubber->GetName() + ": post " + name + " not found");
          return false;
+      }
       prims.push_back(prim);
    }
-   const vector<RubberFit::Vec2> pts = FitPosts(prims, rubber->m_d.m_thickness, rubber->m_d.m_postSlack, rubber->m_d.m_postWrap);
-   if (pts.empty())
+   vector<RubberFit::Point> pts;
+   string error;
+   if (!FitPosts(prims, static_cast<float>(rubber->m_d.m_thickness), rubber->m_d.m_postRoundness, pts, error))
+   {
+      ed.Report(rubber->GetName() + ": " + error + " (shape kept)"); // The previous shape stays
       return false;
+   }
    SetPoints(rubber, pts, rubber->m_d.m_height);
-   ed.m_renderer->ReinitRenderable(rubber);
-   ed.m_renderer->InvalidateShadowContent();
-   ed.m_player->m_physics->Update(rubber);
+   Refresh(ed, rubber);
    return true;
 }
 
-void RubberBetweenPosts::Apply(EditorUI &ed)
+void RubberBetweenPosts::Create(EditorUI &ed)
 {
-   if (!CanApply(ed))
+   if (!CanCreate(ed))
    {
-      ed.Report("Rubber Between Posts: select two or more primitives");
+      ed.Report("Create Rubber Around Selected Posts: select two or more primitives");
       return;
    }
    const vector<Primitive *> prims = SelectedPosts(ed);
-   for (Primitive *const prim : prims)
-      if (RubberFit::Post post; Footprint(prim, post) && post.r > kMaxPostRadius)
-      {
-         ed.Report(prim->GetName() + " is too big to be a post");
-         return;
-      }
    const int thickness = kDefaultThickness;
    const float height = kDefaultHeight;
-   const vector<RubberFit::Vec2> pts = FitPosts(prims, thickness, 0.f, 0);
-   if (pts.empty())
+   vector<RubberFit::Point> pts;
+   string error;
+   if (!FitPosts(prims, static_cast<float>(thickness), 0.f, pts, error))
    {
-      ed.Report("Rubber Between Posts: no loop fits these posts");
+      ed.Report("Create Rubber Around Selected Posts: " + error);
       return;
    }
-   RubberFit::Vec2 centre { 0.f, 0.f };
-   for (const RubberFit::Vec2 &p : pts)
+   RubberFit::Point centre { 0.f, 0.f, false };
+   for (const RubberFit::Point &p : pts)
    {
       centre.x += p.x / static_cast<float>(pts.size());
       centre.y += p.y / static_cast<float>(pts.size());
@@ -152,8 +191,7 @@ void RubberBetweenPosts::Apply(EditorUI &ed)
    rubber->m_d.m_thickness = thickness;
    rubber->m_d.m_height = height;
    rubber->m_d.m_hitHeight = height;
-   rubber->m_d.m_postWrap = 0;
-   rubber->m_d.m_postSlack = 0.f;
+   rubber->m_d.m_postRoundness = 0.f;
    for (const Primitive *const prim : prims)
       rubber->m_d.m_postRefs.push_back(prim->GetName());
    SetPoints(rubber, pts, height);
@@ -170,9 +208,9 @@ void RubberBetweenPosts::Apply(EditorUI &ed)
 
    ed.m_undo.BeginUndo();
    ed.m_undo.MarkForCreate(pie);
-   ed.m_undo.SetLabel("Add Rubber Between Posts");
+   ed.m_undo.SetLabel("Create Rubber Around Selected Posts");
    ed.m_undo.EndUndo();
-   ed.Report("Added " + pie->GetName() + " between " + std::to_string(prims.size()) + " posts");
+   ed.Report("Added " + pie->GetName() + " around " + std::to_string(prims.size()) + " posts");
 
    ed.UpdateEditableList();
    if (const auto it = ed.m_editableMap.find(pie); it != ed.m_editableMap.end())
@@ -185,9 +223,95 @@ void RubberBetweenPosts::Apply(EditorUI &ed)
       ed.SetLastOperation(EditorUI::LastOperation::Type::RubberBetweenPosts, placed);
       ed.m_lastOp.rbThickness = thickness;
       ed.m_lastOp.rbHeight = height;
-      ed.m_lastOp.rbWrap = 0;
-      ed.m_lastOp.rbSlack = 0.f;
+      ed.m_lastOp.rbRoundness = 0.f;
    }
+}
+
+void RubberBetweenPosts::Bind(EditorUI &ed)
+{
+   if (!CanBind(ed))
+   {
+      ed.Report("Bind Selected: select one rubber and one or more primitives");
+      return;
+   }
+   Rubber *rubber = nullptr;
+   for (const auto &part : ed.m_multiSel)
+      if (IEditable *const edit = part ? part->GetEditable() : nullptr; edit && edit->GetItemType() == eItemRubber)
+         rubber = static_cast<Rubber *>(edit);
+   const vector<Primitive *> prims = SelectedPosts(ed);
+   vector<RubberFit::Point> pts;
+   string error;
+   if (!FitPosts(prims, static_cast<float>(rubber->m_d.m_thickness), rubber->m_d.m_postRoundness, pts, error))
+   {
+      ed.Report("Bind Selected: " + error + " (shape kept)");
+      return;
+   }
+   ed.m_undo.BeginUndo();
+   ed.m_undo.MarkForUndo(rubber);
+   rubber->m_d.m_postRefs.clear();
+   for (const Primitive *const prim : prims)
+      rubber->m_d.m_postRefs.push_back(prim->GetName());
+   SetPoints(rubber, pts, rubber->m_d.m_height);
+   Refresh(ed, rubber);
+   ed.m_undo.SetLabel("Bind Selected: " + rubber->GetName());
+   ed.m_undo.EndUndo();
+   ed.Report(rubber->GetName() + " follows " + std::to_string(prims.size()) + (prims.size() == 1 ? " post" : " posts"));
+
+   if (const auto it = ed.m_editableMap.find(rubber); it != ed.m_editableMap.end())
+   {
+      ed.SetSelection(Selection(it->second));
+      ed.m_outlinerAnchor = it->second;
+      Matrix3D placed;
+      if (!ed.GetSelectionTransform(placed))
+         placed.SetIdentity();
+      ed.SetLastOperation(EditorUI::LastOperation::Type::RubberBetweenPosts, placed);
+      ed.m_lastOp.rbThickness = rubber->m_d.m_thickness;
+      ed.m_lastOp.rbHeight = rubber->m_d.m_height;
+      ed.m_lastOp.rbRoundness = rubber->m_d.m_postRoundness;
+   }
+}
+
+void RubberBetweenPosts::Autofit(EditorUI &ed)
+{
+   const vector<Rubber *> rubbers = SelectedLinkedRubbers(ed);
+   if (!CanAutofit(ed))
+   {
+      ed.Report("Autofit Now: select a rubber that follows posts");
+      return;
+   }
+   ed.m_undo.BeginUndo();
+   for (Rubber *const rubber : rubbers)
+      ed.m_undo.MarkForUndo(rubber);
+   const PostMap posts = PostsByName(ed);
+   size_t fitted = 0;
+   for (Rubber *const rubber : rubbers)
+      fitted += Refit(ed, rubber, &posts) ? 1 : 0; // A failure reports and keeps the shape
+   if (fitted == 0)
+   {
+      ed.m_undo.EndUndo();
+      ed.m_undo.Discard();
+      return;
+   }
+   ed.m_undo.SetLabel(EditorUI::CountLabel("Autofit", rubbers.size(), rubbers.front()->GetName()));
+   ed.m_undo.EndUndo();
+}
+
+void RubberBetweenPosts::Detach(EditorUI &ed)
+{
+   const vector<Rubber *> rubbers = SelectedLinkedRubbers(ed);
+   if (!CanDetach(ed))
+   {
+      ed.Report("Detach From Posts: select a rubber that follows posts");
+      return;
+   }
+   ed.m_undo.BeginUndo();
+   for (Rubber *const rubber : rubbers)
+   {
+      ed.m_undo.MarkForUndo(rubber);
+      ed.DetachRubberRefs(rubber);
+   }
+   ed.m_undo.SetLabel(EditorUI::CountLabel("Detach From Posts", rubbers.size(), rubbers.front()->GetName()));
+   ed.m_undo.EndUndo();
 }
 
 }
