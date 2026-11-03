@@ -147,7 +147,8 @@ void RenderProbe::ReleaseRenderTargets()
 
 RenderTarget* RenderProbe::Render(const unsigned int renderMask)
 {
-   assert(m_renderer != nullptr);
+   if (m_renderer == nullptr)
+      return nullptr; // Not set up (a probe of a table that is not rendered, e.g. a library preview): the part draws without it
    const bool isReflectionPass = renderMask & Renderer::REFLECTION_PASS;
 
    // Probes are rendered and used in screen space therefore, they can't be recursively used (e.g. reflections
