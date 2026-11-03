@@ -14,9 +14,6 @@
 #include "ui/VPXFileFeedback.h"
 #include "utils/JSONSerializer.h"
 
-// Title (used as Id) of the modal dialog
-#define ID_PART_LIBRARY "Part Library"
-
 namespace VPX::EditorUI
 {
 
@@ -52,7 +49,7 @@ void PartLibraryPanel::ExportSelection()
       m_editor.m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str());
 }
 
-void PartLibraryPanel::Render()
+void PartLibraryPanel::Update()
 {
    // Apply the file picked by the asynchronous 'Export' save dialog (deferred to the main thread)
    if (m_pendingExportPath && !m_pendingExportPath->empty())
@@ -97,20 +94,25 @@ void PartLibraryPanel::Render()
       AddLibraryFolder(PathFromUTF8(*m_pendingFolderPath));
       m_pendingFolderPath = nullptr;
    }
+}
 
-   if (!m_visible)
-      return;
-
+void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
+{
    if (m_rescanLibrary)
    {
       m_rescanLibrary = false;
       RescanLibrary();
    }
 
-   const float dpi = m_editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowSize(ImVec2(560.f * dpi, 420.f * dpi), ImGuiCond_FirstUseEver);
-   if (ImGui::Begin(ID_PART_LIBRARY, &m_visible))
+   if (m_editor.BeginAreaWindow("PARTLIBRARY", pos, size))
    {
+      // Header: editor type button and title
+      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::PartLibrary);
+      ImGui::SameLine();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextDisabled("Part Library");
+      ImGui::Separator();
+
       // Destination of the import, same as for newly added parts: the group of the current selection
       const PartGroup *const target = m_editor.GetPartGroupForNewPart();
       ImGui::Text("Import into part group: %s", (target != nullptr) ? target->GetName().c_str() : "(table root)");
@@ -229,7 +231,7 @@ void PartLibraryPanel::Render()
          ImGui::EndDisabled();
       }
    }
-   ImGui::End();
+   m_editor.EndAreaWindow();
 }
 
 void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const string &label)
