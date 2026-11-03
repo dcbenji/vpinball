@@ -120,6 +120,8 @@ private:
 
    void RescanLibrary();
    void RenderGrid(float height);
+   void RenderGridControls(); // Kind filter, name search and sort of the tiles (kept in the app settings)
+   void SaveGridView() const;
    void PumpThumbnails(); // Renders the missing thumbnails, one at a time
    bool LoadScratch(const LibraryItem &item, float factor = 1.f);
    void ReleaseScratch();
@@ -168,6 +170,10 @@ private:
    std::filesystem::path m_selectedPack;
    PackInfo m_selectedPackInfo;
    vector<LibraryItem> m_items;
+   int m_filterKind = 0; // 0 all, 1 insert, 2 material, 3 part
+   int m_sortKind = 0; // 0 name, 1 kind then name
+   char m_search[64] = {};
+   bool m_viewLoaded = false;
    std::filesystem::path m_filterFolder; // Tiles shown: the packs under this folder, all if empty
 
    // Thumbnail rendering: the queue of items to render, the pack keys to write once their last item is rendered

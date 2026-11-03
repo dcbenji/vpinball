@@ -649,6 +649,7 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       }
 
       // The grid is the last section: it takes the area height down to the bottom edge (at least a row and a half of tiles)
+      RenderGridControls();
       const float gridHeight = max(ImGui::GetContentRegionAvail().y - 4.f * dpi, 150.f * dpi);
       if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, gridHeight), ImGuiChildFlags_Borders))
          RenderGrid(ImGui::GetContentRegionAvail().y);
@@ -675,6 +676,39 @@ void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const st
    }
 }
 
+void PartLibraryPanel::SaveGridView() const
+{
+   g_settingsService.GetAppSettings().SetEditor_PartLibraryView(std::format("{};{};{}", m_filterKind, m_sortKind, m_search), false);
+}
+
+void PartLibraryPanel::RenderGridControls()
+{
+   if (!m_viewLoaded)
+   {
+      m_viewLoaded = true;
+      const string stored = g_settingsService.GetAppSettings().GetEditor_PartLibraryView();
+      const size_t a = stored.find(';'), b = a == string::npos ? string::npos : stored.find(';', a + 1);
+      if (b != string::npos)
+      {
+         m_filterKind = clamp(atoi(stored.substr(0, a).c_str()), 0, 3);
+         m_sortKind = clamp(atoi(stored.substr(a + 1, b - a - 1).c_str()), 0, 1);
+         strncpy(m_search, stored.substr(b + 1).c_str(), sizeof(m_search) - 1);
+      }
+   }
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   bool changed = false;
+   ImGui::SetNextItemWidth(80.f * dpi);
+   changed |= ImGui::Combo("##kind", &m_filterKind, "All\0Insert\0Material\0Part\0");
+   ImGui::SameLine();
+   ImGui::SetNextItemWidth(90.f * dpi);
+   changed |= ImGui::Combo("##sort", &m_sortKind, "Sort: Name\0Sort: Kind\0");
+   ImGui::SameLine();
+   ImGui::SetNextItemWidth(-FLT_MIN);
+   changed |= ImGui::InputTextWithHint("##search", "Search", m_search, sizeof(m_search));
+   if (changed)
+      SaveGridView();
+}
+
 void PartLibraryPanel::RenderGrid(const float height)
 {
    const float dpi = m_editor.m_liveUI.GetDPI();
@@ -684,11 +718,29 @@ void PartLibraryPanel::RenderGrid(const float height)
    const string filter = m_filterFolder.empty() ? ""s : PathToUTF8(m_filterFolder / ""); // Trailing separator: /lib/foo does not match /lib/foobar
    ImDrawList *const drawList = ImGui::GetWindowDrawList();
    int shown = 0, loads = 0;
+   // The tiles to show: the folder, kind and name filters, in the sort order (name, or kind then name; kind badges stay)
+   static constexpr int kKindRank[] = { 2, 1, 0 }; // Part, Material, Insert -> Insert first
+   const string search = lowerCase(m_search);
+   vector<size_t> order;
    for (size_t i = 0; i < m_items.size(); i++)
    {
-      LibraryItem &item = m_items[i];
-      if (!filter.empty() && PathToUTF8(item.pack).rfind(filter, 0) != 0)
+      const LibraryItem &item = m_items[i];
+      if ((!filter.empty() && PathToUTF8(item.pack).rfind(filter, 0) != 0) || (m_filterKind > 0 && kKindRank[static_cast<int>(item.kind)] != m_filterKind - 1)
+         || (!search.empty() && lowerCase(item.label).find(search) == string::npos))
          continue;
+      order.push_back(i);
+   }
+   std::ranges::stable_sort(order,
+      [this](const size_t a, const size_t b)
+      {
+         const LibraryItem &x = m_items[a], &y = m_items[b];
+         if (m_sortKind == 1 && x.kind != y.kind)
+            return kKindRank[static_cast<int>(x.kind)] < kKindRank[static_cast<int>(y.kind)];
+         return lowerCase(x.label) < lowerCase(y.label);
+      });
+   for (const size_t i : order)
+   {
+      LibraryItem &item = m_items[i];
       if (shown % columns != 0)
          ImGui::SameLine();
       shown++;
@@ -760,7 +812,7 @@ void PartLibraryPanel::RenderGrid(const float height)
    }
    if (shown == 0)
    {
-      const char *const msg = m_library.empty() ? "No library folder defined" : "No pack found";
+      const char *const msg = m_library.empty() ? "No library folder defined" : m_items.empty() ? "No pack found" : "No items match";
       const ImVec2 avail = ImGui::GetContentRegionAvail();
       ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
       ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + max(0.f, (avail.x - ImGui::CalcTextSize(msg).x) * 0.5f), ImGui::GetCursorPosY() + max(0.f, height * 0.4f - ImGui::GetTextLineHeight())));
