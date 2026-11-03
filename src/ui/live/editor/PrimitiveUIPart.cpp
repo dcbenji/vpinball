@@ -414,6 +414,16 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_domeGlint; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeGlint = clamp(v, 0.f, 5.f); }, 0.f, 5.f, 2,
          "The lamp-off sparkle: facet glints, ridge glints and needles along the flutes, the room seen in the plastic (1 = as tuned, 0 = none)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Glint Lights"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeGlintLights; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeGlintLights = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
+         "What the lamp-off sparkle reflects: 0 = a fixed studio room, 1 = the table's own lights near the dome (GI bulbs, inserts, other flashers), so the glints move and change as they light up");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Frost"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeFrost; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeFrost = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
+         "Clear and pale domes: the thick parts of the plastic (ridges, top, base, rim) scatter the room's light to a milky white so the dome reads frosted, not grey (0 = off)");
       props.InputRGB<Primitive>(
          m_part, "Dome Tint"s, //
          [](const Primitive* primitive) { return convertColor(primitive->m_d.m_domeTint); }, //

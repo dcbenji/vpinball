@@ -39,7 +39,11 @@
 // [12] xyz the lamp's colour (linear, max channel 1), w unused
 // [13] x the outer radius at the top edge (mm; the cap's rim), y the table's environment level (env emission x scene lighting),
 //      z dome_glint (the OFF sparkle's scale, 1 = as tuned), w dome_peak (white-hot peak, 0 = the red peak)
-// [15] x 1 = a baked glow map is bound (dome_glow_map), y its gain
+// [15] x 1 = a baked glow map is bound (dome_glow_map), y its gain, z dome_glint_lights (0 = the studio room, 1 = the table's
+//      own lights), w dome_frost (clear plastic: the thick parts of the wall scatter the room to a milky white, 0 = off)
+// [16..23] the four strongest table lights at the dome (GI bulbs, inserts, other domes' lamps), two entries each: xyz position
+//      (table space), w source radius (table units); then rgb irradiance at the dome (relative to the room light), w unused
+//      ([17].w: dome_frost's gain)
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -54,7 +58,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 
 #include "common.sh"
 
-uniform vec4 domeParams[16];
+uniform vec4 domeParams[24];
 SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R glow (x2, gamma 2.2), G wall thickness (0..4 mm)
 
 #ifdef STEREO
@@ -70,6 +74,7 @@ SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R
 #endif
 
 #define DOME_PI 3.14159265
+#define FROST_GAIN domeParams[17].w
 
 float domeHash(const float n) { return fract(sin(n) * 43758.5453); }
 
@@ -104,6 +109,36 @@ float domeStudio(const vec3 wd)
 	env += 3.0 * pow(saturate(dot(wd, normalize(vec3(0.85, -0.2, 0.35)))), 60.0); // side card
 	env += 2.5 * pow(saturate(dot(wd, normalize(vec3(-0.3, -0.4, 0.95)))), 70.0); // overhead bar
 	env += 2.0 * pow(saturate(dot(wd, normalize(vec3(-0.8, 0.5, 0.3)))), 60.0);   // left card
+	return env;
+}
+
+// What the OFF glints reflect. dome_glint_lights (domeParams[15].z) brings in the table's own light: below the horizon the
+// walls mirror the playfield round the dome, lit by the four strongest lights near it (GI bulbs, inserts, other domes'
+// lamps; a diffuse floor, brighter toward each light, in its colour), and each light itself is a small bright disc (its
+// irradiance at the dome spread over its solid angle, at least ~2 deg). Above the horizon the studio room stays (the
+// cabinet and the room are not table lights). The glints move with the real bulbs and follow them as they light and dim.
+// floorW: 1 for reflections; 0 for light seen through the dome (the GI glow carries the lit playfield behind it, and the
+// studio stays there). k = 0 returns the studio room exactly
+vec3 domeEnv(const vec3 wd, const vec3 Pt, const float floorW)
+{
+	const float k = saturate(domeParams[15].z);
+	BRANCH if (k <= 0.0)
+		return vec3_splat(domeStudio(wd));
+	const float below = smoothstep(0.1, -0.25, wd.z) * floorW;
+	vec3 env = vec3_splat(mix(domeStudio(wd), mix(0.008, 0.16, saturate(wd.z * 0.5 + 0.5)), k * below));
+	const vec2 hd = normalize(wd.xy + vec2(1e-5, 0.0));
+	for (int i = 0; i < 4; i++)
+	{
+		const vec4 lp = domeParams[16 + 2 * i];
+		const vec3 E = domeParams[17 + 2 * i].rgb;
+		const vec3 dl = lp.xyz - Pt;
+		const float d = max(length(dl), 1.0);
+		const float ts = max(lp.w / d, 0.035);
+		const float t2 = 2.0 * max(1.0 - dot(wd, dl / d), 0.0); // angle^2
+		const vec2 hl = normalize(dl.xy + vec2(1e-5, 0.0));
+		env += k * E * (exp(-t2 / (ts * ts)) / (DOME_PI * ts * ts) // the light
+			+ below * 0.35 / DOME_PI * (0.4 + 0.6 * max(dot(hd, hl), 0.0))); // the playfield it lights (albedo ~0.35)
+	}
 	return env;
 }
 
@@ -430,13 +465,13 @@ void main()
 		const float side = mix(s > 0.0 ? 1.0 : 0.25, 1.0, capN);
 		const float facing = smoothstep(-0.15, 0.35, dot(V, s * tg));
 		const float spark = mix(mix(mix(0.12, 2.2, pow(domeHash(idx * 12.9898 + 4.1), 8.0)), 0.5, capN), 0.3, aaF); // a few hot facets, most dim
-		sparkle = (1.0 + 1.5 * bodyK) * Fr * min(domeStudio(wd), mix(8.0, 1.0, capW)) * tint * facetGain * side * spark * mix(1.0, 0.6 + 0.8 * edge, capN);
+		sparkle = (1.0 + 1.5 * bodyK) * Fr * min(domeEnv(wd, v_tablePos, 1.0), vec3_splat(mix(8.0, 1.0, capW))) * tint * facetGain * side * spark * mix(1.0, 0.6 + 0.8 * edge, capN);
 		// The room seen through the dome (into the cavity, out through the far wall): deep red, lensed by the flutes. Over a
 		// see-through body, which shows the real scene behind (transmittance pass), it stays as the room light the flutes
 		// scatter (the plastic's own ruby glow), weaker
 		{
 			const vec3 wt = d2.x * ex + d2.y * up + d2.z * ez;
-			sparkle += (mode < 1.5 ? 0.35 : mix(0.2, 0.35, bodyK)) * (1.0 - Fr) * domeStudio(wt) * exp(-sigma * (thN + 1.2 * wallB)) * (0.7 + 0.6 * hA);
+			sparkle += (mode < 1.5 ? 0.35 : mix(0.2, 0.35, bodyK)) * (1.0 - Fr) * domeEnv(wt, v_tablePos, 0.0) * exp(-sigma * (thN + 1.2 * wallB)) * (0.7 + 0.6 * hA);
 		}
 
 		// Seen through the plastic (in and out through the walls: deep red): the bulb's glass envelope catches the room as a
@@ -448,7 +483,7 @@ void main()
 		{
 			const float Fg = 0.04 + 0.96 * pow(1.0 - saturate(dot(-d2, nb)), 5.0);
 			const vec3 rbv = reflect(d2, nb);
-			sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * Fg * min(domeStudio(rbv.x * ex + rbv.y * up + rbv.z * ez), 6.0) * tint2;
+			sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * Fg * min(domeEnv(rbv.x * ex + rbv.y * up + rbv.z * ez, v_tablePos, 1.0), vec3_splat(6.0)) * tint2;
 		}
 		if (newLook > 0.0 && !tir && d2.y < -0.05)
 		{
@@ -460,7 +495,7 @@ void main()
 			{
 				const vec3 nR = normalize(vec3(-0.35 * B.x / max(rB, 1e-3), 1.0, -0.35 * B.z / max(rB, 1e-3)));
 				const vec3 rr2 = reflect(d2, nR);
-				sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * 0.6 * ringW * (0.75 + 0.25 * sin(rB * 7.0)) * min(domeStudio(rr2.x * ex + rr2.y * up + rr2.z * ez), 6.0) * tint2;
+				sparkle += domeParams[6].w * (1.0 - 0.85 * bodyK) * 0.6 * ringW * (0.75 + 0.25 * sin(rB * 7.0)) * min(domeEnv(rr2.x * ex + rr2.y * up + rr2.z * ez, v_tablePos, 1.0), vec3_splat(6.0)) * tint2;
 			}
 		}
 
@@ -513,7 +548,8 @@ void main()
 	// (dome_scatter) and the top edge (dome_cap). All zero at the defaults.
 	vec3 thick = vec3_splat(0.0);
 	const float depthK = max(domeParams[14].x, 0.0);
-	BRANCH if (bodyK > 0.0 || scatK > 0.0 || capK > 0.0 || peakK > 0.0 || depthK > 0.0)
+	const float frostK = max(domeParams[15].w, 0.0);
+	BRANCH if (bodyK > 0.0 || scatK > 0.0 || capK > 0.0 || peakK > 0.0 || depthK > 0.0 || frostK > 0.0)
 	{
 		const float bandF = mix(facet * (0.6 + 0.8 * edge), 0.7 + 0.6 * edge, capW); // the flutes (and the cap's ribs) band the scattered light
 		// Interior, lamp off: the room (the table's environment level) and the table's lights at the dome (the GI irradiance, from
@@ -553,7 +589,7 @@ void main()
 		const vec3 nB = normalize(radial + vec3(0.0, 1.0, 0.0));
 		const vec3 rV = reflect(-V, normalize(mix(Ns, nB, 0.6)));
 		const float FrB = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeStudio(rV.x * ex + rV.y * up + rV.z * ez), 6.0)) * mix(vec3_splat(1.0), trH, 0.3)
+		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeEnv(rV.x * ex + rV.y * up + rV.z * ez, v_tablePos, 1.0), vec3_splat(6.0))) * mix(vec3_splat(1.0), trH, 0.3)
 			+ 4.0 * lvlG * mix(lampCol, bb, domeParams[8].x * pk) * exp(-sigma * 0.5 * wallB) * (1.0 + 0.35 * (flash - 1.0)));
 		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
 		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
@@ -604,7 +640,25 @@ void main()
 			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
 			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (2.5 * farL * trH * trN + tirL * trN) + capW * 3.0 * capL * trH);
 		}
-		thick = interior + lampScat + capRim + peakScat + capSpot + depthL;
+		// Frost (dome_frost; clear plastic, Ben's VPE Clear preset): a clear dome is neither see-through nor grey. Where the light's
+		// path through the wall is long (the ridge tips, the cap, the base band, the rim) the plastic scatters the room to a
+		// slightly warm milky white, the thin flanks keep a faint floor; grazing views run longer paths (a whiter silhouette).
+		// It is lit by the room (environment level and the table's lights at the dome, from their side), so it takes the room's
+		// tone; dark creases at the groove roots (light turned away by total internal reflection) draw the fine vertical lines.
+		// As the lamp comes up its own light takes over (kept at 30 %)
+		vec3 frost = vec3_splat(0.0);
+		BRANCH if (frostK > 0.0)
+		{
+			const float baseBand = 1.0 - smoothstep(1.5, 3.5, P.y);
+			const float pathMM = (thN + 2.0 * baseBand) / max(dot(-VrIn, Ns), 0.2);
+			const float crest = mix(exp(-(eTip / 0.1) * (eTip / 0.1)), 1.0, aaF);
+			// the cap is one thick moulding: milky all over, its ribs drawn by the other layers
+			const float milkW = mix(saturate(0.672 * (smoothstep(1.0, 2.0, pathMM) * mix(1.0, crest, 0.9) + 0.29)), 0.75, capW) + 0.3 * pow(1.0 - nv, 3.0);
+			const float crease = 1.0 - 0.3 * (fwA > 0.0 ? domeLine(eRoot, 0.06, fwA) : exp(-(eRoot / 0.06) * (eRoot / 0.06))) * (1.0 - capW);
+			const vec3 roomIrr = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
+			frost = frostK * FROST_GAIN * vec3(0.7435, 0.6829, 0.6253) * milkW * crease * roomIrr * trH * (1.0 - 0.7 * lvlG);
+		}
+		thick = interior + lampScat + capRim + peakScat + capSpot + depthL + frost;
 	}
 
 	// Orb (dome_orb, lamp lit): the bulb itself seen through the near wall. The cavity ray, bent by the flank it entered

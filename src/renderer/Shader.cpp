@@ -328,7 +328,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4v, balls, 8), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4, staticColor_Alpha, 1), // Basic & Flasher
    SHADER_UNIFORM(ShaderUniformType::Float4v, tracedParams, 14), // Basic (traced insert parameters, see fs_insert_traced.sc)
-   SHADER_UNIFORM(ShaderUniformType::Float4v, domeParams, 16), // Basic (flasher dome parameters, see fs_flasher_dome.sc)
+   SHADER_UNIFORM(ShaderUniformType::Float4v, domeParams, 24), // Basic (flasher dome parameters, see fs_flasher_dome.sc)
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)
 
    // Shared material for Ball, Basic and Classic light shaders
@@ -382,7 +382,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4x4, matShadowVP, 32), // ortho virtual shadow map view-projection, per shadowed light
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMParams, 32), // per shadowed light: x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMBox, 32), // per shadowed light: x/y: world->virtual-uv scale (1/ortho box extents)
-   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: page linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness step
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: unused
    SHADER_SAMPLER(tex_pbr_orm, 8, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // packed occlusion/roughness/metallic
    SHADER_SAMPLER(tex_pbr_emission, 9, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // emission map
    SHADER_SAMPLER(tex_pbr_ao, 10, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // screenspace ambient occlusion

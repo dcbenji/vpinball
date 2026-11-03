@@ -95,6 +95,8 @@ public:
    float m_domeCooldown = 0.f; // white-hot parts follow the level as a continuous blackbody pulse (white, yellow, orange, red as it cools) instead of gating on near full (0 = off)
    string m_domeGlowMap; // baked glow (the lamp's light scattered in a clear dome, on the mesh's UVs): R = glow (x2, gamma 2.2), G = wall thickness (0..4 mm); empty = the procedural falloff
    float m_domeBoost = 1.f; // gain on the lamp level the dome layer sees (a ROM flash peaking below full reads hotter); the lamp's own light is unchanged
+   float m_domeFrost = 0.f; // clear plastic: the thick parts of the wall (ridge tips, cap, base, rim) scatter the room to a milky white, the thin flanks stay clearer, dark creases at the groove roots (0 = off)
+   float m_domeGlintLights = 0.f; // what the OFF glints reflect: 0 = a fixed studio room, 1 = the table's own lights near the dome (GI bulbs, inserts, other flashers), live
    float m_domeGlint = 1.f; // OFF glints (facet glints, ridge glints, needles, the room seen in the plastic) scale (1 = as tuned)
 
    bool m_toy = false;
@@ -350,6 +352,10 @@ public:
    // each frame by the PBR light list build: the plastic scatters it (the dome layer's GI glow)
    vec3 m_domeGI = vec3(0.f, 0.f, 0.f);
    vec4 m_domeGIDir = vec4(0.f, 0.f, 1.f, 0.f); // where it comes from (table space, unit), w its directionality (0..1)
+   // The four strongest of those lights (and other domes' lamps) at the dome, for the OFF glints (dome_glint_lights), set each
+   // frame with m_domeGI: per light (position table space, source radius), (irradiance rgb at the bulb, 0); faded out as a
+   // light drops from the four (the fifth's share is taken off each) so the set changes without a jump
+   vec4 m_domeLights[8] = {};
 
    Mesh m_mesh;
 
