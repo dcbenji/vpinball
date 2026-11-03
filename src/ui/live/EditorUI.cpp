@@ -56,6 +56,7 @@
 
 #include "imgui/imgui_stdlib.h"
 #include "imguizmo/ImGuizmo.h"
+#include "input/SDLInputHandler.h"
 #include "imgui_markdown/imgui_markdown.h"
 
 namespace VPX::EditorUI
@@ -222,6 +223,7 @@ void EditorUI::Close()
       context->ConfigNavEnableTabbing = true; // Overridden each frame while the editor is open (see RenderUI)
    ImGuizmo::Enable(false); // Clears a gizmo state left by a drag in progress
    ImGuizmo::Enable(true);
+   SDLInputHandler::ClearSwallowedMouseButtons(); // The editor stops drawing: no nav cube press can stay swallowed
    m_gizmoDragActive = false;
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
@@ -234,6 +236,7 @@ void EditorUI::Close()
 
 void EditorUI::SetTable(PinTable *const table)
 {
+   SDLInputHandler::ClearSwallowedMouseButtons();
    assert(table != nullptr);
    // Only tables of a same base table / live copy pair are supported (guaranteed by the player's SetTable)
    PinTable *const baseTable = m_table->m_liveBaseTable ? m_table->m_liveBaseTable : m_table;
@@ -411,6 +414,12 @@ void EditorUI::LoadTableDialog(const bool folder)
 
 void EditorUI::RequestClose(const int closeState)
 {
+   // Stopping a play test pops the table under the async save of the base table: refused for every caller (Stop, X, Shift+F5, OS window close)
+   if (IsInspectMode() && m_fileOp != nullptr)
+   {
+      Report("Cannot stop the play test while a save is in progress");
+      return;
+   }
    // Only closing a full editor session loses the edited table (a live edit started from the Win32 editor or a play test gets back to its editor)
    if (m_player->IsEditorMode() && !IsInspectMode() && m_table->GetDirtyState() != SaveDirtyState::Clean)
    {
@@ -1360,8 +1369,9 @@ void EditorUI::RenderAreaCorners()
          continue;
       for (int corner = 0; corner < 4; ++corner)
       {
-         // The right corners are smaller: the header search field and the scrollbar ends sit 4 px inside the area edge
-         const float side = (corner & 1) ? min(fullSide, 7.f * dpi) : fullSide;
+         // The top corners are smaller: the header's first and last widgets (type button, search field) sit 4 px inside the area edge. The bottom corners
+         // keep the full size on the left (nothing sits there), but not on the right (scrollbar end)
+         const float side = ((corner & 2) == 0 || (corner & 1)) ? min(fullSide, 7.f * dpi) : fullSide;
          const float x = (corner & 1) ? leaf.rect.x1 - side : leaf.rect.x0;
          const float y = (corner & 2) ? leaf.rect.y1 - side : leaf.rect.y0;
          // Triangular hit zone: the half of the square touching the area's corner (Blender). Outside it the window takes no input, so the header
@@ -4018,7 +4028,10 @@ void EditorUI::RenderNavCube()
 {
    // Not in the 2D desktop backdrop view, nor with the side panels hidden (it is kept in inspect mode to orbit the running game)
    if (!m_showNavCube || !m_viewportVisible || m_flyMode || m_table->IsLocked() || m_inspectionModal.IsVisible() || m_camMode == ViewMode::DesktopBackdrop)
+   {
+      SDLInputHandler::SetMouseOverEditorWidget(false); // Hidden cube: nothing is filtered
       return;
+   }
 
    ImGuiIO &io = ImGui::GetIO();
    const float dpi = m_liveUI.GetDPI();
@@ -4066,6 +4079,7 @@ void EditorUI::RenderNavCube()
       io.MousePos = savedMousePos;
       io.MouseDown[0] = savedMouseDown;
    }
+   SDLInputHandler::SetMouseOverEditorWidget(!gizmoBusy && ImGuizmo::IsViewManipulateHovered()); // The game must not get a press made on the cube
 
    if (memcmp(viewG, viewGIn, sizeof(viewG)) == 0)
       return;
