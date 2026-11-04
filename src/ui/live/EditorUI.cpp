@@ -4909,7 +4909,7 @@ void EditorUI::BeginModalTransform(ModalOp op)
       {
          Matrix3D unused;
          const int mask = static_cast<int>(part->GetTransform(unused));
-         zOnly |= (mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
+         zOnly |= mask != EditorUIPart::TM_None && (mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY); // (a part group has no transform of its own)
       }
       if (zOnly)
       {
