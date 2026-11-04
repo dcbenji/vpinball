@@ -442,6 +442,13 @@ private:
    } m_modal;
    vector<std::shared_ptr<EditorUIPart>> m_gizmoDragSelection; // Selection the current gizmo drag started on
    uint64_t m_gizmoDragRecordId = 0; // Undo record pushed when the current gizmo drag began
+   // Parts moved during a drag: the picking tree follows per frame, the gameplay colliders at the drag end
+   struct Drag
+   {
+      vector<IEditable *> pendingPhysics;
+   };
+   mutable Drag m_drag; // Filled by SetSelectionTransform (const)
+   void FlushDrag();
    bool m_gizmoDragActive = false; // A gizmo drag is in progress (its undo record was pushed)
    Matrix3D m_gizmoStartTransform; // Selection transform when the current gizmo drag began
    bool m_gizmoDragTranslate = false; // The current gizmo drag is a translation
