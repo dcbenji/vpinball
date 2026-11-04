@@ -102,6 +102,7 @@ struct SplitterRect
    float pos = 0.f; // divider coordinate along the axis (x for Vertical, y for Horizontal), whole pixels
    AreaRect grab;   // grab strip: 6 * dpi wide, centred on the divider, spans bounds across the axis
    float minPos = 0.f, maxPos = 0.f; // allowed range of pos so that both children keep their minimum size
+   float shrink = 1.f; // stored size to displayed size ratio (a stacked split on a short window shows its fixed child smaller)
 
    // Logical size to store in AreaNode::size for a divider at the given position
    float SizeForPos(float p, float dpi) const;
@@ -119,6 +120,9 @@ public:
 
    // Minimum sizes, logical px (multiplied by dpi in Compute)
    static constexpr float kPanelMinW = 140.f, kPanelMinH = 100.f;
+   // A stacked split (horizontal) shows its fixed child at its stored size down to this height (logical px) and shrinks it in proportion below:
+   // a 1080p right column is about 998 px, so the default 360 px Outliner is whole there and Properties keeps its rows on a 720p window
+   static constexpr float kStackedRefH = 990.f;
    static constexpr float kViewportMinW = 240.f, kViewportMinH = 180.f;
    static constexpr float kGrabWidth = 6.f; // splitter grab strip
 

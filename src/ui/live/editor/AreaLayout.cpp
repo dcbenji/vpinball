@@ -47,7 +47,7 @@ float SplitterRect::SizeForPos(const float p, const float dpi) const
 {
    const float start = axis == SplitAxis::Vertical ? bounds.x0 : bounds.y0;
    const float end = axis == SplitAxis::Vertical ? bounds.x1 : bounds.y1;
-   return (fixed == 1 ? end - p : p - start) / (dpi > 0.f ? dpi : 1.f);
+   return (fixed == 1 ? end - p : p - start) / ((dpi > 0.f ? dpi : 1.f) * shrink);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -630,7 +630,8 @@ void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const 
    MinSize(n.child[o], dpi, sidebarPx, ignoreHidden, w, h);
    const float minO = vertical ? w : h;
 
-   float fixedPx = n.size * dpi;
+   const float shrink = vertical ? 1.f : std::min(1.f, total / (kStackedRefH * dpi));
+   float fixedPx = n.size * dpi * shrink;
    const bool squeezed = total <= minF + minO;
    if (squeezed) // smaller than the minimums: shrink proportionally
       fixedPx = (minF + minO) > 0.f ? total * minF / (minF + minO) : total * 0.5f;
@@ -660,6 +661,7 @@ void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const 
       s.fixed = n.fixed;
       s.bounds = r;
       s.pos = pos;
+      s.shrink = shrink;
       const float half = kGrabWidth * dpi * 0.5f;
       s.grab = vertical ? AreaRect { pos - half, r.y0, pos + half, r.y1 } : AreaRect { r.x0, pos - half, r.x1, pos + half };
       if (squeezed)
