@@ -690,6 +690,9 @@ void PartLibraryPanel::RenderLibraryMenu()
 void PartLibraryPanel::RenderCatalogs(const float height)
 {
    const float dpi = m_editor.m_liveUI.GetDPI();
+   // A saved catalog that is not (or no longer) among the library's folders shows everything
+   if (!m_catalog.empty() && !m_library.empty() && std::ranges::none_of(m_catalogs, [this](const string &c) { return lowerCase(c) == m_catalog; }))
+      m_catalog.clear();
    if (ImGui::BeginChild("##catalogs", ImVec2(130.f * dpi, height)))
    {
       ImDrawList *const drawList = ImGui::GetWindowDrawList();
@@ -717,9 +720,32 @@ void PartLibraryPanel::RenderCatalogs(const float height)
    ImGui::EndChild();
 }
 
+// The catalog name in the Editor/PartLibraryView setting: ';' and '%' escaped
+static string escapeCatalog(const string &name)
+{
+   string out;
+   for (const char c : name)
+      out += c == ';' ? "%3B"s : c == '%' ? "%25"s : string(1, c);
+   return out;
+}
+
+static string unescapeCatalog(const string &text)
+{
+   string out;
+   for (size_t i = 0; i < text.size(); i++)
+      if (text[i] == '%' && i + 2 < text.size() + 0 && (text.compare(i, 3, "%3B") == 0 || text.compare(i, 3, "%25") == 0))
+      {
+         out += text[i + 1] == '3' ? ';' : '%';
+         i += 2;
+      }
+      else
+         out += text[i];
+   return out;
+}
+
 void PartLibraryPanel::SaveGridView() const
 {
-   g_settingsService.GetAppSettings().SetEditor_PartLibraryView(std::format("{};{};{}", m_catalog, m_sortKind, m_search), false);
+   g_settingsService.GetAppSettings().SetEditor_PartLibraryView(std::format("v2;{};{};{}", escapeCatalog(m_catalog), m_sortKind, m_search), false);
 }
 
 void PartLibraryPanel::RenderGridControls()
@@ -728,13 +754,13 @@ void PartLibraryPanel::RenderGridControls()
    {
       m_viewLoaded = true;
       const string stored = g_settingsService.GetAppSettings().GetEditor_PartLibraryView();
-      const size_t a = stored.find(';'), b = a == string::npos ? string::npos : stored.find(';', a + 1);
+      // "v2;catalog;sort;search" (the catalog escaped: ';' and '%'); an older value was "kind;sort;search" (the kind filter is dropped)
+      const bool v2 = stored.starts_with("v2;");
+      const size_t first = v2 ? 3 : 0, a = stored.find(';', first), b = a == string::npos ? string::npos : stored.find(';', a + 1);
       if (b != string::npos)
       {
-         // The catalog (an old value was the kind filter, a number: dropped)
-         m_catalog = stored.substr(0, a);
-         if (std::ranges::all_of(m_catalog, [](const char c) { return c >= '0' && c <= '9'; }))
-            m_catalog.clear();
+         if (v2)
+            m_catalog = unescapeCatalog(stored.substr(first, a - first));
          m_sortKind = clamp(atoi(stored.substr(a + 1, b - a - 1).c_str()), 0, 1);
          strncpy(m_search, stored.substr(b + 1).c_str(), sizeof(m_search) - 1);
       }
@@ -1854,11 +1880,12 @@ void PartLibraryPanel::RenderLightbox()
       if (m_lbHasCard && ImGui::GetWindowWidth() < 700.f * dpi)
       {
          ImGui::SameLine();
-         if (m_lbShowLook)
+         const bool lookOn = m_lbShowLook; // Pushed and popped on the same value (the click flips the member in between)
+         if (lookOn)
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
          if (ImGui::Button(ICON_FK_COG "##LookToggle"))
             m_lbShowLook = !m_lbShowLook;
-         if (m_lbShowLook)
+         if (lookOn)
             ImGui::PopStyleColor();
          ImGui::SetItemTooltip("Look controls");
       }
@@ -1868,7 +1895,7 @@ void PartLibraryPanel::RenderLightbox()
       const char *const placeLabel = material ? ICON_FK_DOWNLOAD "  Apply" : ICON_FK_DOWNLOAD "  Place";
       const float placeW = ImGui::CalcTextSize(placeLabel).x + 2.f * ImGui::GetStyle().FramePadding.x;
       ImGui::SameLine(max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - placeW - ImGui::GetStyle().WindowPadding.x));
-      ImGui::BeginDisabled(m_editor.m_table->IsLocked());
+      ImGui::BeginDisabled(m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr);
       const bool place = ImGui::Button(placeLabel);
       ImGui::EndDisabled();
       ImGui::SetItemTooltip(material ? "Import the material and apply it to the selected parts" : "Place it at the selection centre, or the table centre");
