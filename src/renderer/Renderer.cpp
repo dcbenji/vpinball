@@ -2773,6 +2773,8 @@ void Renderer::PreparePBRPasses()
          UpdateVirtualShadowMaps();
          UpdatePBRShadowCache();
       }
+      else
+         m_vsmTouchedRTs.clear(); // Last frame's list holds RTs deleted at its end (the shadow cache bake target): not to be depended on by this frame's passes
       BuildPBRLightList();
    }
    else
