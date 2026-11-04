@@ -79,7 +79,7 @@ SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R
 
 #define DOME_PI 3.14159265
 #define FROST_GAIN domeParams[17].w
-#define DOME_ABSORB 0.12 // 1/mm, every wavelength: the unlit body only (the interior and dome_lens)
+#define DOME_ABSORB 0.2 // 1/mm, every wavelength: the unlit body only (the interior and dome_lens)
 #define FOOT_GAIN domeParams[23].w
 
 float domeHash(const float n) { return fract(sin(n) * 43758.5453); }
