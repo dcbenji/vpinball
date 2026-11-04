@@ -2332,7 +2332,7 @@ void Renderer::SetSpaceReference(PartGroupData::SpaceReference spaceReference, b
 void Renderer::RenderItem(IEditable* const editable, bool isNoBackdrop)
 {
    // Wireframe modes only apply to the main scene render, not to sub passes (UI wireframe fill/edges, light buffer, reflection probes, shadow pages)
-   const bool isWireframe = m_shadeMode != ShadeMode::Default && (m_render_mask & (UI_FILL | UI_EDGES | LIGHT_BUFFER | REFLECTION_PASS | SHADOW_MAP)) == 0;
+   const bool isWireframe = IsWireframeShade(m_shadeMode) && (m_render_mask & (UI_FILL | UI_EDGES | LIGHT_BUFFER | REFLECTION_PASS | SHADOW_MAP)) == 0;
    if (editable->GetIRenderable() == nullptr // Not renderable
       || (editable->m_desktopBackdrop && isNoBackdrop) // Don't render backdrop items in reflections or VR & cabinet modes
       || (editable->GetPartGroup() != nullptr && ((editable->GetPartGroup()->GetPlayerModeVisibilityMask() & m_visibilityMask) == 0))) // Apply player mode visibility mask
@@ -2625,9 +2625,16 @@ void Renderer::PreparePBRPasses()
 #ifdef ENABLE_BGFX
    if (!m_editorPreviewPass)
    {
-      UpdateVirtualShadowMaps();
+      // Shadow pages are skipped for a Solid main view unless a secondary PBR view (recorded after this) shares them
+      bool needShadows = !IsSolidPass();
+      for (int slot = 0; slot < kMaxEditorViews; slot++)
+         needShadows |= m_editorViews[slot].requested && !m_editorViews[slot].request.wireframe && !m_editorViews[slot].request.solid;
+      if (needShadows)
+         UpdateVirtualShadowMaps();
       BuildPBRLightList();
    }
+   else
+      ApplyPBRLightGrid2();
 #endif
 
    // PBR parts write their specular resolve inputs to 2 sideband attachments of the scene framebuffer. Clearing them
@@ -3355,6 +3362,12 @@ void Renderer::UpdateVirtualShadowMaps()
 // (start,count), [1024,+) the light index list (light index, light source sphere radius, upward emitter flag). The
 // upload runs inside RenderFrame::Execute through a begin-of-frame command so it lands on the render thread.
 // VPX_T11=0 disables the sphere light radius (punctual specular) and the Traced insert proxy lights (A/B tests).
+void Renderer::ApplyPBRLightGrid2()
+{
+   // Solid: no table lights (so no shadows either, the shadow lookups are per light)
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, m_pbrLightGrid2.x, IsSolidPass() ? 0.f : m_pbrLightGrid2.y, m_pbrLightGrid2.z, m_pbrLightGrid2.w);
+}
+
 void Renderer::BuildPBRLightList()
 {
    constexpr int texW = 256, texH = 32;
@@ -3588,7 +3601,8 @@ void Renderer::BuildPBRLightList()
    static const float specAA = std::getenv("VPX_SPEC_AA") ? (float)atof(std::getenv("VPX_SPEC_AA")) : 1.f;
    // w: refraction probe debug view (VPX_REFR_DEBUG=1 raw probe at the pixel, 2 at the refracted position)
    static const float refrDebug = std::getenv("VPX_REFR_DEBUG") ? (float)atof(std::getenv("VPX_REFR_DEBUG")) : 0.f;
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, (float)cellsY, (float)lightCount, specAA, refrDebug);
+   m_pbrLightGrid2 = vec4((float)cellsY, (float)lightCount, specAA, refrDebug);
+   ApplyPBRLightGrid2();
    m_renderDevice->AddBeginOfFrameCmd([rd = m_renderDevice, data = std::move(texData)]()
       { bgfx::updateTexture2D(rd->m_pbrLightListTex, 0, 0, 0, 0, 256, 32, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
 }
@@ -3797,7 +3811,7 @@ void Renderer::UpdateAmbientOcclusion(RenderTarget* renderedRT, unsigned int jit
 
 bool Renderer::IsBloomEnabled() const
 {
-   return !m_bloomOff && (m_table->m_bloom_strength > 0.0f) && (g_pplayer->GetInfoMode() <= IF_DYNAMIC_ONLY);
+   return !m_bloomOff && !IsSolidPass() && (m_table->m_bloom_strength > 0.0f) && (g_pplayer->GetInfoMode() <= IF_DYNAMIC_ONLY);
 }
 
 void Renderer::UpdateBloom(RenderTarget* renderedRT)
@@ -5546,6 +5560,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewPass = true;
    m_editorPreviewPlayerCam = req.playerCamera;
    m_editorLitePass = lite;
+   m_editorSolidPass = !lite && req.solid;
 
    // The table's view setup (the player view), as the Preview Camera computes it (Renderer::InitLayout). m_initialMVP is set too, as
    // the passes which change the camera (shadow map pages) restore it from there
@@ -5627,6 +5642,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewPass = false;
    m_editorPreviewPlayerCam = false;
    m_editorLitePass = false;
+   m_editorSolidPass = false;
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
    m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
@@ -5652,6 +5668,9 @@ void Renderer::RenderEditorView(const int slot)
    m_mvpSpaceReference = PartGroupData::SpaceReference::SR_PLAYFIELD;
    UpdateBasicShaderMatrix();
    UpdateBallShaderMatrix();
+#ifdef ENABLE_BGFX
+   ApplyPBRLightGrid2(); // Back to the main view's lights
+#endif
 }
 
 static_assert(RenderProbe::kAlternateTargetSets == Renderer::kMaxEditorViews, "one render probe alternate target set per scene target set");
@@ -6234,7 +6253,7 @@ RenderProbe::ReflectionMode Renderer::GetMaxReflectionMode() const
 int Renderer::GetAOMode() const // 0=Off, 1=Static, 2=Dynamic
 {
    // We must evaluate this dynamically since AO scale and enabled/disable can be changed from script
-   if (m_disableAO || !m_table->m_enableAO || !m_renderDevice->DepthBufferReadBackAvailable() || m_table->m_AOScale == 0.f)
+   if (m_disableAO || IsSolidPass() || !m_table->m_enableAO || !m_renderDevice->DepthBufferReadBackAvailable() || m_table->m_AOScale == 0.f)
       return 0;
    // Dynamic AO under a moving camera needs the depth prepass motion vectors to reproject its temporal
    // accumulation (the depth-only path smears): in VR only enable it when the depth prepass is active, the
