@@ -53,7 +53,7 @@ struct Result
    Mesh top; // the cap at z = height + thickness, inset by the bevel
    Mesh bevel; // walls plus bevel rings
    int skippedHoles = 0; // holes whose centre lies outside the outline
-   int crossingHoles = 0; // holes (kept as they are) whose circle reaches over the outline edge: a warning only, the geometry is not changed
+   int crossingHoles = 0; // holes (kept as they are) whose circle reaches over the outline edge or into the band r + 2 * bevel of it: a warning only
 };
 
 // The closed outline flattened to a polyline (no repeated first point). Arcs deviate from the true circle by at most `tol`.

@@ -461,6 +461,8 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
 
    Result res;
    std::vector<std::vector<P2>> contours { ol };
+   std::vector<double> topGrow { 1e300 }; // per contour: the most its top ring may move toward the material (holes: grow), 1e300 = the full bevel
+   const double warnBevel = std::max(0.0, std::min((double)params.bevel, (double)params.thickness));
    for (const Hole& h : holes)
    {
       const double r = 0.5 * h.diameter;
@@ -479,8 +481,10 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
          const double t = l2 > 0.0 ? std::max(0.0, std::min(1.0, Dot(P2 { h.x, h.y } - ol[k], e) / l2)) : 0.0;
          edgeDist = std::min(edgeDist, Len(P2 { h.x, h.y } - (ol[k] + e * t)));
       }
-      if (edgeDist < r)
+      if (edgeDist < r + 2.0 * warnBevel) // inside the band where the top rings (outline inset, hole grown by the bevel) overlap: warning only
          res.crossingHoles++;
+      // A hole near the edge: its top ring grows only as far as it stays clear of the outline's inset top ring (it would fold the top cap)
+      topGrow.push_back(std::max(0.0, std::min(warnBevel, edgeDist - warnBevel - r - 0.1)));
       const int n = std::max(12, (int)std::ceil(2.0 * kPi / std::max(2.0 * std::acos(std::max(-1.0, 1.0 - tol / r)), 1e-3)));
       std::vector<P2> c;
       for (int i = 0; i < n; i++) // clockwise: the material is on the left
@@ -500,11 +504,13 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    AddCap(ctx, contours, z0, res.bottom);
    std::vector<std::vector<P2>> inset = contours;
    if (bevel > 0.0)
-      for (auto& ring : inset)
+      for (size_t k = 0; k < inset.size(); k++)
       {
+         auto& ring = inset[k];
          const ContourInfo ci = Analyse(ring);
+         const double d = std::min(bevel, topGrow[k]);
          for (size_t i = 0; i < ring.size(); i++)
-            ring[i] = ring[i] + ci.mitre[i] * bevel;
+            ring[i] = ring[i] + ci.mitre[i] * d;
       }
    AddCap(ctx, inset, z0 + thick, res.top);
    for (const auto& ring : contours)
