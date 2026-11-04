@@ -161,14 +161,20 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       ImGui::PopID();
       changed |= toggled;
    };
-   const auto slider = [&](const char *id, float &value, const float lo, const float hi, const char *format, const float def) {
+   const auto slider = [&](const char *id, float &value, const float lo, const float hi, const char *format, const float def, const char *unavailable = nullptr) {
       ImGui::PushID(id);
+      ImGui::BeginDisabled(unavailable != nullptr); // The renderer does not have what this slider drives: shown disabled, with the reason
       ImGui::SetNextItemWidth(-FLT_MIN);
       changed |= PropertyPane::FillSlider("##sl", &value, lo, hi, format);
       value = std::clamp(value, lo, hi);
+      ImGui::EndDisabled();
+      if (unavailable != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", unavailable);
       resetMenu([&]() { value = def; });
       ImGui::PopID();
    };
+   // The environment turn is a BGFX shader uniform: the GL and DX9 shaders do not have it
+   const char *const noEnvRotation = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasEnvRotation() ? "Not available with this renderer (the shaders have no environment rotation)" : nullptr;
    // Theme / Custom colour: the swatch opens the picker, picking a colour makes it Custom
    const auto themeOrCustom = [&](const char *id, bool &custom, float (&rgb)[3]) {
       static const char *const labels[2] = { "Theme", "Custom" };
@@ -218,7 +224,8 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          }
          slider("brightness", o.brightness, 0.f, 4.f, "Brightness  %.2f", def.brightness);
          ImGui::BeginDisabled(o.flat); // Flat has no direction
-         slider("direction", o.lightAngle, -180.f, 180.f, "Light Direction  %.0f deg", def.lightAngle);
+         slider("direction", o.lightAngle, -180.f, 180.f, "Light Direction  %.0f deg", def.lightAngle, noEnvRotation);
+         slider("elevation", o.lightElevation, -90.f, 90.f, "Light Elevation  %.0f deg", def.lightElevation, noEnvRotation);
          ImGui::EndDisabled();
       }
       if (section("Color"))
@@ -265,6 +272,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       {
          o.brightness = def.brightness;
          o.lightAngle = def.lightAngle;
+         o.lightElevation = def.lightElevation;
          o.flat = def.flat;
          o.bgCustom = def.bgCustom;
          std::copy(def.bg, def.bg + 3, o.bg);

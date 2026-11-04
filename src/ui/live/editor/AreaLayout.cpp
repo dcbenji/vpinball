@@ -186,6 +186,8 @@ nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
       j["brightness"] = o.brightness;
    if (o.lightAngle != d.lightAngle)
       j["light_angle"] = o.lightAngle;
+   if (o.lightElevation != d.lightElevation)
+      j["light_elevation"] = o.lightElevation;
    if (o.flat)
       j["flat"] = true;
    if (o.bgCustom)
@@ -243,6 +245,7 @@ ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
    };
    num("brightness", o.brightness, 0.f, 4.f);
    num("light_angle", o.lightAngle, -180.f, 180.f);
+   num("light_elevation", o.lightElevation, -90.f, 90.f);
    flag("flat", o.flat);
    color("background", o.bgCustom, o.bg);
    flag("backface_culling", o.backfaceCulling);

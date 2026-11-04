@@ -111,7 +111,7 @@ vec3 DoPointLight(const vec3 pos, const vec3 N, const vec3 V, const vec3 diffuse
 // does /PI-corrected lookup/final color already
 vec3 DoEnvmapDiffuse(const vec3 N, const vec3 diffuse)
 {
-   const vec3 env = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(N)).xyz;
+   const vec3 env = texNoLod(tex_diffuse_env, env_uv(N)).xyz;
    return diffuse * env*fenvEmissionScale_TexWidth.x;
 }
 
@@ -198,7 +198,7 @@ vec3 lightLoop(const vec3 pos, vec3 N, const vec3 V, vec3 diffuse, vec3 glossy, 
        // trafo back to world for lookup into world space envmap // actually: mul(float4(R,0.0), mViewInverseInverseTranspose), but optimized to save one matrix
        // mView is always an orthonormal matrix, so no need to normalize after transform
        R = /*normalize*/(( mul(vec4(R,0.0), mView) ).xyz); // trafo back to world for lookup into world space envmap // actually: mul(vec4(R,0.0), matViewInverseInverseTranspose), but optimized to save one matrix
-       const vec2 Ruv = ray_to_equirectangular_uv(R);
+       const vec2 Ruv = env_uv(R);
        if (glossyMax > 0.0)
           color += DoEnvmapGlossy(N, V, Ruv, glossy, Roughness_WrapL_Edge_Thickness.x);
        if (specularMax > 0.0)

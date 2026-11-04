@@ -327,7 +327,7 @@ vec3 pbr_indirect_diffuse(const vec3 N, const vec3 albedo, const vec3 kd, const 
 {
    // trafo back to world for lookup into world space envmap (mView is orthonormal, no need to normalize)
    const vec3 wN = mul(vec4(N, 0.0), mView).xyz;
-   const vec3 env = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wN)).xyz;
+   const vec3 env = texNoLod(tex_diffuse_env, env_uv(wN)).xyz;
    return albedo * kd * (env * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz) * ao;
 }
 
@@ -351,7 +351,7 @@ vec3 pbr_specular_weight(const vec3 N, const vec3 V, const vec3 F0, const float 
    const float SO = saturate(pow(NdotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
    const vec3 R = mul(vec4(reflect(-V, N), 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
    const float lod = roughness * log2(fenvEmissionScale_TexWidth.y);
-   envSpec = texture2DLod(tex_env, ray_to_equirectangular_uv(R), lod).xyz * (fenvEmissionScale_TexWidth.x * pbrProbeLods.w); // env_reflection_scale (table): the room in reflections only
+   envSpec = texture2DLod(tex_env, env_uv(R), lod).xyz * (fenvEmissionScale_TexWidth.x * pbrProbeLods.w); // env_reflection_scale (table): the room in reflections only
    return (Fss + Fms) * SO;
 }
 
@@ -1545,7 +1545,7 @@ void main() {
                const float edge = saturate(((1.0 - pCos) / pCos - pbrScatterEdge0) * (1.0 / 9.5));
                const float kv = refractionParams.w > 0.0 ? v_refrCurv : 10.0 * pbr_curvature(Nv, v_tablePos).x;
                const float bend = saturate((kv - 0.3) * (1.0 / 1.7));
-               const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
+               const vec3 envIrr = texNoLod(tex_diffuse_env, env_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
                vec3 lit = lamps + ((1.0 - pbrPresence2.z) * pbrPresence.y) * envIrr; // locality fades the ambient share
                // Scatter width: band weight exponent, 1 at width 1; larger (thinner band) at low width, more so where lit is low
                float bandE = 1.0;
@@ -1610,7 +1610,7 @@ void main() {
          BRANCH if (pbrPresence3.z > 0.0)
          {
             const vec3 wNg = mul(vec4(Ng, 0.0), mView).xyz;
-            const vec3 envIrr = texNoLod(tex_diffuse_env, ray_to_equirectangular_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
+            const vec3 envIrr = texNoLod(tex_diffuse_env, env_uv(wNg)).xyz * fenvEmissionScale_TexWidth.x + cAmbient_LightRange.xyz;
             // Scatter Locality (shared with the scatter lobe, round 8): the lamps go local and unwrapped (|N.L| on the cut normal:
             // light travelling along the sheet into the cut counts, a lamp beside the wall less) and the env share fades out,
             // so the cut is bright next to a bulb and dull away from it instead of one even line

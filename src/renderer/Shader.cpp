@@ -346,6 +346,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4v, ballPackedLights, 15), // DX9 only
    SHADER_UNIFORM(ShaderUniformType::Float4, Roughness_WrapL_Edge_Thickness, 1), SHADER_UNIFORM(ShaderUniformType::Float4, cBase_Alpha, 1),
    SHADER_UNIFORM(ShaderUniformType::Float2, fDisableLighting_top_below, 1), SHADER_UNIFORM(ShaderUniformType::Float2, fenvEmissionScale_TexWidth, 1),
+   SHADER_UNIFORM(ShaderUniformType::Float4, envRotation, 1), // BGFX only: turn of the environment lookups, a quaternion (x, y, z, w - 1) so that all zero is none
    SHADER_UNIFORM(ShaderUniformType::Float4, cAmbient_LightRange, 1),
    SHADER_SAMPLER(tex_env, 1, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // environment
    SHADER_SAMPLER(tex_diffuse_env, 2, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // diffuse environment contribution/radiance

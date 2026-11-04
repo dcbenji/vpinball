@@ -326,6 +326,7 @@ public:
    };
    unsigned int m_render_mask = DEFAULT; // Active pass render bit mask
    bool IsRenderPass(const RenderMask pass_mask) const { return (m_render_mask & pass_mask) != 0; }
+   bool HasEnvRotation() const; // The basic shader has the envRotation uniform (BGFX): the editor views' Light Direction / Elevation / Environment Rotation have an effect
    bool IsBackfaceCullingForced() const { return IsSolidPass() && m_viewShade.backfaceCulling && (m_render_mask & (UI_FILL | UI_EDGES | SHADOW_MAP | LIGHT_BUFFER | REFLECTION_PASS)) == 0; } // Editor Solid view option: faces seen from behind are culled (in the view's own scene draws, not the cached shadow pages, transmitted light or reflections)
    // Whether the view being drawn shows the parts hidden in play (the editor's overlay for them, and their picking), by its shading mode
    bool ShowsHiddenInPlay() const { return IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : IsSolidPass() ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr; }
@@ -592,18 +593,10 @@ private:
    bool m_editorSolidPass = false; // ... in Solid shading
    void ApplySolidEnv(); // Binds the studio environment (assets/library/_preview/env.hdr) in a Solid pass, the table's otherwise; with the view's brightness / rotation / strength
    std::shared_ptr<const Sampler> m_solidEnvSampler, m_solidIrradianceSampler, m_tableDiffuseEnv;
-   std::shared_ptr<const BaseTexture> m_solidEnvTex, m_solidIrradianceTex; // CPU copies, rotated for the view's light direction
-   struct RotatedSolidEnv
-   {
-      int degrees;
-      std::shared_ptr<const Sampler> env, irradiance;
-   };
-   vector<RotatedSolidEnv> m_solidRotatedEnvs; // A few recent rotations (several views at once use different ones)
    std::shared_ptr<const Sampler> m_flatSampler; // 1 x 1 white environment: Solid lighting Flat
    bool m_solidEnvTried = false;
    ViewShadeOptions m_viewShade; // View-only shading options of the view being drawn: the main editor view's, a secondary view's during its pass
    bool NoTableLights() const { return IsSolidPass() || !m_viewShade.tableLights; } // No table lights (nor shadows) in the view being drawn
-   static std::shared_ptr<BaseTexture> RotateEnvU(const BaseTexture& src, int degrees); // Equirectangular image turned about the vertical axis
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
    bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)

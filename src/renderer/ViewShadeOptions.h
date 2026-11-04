@@ -10,6 +10,7 @@ struct ViewShadeOptions
    // Solid: the studio environment (assets/library/_preview/env.hdr) is the only light
    float brightness = 1.f; // Level of the studio light (0 .. 4, 1 = as shipped)
    float lightAngle = 0.f; // Rotation of the studio environment about the table's vertical axis, degrees (-180 .. 180)
+   float lightElevation = 0.f; // Raising of the studio environment about its horizontal axis, degrees (-90 .. 90)
    bool flat = false; // Lighting Flat (uniform light, the base colours as they are) instead of Studio
    bool bgCustom = false; // Background: custom colour instead of the theme's
    float bg[3] = { 13.f / 255.f, 13.f / 255.f, 13.f / 255.f }; // ... the colour (the theme's: 0x0D0D0D)
@@ -31,6 +32,7 @@ struct ViewShadeOptions
    {
       return brightness == o.brightness
          && lightAngle == o.lightAngle
+         && lightElevation == o.lightElevation
          && flat == o.flat
          && bgCustom == o.bgCustom
          && bg[0] == o.bg[0]

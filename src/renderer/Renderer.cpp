@@ -589,8 +589,6 @@ Renderer::~Renderer()
    m_lookdevEnvSampler = nullptr;
    m_lookdevIrradianceSampler = nullptr;
    m_solidEnvSampler = m_solidIrradianceSampler = m_tableDiffuseEnv = m_flatSampler = nullptr;
-   m_solidRotatedEnvs.clear();
-   m_solidEnvTex = m_solidIrradianceTex = nullptr;
    m_aoDitherSampler = nullptr;
    delete m_renderDevice;
 }
@@ -2478,26 +2476,7 @@ bool Renderer::IsTemporalAccumulationInProgress() const
    return false;
 }
 
-std::shared_ptr<BaseTexture> Renderer::RotateEnvU(const BaseTexture& src, const int degrees)
-{
-   // Turning an equirectangular environment about the vertical axis is a horizontal shift of its columns (the sampling direction's azimuth is u)
-   const unsigned int w = src.width(), h = src.height();
-   std::shared_ptr<BaseTexture> dst = BaseTexture::Create(w, h, src.m_format);
-   if (dst == nullptr || w == 0)
-      return dst;
-   const size_t pitch = src.pitch(), bpp = pitch / w;
-   const unsigned int shift = static_cast<unsigned int>(((lround(static_cast<double>(degrees) * w / 360.) % static_cast<long>(w)) + static_cast<long>(w)) % static_cast<long>(w));
-   const uint8_t* const __restrict from = static_cast<const uint8_t*>(src.datac());
-   uint8_t* const __restrict to = static_cast<uint8_t*>(dst->data());
-   for (unsigned int y = 0; y < h; y++)
-   {
-      const uint8_t* const s = from + y * pitch;
-      uint8_t* const d = to + y * pitch;
-      memcpy(d + shift * bpp, s, (w - shift) * bpp);
-      memcpy(d, s + (w - shift) * bpp, shift * bpp);
-   }
-   return dst;
-}
+bool Renderer::HasEnvRotation() const { return m_renderDevice->m_basicShader->HasUniform(ShaderUniform::envRotation); }
 
 void Renderer::ApplySolidEnv()
 {
@@ -2507,8 +2486,7 @@ void Renderer::ApplySolidEnv()
       const std::shared_ptr<const Sampler> diffuse = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
       if (diffuse != m_solidIrradianceSampler || m_solidIrradianceSampler == nullptr) // Never take the studio irradiance for the table's
          if (m_flatSampler == nullptr || diffuse != m_flatSampler)
-            if (std::none_of(m_solidRotatedEnvs.begin(), m_solidRotatedEnvs.end(), [&](const RotatedSolidEnv& r) { return r.irradiance == diffuse; }))
-               m_tableDiffuseEnv = diffuse;
+            m_tableDiffuseEnv = diffuse;
    }
    const bool solid = IsSolidPass();
    if (solid && !m_solidEnvTried)
@@ -2524,11 +2502,25 @@ void Renderer::ApplySolidEnv()
          std::shared_ptr<BaseTexture> irradiance = EnvmapPrecalc(env, irrHeight * 2, irrHeight);
          m_solidIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance"s, irradiance, false);
          m_solidEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Env"s, env, false);
-         m_solidEnvTex = env;
-         m_solidIrradianceTex = irradiance;
       }
    }
    const ViewShadeOptions& opt = m_viewShade;
+   if (basic->HasUniform(ShaderUniform::envRotation)) // BGFX shaders only: the GL and DX9 shaders do not have it (nothing is sent there, in play too)
+   {
+      // The studio light's direction: the environment turned by the view's rotation about the table's vertical axis (z), then raised by its elevation about the horizontal axis (y).
+      // The shader looks the environment up with the inverse turn: q = qy(elevation) * qz(-rotation), sent as (x, y, z, w - 1) so that no turn is all zero
+      float qx = 0.f, qy = 0.f, qz = 0.f, qw = 1.f;
+      if (solid && !opt.flat && (opt.lightAngle != 0.f || opt.lightElevation != 0.f))
+      {
+         const float hz = -opt.lightAngle * (float)(M_PI / 360.), hy = opt.lightElevation * (float)(M_PI / 360.);
+         const float sz = sinf(hz), cz = cosf(hz), sy = sinf(hy), cy = cosf(hy);
+         qw = cy * cz;
+         qx = sy * sz;
+         qy = sy * cz;
+         qz = cy * sz;
+      }
+      basic->SetVector(ShaderUniform::envRotation, qx, qy, qz, qw - 1.f);
+   }
    const float tableScale = m_table->m_envEmissionScale * m_sceneLighting.GetGlobalEmissionScale(); // As SetupShaders binds it
    if (solid && opt.flat)
    {
@@ -2545,24 +2537,8 @@ void Renderer::ApplySolidEnv()
    }
    else if (solid && m_solidEnvSampler != nullptr)
    {
-      std::shared_ptr<const Sampler> env = m_solidEnvSampler, irradiance = m_solidIrradianceSampler;
-      const int degrees = static_cast<int>(lroundf(opt.lightAngle)) % 360;
-      if (degrees != 0)
-      {
-         auto it = std::find_if(m_solidRotatedEnvs.begin(), m_solidRotatedEnvs.end(), [&](const RotatedSolidEnv& r) { return r.degrees == degrees; });
-         if (it == m_solidRotatedEnvs.end())
-         {
-            if (m_solidRotatedEnvs.size() >= 6)
-               m_solidRotatedEnvs.erase(m_solidRotatedEnvs.begin());
-            m_solidRotatedEnvs.push_back({ degrees, std::make_shared<Sampler>(m_renderDevice, "Solid Env Rotated"s, RotateEnvU(*m_solidEnvTex, degrees), false),
-               std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance Rotated"s, RotateEnvU(*m_solidIrradianceTex, degrees), false) });
-            it = m_solidRotatedEnvs.end() - 1;
-         }
-         env = it->env;
-         irradiance = it->irradiance;
-      }
-      basic->SetTexture(ShaderUniform::tex_env, env);
-      basic->SetTexture(ShaderUniform::tex_diffuse_env, irradiance);
+      basic->SetTexture(ShaderUniform::tex_env, m_solidEnvSampler);
+      basic->SetTexture(ShaderUniform::tex_diffuse_env, m_solidIrradianceSampler);
       basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, opt.brightness, static_cast<float>(m_solidEnvSampler->GetHeight()), 0.f, 0.f);
    }
    else if (m_tableDiffuseEnv != nullptr)
@@ -6215,7 +6191,7 @@ void Renderer::RenderEditorView(const int slot)
    PinTable* const mainTable = m_table;
    Shader* const basicShader = m_renderDevice->m_basicShader;
    std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
-   vec4 mainEnvScale, mainLightGrid, mainLightGrid2;
+   vec4 mainEnvScale, mainEnvRotation, mainLightGrid, mainLightGrid2;
 #if defined(ENABLE_BGFX)
    const bool mainShadowCacheOn = m_shadowCacheOn;
 #endif
@@ -6250,6 +6226,11 @@ void Renderer::RenderEditorView(const int slot)
       mainEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_env);
       mainDiffuseEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
       mainEnvScale = basicShader->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
+      if (basicShader->HasUniform(ShaderUniform::envRotation)) // The pass's lighting is the rig's alone: not turned by the view's Light Direction
+      {
+         mainEnvRotation = basicShader->GetVector(ShaderUniform::envRotation);
+         basicShader->SetVector(ShaderUniform::envRotation, 0.f, 0.f, 0.f, 0.f);
+      }
       basicShader->SetTexture(ShaderUniform::tex_env, m_lookdevEnvSampler);
       basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_lookdevIrradianceSampler);
       basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, 1.f, static_cast<float>(m_lookdevEnvSampler->GetHeight()), 0.f, 0.f);
@@ -6297,6 +6278,8 @@ void Renderer::RenderEditorView(const int slot)
          else
             basicShader->SetTextureNull(uniform);
       basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, &mainEnvScale);
+      if (basicShader->HasUniform(ShaderUniform::envRotation))
+         basicShader->SetVector(ShaderUniform::envRotation, &mainEnvRotation);
 #if defined(ENABLE_BGFX)
       if (m_renderDevice->m_pbrActive)
       {

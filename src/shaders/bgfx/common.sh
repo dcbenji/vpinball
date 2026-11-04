@@ -198,6 +198,22 @@ vec2 ray_to_equirectangular_uv(const vec3 ray)
 		acos_approx_divPI(ray.z));
 }
 
+// The editor view's turn of the environment (Solid Light Direction / Elevation, PBR Environment Rotation): a quaternion (x, y, z, w - 1), so that the unset all zero is no turn
+uniform vec4 envRotation;
+
+// Direction in the environment image for a world space direction, with the view's turn of the environment applied
+vec2 env_uv(const vec3 ray)
+{
+   // Unset (no turn, the player's case): a uniform branch skips the two cross products
+   vec3 r = ray;
+   BRANCH if (envRotation.x != 0.0 || envRotation.y != 0.0 || envRotation.z != 0.0)
+   {
+      const vec3 t = 2.0 * cross(envRotation.xyz, ray);
+      r = ray + (envRotation.w + 1.0) * t + cross(envRotation.xyz, t);
+   }
+   return ray_to_equirectangular_uv(r);
+}
+
 #if 0
 //!! this one is untested for special values (see atan2 approx!)
 // 4th order hyperbolical approximation
