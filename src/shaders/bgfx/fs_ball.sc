@@ -117,7 +117,7 @@ void main()
         // trafo back to world for lookup into world space envmap
         // mView is always an orthonormal matrix, so no need to normalize after transform
         const vec3 rv = /*normalize*/(mul(vec4(-R,0.0), mView).xyz);
-        const vec2 uv = ray_to_equirectangular_uv(rv);
+        const vec2 uv = env_uv(rv); // turned by the view's environment rotation (unset in play)
         ballImageColor = texture2DLod(tex_ball_color, uv, lod).rgb;
     #else
         // Spherical Map Reflections

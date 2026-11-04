@@ -2526,6 +2526,8 @@ void Renderer::ApplySolidEnv()
          qz = cy * sz;
       }
       basic->SetVector(ShaderUniform::envRotation, qx, qy, qz, qw - 1.f);
+      if (m_renderDevice->m_ballShader->HasUniform(ShaderUniform::envRotation)) // The balls' diffuse and (equirectangular) reflection lookups turn with the view's environment
+         m_renderDevice->m_ballShader->SetVector(ShaderUniform::envRotation, qx, qy, qz, qw - 1.f);
    }
    const float tableScale = m_table->m_envEmissionScale * m_sceneLighting.GetGlobalEmissionScale(); // As SetupShaders binds it
    if (solid && opt.flat)
@@ -6225,6 +6227,7 @@ void Renderer::RenderEditorView(const int slot)
 
    m_render_mask = Renderer::DEFAULT;
    vec4 mainBallEnvScale; // The ball shader's environment level, which the isolated pass swaps
+   vec4 mainBallEnvRotation; // ... and its turn
    PinTable* const mainTable = m_table;
    Shader* const basicShader = m_renderDevice->m_basicShader;
    std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
@@ -6269,6 +6272,11 @@ void Renderer::RenderEditorView(const int slot)
       {
          mainEnvRotation = basicShader->GetVector(ShaderUniform::envRotation);
          basicShader->SetVector(ShaderUniform::envRotation, 0.f, 0.f, 0.f, 0.f);
+      }
+      if (m_renderDevice->m_ballShader->HasUniform(ShaderUniform::envRotation)) // ... nor are the preview's balls
+      {
+         mainBallEnvRotation = m_renderDevice->m_ballShader->GetVector(ShaderUniform::envRotation);
+         m_renderDevice->m_ballShader->SetVector(ShaderUniform::envRotation, 0.f, 0.f, 0.f, 0.f);
       }
       basicShader->SetTexture(ShaderUniform::tex_env, m_lookdevEnvSampler);
       basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_lookdevIrradianceSampler);
@@ -6320,6 +6328,8 @@ void Renderer::RenderEditorView(const int slot)
       basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, &mainEnvScale);
       if (basicShader->HasUniform(ShaderUniform::envRotation))
          basicShader->SetVector(ShaderUniform::envRotation, &mainEnvRotation);
+      if (m_renderDevice->m_ballShader->HasUniform(ShaderUniform::envRotation))
+         m_renderDevice->m_ballShader->SetVector(ShaderUniform::envRotation, &mainBallEnvRotation);
 #if defined(ENABLE_BGFX)
       if (m_renderDevice->m_pbrActive)
       {
