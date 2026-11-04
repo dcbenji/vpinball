@@ -121,7 +121,7 @@ private:
    LookOverride ResolveLook(const std::filesystem::path &pack, PinTable *table); // The session override of the pack (mask 0: none)
    void ApplyLightboxLook(); // The cards' own values, then the override
 
-   static constexpr unsigned int kRigVersion = 6; // Bump when the thumbnail rig changes: every thumbnail is rendered again
+   static constexpr unsigned int kRigVersion = 7; // Bump when the thumbnail rig changes: every thumbnail is rendered again
    static constexpr int kThumbSize = 256;
    // Insert previews are normalized: the card's alpha is scaled (never up) until the 90th percentile display luminance of the item's pixels reaches this value
    // (the red round insert, the least blown of the set, as it read at factor 1); the factor is cached beside the thumbnail ('<name>.norm')

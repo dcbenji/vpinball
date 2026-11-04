@@ -255,6 +255,46 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
       m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid, 0.f, 0.f, 0.f, 1.f);
       m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, 1.f, 0.f, std::getenv("VPX_SPEC_AA") ? (float)atof(std::getenv("VPX_SPEC_AA")) : 1.f, 0.f);
+
+      // Part library preview key lights: their own tex_pbr_lights, one grid cell, never rebuilt. Far enough to act as directional lights, so the rig does not
+      // depend on a part's size or position: yaw and pitch as the orbit camera's (yaw 0 = the player side, pitch 90 = above), angular radius of the lamp (deg),
+      // irradiance (pi = a white surface at 1). Four small lamps a quarter turn apart: the first mirrors the default insert view (yaw 35, pitch 55) a little off centre,
+      // so a flat cap shows it as a highlight there, slides it off as the view orbits and picks up the next one. Two low wide ones catch the sides. VPX_LIBRARY_KEYS="yaw,pitch,radius,irradiance;..." replaces the rig (at most 8 lights).
+      vector<vec4> keys { vec4(225.f, 50.f, 1.6f, 0.16f), vec4(315.f, 58.f, 1.2f, 0.09f), vec4(45.f, 52.f, 1.2f, 0.09f), vec4(135.f, 60.f, 1.2f, 0.09f), vec4(130.f, 25.f, 3.f, 0.6f), vec4(310.f, 25.f, 3.f, 0.4f) };
+      if (const char* const keyEnv = std::getenv("VPX_LIBRARY_KEYS"); keyEnv != nullptr && *keyEnv != '\0')
+      {
+         keys.clear();
+         std::istringstream list { string(keyEnv) };
+         list.imbue(std::locale::classic());
+         for (string key; std::getline(list, key, ';') && keys.size() < 8;)
+         {
+            std::istringstream one { key };
+            one.imbue(std::locale::classic());
+            vec4 k;
+            char sep;
+            if (one >> k.x >> sep >> k.y >> sep >> k.z >> sep >> k.w)
+               keys.push_back(k);
+         }
+      }
+      constexpr float keyDistance = 100000.f;
+      m_lookdevLightCount = static_cast<int>(keys.size());
+      vector<float> keyData(256 * 5 * 4, 0.f); // Layout in fs_pbr: light records, grid cells at 512, index list at 1024
+      keyData[512 * 4 + 1] = static_cast<float>(m_lookdevLightCount);
+      for (int i = 0; i < m_lookdevLightCount; i++)
+      {
+         const float yaw = ANGTORAD(keys[i].x), pitch = ANGTORAD(keys[i].y);
+         float* const rec = keyData.data() + i * 8;
+         rec[0] = sinf(yaw) * cosf(pitch) * keyDistance;
+         rec[1] = cosf(yaw) * cosf(pitch) * keyDistance;
+         rec[2] = sinf(pitch) * keyDistance;
+         rec[3] = keyDistance * 4.f;
+         rec[4] = rec[5] = rec[6] = keys[i].w * keyDistance * keyDistance;
+         keyData[(1024 + i) * 4] = static_cast<float>(i);
+         keyData[(1024 + i) * 4 + 1] = keyDistance * tanf(ANGTORAD(keys[i].z));
+      }
+      const bgfx::TextureHandle keyTex = bgfx::createTexture2D(256, 5, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE, bgfx::copy(keyData.data(), static_cast<uint32_t>(keyData.size() * sizeof(float))));
+      bgfx::setName(keyTex, "Lookdev Light List");
+      m_lookdevLightList = std::make_shared<Sampler>(m_renderDevice, "Lookdev Light List"s, SurfaceType::RT_DEFAULT, keyTex, bgfx::TextureFormat::RGBA32F, 256, 5, true);
    }
 #endif
 
@@ -540,6 +580,7 @@ Renderer::~Renderer()
    ReleaseAORenderTargets();
    m_ballEnvSampler = nullptr;
    m_envSampler = nullptr;
+   m_lookdevLightList = nullptr;
    m_lookdevEnvSampler = nullptr;
    m_lookdevIrradianceSampler = nullptr;
    m_solidEnvSampler = m_solidIrradianceSampler = m_tableDiffuseEnv = nullptr;
@@ -6067,7 +6108,7 @@ void Renderer::RenderEditorView(const int slot)
    PinTable* const mainTable = m_table;
    Shader* const basicShader = m_renderDevice->m_basicShader;
    std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
-   vec4 mainEnvScale, mainLightGrid2;
+   vec4 mainEnvScale, mainLightGrid, mainLightGrid2;
 #if defined(ENABLE_BGFX)
    const bool mainShadowCacheOn = m_shadowCacheOn;
 #endif
@@ -6098,7 +6139,7 @@ void Renderer::RenderEditorView(const int slot)
             m_lookdevIrradianceSampler = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
          }
       }
-      // Swapped for the pass, restored below: environment, light count 0 (no Forward+ light, so no VSM or flasher cache shadow either), no playfield shadow cache
+      // Swapped for the pass, restored below: environment, the rig's key lights for the table's light list (none shadowed, so no VSM or flasher cache shadow either), no playfield shadow cache
       mainEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_env);
       mainDiffuseEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
       mainEnvScale = basicShader->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
@@ -6108,8 +6149,11 @@ void Renderer::RenderEditorView(const int slot)
 #if defined(ENABLE_BGFX)
       if (m_renderDevice->m_pbrActive)
       {
+         mainLightGrid = basicShader->GetVector(ShaderUniform::pbrLightGrid);
          mainLightGrid2 = basicShader->GetVector(ShaderUniform::pbrLightGrid2);
-         basicShader->SetVector(ShaderUniform::pbrLightGrid2, mainLightGrid2.x, 0.f, mainLightGrid2.z, mainLightGrid2.w);
+         basicShader->SetVector(ShaderUniform::pbrLightGrid, 0.f, 0.f, 0.f, 1.f);
+         basicShader->SetVector(ShaderUniform::pbrLightGrid2, 1.f, static_cast<float>(m_lookdevLightCount), mainLightGrid2.z, mainLightGrid2.w);
+         basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_lookdevLightList);
       }
       m_shadowCacheOn = false;
 #endif
@@ -6148,7 +6192,11 @@ void Renderer::RenderEditorView(const int slot)
       basicShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, &mainEnvScale);
 #if defined(ENABLE_BGFX)
       if (m_renderDevice->m_pbrActive)
+      {
+         basicShader->SetVector(ShaderUniform::pbrLightGrid, &mainLightGrid);
          basicShader->SetVector(ShaderUniform::pbrLightGrid2, &mainLightGrid2);
+         basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
+      }
       m_shadowCacheOn = mainShadowCacheOn;
 #endif
    }

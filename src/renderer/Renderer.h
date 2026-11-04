@@ -624,6 +624,8 @@ private:
 
    std::shared_ptr<Sampler> m_envSampler = nullptr;
    std::shared_ptr<const Sampler> m_lookdevEnvSampler, m_lookdevIrradianceSampler; // Part library previews (EditorViewRequest::isolated), created on first use
+   std::shared_ptr<const Sampler> m_lookdevLightList; // Their key lights, a fixed tex_pbr_lights (BGFX PBR only)
+   int m_lookdevLightCount = 0;
    std::shared_ptr<Sampler> m_ballEnvSampler = nullptr;
 
    bool m_ss_refl;
