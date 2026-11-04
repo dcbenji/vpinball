@@ -4244,23 +4244,40 @@ void EditorUI::FrameBounds(const FRect3D &bounds)
    const vec3 newTarget(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
 
    // Evaluate the distance needed for all the bounds corners to be inside the view, keeping the camera orientation
-   // and fitting inside the area left visible by the UI (a symmetric margin accounts for the UI drawn over the render)
+   // and fitting inside the 3D viewport area (its content rect: the area the UI leaves to the render, which is drawn over the full window):
+   // the half size of the area and its offset from the window center, as fractions of the half window (NDC)
    const float aspect = io.DisplaySize.x / io.DisplaySize.y;
-   const Vertex2D visible = GetUIVisibleFraction();
+   if (!m_areaRectsValid)
+      ComputeAreaRects();
+   const AreaRect &vc = m_viewportContentRect;
+   const bool useRect = m_viewportVisible && !m_flyMode && !m_inspectionModal.IsVisible() && vc.x1 > vc.x0 && vc.y1 > vc.y0;
+   Vertex2D visible = GetUIVisibleFraction(); // Maximized panel: frame for the layout that comes back on restore (centered)
+   float offX = 0.f, offY = 0.f; // The area center in NDC (x right, y up)
+   if (useRect)
+   {
+      visible = Vertex2D(max(0.1f, (vc.x1 - vc.x0) / io.DisplaySize.x), max(0.1f, (vc.y1 - vc.y0) / io.DisplaySize.y));
+      offX = ((vc.x0 + vc.x1) / io.DisplaySize.x) - 1.f;
+      offY = 1.f - ((vc.y0 + vc.y1) / io.DisplaySize.y);
+   }
    const float tanHalfFovY = tanf(0.5f * ANGTORAD(m_navFovY));
+   const float tx = tanHalfFovY * aspect;
    float distance = 0.f;
    for (int i = 0; i < 8; i++)
    {
       const vec3 toCorner = vec3((i & 1) ? bounds.right : bounds.left, (i & 2) ? bounds.bottom : bounds.top, (i & 4) ? -bounds.zlow : -bounds.zhigh) - newTarget;
-      const float dx = fabsf(right.Dot(toCorner));
-      const float dy = fabsf(up.Dot(toCorner));
+      const float rx = right.Dot(toCorner), ry = up.Dot(toCorner), dz = dir.Dot(toCorner);
+      // Perspective: the camera is panned so that the bounds center lands on the area center, which makes the corner's offset depend on its depth
       distance = max(distance,
-         m_perspectiveCam ? dir.Dot(toCorner) + max(dy / (tanHalfFovY * visible.y), dx / (tanHalfFovY * aspect * visible.x)) : max(dy / visible.y, dx / (aspect * visible.x)));
+         m_perspectiveCam ? dz + max(fabsf(ry + offY * tanHalfFovY * dz) / (tanHalfFovY * visible.y), fabsf(rx + offX * tx * dz) / (tx * visible.x))
+                          : max(fabsf(ry) / visible.y, fabsf(rx) / (aspect * visible.x)));
    }
    if (distance > 0.f) // Keep the current distance for degenerate (point) selections
       m_camDistance = distance * 1.1f; // Small margin so that the selection does not exactly touch the view borders
-   const vec3 newEye = newTarget + dir * m_camDistance;
-   m_camView = Matrix3D::MatrixLookAtRH(newEye, newTarget, up);
+   // Pan the camera (the orbit target follows) so the bounds center is at the area center
+   const float halfW = m_perspectiveCam ? m_camDistance * tx : m_camDistance * aspect, halfH = m_perspectiveCam ? m_camDistance * tanHalfFovY : m_camDistance;
+   const vec3 panTarget = newTarget - right * (offX * halfW) - up * (offY * halfH);
+   const vec3 newEye = panTarget + dir * m_camDistance;
+   m_camView = Matrix3D::MatrixLookAtRH(newEye, panTarget, up);
 }
 
 // Numpad key, or the matching top row digit when numpad emulation is enabled (laptops without a numpad)
