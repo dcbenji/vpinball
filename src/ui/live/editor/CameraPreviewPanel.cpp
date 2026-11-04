@@ -175,7 +175,7 @@ bool CameraPreviewPanel::GameOwnsInput() const
 void CameraPreviewPanel::HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, const bool hovered, const bool active)
 {
    (void)imgMin;
-   if (GameOwnsInput())
+   if (GameOwnsInput() || m_editor.m_modal.active || ImGuizmo::IsUsingAny()) // Not while a G / R / S or a gizmo drag works with the camera of the last render
    {
       m_navDragging = false;
       return;
@@ -240,7 +240,7 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
    const bool blocked = GameOwnsInput() || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr || e.m_modal.active || e.m_fileOp != nullptr;
    if (m_navDragging || blocked)
       m_clickPending = false;
-   else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt))
+   else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver()) // Not a press on the gizmo
    {
       m_clickPending = true;
       m_clickStart = ImGui::GetMousePos();
@@ -456,10 +456,11 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = true;
          }
 
-         // The image, under an invisible button that takes this view's mouse input (picking: HandleSelectInput; no gizmo: P3)
+         // The image, under an invisible button that takes this view's mouse input (picking: HandleSelectInput; the gizmo is drawn over it by EditorUI::RenderUI)
          ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (avail.x - imgW) * 0.5f, ImGui::GetCursorPosY() + 4.f * dpi)); // Top-anchored under the header
          ImGui::InvisibleButton("##ViewImage", ImVec2(imgW, imgH), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
          const ImVec2 imgMin = ImGui::GetItemRectMin(), imgMax = ImGui::GetItemRectMax();
+         const ImGuiID imgItemId = ImGui::GetItemID();
          const bool imgHovered = ImGui::IsItemHovered(), imgActive = ImGui::IsItemActive();
          if (m_settings.freeOrbit)
             HandleOrbitInput(imgMin, ImVec2(imgW, imgH), imgHovered, imgActive);
@@ -505,7 +506,10 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          // frames), then 0, 2, so no two wireframe views share a frame
          static constexpr unsigned int kWirePhases[4] = { 1u, 3u, 0u, 2u };
          const unsigned int frame = static_cast<unsigned int>(ImGui::GetFrameCount());
-         const bool scheduled = m_settings.wireframe ? (frame % 4u) == kWirePhases[static_cast<unsigned int>(m_rank) % 4u] : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0;
+         // The view a gizmo drag or a G / R / S transform works in renders at the 3D Viewport's rate (PBR: every frame, wireframe: every 2nd, as it costs more CPU side)
+         const bool ownsEdit = (m_editor.m_modal.active && m_editor.m_modal.viewSlot == m_slot) || (ImGuizmo::IsUsingAny() && m_editor.m_gizmoSlot == m_slot);
+         const bool scheduled = (ownsEdit && (!m_settings.wireframe || frame % 2u == 0u))
+            || (m_settings.wireframe ? (frame % 4u) == kWirePhases[static_cast<unsigned int>(m_rank) % 4u] : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0);
          if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
          {
             Renderer::EditorViewRequest req;
@@ -543,6 +547,18 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                view.rectMin = imgMin;
                view.rectSize = ImVec2(imgW, imgH);
                m_editor.DrawSelectionLines(drawList, view);
+               // The camera and rect for the gizmo and the G / R / S modal transforms (see EditorUI::RenderUI)
+               EditorUI::SecondaryViewInfo &info = m_editor.m_viewInfo[m_slot];
+               if (renderer->GetEditorViewMatrices(m_slot, info.view, info.proj))
+               {
+                  info.valid = true;
+                  info.mvp = view.modelViewProj;
+                  info.rectMin = imgMin;
+                  info.rectSize = ImVec2(imgW, imgH);
+                  info.drawList = drawList;
+                  info.itemId = imgItemId;
+                  info.imageHovered = hoveredWindow && ImGui::IsMouseHoveringRect(imgMin, imgMax);
+               }
             }
          }
          else
@@ -558,7 +574,10 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             ImGui::SetMouseCursor(m_navDragging ? ImGuiMouseCursor_ResizeAll : ImGuiMouseCursor_Arrow);
       }
       if (hoveredWindow)
+      {
          m_editor.m_secondaryViewHovered = true; // Keys go to the view under the mouse
+         m_editor.m_secondaryViewSlot = m_slot;
+      }
    }
    m_editor.EndAreaWindow();
    if (!m_settings.SameChoices(before) || m_view != viewBefore || m_camMoved || before.orbitValid != m_settings.orbitValid)

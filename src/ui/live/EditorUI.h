@@ -116,7 +116,22 @@ private:
    PartLibraryPanel m_partLibrary;
    CameraPreviewPanel m_cameraPreviews[AreaLayout::kMaxViewLeaves]; // Secondary 3D views, one per renderer view slot, bound to the Camera Preview leaves shown (see RenderAreas)
    bool IsSecondaryViewEditDrag() const; // An interactive edit runs: the secondary views render on their schedule (see RenderAreas)
-   bool m_secondaryViewHovered = false; // A secondary view is under the mouse: the 3D Viewport leaves it the view keys (numpad, F, Home, Z, G / R / S)
+   bool m_secondaryViewHovered = false; // A secondary view is under the mouse: the 3D Viewport leaves it the view keys (numpad, F, Home, Z)
+   int m_secondaryViewSlot = -1; // ... its slot (G / R / S started over it work in that view)
+   // What the editing code needs of a secondary view shown this frame (filled by its CameraPreviewPanel, reset every frame): its image rect and the camera
+   // of its last render, the draw list of its area window, whether the mouse is over the image
+   struct SecondaryViewInfo
+   {
+      bool valid = false;
+      bool imageHovered = false;
+      ImVec2 rectMin, rectSize;
+      Matrix3D view, proj; // The renderer's convention (see EditorUI::RenderUI)
+      Matrix3D mvp; // Model view projection of the image (Renderer::GetEditorViewMVP)
+      ImDrawList *drawList = nullptr;
+      ImGuiID itemId = 0; // The image's invisible button
+   };
+   SecondaryViewInfo m_viewInfo[AreaLayout::kMaxViewLeaves];
+   int m_gizmoSlot = -1; // The view the gizmo is drawn in and works in: -1 = the 3D Viewport, else a secondary view slot. The mouse picks it; a drag keeps it until it ends
    ScriptPanel m_scriptPanel;
    PinnedPanel m_pinned; // Floating overlay of pinned properties
    SearchPalette m_palette; // Cmd/Ctrl+K search to field
@@ -486,6 +501,7 @@ private:
    struct ModalTransform
    {
       bool active = false;
+      int viewSlot = -1; // The view it works in (its camera, its image rect): -1 = the 3D Viewport, else a secondary view slot
       ModalOp op = ModalOp::Grab;
       int axis = -1; // Constraint axis (0..2 for X/Y/Z), -1 for none (view plane / view axis / uniform)
       bool plane = false; // Constrain to the plane perpendicular to the axis

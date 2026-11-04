@@ -158,7 +158,9 @@ public:
       for (EditorView& v : m_editorViews)
          if (v.requested && v.request.isolated == isolated)
             v.requested = false;
-   }   bool GetEditorViewMVP(int slot, Matrix3D& modelViewProj) const; // Model view projection (clip space) of the slot's last render, for picking in the image; false before the first one
+   }
+   bool GetEditorViewMatrices(int slot, Matrix3D& view, Matrix3D& proj) const; // View and projection of the slot's last render (eye 0, the renderer's convention), for editing in the image
+   bool GetEditorViewMVP(int slot, Matrix3D& modelViewProj) const; // Model view projection (clip space) of the slot's last render, for picking in the image; false before the first one
    void ReleaseEditorView(int slot); // Releases the slot's targets (the area was closed), recreated on the next request
    // View setup of the scene being recorded: the table's active one, or the one the editor camera preview renders (rotation dependent passes use it)
    const ViewSetup& GetRenderViewSetup() const;
@@ -564,6 +566,7 @@ private:
       bool lite = false; // The slot's target set holds lite (LDR, wireframe) targets
       bool pbr = false; // The slot's target set holds full PBR targets
       RenderTarget* out = nullptr; // Tonemapped output of a full PBR view (a lite view's output is its set's back buffer)
+      Matrix3D view, proj; // Eye 0 view and projection of the last render (see GetEditorViewMatrices)
       Matrix3D modelViewProj; // Eye 0 model view projection of the last render (see GetEditorViewMVP)
    };
    EditorView m_editorViews[kMaxEditorViews];

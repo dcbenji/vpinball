@@ -2201,6 +2201,9 @@ void EditorUI::RenderUI()
       CancelAreaInteraction(false); // Fly mode, inspection modal: no corner drag or edge mode survives it
    ComputeAreaRects(); // The bar heights may have changed with the chrome render
    m_secondaryViewHovered = false; // Set by the secondary views drawn by RenderAreas
+   m_secondaryViewSlot = -1;
+   for (SecondaryViewInfo &info : m_viewInfo)
+      info = SecondaryViewInfo();
    if (showFullUI)
    {
       RenderAreas(); // Panels of the visible areas
@@ -2357,12 +2360,45 @@ void EditorUI::RenderUI()
       ImGuizmo::Enable(true);
    }
    bool gizmoManipulated = false; // Manipulate called this frame with an operation
-   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost && m_viewportVisible)
+   // The view the gizmo works in (ImGuizmo has one active manipulation): the view under the mouse, a secondary view or the 3D Viewport; over a panel the last
+   // one stays. A drag keeps the view it started in until it ends, wherever the mouse goes
+   if (!ImGuizmo::IsUsingAny())
+   {
+      int hoveredSlot = -1;
+      for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
+         if (m_viewInfo[i].valid && m_viewInfo[i].imageHovered)
+            hoveredSlot = i;
+      if (hoveredSlot >= 0)
+         m_gizmoSlot = hoveredSlot;
+      else if (m_viewportVisible && !io.WantCaptureMouse)
+         m_gizmoSlot = -1; // Over the 3D Viewport
+      if (m_gizmoSlot >= 0 && !m_viewInfo[m_gizmoSlot].valid)
+         m_gizmoSlot = -1; // The view is gone
+   }
+   const SecondaryViewInfo *const gizmoView = m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid ? &m_viewInfo[m_gizmoSlot] : nullptr;
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost
+      && (m_gizmoSlot >= 0 ? (gizmoView != nullptr && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop) : m_viewportVisible))
    {
       float camViewLH[16];
-      memcpy(camViewLH, &m_camView.m[0][0], sizeof(float) * 4 * 4);
-      for (int i = 8; i < 12; i++)
-         camViewLH[i] = -camViewLH[i];
+      Matrix3D secondaryProj;
+      if (gizmoView != nullptr)
+      {
+         // A secondary view: the camera of its last render, factored the way the 3D Viewport's camera is (view = RH2LH * m_camView * YAxis, proj = YAxis * m_camProj;
+         // ImGuizmo's view is RH2LH * m_camView)
+         const Matrix3D YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
+         const Matrix3D secondaryView = gizmoView->view * YAxis;
+         secondaryProj = YAxis * gizmoView->proj;
+         memcpy(camViewLH, &secondaryView.m[0][0], sizeof(float) * 4 * 4);
+         ImGuizmo::SetRect(gizmoView->rectMin.x, gizmoView->rectMin.y, gizmoView->rectSize.x, gizmoView->rectSize.y);
+         ImGuizmo::SetDrawlist(gizmoView->drawList);
+         ImGuizmo::SetOrthographic(fabsf(secondaryProj.m[2][3]) < 1e-6f);
+      }
+      else
+      {
+         memcpy(camViewLH, &m_camView.m[0][0], sizeof(float) * 4 * 4);
+         for (int i = 8; i < 12; i++)
+            camViewLH[i] = -camViewLH[i];
+      }
       const Matrix3D prevTransform(transform);
       ImGuizmo::OPERATION gizmoOperation = m_gizmoOperation;
       if (m_pointEditPart || m_camMode == ViewMode::DesktopBackdrop)
@@ -2375,7 +2411,7 @@ void EditorUI::RenderUI()
          else if (gizmoOperation == ImGuizmo::SCALE)
             gizmoOperation = static_cast<ImGuizmo::OPERATION>(ImGuizmo::SCALE_X | ImGuizmo::SCALE_Y);
       }
-      else if (m_camMode == ViewMode::EditorCam)
+      else if (m_camMode == ViewMode::EditorCam && gizmoView == nullptr)
       {
          // Predefined views are axis aligned 2D views: restrict gizmo operations to the view plane
          switch (m_predefinedView)
@@ -2437,9 +2473,27 @@ void EditorUI::RenderUI()
       // Drawn inside the viewport area only (not over the panels beside it when the part is outside the narrow viewport)
       ImDrawList *const gizmoDrawList = ImGui::FindWindowByName("gizmo") != nullptr ? ImGui::FindWindowByName("gizmo")->DrawList : nullptr;
       const int gizmoFirstCmd = gizmoDrawList != nullptr ? max(0, gizmoDrawList->CmdBuffer.Size - 1) : 0;
-      ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
+      // ImGuizmo starts a drag only when no ImGui item is hovered or active: the image of a secondary view is one (its invisible button), so it is hidden from
+      // ImGuizmo for the call (the 3D Viewport has no item under the mouse)
+      ImGuiContext &imguiContext = *ImGui::GetCurrentContext();
+      const ImGuiID savedIds[3] = { imguiContext.HoveredId, imguiContext.HoveredIdPreviousFrame, imguiContext.ActiveId };
+      if (gizmoView != nullptr)
+         for (ImGuiID *id : { &imguiContext.HoveredId, &imguiContext.HoveredIdPreviousFrame, &imguiContext.ActiveId })
+            if (*id == gizmoView->itemId)
+               *id = 0;
+      ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
+      imguiContext.HoveredId = savedIds[0];
+      imguiContext.HoveredIdPreviousFrame = savedIds[1];
+      imguiContext.ActiveId = savedIds[2];
       ClipDrawCommands(gizmoDrawList, gizmoFirstCmd, m_viewportVisible ? &m_viewportRect : nullptr);
       gizmoManipulated = gizmoOperation != ImGuizmo::OPERATION(0);
+      if (gizmoView != nullptr)
+      {
+         // Back to the 3D Viewport's context for what follows (the nav cube)
+         ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+         ImGuizmo::SetDrawlist(ImGui::FindWindowByName("gizmo")->DrawList);
+         ImGuizmo::SetOrthographic(m_camMode == ViewMode::DesktopBackdrop || (m_camMode == ViewMode::EditorCam && !m_perspectiveCam));
+      }
       if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {
          // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
@@ -2523,7 +2577,7 @@ void EditorUI::RenderUI()
             overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
-      if (m_modal.active && m_viewportVisible)
+      if (m_modal.active && m_modal.viewSlot < 0 && m_viewportVisible)
       {
          // Modal readout on the viewport header line (top centre, on a dark pill), like Blender's header text
          const float dpi = m_liveUI.GetDPI();
@@ -2531,6 +2585,20 @@ void EditorUI::RenderUI()
          const float x = (m_viewportContentRect.x0 + m_viewportContentRect.x1 - textSize.x) * 0.5f, y = m_viewportContentRect.y0 + 8.f * dpi;
          overlayDrawList->AddRectFilled(ImVec2(x - 10.f * dpi, y - 3.f * dpi), ImVec2(x + textSize.x + 10.f * dpi, y + textSize.y + 3.f * dpi), IM_COL32(20, 20, 22, 200), 4.f * dpi);
          overlayDrawList->AddText(ImVec2(x, y), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+      }
+
+      if (m_modal.active && m_modal.viewSlot >= 0 && m_viewInfo[m_modal.viewSlot].valid)
+      {
+         // The same readout at the top of the secondary view the transform works in
+         const SecondaryViewInfo &info = m_viewInfo[m_modal.viewSlot];
+         const float dpi = m_liveUI.GetDPI();
+         const ImVec2 textSize = ImGui::CalcTextSize(m_modal.hud.c_str());
+         const float x = info.rectMin.x + (info.rectSize.x - textSize.x) * 0.5f, y = info.rectMin.y + 8.f * dpi;
+         ImDrawList *const hudList = ImGui::GetForegroundDrawList();
+         hudList->PushClipRect(info.rectMin, ImVec2(info.rectMin.x + info.rectSize.x, info.rectMin.y + info.rectSize.y), true);
+         hudList->AddRectFilled(ImVec2(x - 10.f * dpi, y - 3.f * dpi), ImVec2(x + textSize.x + 10.f * dpi, y + textSize.y + 3.f * dpi), IM_COL32(20, 20, 22, 200), 4.f * dpi);
+         hudList->AddText(ImVec2(x, y), IM_COL32(255, 255, 255, 255), m_modal.hud.c_str());
+         hudList->PopClipRect();
       }
 
       // In desktop backdrop mode, draw the bounds of the backdrop area
@@ -3000,12 +3068,12 @@ void EditorUI::RenderUI()
             ClearSelection(); // Cancel current selection
       }
       else if (m_secondaryViewHovered
-         && ((!io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_G) || ImGui::IsKeyPressed(ImGuiKey_R) || ImGui::IsKeyPressed(ImGuiKey_S) || ImGui::IsKeyPressed(ImGuiKey_Z)
+         && ((!io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Z)
                 || ImGui::IsKeyPressed(ImGuiKey_F) || ImGui::IsKeyPressed(ImGuiKey_Home) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide)))
             || IsNumpadPressed(0) || IsNumpadPressed(1) || IsNumpadPressed(2) || IsNumpadPressed(3) || IsNumpadPressed(4) || IsNumpadPressed(5) || IsNumpadPressed(6)
             || IsNumpadPressed(7) || IsNumpadPressed(8) || IsNumpadPressed(9)))
       {
-         // A secondary 3D view is under the mouse: the view keys are its own (it has no G / R / S, no shading key)
+         // A secondary 3D view is under the mouse: the view keys are its own (no shading key; G / R / S work in it, see BeginModalTransform)
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
@@ -4777,16 +4845,19 @@ namespace
 
 void EditorUI::BeginModalTransform(ModalOp op)
 {
-   if (!m_viewportVisible)
-      return; // G / R / S act on the 3D view
+   // G / R / S act on the 3D view under the mouse: a secondary view (its camera and image rect are used until the transform ends), else the 3D Viewport
+   const int viewSlot = m_secondaryViewHovered && m_secondaryViewSlot >= 0 && m_viewInfo[m_secondaryViewSlot].valid ? m_secondaryViewSlot : -1;
+   if (viewSlot < 0 && !m_viewportVisible)
+      return;
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
       return;
-   if (m_camMode == ViewMode::PreviewCam)
+   if (viewSlot < 0 && m_camMode == ViewMode::PreviewCam)
       m_camMode = ViewMode::EditorCam;
    const ImGuizmo::OPERATION savedGizmo = m_gizmoOperation;
    m_gizmoOperation = ImGuizmo::OPERATION(0);
    m_modal = ModalTransform();
+   m_modal.viewSlot = viewSlot;
    m_lastOp.type = LastOperation::Type::None;
    m_modal.savedGizmo = savedGizmo;
    m_modal.active = true;
@@ -4916,17 +4987,52 @@ void EditorUI::UpdateModalTransform()
    const bool hasValue = !m_modal.typed.empty() && m_modal.typed != "-" && m_modal.typed != ".";
    const float value = hasValue ? static_cast<float>(atof(m_modal.typed.c_str())) : 0.f;
 
-   // Camera basis & projection (in the camera's space)
+   // Camera basis & projection (in the camera's space): the 3D Viewport's (the whole window), or the view the transform started in (its last render's
+   // camera, in its image rect: the editor camera is view = RH2LH * m_camView * YAxis, see RenderUI)
    Matrix3D view(m_camView);
+   bool perspective = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop;
+   float tanHalfFov = tanf(0.5f * ANGTORAD(m_navFovY)), orthoHalfH = m_camDistance; // Half view height per unit of depth (perspective) / at any depth (orthographic)
+   ImVec2 viewOrg(0.f, 0.f), viewSize = io.DisplaySize;
+   if (m_modal.viewSlot >= 0)
+   {
+      const SecondaryViewInfo &info = m_viewInfo[m_modal.viewSlot];
+      if (!info.valid) // The view is not shown anymore
+      {
+         EndModalTransform(false);
+         return;
+      }
+      const Matrix3D RH2LH = Matrix3D::MatrixScale(1.f, 1.f, -1.f), YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
+      view = RH2LH * info.view * YAxis;
+      perspective = fabsf(info.proj.m[2][3]) > 1e-6f;
+      tanHalfFov = orthoHalfH = 1.f / max(fabsf(info.proj.m[1][1]), 1e-6f);
+      viewOrg = info.rectMin;
+      viewSize = info.rectSize;
+   }
    view.Invert();
    const vec3 right = view.GetOrthoNormalRight(), up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), eye = view.GetOrthoNormalPos();
    const Matrix3D &m0 = m_modal.initial;
    const vec3 pivot = FlipZ(vec3(m0._41, m0._42, m0._43));
-   const bool perspective = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop;
-   const float depth = max((eye - pivot).Dot(dir), 1e-3f);
-   const float halfH = perspective ? depth * tanf(0.5f * ANGTORAD(m_navFovY)) : m_camDistance;
-   const float aspect = io.DisplaySize.x / io.DisplaySize.y;
-   const ImVec2 screenPivot(0.5f * io.DisplaySize.x * (1.f + (pivot - eye).Dot(right) / (halfH * aspect)), 0.5f * io.DisplaySize.y * (1.f - (pivot - eye).Dot(up) / halfH));
+   const float aspect = viewSize.x / viewSize.y;
+   // Camera space point (right handed, see FlipZ) to the screen. The 3D Viewport's camera is a plain look at; a secondary view's can be any view setup of the table
+   // (the player's: layback, off axis), so it projects with the model view projection its image was rendered with
+   const auto toScreen = [&](const vec3 &p) -> ImVec2
+   {
+      if (m_modal.viewSlot >= 0)
+      {
+         const Matrix3D &mvp = m_viewInfo[m_modal.viewSlot].mvp;
+         const vec3 v = FlipZ(p);
+         const float xp = mvp._11 * v.x + mvp._21 * v.y + mvp._31 * v.z + mvp._41;
+         const float yp = mvp._12 * v.x + mvp._22 * v.y + mvp._32 * v.z + mvp._42;
+         const float wp = mvp._14 * v.x + mvp._24 * v.y + mvp._34 * v.z + mvp._44;
+         if (wp <= 1e-10f) // Behind the camera
+            return ImVec2(FLT_MAX, FLT_MAX);
+         return ImVec2(viewOrg.x + (wp + xp) * viewSize.x * 0.5f / wp, viewOrg.y + (wp - yp) * viewSize.y * 0.5f / wp);
+      }
+      const float d = max((p - eye).Dot(dir), 1e-3f);
+      const float h = perspective ? d * tanHalfFov : orthoHalfH;
+      return ImVec2(viewOrg.x + 0.5f * viewSize.x * (1.f + (p - eye).Dot(right) / (h * aspect)), viewOrg.y + 0.5f * viewSize.y * (1.f - (p - eye).Dot(up) / h));
+   };
+   const ImVec2 screenPivot = toScreen(pivot);
    const ImVec2 mouse = ImGui::GetMousePos();
    const float curAngle = atan2f(mouse.y - screenPivot.y, mouse.x - screenPivot.x);
    const float curDist = hypotf(mouse.x - screenPivot.x, mouse.y - screenPivot.y);
@@ -4945,8 +5051,24 @@ void EditorUI::UpdateModalTransform()
    {
    case ModalOp::Grab:
    {
-      const float unitsPerPixel = 2.f * halfH / io.DisplaySize.y;
-      vec3 move = right * ((mouse.x - m_modal.startMouse.x) * unitsPerPixel) - up * ((mouse.y - m_modal.startMouse.y) * unitsPerPixel);
+      const float dx = mouse.x - m_modal.startMouse.x, dy = mouse.y - m_modal.startMouse.y;
+      vec3 move(0.f, 0.f, 0.f);
+      if (m_modal.viewSlot < 0)
+      {
+         const float depth = max((eye - pivot).Dot(dir), 1e-3f);
+         const float unitsPerPixel = 2.f * (perspective ? depth * tanHalfFov : orthoHalfH) / viewSize.y;
+         move = right * (dx * unitsPerPixel) - up * (dy * unitsPerPixel);
+      }
+      else
+      {
+         // In the plane through the pivot facing the camera: the screen offsets of a step along its two axes give the move that follows the mouse
+         constexpr float step = 10.f;
+         const ImVec2 s0 = toScreen(pivot), sr = toScreen(pivot + right * step), su = toScreen(pivot + up * step);
+         const float ax = (sr.x - s0.x) / step, ay = (sr.y - s0.y) / step, bx = (su.x - s0.x) / step, by = (su.y - s0.y) / step; // Pixels per unit along right / up
+         const float det = ax * by - ay * bx;
+         if (fabsf(det) > 1e-9f && fabsf(det) < 1e18f)
+            move = right * ((dx * by - dy * bx) / det) + up * ((ax * dy - ay * dx) / det);
+      }
       if (hasValue)
          move = TableAxis(m_modal.axis < 0 ? 0 : m_modal.axis) * value;
       else if (m_modal.axis >= 0)
@@ -4978,12 +5100,6 @@ void EditorUI::UpdateModalTransform()
                      break;
                }
             }
-            const auto toScreen = [&](const vec3 &p)
-            {
-               const float d = max((p - eye).Dot(dir), 1e-3f);
-               const float h = perspective ? d * tanf(0.5f * ANGTORAD(m_navFovY)) : m_camDistance;
-               return ImVec2(0.5f * io.DisplaySize.x * (1.f + (p - eye).Dot(right) / (h * aspect)), 0.5f * io.DisplaySize.y * (1.f - (p - eye).Dot(up) / h));
-            };
             const ImVec2 moved = toScreen(FlipZ(vec3(m0._41 + delta.x, m0._42 + delta.y, m0._43 + delta.z)));
             const float maxDist = 14.f * m_liveUI.GetDPI();
             float best = maxDist;

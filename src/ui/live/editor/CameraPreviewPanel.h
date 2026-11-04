@@ -17,7 +17,7 @@ namespace VPX::EditorUI
 class EditorUI;
 
 // Secondary 3D view, hosted by a Camera Preview editor area (up to AreaLayout::kMaxViewLeaves, one panel per renderer view slot): not the
-// editing viewport (click selects as in the 3D Viewport, see HandleSelectInput, but no gizmo and no G/R/S yet), the scene rendered by the Renderer into an offscreen target beside it, with
+// editing viewport (click selects as in the 3D Viewport, see HandleSelectInput; the gizmo and G / R / S work in the view under the mouse, see EditorUI::RenderUI), the scene rendered by the Renderer into an offscreen target beside it, with
 // - camera: the Player view (the table's view setup, as the editor's Preview Camera shows it, Auto/Desktop/Cabinet/FSS) or its own Free orbit
 //   camera (turntable orbit, pan, zoom, numpad views, Frame Selected / Frame All, with the main viewport's mouse bindings, while hovered),
 // - shading: full PBR, or Wireframe (the editor's hidden line wireframe on the renderer's lite path: no post processing, no HDR targets).

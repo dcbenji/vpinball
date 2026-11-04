@@ -5875,6 +5875,15 @@ RenderTarget* Renderer::GetEditorView(const int slot) const
    return m_editorViews[slot].lite ? m_sceneTargetSets[slot].backBuffer1 : m_editorViews[slot].out;
 }
 
+bool Renderer::GetEditorViewMatrices(const int slot, Matrix3D& view, Matrix3D& proj) const
+{
+   if (slot < 0 || slot >= kMaxEditorViews || !m_editorViews[slot].rendered)
+      return false;
+   view = m_editorViews[slot].view;
+   proj = m_editorViews[slot].proj;
+   return true;
+}
+
 bool Renderer::GetEditorViewMVP(const int slot, Matrix3D& modelViewProj) const
 {
    if (slot < 0 || slot >= kMaxEditorViews || !m_editorViews[slot].rendered)
@@ -6102,6 +6111,8 @@ void Renderer::RenderEditorView(const int slot)
    }
    m_initialMVP = m_mvp;
    v.modelViewProj = m_mvp.GetModelViewProj(0); // What the image shows, for picking in it
+   v.view = m_mvp.GetView(0);
+   v.proj = m_mvp.GetProj(0);
    for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       m_playfieldView[eye] = m_mvp.GetView(eye);
    m_renderDevice->m_basicShader->SetVector(
