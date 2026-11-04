@@ -125,7 +125,9 @@ public:
    static constexpr float kDefaultOutlinerWidth = 280.f; // first-run default; saved workspaces keep their stored width
    static constexpr float kDefaultPropertiesWidth = 360.f; // == PropertiesPanel::PaneWidth
 
-   AreaLayout(); // default: the legacy default layout (Outliner 200 | Viewport | Properties 360)
+   AreaLayout(); // default-constructed: the legacy shape (Outliner 280 | Viewport | Properties 360), the base the legacy keys are converted on
+   // The first-run layout of a table without saved workspaces: Viewport | right column (360 wide) with the Outliner (360 tall) above Properties, as in Blender
+   static AreaLayout DefaultLayout();
 
    // --- Construction and (de)serialization ---
 

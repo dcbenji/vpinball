@@ -55,6 +55,17 @@ float SplitterRect::SizeForPos(const float p, const float dpi) const
 
 AreaLayout::AreaLayout() : AreaLayout(nullptr) { *this = FromLegacy(true, true, 0.f, 0.f, 0, 1); }
 
+AreaLayout AreaLayout::DefaultLayout()
+{
+   // The Outliner takes about 36% of a 1080p column (Blender's 189 px shows only 7 of our 23 px rows)
+   static const nlohmann::json tree = nlohmann::json::parse(R"({ "split": "vertical", "fixed": "second", "size": 360, "children": [ { "editor": "Viewport" },
+      { "split": "horizontal", "fixed": "first", "size": 360, "children": [ { "editor": "Outliner" }, { "editor": "Properties" } ] } ] })");
+   AreaLayout layout;
+   if (!layout.FromJson(tree))
+      return AreaLayout(); // Cannot happen: the legacy shape
+   return layout;
+}
+
 AreaLayout AreaLayout::FromLegacy(const bool outliner, const bool properties, float outlinerW, float propertiesW, const int leftEditor, const int rightEditor)
 {
    if (!std::isfinite(outlinerW) || outlinerW <= 0.f)
