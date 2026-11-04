@@ -45,6 +45,7 @@
 //      (table space), w source radius (table units); then rgb irradiance at the dome (relative to the room light), w unused
 //      ([17].w: dome_frost's gain; [19].w: dome_lens (0 = off, set only when a refraction probe is bound); [21].w: its slice width
 //      in flutes); [23].w: the feet's lit glow gain)
+// [24] xy the dome's centre on screen (render target uv, in gl_FragCoord's orientation; z 1 = set), for dome_lens
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -59,7 +60,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 
 #include "common.sh"
 
-uniform vec4 domeParams[24];
+uniform vec4 domeParams[25];
 SAMPLER2DSTEREO(tex_refraction, 6); // dome_lens: the dome's refraction probe (a copy of the scene behind it)
 uniform vec4 w_h_height; // x/y: 1 / render target size
 SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R glow (x2, gamma 2.2), G wall thickness (0..4 mm)
@@ -286,6 +287,8 @@ void main()
 	// footprints for the top zigzag line and dome_lens's gather disc
 	const float fwTop = abs(dFdx(P.y)) + abs(dFdy(P.y));
 	const float mmPx = max(max(length(dFdx(P)), length(dFdy(P))), 1e-3); // mm per pixel on the dome (dome_lens)
+	const vec2 qF = v_worldPos.xy / v_worldPos.z; // projected view position and its screen derivatives (dome_lens: the dome's centre on screen)
+	const vec2 qFdx = dFdx(qF), qFdy = dFdy(qF);
 	const float fluteF = theta / period;
 	const float idx = floor(fluteF + 0.5);
 	const float eP = fluteF - idx;
@@ -724,32 +727,49 @@ void main()
 	}
 
 	// Lens (dome_lens): light from behind the dome, dispersed through it, never a view through it (Ben 11-03: like a crystal
-	// with a faceted crystal inside: held up to a light it glows, but you never see the other side). The light behind the
-	// whole dome is gathered (12 taps of the screen copy over a disc a dome wide round the pixel: its mean, plus a share of its
-	// brightest tap so a hot light right behind comes through as hotness), filtered through the plastic, then broken up by the
-	// dome's own flutes (a soft band per flute, each flank its own strength): the pattern stays on the dome as the view moves,
-	// only the light under it changes. Thin darker lines at the flute edges. Not on the cap; fades at the silhouette
+	// with a faceted crystal inside; or a red shell over an inner shell of thin silver-foil pie faces). The light behind the
+	// dome is gathered once for the whole dome: 16 taps of the screen copy on a disc round the dome's centre on screen (the engine
+	// projects it, in the backend's framebuffer orientation; any per-pixel weighting let the scene behind show as bands), plus
+	// a share of the brightest tap (a hot light right behind
+	// comes through as hotness). Every pixel of the dome sees the same light: nothing behind can be made out, and nothing
+	// slides through as the view moves. The inner flute faces then act as the foil: where the ray in the wall meets a face
+	// past the critical angle it is turned back (total internal reflection) and the face flashes bright; below it the face
+	// goes dark. Each face changes with the view, the pattern stays on the dome. Filtered through the plastic; not on the
+	// cap; fades at the silhouette
 	vec3 lens = vec3_splat(0.0);
 	const float lensK = saturate(domeParams[19].w);
 	BRANCH if (lensK > 0.0 && mode > 1.5 && capW < 0.99 && lvlG < 0.999)
 	{
-		const float rB = domeParams[21].w * 0.25 * R / mmPx; // pixels (lensw= 4: one dome radius)
+		const vec3 Ct = domeParams[0].xyz + domeParams[1].xyz * (0.5 * H / max(domeParams[0].w, 1e-3));
+		const vec3 Cv = mul(mView, vec4(Ct, 1.0)).xyz;
+		const vec2 dq = Cv.xy / Cv.z - qF;
+		const float det = qFdx.x * qFdy.y - qFdy.x * qFdx.y;
+		vec2 toC = abs(det) > 1e-12 ? vec2(dq.x * qFdy.y - qFdy.x * dq.y, qFdx.x * dq.y - dq.x * qFdx.y) / det : vec2_splat(0.0); // pixels to the centre (estimate)
+		// the exact centre from the engine: one point for every pixel of the dome (the estimate drifts row by row)
+		if (domeParams[24].z > 0.5)
+			toC = domeParams[24].xy / w_h_height.xy - gl_FragCoord.xy;
+		const float rD = domeParams[21].w * 0.2 * R / mmPx; // the disc (lensw= 4: 0.8 dome radius), pixels
 		vec3 sum = vec3_splat(0.0), hot = vec3_splat(0.0);
-		UNROLL for (int k = 0; k < 12; k++)
+		UNROLL for (int k = 0; k < 16; k++)
 		{
 			const float a = float(k) * 2.39996 + 0.5;
-			const float rr = sqrt((float(k) + 0.5) / 12.0);
+			const vec2 dir = vec2(cos(a), sin(a));
+			const float rr = sqrt((float(k) + 0.5) / 16.0);
 			// clamped: the copy can hold blown-out or invalid pixels where a flash lights the playfield under the dome
-			const vec3 t = clamp(texStereoLod(tex_refraction, (gl_FragCoord.xy + vec2(cos(a), sin(a)) * (rr * rB)) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
+			const vec3 t = clamp(texStereoLod(tex_refraction, (gl_FragCoord.xy + toC + dir * (rr * rD)) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
 			sum += t;
 			hot = max(hot, t);
 		}
-		const vec3 bg = sum * (1.0 / 12.0) + 0.25 * hot;
+		const vec3 bg = sum * (1.0 / 16.0) + 0.25 * hot;
 		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
-		const float facetL = mix((0.55 + 0.45 * cos(2.0 * DOME_PI * eP)) * (0.6 + 0.8 * domeHash(flankId * 4.37 + 2.1)), 0.75, aaF);
+		// the foil: total internal reflection at this face (smooth over the critical angle), each face its own strength
+		const float ciF = saturate(dot(VrIn, nFlank));
+		const float st2F = 1.49 * 1.49 * (1.0 - ciF * ciF);
+		const float tirF = smoothstep(0.8, 1.05, st2F);
+		const float foilL = mix(mix(0.2, 1.9, tirF) * (0.7 + 0.6 * domeHash(flankId * 4.37 + 2.1)), 0.9, aaF);
 		const float edgeL = max(fwA > 0.0 ? domeLine(eRoot, 0.035, fwA) : exp(-(eRoot / 0.035) * (eRoot / 0.035)),
 			fwA > 0.0 ? domeLine(eTip, 0.035, fwA) : exp(-(eTip / 0.035) * (eTip / 0.035)));
-		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * facetL * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv);
+		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * foilL * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv);
 	}
 
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange

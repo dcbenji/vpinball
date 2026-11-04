@@ -1375,6 +1375,7 @@ void Primitive::Render(const unsigned int renderMask)
          vec4(max(m_d.m_domeDepth, 0.f), clamp(m_d.m_domeCooldown, 0.f, 1.f), max(m_d.m_domeOrb, 0.f), FlasherDomeTune("orb=", 20000.f)),
          vec4(m_ptable->GetImage(m_d.m_domeGlowMap) ? 1.f : 0.f, FlasherDomeTune("gmap=", 2.5f), clamp(m_d.m_domeGlintLights, 0.f, 1.f), max(m_d.m_domeFrost, 0.f)) };
       std::copy(p, p + 16, params);
+      params[24] = vec4(0.f, 0.f, 0.f, 0.f); // dome_lens: the dome's centre on screen (set by the layer draw)
       // dome_glint_lights: the table's lights for the OFF glints, irradiance relative to the room light (the shader scales the
       // glints by it)
       const float lightGain = FlasherDomeTune("tlg=", 1.f) / max(p[4].w, 1e-3f);
@@ -1657,7 +1658,7 @@ void Primitive::Render(const unsigned int renderMask)
       // submitted after it)
       if (flasherDome && mat->m_bOpacityActive && isPBR && MeasureFlasherDome().valid)
       {
-         vec4 params[24];
+         vec4 params[25];
          flasherDomeParams(params, 1.f);
          const RenderState saved = m_renderer->m_renderDevice->GetRenderState();
          m_renderer->m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
@@ -1665,7 +1666,7 @@ void Primitive::Render(const unsigned int renderMask)
          m_renderer->m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_COLOR);
          m_renderer->m_renderDevice->SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_ADD);
          m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
-         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 24);
+         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 25);
          if (Texture *const glowMap = m_ptable->GetImage(m_d.m_domeGlowMap))
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_traced_env, glowMap, true, SamplerFilter::SF_TRILINEAR, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP);
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
@@ -1793,7 +1794,7 @@ void Primitive::Render(const unsigned int renderMask)
    // Flasher dome layer: additive over the body just drawn (same sort key, submitted after it), outer skin only (depth equal)
    if (flasherDome && !is_reflection_only_pass && MeasureFlasherDome().valid)
    {
-      vec4 params[24];
+      vec4 params[25];
       flasherDomeParams(params, mat->m_bOpacityActive ? 2.f : 0.f);
       m_renderer->m_renderDevice->ResetRenderState();
       m_renderer->m_renderDevice->EnableAlphaBlend(true);
@@ -1826,13 +1827,30 @@ void Primitive::Render(const unsigned int renderMask)
                yMax = max(yMax, yp);
             }
          }
-         // the slices reach a few flutes sideways: widen the area a little
+         // the dome's centre on screen (render target uv, eye 0), for the gather disc
+         {
+            const Matrix3D &mvp = m_renderer->GetMVP().GetModelViewProj(0);
+            const Vertex3Ds c(m_dome.cx, m_dome.cy, m_dome.baseZ + 0.5f * m_dome.height);
+            const float wc = mvp._14 * c.x + mvp._24 * c.y + mvp._34 * c.z + mvp._44;
+            if (wc > 0.f)
+            {
+               // as a render target uv: y follows the backend's framebuffer origin (bottom left on OpenGL), as gl_FragCoord does
+               const float nx = (mvp._11 * c.x + mvp._21 * c.y + mvp._31 * c.z + mvp._41) / wc, ny = (mvp._12 * c.x + mvp._22 * c.y + mvp._32 * c.z + mvp._42) / wc;
+               #if defined(ENABLE_BGFX)
+               const bool originBottomLeft = bgfx::getCaps()->originBottomLeft;
+               #else
+               const bool originBottomLeft = true;
+               #endif
+               params[24] = vec4(0.5f + 0.5f * nx, originBottomLeft ? 0.5f + 0.5f * ny : 0.5f - 0.5f * ny, 1.f, 0.f);
+            }
+         }
+         // the gather disc reaches past the dome a little: widen the area
          const float mx = 0.25f * (xMax - xMin), my = 0.25f * (yMax - yMin);
          lensProbe->ExtendAreaOfInterest(xMin - mx, xMax + mx, yMin - my, yMax + my);
          m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, domeLensRT->GetColorSampler());
          m_renderer->m_renderDevice->AddRenderTargetDependencyOnNextRenderCommand(domeLensRT);
       }
-      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 24);
+      m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 25);
          if (Texture *const glowMap = m_ptable->GetImage(m_d.m_domeGlowMap))
             m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_traced_env, glowMap, true, SamplerFilter::SF_TRILINEAR, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP);
       m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::flasher_dome);
