@@ -402,8 +402,12 @@ private:
    bool m_sectionHasSync = false;
    float m_syncWidth = 0.f;
    ImVec2 m_syncPos;
-   // UI scale for the few fixed pixel sizes of the pane
+   // Section card (Blender's panel look): header and fields are drawn on draw list channel 1, the rounded fill goes behind them on channel 0
+   ImDrawListSplitter m_cardSplit;
+   ImVec2 m_cardMin; // Top left of the open section's card (its header)
+   float m_cardMaxX = 0.f; // Right edge of the card
    float m_cardScale = ImGui::GetStyle().GrabMinSize / 10.f; // UI scale, read from the style when the pane is created (GrabMinSize is 10 px at 100%)
+   void DrawCard(float bottom);
 };
 
 

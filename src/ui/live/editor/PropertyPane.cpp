@@ -390,11 +390,32 @@ bool PropertyPane::BeginSection(const string& name)
       else
          ImGui::SetNextItemOpen(true);
    }
+   // Card: 8 px margin from the pane edges; the header and the fields go on channel 1, the rounded fill is added behind them on channel 0
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   const float margin = 8.f * m_cardScale;
+   ImGui::Indent(margin);
+   window->WorkRect.Max.x -= margin;
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   m_cardSplit.Split(drawList, 2);
+   m_cardSplit.SetCurrentChannel(drawList, 1);
    const bool opened = SectionHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+   m_cardMin = ImGui::GetItemRectMin();
+   m_cardMaxX = ImGui::GetItemRectMax().x;
 
    if (!opened)
+   {
+      // Collapsed: the card is just the header
+      m_cardSplit.SetCurrentChannel(drawList, 0);
+      DrawCard(ImGui::GetItemRectMax().y);
+      m_cardSplit.Merge(drawList);
+      window->WorkRect.Max.x += margin;
+      ImGui::Unindent(margin);
       return false;
+   }
 
+   const float inset = 9.f * m_cardScale; // Content inset inside the card
+   ImGui::Indent(inset);
+   window->WorkRect.Max.x -= inset;
    ImGui::Dummy(ImVec2(0.f, 4.f));
    m_inSection = true;
    m_pinGroup = name;
@@ -410,6 +431,26 @@ void PropertyPane::EndSection()
    assert(m_inSection);
    FlushRow();
    m_inSection = false;
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   const float margin = 8.f * m_cardScale, inset = 9.f * m_cardScale;
+   ImGui::Dummy(ImVec2(0.f, 4.f));
+   const float bottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+   window->WorkRect.Max.x += inset;
+   ImGui::Unindent(inset);
+   m_cardSplit.SetCurrentChannel(drawList, 0);
+   DrawCard(bottom);
+   m_cardSplit.Merge(drawList);
+   window->WorkRect.Max.x += margin;
+   ImGui::Unindent(margin);
+}
+
+void PropertyPane::DrawCard(const float bottom)
+{
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   const ImVec2 max(m_cardMaxX, bottom);
+   drawList->AddRectFilled(m_cardMin, max, EditorTheme::Rgb(61, 61, 61), 4.f * m_cardScale);
+   drawList->AddRect(m_cardMin, max, EditorTheme::Rgb(74, 74, 74), 4.f * m_cardScale);
 }
 
 namespace
