@@ -2088,7 +2088,7 @@ void EditorUI::RenderUI()
       m_addPartType = eItemInvalid;
    if (m_plasticTrace.active && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       PlasticFromAtlas::Cancel(*this);
-   // Plastics whose meshes were rebuilt: their picking colliders follow (the heavy update waits for the end of a drag)
+   // Plastics whose meshes were rebuilt: their picking colliders follow
    if (m_player != nullptr && m_player->m_physics != nullptr && !IsInspectMode())
       for (IEditable *const part : m_table->GetParts())
       {
@@ -2114,16 +2114,12 @@ void EditorUI::RenderUI()
                }
             }
          }
-         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty)
+         // A drag waits for its end: the companions sit in the static UI quadtree, each update of one waits for a rebuild of that tree (~75 ms on a big table)
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty && !IsDragInProgress())
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
-            if (m_modal.active || m_gizmoDragActive || m_plasticBow.active)
-               m_player->m_physics->UpdateUI(plastic);
-            else
-            {
-               plastic->m_plasticPickDirty = false;
-               m_player->m_physics->Update(plastic);
-            }
+            plastic->m_plasticPickDirty = false;
+            m_player->m_physics->Update(plastic);
          }
       }
 
