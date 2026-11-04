@@ -2939,7 +2939,39 @@ void EditorUI::RenderUI()
    const bool tracing = m_plasticTrace.active;
    if (tracing && m_fileOp == nullptr && !modalWasActive && !gameKeys)
       PlasticFromAtlas::Keys(*this);
-   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive && !gameKeys && (!tracing || ImGui::IsKeyReleased(ImGuiKey_Escape)))
+   // Undo, redo and F5 are global commands: a widget that still holds ImGui's active item (a number field clicked into type mode and left alone, an item
+   // kept after a press) must not swallow them. They pass unless the item can use the key: a text field with an undo history of its own (the script editor,
+   // renames and search boxes always keep it), a press still held (a drag in progress), or a modal popup.
+   bool globalKeyOverItem = false;
+   if (io.WantCaptureKeyboard && !io.KeyAlt && !gameKeys && ImGui::GetActiveID() != 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+   {
+      const bool redoKey = io.KeyCtrl && ((ImGui::IsKeyPressed(ImGuiKey_Z) && io.KeyShift)
+#ifndef __APPLE__
+         || (ImGui::IsKeyPressed(ImGuiKey_Y) && !io.KeyShift)
+#endif
+      );
+      const bool undoKey = io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z);
+      const bool playKey = !io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_F5);
+      if (undoKey || redoKey || playKey)
+      {
+         const ImGuiContext &g = *ImGui::GetCurrentContext();
+         bool modalPopup = false;
+         for (const ImGuiPopupData &popup : g.OpenPopupStack)
+            modalPopup |= popup.Window != nullptr && (popup.Window->Flags & ImGuiWindowFlags_Modal) != 0;
+         if (!modalPopup)
+         {
+            if (!io.WantTextInput)
+               globalKeyOverItem = true;
+            else if (ImGui::TempInputIsActive(g.ActiveId))
+            {
+               // A number field typed into: its own text undo (and redo) once its text was edited, the editor's while the text is untouched
+               const ImGuiInputTextState *const text = ImGui::GetInputTextState(g.ActiveId);
+               globalKeyOverItem = playKey || text == nullptr || !text->EditedBefore;
+            }
+         }
+      }
+   }
+   if ((!io.WantCaptureKeyboard || globalKeyOverItem) && m_fileOp == nullptr && !modalWasActive && !gameKeys && (!tracing || ImGui::IsKeyReleased(ImGuiKey_Escape)))
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
       {
