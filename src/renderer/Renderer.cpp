@@ -4350,7 +4350,10 @@ void Renderer::UpdateAmbientOcclusion(RenderTarget* renderedRT, unsigned int jit
    m_renderDevice->m_FBShader->SetVector(ShaderUniform::w_h_height, (float)(1.0 / GetAORenderTarget(1)->GetWidth()), (float)(1.0 / GetAORenderTarget(1)->GetHeight()),
       radical_inverse(jitterIndex) * (float)(1. / 8.0),
       /*sobol*/ radical_inverse<3>(jitterIndex) * (float)(1. / 8.0)); // jitter within (64/8)x(64/8) neighborhood of 64x64 tex, good compromise between blotches and noise
-   m_renderDevice->m_FBShader->SetVector(ShaderUniform::AO_scale_timeblur, m_table->m_AOScale, 0.4f, 0.f,
+   // Solid: the AO pass runs for the view's Cavity (strength: the table's AO scale, or the table default's 1.75 if that is 0, else it would show nothing).
+   // Screen space effects that ride the same pass (without Cavity) run it with an AO scale of 0, i.e. with no cavity darkening of their own
+   const float aoScale = !IsSolidPass() ? m_table->m_AOScale : !m_viewShade.cavity ? 0.f : m_table->m_AOScale <= 0.f ? 1.75f : m_table->m_AOScale;
+   m_renderDevice->m_FBShader->SetVector(ShaderUniform::AO_scale_timeblur, aoScale, 0.4f, 0.f,
       0.f); //!! 0.4f: fake global option in video pref? or time dependent? //!! commonly used is 0.1, but would require to clear history for moving stuff
    // The AO kernel works in view space (linearized depth) so the inverse projection is needed
    Matrix3D matProjInv[2];
