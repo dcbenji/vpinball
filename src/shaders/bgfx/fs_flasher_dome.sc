@@ -636,11 +636,12 @@ void main()
 		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
 		// piping the lamp's light out through its thin edge
 		const float dEdge = length(vec2(rxz - domeParams[13].x, P.y - H));
-		const float rimW = exp(-(dEdge / 0.45) * (dEdge / 0.45));
+		const float rimS = depthK > 0.0 ? 0.45 : 0.7; // with dome_depth: a thinner, redder highlight (defaults unchanged)
+		const float rimW = exp(-(dEdge / rimS) * (dEdge / rimS));
 		const vec3 nB = normalize(radial + vec3(0.0, 1.0, 0.0));
 		const vec3 rV = reflect(-V, normalize(mix(Ns, nB, 0.6)));
 		const float FrB = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeEnv(rV.x * ex + rV.y * up + rV.z * ez, v_tablePos, 1.0), vec3_splat(6.0))) * mix(vec3_splat(1.0), trH, 0.7)
+		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeEnv(rV.x * ex + rV.y * up + rV.z * ez, v_tablePos, 1.0), vec3_splat(6.0))) * mix(vec3_splat(1.0), trH, depthK > 0.0 ? 0.7 : 0.3)
 			+ 4.0 * lvlG * mix(lampCol, bb, domeParams[8].x * pk) * exp(-sigma * 0.5 * wallB) * (1.0 + 0.35 * (flash - 1.0)));
 		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
 		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
