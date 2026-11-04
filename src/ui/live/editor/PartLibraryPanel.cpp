@@ -794,6 +794,7 @@ void PartLibraryPanel::RenderGrid(const float height)
       if (ImGui::IsItemClicked())
       {
          m_selectedPack = item.pack;
+         m_selectedLabel = item.label;
          m_selectedPackInfo = ScanPack(item.pack);
          if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
          {
@@ -837,17 +838,13 @@ void PartLibraryPanel::RenderGrid(const float height)
             }
          }
          const ImVec2 p1(p0.x + tile, p0.y + tile);
-         const bool selected = item.pack == m_selectedPack;
-         drawList->AddRectFilled(p0, p1, IM_COL32(46, 46, 46, 255));
+         // Square thumbnail on a uniform dark backdrop, the name under it in secondary text, a thin orange outline on the last clicked tile
+         const bool selected = item.pack == m_selectedPack && item.label == m_selectedLabel;
+         drawList->AddRectFilled(p0, p1, EditorTheme::Inactive);
          if (item.thumb)
             drawList->AddImage(item.thumb, p0, p1);
-         drawList->AddRect(p0, ImVec2(p1.x, p1.y + labelH), selected ? EditorTheme::Accent : hovered ? IM_COL32(120, 120, 120, 255) : IM_COL32(0, 0, 0, 0), 0.f, 0, selected ? 2.f : 1.f);
-         static constexpr const char *kBadges[] = { "PART", "MAT", "INSERT" };
-         static constexpr ImU32 kBadgeColors[] = { IM_COL32(70, 110, 160, 230), IM_COL32(150, 100, 50, 230), IM_COL32(150, 60, 120, 230) };
-         const char *const badge = kBadges[static_cast<int>(item.kind)];
-         const ImVec2 bs = ImGui::CalcTextSize(badge);
-         drawList->AddRectFilled(ImVec2(p0.x + 2.f * dpi, p0.y + 2.f * dpi), ImVec2(p0.x + 6.f * dpi + bs.x, p0.y + 4.f * dpi + bs.y), kBadgeColors[static_cast<int>(item.kind)], 2.f * dpi);
-         drawList->AddText(ImVec2(p0.x + 4.f * dpi, p0.y + 3.f * dpi), IM_COL32(255, 255, 255, 255), badge);
+         if (selected || hovered)
+            drawList->AddRect(p0, ImVec2(p1.x, p1.y + labelH), selected ? EditorTheme::Accent : EditorTheme::Hover, 0.f, 0, selected ? 1.5f * dpi : 1.f);
          if (item.kind == ItemKind::Insert && m_looks.contains(item.pack))
          {
             // A session look override applies on the next placement of this pack
@@ -856,7 +853,7 @@ void PartLibraryPanel::RenderGrid(const float height)
             drawList->AddText(ImVec2(p1.x - 4.f * dpi - es.x, p0.y + 3.f * dpi), IM_COL32(255, 200, 80, 255), "EDITED");
          }
          const ImVec4 clip(p0.x, p1.y, p1.x, p1.y + labelH);
-         drawList->AddText(nullptr, 0.f, ImVec2(p0.x + 2.f * dpi, p1.y + 2.f * dpi), ImGui::GetColorU32(ImGuiCol_Text), item.label.c_str(), nullptr, 0.f, &clip);
+         drawList->AddText(nullptr, 0.f, ImVec2(p0.x + 2.f * dpi, p1.y + 2.f * dpi), EditorTheme::TextDim, item.label.c_str(), nullptr, 0.f, &clip);
       }
       ImGui::PopID();
    }

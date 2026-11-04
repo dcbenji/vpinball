@@ -176,6 +176,7 @@ private:
    // Library content, rebuilt on Show and whenever the folder list changes
    bool m_rescanLibrary = true;
    vector<LibraryFolder> m_library;
+   string m_selectedLabel; // With the pack: the last clicked tile
    std::filesystem::path m_selectedPack;
    PackInfo m_selectedPackInfo;
    vector<LibraryItem> m_items;
