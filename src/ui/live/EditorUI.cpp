@@ -3331,7 +3331,7 @@ void EditorUI::RenderUI()
    }
 
    // Undo marks (and undo / redo) leave the authored visibility in the parts' m_d: put the display state back before the next frame renders them
-   if (!IsSaveInProgress() && !((m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying())) // (a script may have written m_d of a playing live table)
+   if (m_isOpened && !IsSaveInProgress() && !((m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying())) // (closed this frame: Close restored the authored values for the game; a script may have written m_d of a playing live table)
    {
       const ankerl::unordered_dense::set<const IEditable *> liveParts(m_table->GetParts().begin(), m_table->GetParts().end());
       for (const auto &uiPart : m_editables)

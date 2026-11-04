@@ -407,7 +407,7 @@ private:
    void RenderFileOpModal();
    // Whether a save of the edited table is running on the file operation worker thread: while it is, the
    // UI parts must not write into the parts' data which is being serialized (see EditorUI::Render3D)
-   bool IsSaveInProgress() const { return m_fileOp != nullptr && m_fileOp->type == AsyncFileOp::Type::Save; }
+   bool IsSaveInProgress() const { return m_fileOp != nullptr && m_fileOp->type == AsyncFileOp::Type::Save && (m_fileOp->saveTable == nullptr || m_fileOp->saveTable == m_table); } // Saving this session's table (a save from a play test writes the startup table)
 
    // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel, hosted by an area)
    void OpenPartLibrary() { ShowAreaEditor(AreaEditor::PartLibrary); }
