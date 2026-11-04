@@ -2554,6 +2554,8 @@ void Renderer::ApplySolidEnv()
       basic->SetTexture(ShaderUniform::tex_diffuse_env, m_tableDiffuseEnv);
       basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, tableScale * (solid ? opt.brightness : opt.envStrength), static_cast<float>(m_envSampler->GetHeight()), 0.f, 0.f);
    }
+   // The balls' own shader: the table's level, scaled by the view's (Solid Brightness, PBR Environment Strength; 1 = the table's as before)
+   m_renderDevice->m_ballShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, tableScale * (solid ? opt.brightness : opt.envStrength), static_cast<float>(m_envSampler->GetHeight()), 0.f, 0.f);
 }
 
 void Renderer::RenderStatics()
@@ -6222,6 +6224,7 @@ void Renderer::RenderEditorView(const int slot)
    SetScreenOffset(0.f, 0.f);
 
    m_render_mask = Renderer::DEFAULT;
+   vec4 mainBallEnvScale; // The ball shader's environment level, which the isolated pass swaps
    PinTable* const mainTable = m_table;
    Shader* const basicShader = m_renderDevice->m_basicShader;
    std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
@@ -6257,6 +6260,8 @@ void Renderer::RenderEditorView(const int slot)
          }
       }
       // Swapped for the pass, restored below: environment, the rig's key lights for the table's light list (none shadowed, so no VSM or flasher cache shadow either), no playfield shadow cache
+      mainBallEnvScale = m_renderDevice->m_ballShader->GetVector(ShaderUniform::fenvEmissionScale_TexWidth); // The balls of the preview take the table's own level, not the main view's
+      m_renderDevice->m_ballShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, m_table->m_envEmissionScale * m_sceneLighting.GetGlobalEmissionScale(), static_cast<float>(m_envSampler->GetHeight()), 0.f, 0.f);
       mainEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_env);
       mainDiffuseEnv = basicShader->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
       mainEnvScale = basicShader->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
@@ -6306,6 +6311,7 @@ void Renderer::RenderEditorView(const int slot)
       for (IEditable* const part : *req.isolated)
          RenderItem(part, false);
 
+      m_renderDevice->m_ballShader->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, &mainBallEnvScale);
       for (const auto& [uniform, sampler] : { std::pair { ShaderUniform::tex_env, mainEnv }, std::pair { ShaderUniform::tex_diffuse_env, mainDiffuseEnv } })
          if (sampler != nullptr)
             basicShader->SetTexture(uniform, sampler);
