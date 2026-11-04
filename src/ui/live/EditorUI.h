@@ -513,6 +513,8 @@ private:
       ImVec2 startMouse;
       float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
       Matrix3D initial; // Selection transform when the operation began
+      Matrix3D applied; // The last one set (the reported selection transform does not carry a rotation or scale for drag points and translation only parts)
+      struct SDL_Window *textWindow = nullptr; // The window whose text input this modal turned on
       vec3 duplicateOrigin { 0.f, 0.f, 0.f }; // Position of the duplicated selection
       bool duplicate = false; // Grab following a duplicate: its undo record is folded into the one of the paste on confirmation
       vec3 lastDelta { 0.f, 0.f, 0.f }; // Parameters of the last evaluation (kept as the adjustable parameters of the operation when confirmed)
@@ -542,7 +544,7 @@ private:
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
    bool IsNumpadPressed(int digit) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
-   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false);
+   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false, const Matrix3D *reference = nullptr); // reference: the transform the part selection was last set to, when the reported one does not carry it (see UpdateModalTransform)
 
    // Editor camera
    ViewMode m_camMode = ViewMode::PreviewCam;

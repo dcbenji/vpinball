@@ -4880,8 +4880,16 @@ void EditorUI::BeginModalTransform(ModalOp op)
    m_lastOp.type = LastOperation::Type::None;
    m_modal.savedGizmo = savedGizmo;
    m_modal.active = true;
+   // Typed numbers: real characters on any keyboard layout (SDL sends text only while text input is on; no text field is active in a modal, so it is held open
+   // here and closed when the transform ends)
+   if (SDL_Window *const window = SDL_GetKeyboardFocus(); window != nullptr && !SDL_TextInputActive(window))
+   {
+      SDL_StartTextInput(window);
+      m_modal.textWindow = window;
+   }
    m_modal.op = op;
    m_modal.initial = initial;
+   m_modal.applied = initial;
    m_modal.startMouse = ImGui::GetMousePos();
    // Same undo record as a gizmo drag: one entry for the whole operation
    if (m_table->m_liveBaseTable == nullptr)
@@ -4906,20 +4914,26 @@ void EditorUI::EndModalTransform(const bool confirm)
 {
    if (!m_modal.active)
       return;
-   // A confirmed transform that changed nothing (typed 0, the mouse did not move) leaves no undo step: it is dropped as a cancel (a duplicate is a change)
-   Matrix3D confirmed;
-   bool unchanged = confirm && !m_modal.duplicate && GetSelectionTransform(confirmed); // (the parts store Euler angles: a round trip leaves float noise, so compare with a tolerance)
-   for (int i = 0; unchanged && i < 16; i++)
-      unchanged = fabsf(confirmed.m[i / 4][i % 4] - m_modal.initial.m[i / 4][i % 4]) <= 1e-4f * max(1.f, fabsf(m_modal.initial.m[i / 4][i % 4]));
+   // A confirmed transform that changed nothing (typed 0, the mouse did not move) leaves no undo step: it is dropped as a cancel (a duplicate is a change). Judged on
+   // the operation's own parameters: the selection transform does not always carry the edit (drag points, translation only parts) and its precision shrinks far from the origin
+   const bool unchanged = confirm && !m_modal.duplicate
+      && (m_modal.op == ModalOp::Grab ? fabsf(m_modal.lastDelta.x) + fabsf(m_modal.lastDelta.y) + fabsf(m_modal.lastDelta.z) < 1e-5f
+         : m_modal.op == ModalOp::Rotate ? fabsf(m_modal.lastAngle) < 1e-4f
+         : fabsf(m_modal.lastFactor - 1.f) < 1e-5f);
    if (!confirm || unchanged)
    {
       if (m_modal.hasUndo)
          RestoreUndoState(m_undo.Undo(false)); // Canceled: nothing to redo
       else
-         SetSelectionTransform(m_modal.initial);
+         SetSelectionTransform(m_modal.initial, false, false, false, &m_modal.applied);
    }
    m_modal.active = false;
    FlushRubberDrag(); // After the restore of a canceled drag
+   if (m_modal.textWindow != nullptr)
+   {
+      SDL_StopTextInput(m_modal.textWindow);
+      m_modal.textWindow = nullptr;
+   }
    FlushDrag(); // After the restore of a canceled drag
    m_gizmoOperation = m_modal.savedGizmo; // The gizmo comes back after the transform
    m_lastUndoPart = nullptr;
@@ -5006,7 +5020,7 @@ void EditorUI::UpdateModalTransform()
          else if (c != '.' || m_modal.typed.find('.') == string::npos)
             m_modal.typed += c;
       };
-      if (io.InputQueueCharacters.Size > 0)
+      if (io.InputQueueCharacters.Size > 0 || m_modal.textWindow != nullptr) // Text input is on: characters only (they follow the layout and the press order)
       {
          for (int i = 0; i < io.InputQueueCharacters.Size; i++)
          {
@@ -5200,6 +5214,8 @@ void EditorUI::UpdateModalTransform()
    case ModalOp::Scale:
    {
       float factor = hasValue ? value : curDist / m_modal.startDist;
+      if (hasValue && fabsf(factor) < 1e-3f)
+         factor = 1.f; // "0" on the way to "0.5": a zero scale would collapse the curve parts and the drag points for good (multiplicative)
       if (!hasValue && IsSnapActive(SnapKind::Scale) && m_snapScale > 0.f)
       {
          factor = max(roundf(factor / m_snapScale) * m_snapScale, m_snapScale);
@@ -5212,7 +5228,8 @@ void EditorUI::UpdateModalTransform()
    }
    }
    m_modal.hud = text;
-   SetSelectionTransform(result);
+   SetSelectionTransform(result, false, false, false, &m_modal.applied);
+   m_modal.applied = result;
 }
 
 // Cycle the camera: preview camera, editor camera, desktop backdrop
@@ -5447,7 +5464,7 @@ void EditorUI::ClearSelectionTransform(const Matrix3D &transform, bool clearPosi
    SetSelectionTransform(transform, clearPosition, clearScale, clearRotation);
 }
 
-void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation)
+void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation, const Matrix3D *reference)
 {
    if (m_pointEditPart)
    {
@@ -5459,6 +5476,8 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             return;
          Matrix3D oldTransform;
          GetSelectionTransform(oldTransform);
+         if (reference != nullptr)
+            oldTransform = *reference; // The reported transform is the center / centroid only: it does not carry a rotation or a scale already applied
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
@@ -5471,6 +5490,8 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             return;
          Matrix3D oldTransform;
          GetSelectionTransform(oldTransform);
+         if (reference != nullptr)
+            oldTransform = *reference; // See above
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
@@ -5580,7 +5601,10 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 
    // Apply the active part's transform delta to every selected part
    Matrix3D delta;
-   m_selection.GetPart()->GetTransform(delta);
+   const EditorUIPart::TransformMask activeMask = m_selection.GetPart()->GetTransform(delta);
+   constexpr int kRotScale = EditorUIPart::TM_RotX | EditorUIPart::TM_RotY | EditorUIPart::TM_RotZ | EditorUIPart::TM_ScaleX | EditorUIPart::TM_ScaleY | EditorUIPart::TM_ScaleZ | EditorUIPart::TM_ScaleAll;
+   if (reference != nullptr && (static_cast<int>(activeMask) & kRotScale) == 0)
+      delta = *reference; // A translation only active part never reports the rotation or scale applied to the others: the delta is taken from the last applied transform
    delta.Invert();
    delta = delta * newTransform;
    for (const auto &part : m_multiSel)
