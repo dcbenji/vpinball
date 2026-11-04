@@ -10,8 +10,6 @@
 #include "parts/Material.h"
 #include "parts/primitive.h"
 #include "physics/PhysicsEngine.h"
-#include "utils/BiffWriter.h"
-#include "utils/fileio.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 
@@ -198,7 +196,13 @@ bool PinnedPanel::CanResetToDefault(const PinKey &key, string *whyNot) const
    const string &label = def->label;
    const ItemTypeEnum type = source->GetItemType();
    const bool playfield = type == eItemPrimitive && static_cast<const Primitive *>(source)->IsPlayfield();
-   if (label == "Position" || (type == eItemLightSeq && label == "Animation Center") || (type == eItemTextbox && label == "Size") || (type == eItemHitTarget && label == "Drop Speed")
+   if (m_editor.m_pointEditPart != nullptr)
+      return fail("Not available in point edit mode");
+   // Save does not write Ball "Use Table Settings" and Light "Reflection Enabled": an undo would report success without restoring them, so they have no reset either.
+   // Render visibility goes through a per-session editor override that Save and the undo record do not see: no reset
+   if (label == "Visible" || label.ends_with(" Visible"))
+      return fail("No default is known for this field (render visibility is an editor override)");
+   if (label == "Position" || (type == eItemLight && (label == "Center" || label == "Reflection Enabled")) || (type == eItemBall && label == "Use Table Settings") || (type == eItemLightSeq && label == "Animation Center") || (type == eItemTextbox && label == "Size") || (type == eItemHitTarget && label == "Drop Speed")
       || (type == eItemRamp && (label == "Left Wall" || label == "Right Wall"))
       || (playfield && (label == "Material" || label == "Image" || label == "Show in Editor" || label == "Reflection Strength")))
       return fail("No default is known for this field (it is set when the part is created, or by the table)");
@@ -296,26 +300,17 @@ void PinnedPanel::FlushPendingCopy()
          if (fresh != nullptr)
          {
             fresh->SetDefaults(false);
-            const auto snapshot = [](IEditable *p)
-            {
-               InMemStream stm;
-               BiffWriter writer(&stm, nullptr);
-               p->Save(writer, true);
-               return vector<uint8_t>(stm.Data(), stm.Data() + stm.Size());
-            };
-            const vector<uint8_t> before = snapshot(part);
             m_editor.m_undo.BeginUndo();
             m_editor.m_undo.MarkForUndo(part);
             const bool ok = rdef->copy(static_cast<void *>(fresh), static_cast<void *>(part), true);
-            const bool unchanged = !ok || snapshot(part) == before; // Already at its default: no step, no dirty flag, no notification
+            // No "already at its default" test: Save does not see every field (render-visibility overrides, Ball / Light flags), so a snapshot
+            // comparison can call a real change a no-op. A reset of a value that is already default just leaves a harmless extra step
             m_editor.m_undo.SetFieldLabel("Reset to Default: " + (rdef->label.empty() ? rkey.prop : rdef->label));
             m_editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
-            if (unchanged)
-               m_editor.m_undo.Undo(false); // Cancels the record just ended (the redo records are back)
             fresh->Release();
             m_editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
             m_editor.m_lastUndoId = 0;
-            if (!unchanged)
+            if (ok)
             {
                m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
                m_editor.m_player->m_physics->Update(part);
@@ -437,7 +432,7 @@ void PinnedPanel::SaveTo(PinTable *table) const
    {
       // Layout is only shown as active: it becomes the table's workspace as soon as the user changed the areas (editor types, widths,
       // visibility, sidebar), otherwise the table data is left as it is
-      static const AreaLayout defaultLayout;
+      static const AreaLayout defaultLayout = AreaLayout::DefaultLayout();
       const Workspace &now = workspaces[m_activeWorkspace];
       const bool untouched = now.layout == defaultLayout && !now.sidebar && now.sidebarTab == static_cast<int>(EditorUI::SidebarTab::Item)
          && now.outlinerMode == 0 && now.outlinerTypes == static_cast<int64_t>(OutlinerPanel::AllTypesMask) && now.sidebarWidth == 300.f;
@@ -481,6 +476,8 @@ void PinnedPanel::ResetWorkspaces()
 {
    // Look-dev is the default tree without the Outliner (hidden), with the N-panel on its Favorites tab
    m_workspaces[0] = Workspace { "Layout"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
+   m_workspaces[0].layout = AreaLayout::DefaultLayout(); // Outliner above Properties in the right column
+   m_workspaces[0].presetSizes = false; // A tree of its own: the legacy shape would flatten it
    m_workspaces[1] = Workspace { "Look-dev"s, true, static_cast<int>(EditorUI::SidebarTab::Favorites) };
    m_workspaces[1].layout = AreaLayout::FromLegacy(false, true, 0.f, 0.f, static_cast<int>(AreaType::Outliner), static_cast<int>(AreaType::Properties));
    m_workspaces[2] = Workspace { "Wiring"s, false, static_cast<int>(EditorUI::SidebarTab::Item) };
@@ -694,7 +691,7 @@ void PinnedPanel::SyncWithTable()
    m_editor.m_showSidebar = false;
    m_editor.m_sidebarTab = EditorUI::SidebarTab::Item;
    m_editor.m_sidebarWidth = 300.f;
-   m_editor.SetAreaLayout(AreaLayout());
+   m_editor.SetAreaLayout(AreaLayout::DefaultLayout());
    m_editor.m_outliner.SetDisplayMode(0); // Outliner display mode and type filter of a table without saved workspaces: the defaults
    m_editor.m_outliner.SetTypeMask(OutlinerPanel::AllTypesMask);
    m_workspacesPristine = false;
