@@ -393,9 +393,21 @@ void PinnedPanel::FlushPendingCopy()
          if (fresh != nullptr)
          {
             fresh->SetDefaults(false);
+            // As Copy to Selected: the other selected parts that have the field are reset too, all in one undo step (never a playfield mesh, which has no honest default)
+            vector<IEditable *> parts { part };
+            vector<std::shared_ptr<EditorUIPart>> others;
+            CollectCopyTargets(fresh, rdef->copy, others);
+            if (std::ranges::any_of(others, [part](const auto &o) { return o->GetEditable() == part; }))
+               for (const std::shared_ptr<EditorUIPart> &o : others)
+                  if (o->GetEditable() != part && !(o->GetEditable()->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(o->GetEditable())->IsPlayfield()))
+                     parts.push_back(o->GetEditable());
             m_editor.m_undo.BeginUndo();
-            m_editor.m_undo.MarkForUndo(part);
-            const bool ok = rdef->copy(static_cast<void *>(fresh), static_cast<void *>(part), true, nullptr);
+            for (IEditable *const p : parts)
+               m_editor.m_undo.MarkForUndo(p);
+            m_editor.MarkDependentsForUndo(parts);
+            bool ok = true;
+            for (IEditable *const p : parts)
+               ok &= rdef->copy(static_cast<void *>(fresh), static_cast<void *>(p), true, nullptr);
             // No "already at its default" test: Save does not see every field (render-visibility overrides, Ball / Light flags), so a snapshot
             // comparison can call a real change a no-op. A reset of a value that is already default just leaves a harmless extra step
             m_editor.m_undo.SetFieldLabel("Reset to Default: " + (rdef->label.empty() ? rkey.prop : rdef->label));
@@ -405,12 +417,16 @@ void PinnedPanel::FlushPendingCopy()
             m_editor.m_lastUndoId = 0;
             if (ok)
             {
-               m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
-               m_editor.m_player->m_physics->Update(part);
-               for (const std::shared_ptr<EditorUIPart> &sel : m_editor.m_multiSel)
-                  if (sel->GetEditable() == part)
-                     sel->SyncVisibilityOverrides();
-               m_editor.m_liveUI.PushNotification("Reset '"s + (rdef->label.empty() ? rkey.prop : rdef->label) + "' to its default", 2500);
+               for (IEditable *const p : parts)
+               {
+                  m_editor.m_renderer->ReinitRenderable(p->GetIRenderable());
+                  m_editor.m_player->m_physics->Update(p);
+                  for (const std::shared_ptr<EditorUIPart> &sel : m_editor.m_multiSel)
+                     if (sel->GetEditable() == p)
+                        sel->SyncVisibilityOverrides();
+               }
+               m_editor.RefitDependents(parts);
+               m_editor.m_liveUI.PushNotification("Reset '"s + (rdef->label.empty() ? rkey.prop : rdef->label) + "' to its default" + (parts.size() > 1 ? " on " + std::to_string(parts.size()) + " parts" : ""s), 2500);
             }
          }
       }

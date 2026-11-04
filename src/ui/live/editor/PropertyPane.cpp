@@ -934,7 +934,7 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       if (ImGui::MenuItem(ICON_LC_UNDO_2 " Reset to Default", "Backspace", false, canReset))
          m_pins->ResetToDefault(key);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("%s", canReset ? "Set this field back to the default of a new part of this type (only this part, even with several selected)" : whyNot.c_str());
+         ImGui::SetTooltip("%s", canReset ? "Set this field back to the default of a new part of this type (on every selected part that has it)" : whyNot.c_str());
    }
    if (part != nullptr)
    {
