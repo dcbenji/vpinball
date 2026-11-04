@@ -2042,6 +2042,14 @@ void EditorUI::RenderUI()
    // Plastics whose meshes were rebuilt: their picking colliders follow (the heavy update waits for the end of a drag)
    if (m_player != nullptr && m_player->m_physics != nullptr && !IsInspectMode())
       for (IEditable *const part : m_table->GetParts())
+      {
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticCrossingWarn)
+         {
+            Primitive *const plastic = static_cast<Primitive *>(part);
+            plastic->m_plasticCrossingWarn = false;
+            if (plastic->m_d.m_plasticGen) // Warning only: the hole stays as it is
+               Report("Warning: " + std::to_string(plastic->m_plasticCrossingHoles) + (plastic->m_plasticCrossingHoles == 1 ? " hole of " : " holes of ") + plastic->GetName() + " cross the outline edge");
+         }
          if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty)
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
@@ -2053,6 +2061,7 @@ void EditorUI::RenderUI()
                m_player->m_physics->Update(plastic);
             }
          }
+      }
 
    // Drag point edit mode housekeeping: exit without restoring the selection if the edited part is no
    // longer the active selected part, and drop selected points that do not exist anymore (points are
@@ -3099,7 +3108,10 @@ void EditorUI::RenderUI()
                ClearSelection();
             }
             if (changed)
+            {
+               PlasticFromAtlas::SyncCompanionVisibility(*this); // A plastic's companions are hidden and shown with their host
                m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+            }
          }
       }
       else if ((ImGui::IsKeyPressed(ImGuiKey_W) || ImGui::IsKeyPressed(ImGuiKey_E) || ImGui::IsKeyPressed(ImGuiKey_T)) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -3705,6 +3717,7 @@ void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
    }
    if (moved.empty())
       return;
+   PlasticFromAtlas::AddCompanions(moved); // A plastic's companions change group with their host, in the same undo step
    m_undo.BeginUndo();
    for (IEditable *const editable : moved)
    {
@@ -5435,15 +5448,37 @@ DragPoint *EditorUI::HitTestDragPoint(const ImVec2 &mousePos) const
    const float maxDist = 10.f * m_liveUI.GetDPI();
    DragPoint *best = nullptr;
    float bestDist = maxDist;
-   for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
+   const auto &points = m_pointEditPart->GetDragPointCurve()->GetPoints();
+   // On a plastic outline a handle's pick radius is capped by a third of the shorter neighbouring span, so a short line can still be bowed
+   const IEditable *const edited = m_pointEditPart->GetEditable();
+   const bool plasticOutline = edited->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edited)->m_d.m_plasticGen && !static_cast<const Primitive *>(edited)->m_plasticEditHoles;
+   const int n = static_cast<int>(points.size());
+   vector<ImVec2> proj;
+   if (plasticOutline)
    {
-      const ImVec2 pos = ctx.Project(Vertex3Ds(point->GetX(), point->GetY(), m_pointEditPart->GetDragPointZ(point.get())));
+      proj.reserve(n);
+      for (const auto &point : points)
+         proj.push_back(ctx.Project(Vertex3Ds(point->GetX(), point->GetY(), m_pointEditPart->GetDragPointZ(point.get()))));
+   }
+   for (int i = 0; i < n; i++)
+   {
+      const auto &point = points[i];
+      const ImVec2 pos = plasticOutline ? proj[i] : ctx.Project(Vertex3Ds(point->GetX(), point->GetY(), m_pointEditPart->GetDragPointZ(point.get())));
       if (pos.x == FLT_MAX)
          continue;
       const float dx = pos.x - mousePos.x;
       const float dy = pos.y - mousePos.y;
       const float dist = sqrtf(dx * dx + dy * dy);
-      if (dist < bestDist)
+      float radius = maxDist;
+      if (plasticOutline && n >= 3)
+      {
+         float shorter = FLT_MAX;
+         for (const int j : { (i + n - 1) % n, (i + 1) % n })
+            if (proj[j].x != FLT_MAX)
+               shorter = min(shorter, hypotf(proj[j].x - pos.x, proj[j].y - pos.y));
+         radius = min(maxDist, shorter * (1.f / 3.f));
+      }
+      if (dist < bestDist && dist < radius)
       {
          bestDist = dist;
          best = point.get();

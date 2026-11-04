@@ -265,6 +265,7 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       ed.Report("Plastic from Atlas: the outline needs 3 points or more");
       return;
    }
+   int crossing = 0;
    {
       // Build it first: a degenerate outline (collinear clicks) must not leave three default primitives behind
       vector<PlasticMesh::CurvePoint> outline;
@@ -281,6 +282,7 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       }
       if (probe.skippedHoles > 0)
          ed.Report("Plastic from Atlas: " + std::to_string(probe.skippedHoles) + " hole(s) outside the outline are left out");
+      crossing = probe.crossingHoles;
    }
    const float cx = 0.5f * (ed.m_table->m_left + ed.m_table->m_right), cy = 0.5f * (ed.m_table->m_top + ed.m_table->m_bottom);
    const string hostName = ed.m_table->GetUniqueName("Plastic"s);
@@ -330,7 +332,9 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       ed.m_undo.MarkForCreate(prim);
    ed.m_undo.SetLabel("Add Plastic from Atlas");
    ed.m_undo.EndUndo();
-   ed.Report("Added " + hostName + " (with " + clearName + " and " + bevelName + ")");
+   ed.Report("Added " + hostName + " (with " + clearName + " and " + bevelName + ")"
+      + (crossing > 0 ? "  Warning: " + std::to_string(crossing) + (crossing == 1 ? " hole crosses" : " holes cross") + " the outline edge" : string()));
+   host->m_plasticCrossingWarn = false; // Said in the message above
 
    s_lastImage = t.image;
    ed.m_perspectiveCam = t.prevPerspective;
@@ -365,6 +369,15 @@ void PlasticFromAtlas::Adjust(Primitive *const host, const float height, const f
    if (fabsf(dpi - host->m_d.m_plasticDpi) > 1e-3f)
       host->SetPlasticDpi(dpi);
    host->UpdatePlastic();
+}
+
+void PlasticFromAtlas::SyncCompanionVisibility(EditorUI &ed)
+{
+   for (IEditable *const part : ed.m_table->GetParts())
+      if (IsHost(part))
+         for (Primitive *const comp : static_cast<Primitive *>(part)->GetPlasticCompanions())
+            if (comp->IsUIVisible(false) != part->IsUIVisible(false))
+               comp->SetUIVisible(part->IsUIVisible(false));
 }
 
 void PlasticFromAtlas::AddCompanions(vector<IEditable *> &parts)

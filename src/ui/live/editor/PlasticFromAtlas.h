@@ -69,6 +69,7 @@ public:
    static void DrawTrace(EditorUI &ed, ImDrawList *draw, const LiveRenderContext &ctx);
 
    // Companions follow their host through the editor operations (same undo record)
+   static void SyncCompanionVisibility(EditorUI &ed); // The editor eye (H key, outliner) of a host reaches its companions
    static void AddCompanions(vector<IEditable *> &parts); // Appends the companions of the plastic hosts in 'parts' that are not in it
    static void FixPasted(const vector<IEditable *> &pasted, const vector<string> &originalNames); // Pasted companions follow the pasted host copies, else become plain primitives
 

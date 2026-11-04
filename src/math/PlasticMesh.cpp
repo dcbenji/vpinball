@@ -471,6 +471,16 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
          res.skippedHoles++;
          continue;
       }
+      double edgeDist = 1e300; // centre to the outline edge
+      for (size_t i = 0, k = ol.size() - 1; i < ol.size(); k = i++)
+      {
+         const P2 e = ol[i] - ol[k];
+         const double l2 = Dot(e, e);
+         const double t = l2 > 0.0 ? std::max(0.0, std::min(1.0, Dot(P2 { h.x, h.y } - ol[k], e) / l2)) : 0.0;
+         edgeDist = std::min(edgeDist, Len(P2 { h.x, h.y } - (ol[k] + e * t)));
+      }
+      if (edgeDist < r)
+         res.crossingHoles++;
       const int n = std::max(12, (int)std::ceil(2.0 * kPi / std::max(2.0 * std::acos(std::max(-1.0, 1.0 - tol / r)), 1e-3)));
       std::vector<P2> c;
       for (int i = 0; i < n; i++) // clockwise: the material is on the left

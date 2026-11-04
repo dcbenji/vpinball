@@ -11,6 +11,7 @@
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
 #include "parts/Sound.h"
+#include "PlasticFromAtlas.h"
 #include "PropertiesPanel.h"
 #include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
@@ -621,6 +622,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + editable->GetName()).c_str()))
          {
             editable->SetUIVisible(!editable->IsUIVisible(false));
+            PlasticFromAtlas::SyncCompanionVisibility(editor);
             editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
          ImGui::PopStyleColor(2);

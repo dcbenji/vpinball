@@ -96,6 +96,9 @@ int main(){ setbuf(stdout,0);
     Result s; CHECK(Build(st,{},P,s),"stadium"); manifold("stadium",{&s.bottom,&s.top,&s.bevel},true); int i3; printf("stadium bottom area %.2f vs polygon %.2f inv %d\n",capArea(s.bottom,i3),polyArea(FlattenOutline(st,0.25f)),i3); CHECK(i3==0,"inv"); dump("stadium.txt",s,FlattenOutline(st,0.25f)); }
   // clockwise input outline and a hole outside
   { std::vector<CurvePoint> cw(ol.rbegin(),ol.rend()); std::vector<Hole> hh=holes; hh.push_back({300,300,10}); Result s; CHECK(Build(cw,hh,P,s),"cw"); CHECK(s.skippedHoles==1,"skipped"); manifold("cw outline",{&s.bottom,&s.top,&s.bevel},true);}  
+  // holes crossing the outline edge, overlapping each other, bigger than the part, straddling a corner: counted, built, terminates
+  { std::vector<Hole> hc={{20,20,12},{3,20,10},{100,50,300},{0.5f,0.5f,8},{30,20,12},{30,20,12}}; Result s; auto t0=clock(); bool ok=Build(ol,hc,P,s); printf("crossing holes: build %d crossing %d skipped %d, %.0f ms\n",ok,s.crossingHoles,s.skippedHoles,1000.0*(clock()-t0)/CLOCKS_PER_SEC); CHECK(s.crossingHoles>=2,"crossing counted"); CHECK(clock()-t0<5*CLOCKS_PER_SEC,"hang");
+    Result n; CHECK(Build(ol,holes,P,n)&&n.crossingHoles==0,"no false crossing"); }
   // degenerate
   { Result s; CHECK(!Build({{0,0,false},{1,1,false}},{},P,s),"2 pts"); }
   dump("main.txt",r,flat);
