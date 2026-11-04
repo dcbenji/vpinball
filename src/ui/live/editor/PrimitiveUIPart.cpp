@@ -572,7 +572,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.SliderFloat<Primitive>(
          m_part, "Bulb Spot Size"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbScale; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); }, 0.2f, 2.f, 2, "Hot spot size (1 = about 19 mm across at half height)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); }, 0.05f, 0.4f, 2, "Hot spot size (1 = about 19 mm across at half height)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Brightness"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
