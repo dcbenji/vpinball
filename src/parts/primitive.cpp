@@ -1441,9 +1441,31 @@ void Primitive::Render(const unsigned int renderMask)
    // Request probes before setting up state since this can trigger a renderprobe update which modifies the render state
    RenderProbe *const refraction_probe = m_ptable->GetRenderProbe(m_d.m_szRefractionProbe);
    RenderTarget *const probeRT = refraction_probe ? refraction_probe->Render(renderMask) : nullptr;
-   // dome_lens: a flasher dome's refraction probe feeds its dome layer (the lensed slices), not its body
-   RenderTarget *const domeLensRT = (flasherDome && m_d.m_domeLens > 0.f && mat->m_bOpacityActive) ? probeRT : nullptr;
-   RenderTarget *const refractions = domeLensRT ? nullptr : probeRT;
+   // dome_lens: the dome layer's lensed slices need a copy of the scene behind the dome (a screen space transparency probe).
+   // Any table works: the dome's own refraction probe if one is set (its body then skips it), else any such probe the table
+   // already has (ramps, plastics...; the sharpest), else one the engine adds, once, when a dome first needs it
+   RenderProbe *lensProbe = nullptr;
+   RenderTarget *domeLensRT = nullptr;
+   if (flasherDome && m_d.m_domeLens > 0.f && mat->m_bOpacityActive)
+   {
+      lensProbe = (refraction_probe && refraction_probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY) ? refraction_probe : nullptr;
+      if (lensProbe == nullptr)
+      {
+         for (RenderProbe *const probe : m_ptable->m_vrenderprobe)
+            if (probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY && (lensProbe == nullptr || probe->GetRoughness() < lensProbe->GetRoughness()))
+               lensProbe = probe;
+         if (lensProbe == nullptr)
+         {
+            lensProbe = m_ptable->NewRenderProbe();
+            lensProbe->SetType(RenderProbe::SCREEN_SPACE_TRANSPARENCY);
+            lensProbe->SetName("Dome Lens"s);
+            lensProbe->RenderSetup(m_renderer);
+            PLOGI << "Flasher dome " << GetName() << ": no screen space transparency probe on the table, added 'Dome Lens' for dome_lens";
+         }
+      }
+      domeLensRT = lensProbe == refraction_probe ? probeRT : lensProbe->Render(renderMask);
+   }
+   RenderTarget *const refractions = (domeLensRT && lensProbe == refraction_probe) ? nullptr : probeRT;
 
    const bool depthMask = m_d.m_useDepthMask && !m_d.m_addBlend;
 
@@ -1805,7 +1827,7 @@ void Primitive::Render(const unsigned int renderMask)
          }
          // the slices reach a few flutes sideways: widen the area a little
          const float mx = 0.25f * (xMax - xMin), my = 0.25f * (yMax - yMin);
-         refraction_probe->ExtendAreaOfInterest(xMin - mx, xMax + mx, yMin - my, yMax + my);
+         lensProbe->ExtendAreaOfInterest(xMin - mx, xMax + mx, yMin - my, yMax + my);
          m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, domeLensRT->GetColorSampler());
          m_renderer->m_renderDevice->AddRenderTargetDependencyOnNextRenderCommand(domeLensRT);
       }
