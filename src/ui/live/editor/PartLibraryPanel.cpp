@@ -1835,6 +1835,29 @@ void PartLibraryPanel::RenderLightbox()
       const float fit = min(size.x / static_cast<float>(m_lbWidth), size.y / static_cast<float>(m_lbHeight));
       const ImVec2 half(0.5f * fit * static_cast<float>(m_lbWidth), 0.5f * fit * static_cast<float>(m_lbHeight)), mid(0.5f * (imgMin.x + imgMax.x), 0.5f * (imgMin.y + imgMax.y));
       drawList->AddImage(rt->GetColorSampler(), ImVec2(mid.x - half.x, mid.y - half.y), ImVec2(mid.x + half.x, mid.y + half.y), ImVec2(0.f, flipV ? 1.f : 0.f), ImVec2(1.f, flipV ? 0.f : 1.f));
+      // Vignette: a black radial gradient over the render (clear up to 45% of the half diagonal, 0.6 alpha at the corners), a grid of vertex-coloured quads
+      {
+         constexpr int n = 24;
+         const ImVec2 p0(mid.x - half.x, mid.y - half.y);
+         const float halfDiag = sqrtf(half.x * half.x + half.y * half.y);
+         drawList->PrimReserve(n * n * 6, (n + 1) * (n + 1));
+         const ImVec2 white = drawList->_Data->TexUvWhitePixel;
+         const ImDrawIdx base = static_cast<ImDrawIdx>(drawList->_VtxCurrentIdx);
+         for (int y = 0; y <= n; y++)
+            for (int x = 0; x <= n; x++)
+            {
+               const ImVec2 p(p0.x + 2.f * half.x * static_cast<float>(x) / n, p0.y + 2.f * half.y * static_cast<float>(y) / n);
+               const float t = clamp((sqrtf((p.x - mid.x) * (p.x - mid.x) + (p.y - mid.y) * (p.y - mid.y)) / halfDiag - 0.45f) / 0.55f, 0.f, 1.f);
+               drawList->PrimWriteVtx(p, white, IM_COL32(0, 0, 0, static_cast<int>(0.6f * t * 255.f + 0.5f)));
+            }
+         for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+            {
+               const ImDrawIdx i0 = static_cast<ImDrawIdx>(base + y * (n + 1) + x), i1 = static_cast<ImDrawIdx>(i0 + 1), i2 = static_cast<ImDrawIdx>(i0 + n + 1), i3 = static_cast<ImDrawIdx>(i2 + 1);
+               drawList->PrimWriteIdx(i0); drawList->PrimWriteIdx(i1); drawList->PrimWriteIdx(i3);
+               drawList->PrimWriteIdx(i0); drawList->PrimWriteIdx(i3); drawList->PrimWriteIdx(i2);
+            }
+      }
       if (refused)
          note = "Not available while an info mode is on";
       else if (m_lbRequested && !m_lbLogged && !renderer->IsEditorViewPending(m_lbSlot))
