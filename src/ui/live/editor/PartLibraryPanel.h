@@ -155,6 +155,7 @@ private:
    void AbortThumbnail();
    static uint64_t PackKey(const std::filesystem::path &pack);
    static std::filesystem::path ThumbFolder(const std::filesystem::path &pack);
+   void RenderLibraryMenu(); // The header menu
    void RenderCatalogs(float height); // The catalog column left of the grid
    vector<std::filesystem::path> GetLibraryFolders() const;
    void SetLibraryFolders(const vector<std::filesystem::path> &folders);

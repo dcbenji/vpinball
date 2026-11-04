@@ -30,7 +30,6 @@
 #include "renderer/RenderDevice.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/editor/EditorUIPartRegistry.h"
-#include "PropertyPane.h"
 #include "CameraPreviewPanel.h"
 #include "EditorTheme.h"
 #include "ui/live/LiveUI.h"
@@ -546,132 +545,22 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
    if (m_editor.BeginAreaWindow("PARTLIBRARY", pos, size))
    {
-      // Header: editor type button and title
+      const float dpi = m_editor.m_liveUI.GetDPI();
+      // Header: editor type button, title, and the library menu (import options, pack file, library folders) at the right
       m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::PartLibrary);
       ImGui::SameLine();
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("Part Library");
+      ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::GetFrameHeight() - ImGui::GetStyle().WindowPadding.x * 2.f);
+      if (ImGui::Button(ICON_FK_COG "##LibraryMenu"))
+         ImGui::OpenPopup("##LibraryMenuPopup");
+      ImGui::SetItemTooltip("Import options, pack file, library folders");
+      if (ImGui::BeginPopup("##LibraryMenuPopup"))
+      {
+         RenderLibraryMenu();
+         ImGui::EndPopup();
+      }
       ImGui::Separator();
-
-      // Destination of the import, same as for newly added parts: the group of the current selection
-      const PartGroup *const target = m_editor.GetPartGroupForNewPart();
-      ImGui::Dummy(ImVec2(0.f, 2.f));
-      ImGui::TextDisabled("Import into part group:");
-      ImGui::SameLine();
-      ImGui::TextUnformatted((target != nullptr) ? target->GetName().c_str() : "(table root)");
-      if (m_editor.m_table->IsLocked())
-         ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "The table is locked: import is disabled");
-
-      PropertyPane sections(m_editor.m_table);
-      const float dpi = m_editor.m_liveUI.GetDPI();
-      if (sections.BeginSection("Import Options"s))
-      {
-         int strategy = static_cast<int>(m_mergeStrategy);
-         ImGui::RadioButton("Rename on conflict when assets differ", &strategy, static_cast<int>(PartImportMergeStrategy::RenameConflict));
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Imported assets sharing the name of a different table asset are renamed\n"
-                              "and the references of the imported parts are updated to the new names.\n"
-                              "Identical assets are shared.");
-         ImGui::RadioButton("Newer wins on name conflict", &strategy, static_cast<int>(PartImportMergeStrategy::ExistingWins));
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("On a name conflict, the imported parts reuse the asset already present in the table.");
-         m_mergeStrategy = static_cast<PartImportMergeStrategy>(strategy);
-         sections.EndSection();
-      }
-
-      if (sections.BeginSection("Import a Pack File"s))
-      {
-      if (PaddedButton(ICON_FK_FILE_O "  Select VPZ File...", ImGui::GetContentRegionAvail().x, dpi))
-      {
-         if (m_editor.m_player->m_playfieldWnd != nullptr)
-         {
-            m_pendingImportPath = std::make_shared<string>();
-            const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
-            const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
-            const SDL_DialogFileFilter filters[] = { { "Visual Pinball Packs", "vpz" } };
-            SDL_ShowOpenFileDialog(
-               [](void *userdata, const char *const *filelist, int filter)
-               {
-                  auto *res = static_cast<std::shared_ptr<string> *>(userdata);
-                  if (filelist != nullptr && filelist[0] != nullptr)
-                     **res = filelist[0];
-                  delete res;
-               },
-               new std::shared_ptr<string>(m_pendingImportPath), //
-               m_editor.m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str(), false);
-         }
-      }
-
-      sections.EndSection();
-      }
-
-      // Selected pack preview and import action
-      if (sections.BeginSection("Import"s))
-      {
-      if (m_selectedPack.empty())
-         ImGui::TextDisabled("Select a VPZ pack file to import");
-      else
-      {
-         ImGui::TextUnformatted(PathToUTF8(m_selectedPack.filename()).c_str());
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", PathToUTF8(m_selectedPack).c_str());
-         if (!m_selectedPackInfo.valid)
-            ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Failed to read the pack");
-         else
-            ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
-               m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
-         ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
-         if (PaddedButton(ICON_FK_DOWNLOAD "  Import", ImGui::GetContentRegionAvail().x, dpi))
-            ImportPack(m_selectedPack);
-         ImGui::EndDisabled();
-      }
-      sections.EndSection();
-      }
-
-      if (sections.BeginSection("Library Folders"s))
-      {
-      const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-      if (PaddedButton(ICON_FK_FOLDER_OPEN "  Add Folder...", halfW, dpi))
-      {
-         if (m_editor.m_player->m_playfieldWnd != nullptr)
-         {
-            m_pendingFolderPath = std::make_shared<string>();
-            const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
-            const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
-            SDL_ShowOpenFolderDialog(
-               [](void *userdata, const char *const *filelist, int filter)
-               {
-                  auto *res = static_cast<std::shared_ptr<string> *>(userdata);
-                  if (filelist != nullptr && filelist[0] != nullptr)
-                     **res = filelist[0];
-                  delete res;
-               },
-               new std::shared_ptr<string>(m_pendingFolderPath), //
-               m_editor.m_player->m_playfieldWnd->GetCore(), location.empty() ? nullptr : location.c_str(), false);
-         }
-      }
-      ImGui::SameLine();
-      if (PaddedButton(ICON_FK_REFRESH "  Refresh", ImGui::GetContentRegionAvail().x, dpi))
-         m_rescanLibrary = true;
-
-      // The library folders: removable
-      if (m_library.empty())
-         ImGui::TextDisabled("No library folder defined");
-      for (size_t i = 0; i < m_library.size(); i++)
-      {
-         ImGui::PushID(static_cast<int>(i));
-         if (ImGui::SmallButton(ICON_FK_TRASH_O))
-         {
-            RemoveLibraryFolder(m_library[i].path); // By path: m_library skips the stored folders missing on disk
-            ImGui::PopID();
-            break;
-         }
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Remove this library folder");
-         ImGui::SameLine();
-         ImGui::TextUnformatted(PathToUTF8(m_library[i].path).c_str());
-         ImGui::PopID();
-      }
 
       // The catalog column and the grid take the area height down to the bottom edge (at least a row and a half of tiles)
       const float gridHeight = max(ImGui::GetContentRegionAvail().y - 4.f * dpi, 150.f * dpi);
@@ -685,10 +574,117 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::EndChild();
       }
       ImGui::EndChild();
-      sections.EndSection();
-      }
    }
    m_editor.EndAreaWindow();
+}
+
+// The header menu: where imports go, the merge strategy, a pack file picked by hand, the selected pack, the library folders
+void PartLibraryPanel::RenderLibraryMenu()
+{
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   // Destination of the import, same as for newly added parts: the group of the current selection
+   const PartGroup *const target = m_editor.GetPartGroupForNewPart();
+   ImGui::TextDisabled("Import into part group:");
+   ImGui::SameLine();
+   ImGui::TextUnformatted((target != nullptr) ? target->GetName().c_str() : "(table root)");
+   if (m_editor.m_table->IsLocked())
+      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "The table is locked: import is disabled");
+
+   ImGui::SeparatorText("Import Options");
+   int strategy = static_cast<int>(m_mergeStrategy);
+   ImGui::RadioButton("Rename on conflict when assets differ", &strategy, static_cast<int>(PartImportMergeStrategy::RenameConflict));
+   if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Imported assets sharing the name of a different table asset are renamed\n"
+                        "and the references of the imported parts are updated to the new names.\n"
+                        "Identical assets are shared.");
+   ImGui::RadioButton("Newer wins on name conflict", &strategy, static_cast<int>(PartImportMergeStrategy::ExistingWins));
+   if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("On a name conflict, the imported parts reuse the asset already present in the table.");
+   m_mergeStrategy = static_cast<PartImportMergeStrategy>(strategy);
+
+   ImGui::SeparatorText("Import a Pack File");
+   if (PaddedButton(ICON_FK_FILE_O "  Select VPZ File...", ImGui::GetContentRegionAvail().x, dpi))
+   {
+      if (m_editor.m_player->m_playfieldWnd != nullptr)
+      {
+         m_pendingImportPath = std::make_shared<string>();
+         const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
+         const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
+         const SDL_DialogFileFilter filters[] = { { "Visual Pinball Packs", "vpz" } };
+         SDL_ShowOpenFileDialog(
+            [](void *userdata, const char *const *filelist, int filter)
+            {
+               auto *res = static_cast<std::shared_ptr<string> *>(userdata);
+               if (filelist != nullptr && filelist[0] != nullptr)
+                  **res = filelist[0];
+               delete res;
+            },
+            new std::shared_ptr<string>(m_pendingImportPath), //
+            m_editor.m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str(), false);
+      }
+   }
+
+   // Selected pack preview and import action
+   ImGui::SeparatorText("Import");
+   if (m_selectedPack.empty())
+      ImGui::TextDisabled("Select a VPZ pack file to import");
+   else
+   {
+      ImGui::TextUnformatted(PathToUTF8(m_selectedPack.filename()).c_str());
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("%s", PathToUTF8(m_selectedPack).c_str());
+      if (!m_selectedPackInfo.valid)
+         ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Failed to read the pack");
+      else
+         ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
+            m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
+      ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
+      if (PaddedButton(ICON_FK_DOWNLOAD "  Import", ImGui::GetContentRegionAvail().x, dpi))
+         ImportPack(m_selectedPack);
+      ImGui::EndDisabled();
+   }
+
+   ImGui::SeparatorText("Library Folders");
+   const float halfW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+   if (PaddedButton(ICON_FK_FOLDER_OPEN "  Add Folder...", halfW, dpi))
+   {
+      if (m_editor.m_player->m_playfieldWnd != nullptr)
+      {
+         m_pendingFolderPath = std::make_shared<string>();
+         const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
+         const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
+         SDL_ShowOpenFolderDialog(
+            [](void *userdata, const char *const *filelist, int filter)
+            {
+               auto *res = static_cast<std::shared_ptr<string> *>(userdata);
+               if (filelist != nullptr && filelist[0] != nullptr)
+                  **res = filelist[0];
+               delete res;
+            },
+            new std::shared_ptr<string>(m_pendingFolderPath), //
+            m_editor.m_player->m_playfieldWnd->GetCore(), location.empty() ? nullptr : location.c_str(), false);
+      }
+   }
+   ImGui::SameLine();
+   if (PaddedButton(ICON_FK_REFRESH "  Refresh", ImGui::GetContentRegionAvail().x, dpi))
+      m_rescanLibrary = true;
+   if (m_library.empty())
+      ImGui::TextDisabled("No library folder defined");
+   for (size_t i = 0; i < m_library.size(); i++)
+   {
+      ImGui::PushID(static_cast<int>(i));
+      if (ImGui::SmallButton(ICON_FK_TRASH_O))
+      {
+         RemoveLibraryFolder(m_library[i].path); // By path: m_library skips the stored folders missing on disk
+         ImGui::PopID();
+         break;
+      }
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Remove this library folder");
+      ImGui::SameLine();
+      ImGui::TextUnformatted(PathToUTF8(m_library[i].path).c_str());
+      ImGui::PopID();
+   }
 }
 
 void PartLibraryPanel::RenderCatalogs(const float height)
