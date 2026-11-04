@@ -312,6 +312,12 @@ void EditorUI::SaveTable()
       m_liveUI.PushNotification(m_table->IsLocked() ? "Nothing saved: the table is locked"s : "Nothing saved: a file operation is still in progress"s, 8000);
       return;
    }
+   if (IsDragInProgress())
+   {
+      // A drag or modal transform holds an uncommitted value in the parts: it would reach the file while Esc can still cancel it in the session
+      m_liveUI.PushNotification("Nothing saved: finish the move first"s, 5000);
+      return;
+   }
    for (IEditable *const part : m_drag.pendingPhysics) // A save during a drag: the file gets meshes that match the points
       if (part->GetItemType() == eItemPrimitive && std::ranges::find(m_table->GetParts(), part) != m_table->GetParts().end())
          static_cast<Primitive *>(part)->FlushGenDrag();
