@@ -672,6 +672,11 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
       ImGui::SetNextItemWidth(90.f * dpi);
       if (ImGui::DragFloat("Sheet DPI", &t.dpi, 0.5f, 10.f, 2400.f, "%.1f"))
          SetSheet(ed);
+      if (ImGui::IsItemDeactivatedAfterEdit()) // Keep the whole sheet in view at its new size
+      {
+         const Vertex2D a = UvToTable(t.uvm, 0.f, 0.f), b = UvToTable(t.uvm, 1.f, 1.f);
+         ed.FrameBounds(FRect3D(a.x, b.x, a.y, b.y, 0.f, 0.f));
+      }
       ImGui::SetItemTooltip("47.06 VPU per inch at this DPI. Traced points stay where they are, the sheet is rescaled about its centre");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(70.f * dpi);
