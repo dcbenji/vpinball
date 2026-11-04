@@ -769,13 +769,13 @@ void SearchPalette::Render()
 
    const ImGuiViewport *const vp = ImGui::GetMainViewport();
    const float dpi = m_editor.m_liveUI.GetDPI();
-   const float width = 560.f * dpi;
-   const float pad = 10.f * dpi; // Window padding
+   const float width = 490.f * dpi;
+   const float pad = 5.f * dpi; // Window padding
    const float spacingY = 2.f * dpi; // Item spacing between rows
-   const float inputHeight = 28.f * dpi;
-   const float inputGap = 6.f * dpi; // Between the input and the results
+   const float inputHeight = 20.f * dpi;
+   const float inputGap = 14.f * dpi; // Between the input and the results
    const float footerGap = 4.f * dpi; // Between the footer rule and the footer text
-   const float rowH = 24.f * dpi;
+   const float rowH = 18.f * dpi;
    const float innerWidth = width - 2.f * pad;
    const float rowHeight = rowH + spacingY;
    const float chrome = 2.f * pad + inputHeight + inputGap + 1.f + footerGap + spacingY + ImGui::GetTextLineHeight();
@@ -785,7 +785,7 @@ void SearchPalette::Render()
 
    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.2f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
    ImGui::SetNextWindowSize(ImVec2(width, chrome + listHeight), ImGuiCond_Always);
-   ImGui::SetNextWindowBgAlpha(0.96f);
+   ImGui::SetNextWindowBgAlpha(1.f);
    if (m_firstFrame || harvested)
       ImGui::SetNextWindowFocus();
 
@@ -798,6 +798,8 @@ void SearchPalette::Render()
       | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, spacingY));
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Rgb(24, 24, 24))); // Blender's opaque 24 menu
+   ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorTheme::V(EditorTheme::Rgb(24, 24, 24)));
    if (ImGui::Begin("##SearchPalette", nullptr, flags))
    {
       if (!m_firstFrame && !harvested && !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
@@ -811,8 +813,12 @@ void SearchPalette::Render()
       }
       ImGui::SetNextItemWidth(innerWidth);
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(30.f * dpi, 0.5f * (inputHeight - ImGui::GetFontSize()))); // Room for the search icon
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::V(EditorTheme::Rgb(24, 24, 24)));
+      ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Rgb(61, 61, 61)));
       ImGui::InputTextWithHint("##query", "Search menus and fields (F3)", &m_query);
-      ImGui::PopStyleVar();
+      ImGui::PopStyleColor(2);
+      ImGui::PopStyleVar(2);
       ImGui::GetWindowDrawList()->AddText(ImVec2(ImGui::GetItemRectMin().x + 9.f * dpi, ImGui::GetItemRectMin().y + 0.5f * (inputHeight - ImGui::GetFontSize())), EditorTheme::TextDim, ICON_LC_SEARCH);
       ImGui::Dummy(ImVec2(0.f, std::max(0.f, inputGap - 2.f * spacingY)));
       if (m_query != m_lastQuery)
@@ -859,20 +865,24 @@ void SearchPalette::Render()
          const ImGuiIO &io = ImGui::GetIO();
          const bool mouseMoved = io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f;
          ImDrawList *const draw = ImGui::GetWindowDrawList();
-         ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Fill));
-         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Fill));
-         ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::FillActive));
+         ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Rgb(63, 63, 63)));
+         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Rgb(63, 63, 63)));
+         ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::Rgb(78, 78, 78)));
          for (size_t i = 0; i < count; ++i)
          {
             const Result &r = m_results[i];
             const bool selected = static_cast<int>(i) == m_sel;
             ImGui::PushID(static_cast<int>(i));
+            if (!selected) // Only the selected row shows the highlight (a still mouse over another row would show two)
+               ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.f, 0.f, 0.f, 0.f));
             if (ImGui::Selectable("##row", selected, ImGuiSelectableFlags_None, ImVec2(0.f, rowH)))
             {
                hasActivation = true;
                activateIdx = i;
                activatePin = false;
             }
+            if (!selected)
+               ImGui::PopStyleColor();
             if (selected && m_scrollToSel)
                ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
             if (ImGui::IsItemHovered() && mouseMoved)
@@ -924,6 +934,7 @@ void SearchPalette::Render()
       }
    }
    ImGui::End();
+   ImGui::PopStyleColor(2);
    ImGui::PopStyleVar(2);
 
    if (close)

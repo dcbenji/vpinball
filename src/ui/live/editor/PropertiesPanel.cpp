@@ -209,22 +209,17 @@ void PropertiesPanel::DrawTabStrip()
    static constexpr const char *icons[] = { ICON_LC_BOX, ICON_LC_MOVE_3D, ICON_LC_CIRCLE_DOT, ICON_LC_SUN, ICON_LC_ATOM, ICON_LC_CODE, ICON_LC_SLIDERS_HORIZONTAL };
    static constexpr const char *names[] = { "Object", "Transform", "Material", "Look", "Physics", "Script & Events", "Advanced (every field)" };
    const float dpi = m_editor.m_liveUI.GetDPI();
-   const float stripWidth = 32.f * dpi;
-   const ImVec2 size(28.f * dpi, 28.f * dpi);
-   // Strip background is the child's (ChildBg); 1 px border on its right edge
-   {
-      const ImVec2 pos = ImGui::GetWindowPos();
-      const ImVec2 winSize = ImGui::GetWindowSize();
-      ImGui::GetWindowDrawList()->AddLine(ImVec2(pos.x + winSize.x - 1.f, pos.y), ImVec2(pos.x + winSize.x - 1.f, pos.y + winSize.y), EditorTheme::Border);
-   }
+   const float stripWidth = 29.f * dpi;
+   const ImVec2 size(26.f * dpi, 28.f * dpi); // Blender: tabs touch the content edge; the active one merges into it
+   // Strip background is the child's (ChildBg)
    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
-   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 4.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
    ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
    const auto tabButton = [&](const char *label, bool active) -> bool
    {
-      ImGui::SetCursorPosX((stripWidth - size.x) * 0.5f);
-      ImGui::PushStyleColor(ImGuiCol_Button, active ? EditorTheme::V(EditorTheme::Raised) : ImVec4(0.f, 0.f, 0.f, 0.f));
+      ImGui::SetCursorPosX(stripWidth - size.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, active ? EditorTheme::V(EditorTheme::Rgb(48, 48, 48)) : ImVec4(0.f, 0.f, 0.f, 0.f));
       ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::TextDim));
       const bool clicked = ImGui::Button(label, size);
       ImGui::PopStyleColor(2);
@@ -623,7 +618,7 @@ void PropertiesPanel::DrawSearchField()
    }
    // Esc clears the text and leaves the field (ImGui alone would only restore the text the field had when it was entered)
    const bool escape = ImGui::GetActiveID() == ImGui::GetID("##PropSearch") && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-   ImGui::InputTextWithHint("##PropSearch", ICON_LC_SEARCH " Search fields", &m_search);
+   EditorTheme::WithTextField([&] { return ImGui::InputTextWithHint("##PropSearch", ICON_LC_SEARCH " Search fields", &m_search); });
    if (escape)
    {
       m_search.clear();
@@ -785,11 +780,11 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    if (tabbed)
    {
       ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorTheme::V(EditorTheme::Strip));
-      ImGui::BeginChild("##PropTabs", ImVec2(32.f * editor.m_liveUI.GetDPI(), 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+      ImGui::BeginChild("##PropTabs", ImVec2(29.f * editor.m_liveUI.GetDPI(), 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
       ImGui::PopStyleColor();
       DrawTabStrip();
       ImGui::EndChild();
-      ImGui::SameLine(0.f, 4.f);
+      ImGui::SameLine(0.f, 0.f);
       ImGui::BeginChild("##PropContent", ImVec2(0.f, 0.f));
    }
    else

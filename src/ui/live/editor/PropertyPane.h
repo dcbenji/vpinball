@@ -402,6 +402,8 @@ private:
    bool m_sectionHasSync = false;
    float m_syncWidth = 0.f;
    ImVec2 m_syncPos;
+   // UI scale for the few fixed pixel sizes of the pane
+   float m_cardScale = ImGui::GetStyle().GrabMinSize / 10.f; // UI scale, read from the style when the pane is created (GrabMinSize is 10 px at 100%)
 };
 
 
@@ -918,7 +920,7 @@ inline void PropertyPane::InputString(T* obj, const string& label, const std::fu
    ImGui::PushID(label.c_str());
    string value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputText(("##" + label).c_str(), &value))
+   if (EditorTheme::WithTextField([&] { return ImGui::InputText(("##" + label).c_str(), &value); }))
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
@@ -948,7 +950,7 @@ inline void PropertyPane::InputResURI(T* obj, const string& label, const std::fu
    T* display = sync.display;
    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
-   if (ImGui::InputText(("##" + label).c_str(), &value))
+   if (EditorTheme::WithTextField([&] { return ImGui::InputText(("##" + label).c_str(), &value); }))
    {
       setter(display, value);
       for (const CoTarget<T>& target : targets)

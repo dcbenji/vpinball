@@ -715,7 +715,8 @@ void LiveUI::SetupImGuiStyle(const bool isEditor) const
    style.CellPadding = ImVec2(4.0f, 2.0f);
    style.IndentSpacing = 21.0f;
    style.ColumnsMinSpacing = 6.0f;
-   style.ScrollbarSize = 11.0f;
+   style.ScrollbarSize = isEditor ? 7.0f : 11.0f; // Editor: Blender's thin overlay lane (7 wide, 2 padding each side = 3 px thumb)
+   style.ScrollbarPadding = 2.0f;
    style.ScrollbarRounding = 2.5f;
    style.GrabMinSize = 10.0f;
    style.GrabRounding = 2.0f;
@@ -728,22 +729,22 @@ void LiveUI::SetupImGuiStyle(const bool isEditor) const
 
    ImGui::GetStyle().ScaleAllSizes(m_uiScale);
 
-   style.Colors[ImGuiCol_Text] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+   style.Colors[ImGuiCol_Text] = isEditor ? ImColor(230, 230, 230) : ImColor(1.0f, 1.0f, 1.0f, 1.0f); // Editor: Blender's 230 text
    style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.592f, 0.592f, 0.592f, 1.0f);
-   style.Colors[ImGuiCol_WindowBg] = isEditor ? ImColor(0xFF363636) : ImColor(0.145f, 0.145f, 0.149f, 1.0f);
-   style.Colors[ImGuiCol_ChildBg] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
-   style.Colors[ImGuiCol_PopupBg] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
-   style.Colors[ImGuiCol_Border] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
+   style.Colors[ImGuiCol_WindowBg] = isEditor ? ImColor(0xFF303030) : ImColor(0.145f, 0.145f, 0.149f, 1.0f); // Editor: same 48 as the content, so no lighter frame round a panel
+   style.Colors[ImGuiCol_ChildBg] = isEditor ? ImColor(48, 48, 48) : ImColor(0.145f, 0.145f, 0.149f, 1.0f);
+   style.Colors[ImGuiCol_PopupBg] = isEditor ? ImColor(24, 24, 24) : ImColor(0.145f, 0.145f, 0.149f, 1.0f);
+   style.Colors[ImGuiCol_Border] = isEditor ? ImColor(36, 36, 36) : ImColor(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_FrameBg] = isEditor ? ImColor(0xFF545454) : ImColor(0.2f, 0.2f, 0.216f, 1.0f);
-   style.Colors[ImGuiCol_FrameBgHovered] = isEditor ? ImColor(96, 96, 96) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
+   style.Colors[ImGuiCol_FrameBgHovered] = isEditor ? ImColor(101, 101, 101) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_FrameBgActive] = isEditor ? ImColor(34, 34, 34) : ImColor(0.0f, 0.467f, 0.784f, 1.0f); // Editor: Blender's dark field while editing
    style.Colors[ImGuiCol_TitleBg] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
    style.Colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
    style.Colors[ImGuiCol_MenuBarBg] = ImVec4(0.2f, 0.2f, 0.216f, 1.0f);
-   style.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0.2f, 0.2f, 0.216f, 1.0f);
-   style.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.322f, 0.322f, 0.333f, 1.0f);
+   style.Colors[ImGuiCol_ScrollbarBg] = isEditor ? ImColor(0, 0, 0, 0) : ImColor(0.2f, 0.2f, 0.216f, 1.0f);
+   style.Colors[ImGuiCol_ScrollbarGrab] = isEditor ? ImColor(62, 62, 62) : ImColor(0.322f, 0.322f, 0.333f, 1.0f);
    style.Colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.353f, 0.353f, 0.373f, 1.0f);
    style.Colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.353f, 0.353f, 0.373f, 1.0f);
    style.Colors[ImGuiCol_CheckMark] = isEditor ? ImColor(0xFFFFFFFF) : ImColor(0.0f, 0.467f, 0.784f, 1.0f);

@@ -173,10 +173,13 @@ bool PropertyPane::BeginFlatCombo(const char* id, const char* preview)
    const string text = Ellipsize(none ? "None" : preview, width - 2.f * style.FramePadding.x - 2.f * chevronSize - style.ItemInnerSpacing.x);
    if (none)
       ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+   ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::Rgb(40, 40, 40)); // Blender's dropdown fill (the list is submitted after this returns)
+   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, EditorTheme::Rgb(57, 57, 57));
    const bool open = ImGui::BeginCombo(id, text.c_str(), ImGuiComboFlags_NoArrowButton);
+   ImGui::PopStyleColor(2);
    if (none)
       ImGui::PopStyleColor();
-   DrawChevron(drawList, ImVec2(min.x + width - style.FramePadding.x - chevronSize, min.y + height * 0.5f), true, chevronSize, EditorTheme::TextDim);
+   DrawChevron(drawList, ImVec2(min.x + width - style.FramePadding.x - chevronSize, min.y + height * 0.5f), true, chevronSize, EditorTheme::Rgb(217, 217, 217));
    return open;
 }
 
@@ -255,7 +258,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    m_rowMin = pos;
    const ImGuiStyle& style = ImGui::GetStyle();
    const float xSpacing = style.ItemSpacing.x;
-   // Label column: ~42% of the pane, at least 120 px, while keeping a sane minimum for the value column
+   // Label column: half of the pane, at least 120 px, while keeping a sane minimum for the value column
    const float availWidth = ImGui::GetContentRegionAvail().x;
    const float valueMin = 100.f;
    // m_syncWidth reserves the whole sync button (frame padding + gap) so it never runs past the pane edge or under the scrollbar
@@ -312,7 +315,7 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
    const string current = getName();
    string name = current;
    // Apply on Enter only: renaming on each keystroke would make each intermediate name unique, corrupting the name being typed
-   if (ImGui::InputText("##Name", &name, ImGuiInputTextFlags_EnterReturnsTrue) && name != current)
+   if (EditorTheme::WithTextField([&] { return ImGui::InputText("##Name", &name, ImGuiInputTextFlags_EnterReturnsTrue); }) && name != current)
    {
       setName(name);
       if (getName() != current) // The setter may reject or adjust the name
@@ -335,7 +338,7 @@ void PropertyPane::Separator(const string& label)
    if (m_skipRest)
       return;
    FlushRow();
-   // Sub-group inside a section: the section header look (accent rule, label, hairline) without the chevron, since it does not collapse
+   // Sub-group inside a section: the section header title without the chevron or rules, since it does not collapse
    ImGui::Dummy(ImVec2(0.f, 2.f));
    const ImGuiStyle& style = ImGui::GetStyle();
    const float fontSize = ImGui::GetFontSize();
@@ -344,10 +347,7 @@ void PropertyPane::Separator(const string& label)
    const float width = ImGui::GetContentRegionAvail().x;
    ImGui::Dummy(ImVec2(width, height));
    ImDrawList* const drawList = ImGui::GetWindowDrawList();
-   const ImVec2 max(min.x + width, min.y + height);
-   drawList->AddRectFilled(min, ImVec2(min.x + 2.f, max.y), EditorTheme::Accent);
    drawList->AddText(ImVec2(min.x + fontSize * 0.5f + style.FramePadding.x, min.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), label.c_str(), ImGui::FindRenderedTextEnd(label.c_str()));
-   drawList->AddLine(ImVec2(min.x, max.y), max, EditorTheme::WorkspaceOff, 1.f);
    ImGui::Dummy(ImVec2(0.f, 2.f));
 }
 
@@ -356,21 +356,24 @@ bool PropertyPane::SectionHeader(const char* labelAndId, ImGuiTreeNodeFlags flag
    // ImGui's filled triangle clashes with the line icons: the header is submitted with invisible text (same ID, click, keyboard
    // and open-state behaviour), then the label and a TextDim chevron are drawn over it
    const ImU32 labelColor = ImGui::GetColorU32(ImGuiCol_Text);
+   const ImGuiStyle& style = ImGui::GetStyle();
+   // Blender's 25 px section header: twice the vertical frame padding (the title below uses the same padding, so it stays centred)
+   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, 2.f * style.FramePadding.y));
+   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f * style.GrabMinSize / 10.f);
    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
+   ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Rgb(61, 61, 61))); // Same as the card
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Rgb(68, 68, 68))); // Blender has no hover step; a faint one keeps the click target visible
    const bool opened = ImGui::CollapsingHeader(labelAndId, flags);
-   ImGui::PopStyleColor();
+   ImGui::PopStyleColor(3);
 
-   // Thin accent rule on the left of the header
    const ImVec2 headerMin = ImGui::GetItemRectMin();
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
-   const ImGuiStyle& style = ImGui::GetStyle();
    const float fontSize = ImGui::GetFontSize();
    const float chevronSize = fontSize * 0.3f;
    DrawChevron(drawList, ImVec2(headerMin.x + style.FramePadding.x + fontSize * 0.5f, (headerMin.y + headerMax.y) * 0.5f), opened, chevronSize, EditorTheme::TextDim);
-   drawList->AddText(ImVec2(headerMin.x + fontSize + style.FramePadding.x * 3.f, headerMin.y + style.FramePadding.y), labelColor, labelAndId, ImGui::FindRenderedTextEnd(labelAndId));
-   drawList->AddRectFilled(headerMin, ImVec2(headerMin.x + 2.f, headerMax.y), EditorTheme::Accent);
-   drawList->AddLine(ImVec2(headerMin.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), EditorTheme::WorkspaceOff, 1.f); // Separates stacked headers
+   drawList->AddText(ImVec2(headerMin.x + fontSize + style.FramePadding.x * 2.25f, headerMin.y + style.FramePadding.y), labelColor, labelAndId, ImGui::FindRenderedTextEnd(labelAndId));
+   ImGui::PopStyleVar(2);
    return opened;
 }
 
@@ -780,8 +783,12 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    if (rowHovered && part != nullptr && ImGui::IsKeyPressed(ImGuiKey_Backspace, false) && !ImGui::GetIO().WantTextInput && ImGui::GetActiveID() == 0
       && !ImGui::IsPopupOpen("##PinMenu") && !fieldDisabled) // Not a greyed-out field
       m_pins->ResetToDefault(key);
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 7.f * m_cardScale)); // Blender's 20 px menu row pitch
    if (!ImGui::BeginPopup("##PinMenu"))
+   {
+      ImGui::PopStyleVar();
       return;
+   }
    if (m_pins->IsPinned(key))
    {
       if (ImGui::MenuItem(ICON_LC_STAR " Remove from Quick Favorites"))
@@ -836,6 +843,7 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
                                          : "Select other parts that have this field (Ctrl+click in the outliner or viewport)");
    }
    ImGui::EndPopup();
+   ImGui::PopStyleVar();
 }
 
 void PropertyPane::ConvertUnit(Unit from, Unit& to, float& value, int& nDecimalAdjust)

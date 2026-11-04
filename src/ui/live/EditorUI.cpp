@@ -720,9 +720,9 @@ void EditorUI::RenderSplitters()
       if (seam)
       {
          if (vertical)
-            drawList->AddLine(ImVec2(mid, grab.y0), ImVec2(mid, grab.y1), EditorTheme::Border, 1.f);
+            drawList->AddLine(ImVec2(mid, grab.y0), ImVec2(mid, grab.y1), EditorTheme::Rgb(22, 22, 22), 3.f * dpi);
          else
-            drawList->AddLine(ImVec2(grab.x0, mid), ImVec2(grab.x1, mid), EditorTheme::Border, 1.f);
+            drawList->AddLine(ImVec2(grab.x0, mid), ImVec2(grab.x1, mid), EditorTheme::Rgb(22, 22, 22), 3.f * dpi);
       }
       if (ImGui::IsItemHovered() || active)
       {
@@ -737,19 +737,13 @@ void EditorUI::RenderSplitters()
       return active;
    };
 
-   const auto &nodes = m_areas.Nodes();
-   const auto hasViewport = [&nodes](const auto &self, const int index) -> bool
-   {
-      const AreaNode &node = nodes[index];
-      return node.isSplit ? (self(self, node.child[0]) || self(self, node.child[1])) : node.type == AreaType::Viewport;
-   };
    for (const SplitterRect &split : m_splitterRects)
    {
       const AreaNode *const node = m_areas.Find(split.nodeId);
       if (node == nullptr)
          continue;
       const bool vertical = split.axis == SplitAxis::Vertical;
-      const bool seam = !hasViewport(hasViewport, static_cast<int>(node - nodes.data()));
+      const bool seam = true; // Blender: a 3 px dark seam on every edge, beside the 3D view too
       char name[32];
       snprintf(name, sizeof(name), "##Split%d", split.nodeId);
       bool activated = false, menuRequested = false;

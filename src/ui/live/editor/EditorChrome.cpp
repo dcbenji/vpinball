@@ -35,13 +35,13 @@ constexpr const char *ModKey = "Ctrl";
 #endif
 float s_toolDpi = 1.f;
 
-// Toolbar icon button: transparent, hovered = Hover, active (mode on) = Raised background with Accent icon
+// Toolbar icon button: transparent, hovered = Hover, active (mode on) = Fill (Blender's blue) background with a white icon
 bool ToolButton(const char *icon, bool active = false)
 {
-   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Raised : 0u));
+   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Fill : 0u));
    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
    ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::Text));
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? IM_COL32_WHITE : EditorTheme::Text));
    const bool pressed = ImGui::Button(icon, ImVec2(ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
    ImGui::PopStyleColor(4);
    return pressed;
@@ -175,11 +175,12 @@ void EditorChrome::RenderMenuBar()
    EditorUI &editor = m_editor;
    const float dpi = editor.m_liveUI.GetDPI();
    // The menu bar is tall enough for the workspace tabs, and shares the toolbar background
-   constexpr float menuBarHeight = 28.f;
-   constexpr float tabHeight = 24.f;
+   constexpr float menuBarHeight = 26.f;
+   constexpr float tabHeight = 22.f;
    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, max(ImGui::GetStyle().FramePadding.y, 0.5f * (menuBarHeight * dpi - ImGui::GetFontSize()))));
    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
    ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 7.f * dpi)); // Blender's 20 px menu row pitch
    if (ImGui::BeginMainMenuBar())
    {
       if (!editor.IsInspectMode() && ImGui::BeginMenu("File"))
@@ -481,17 +482,17 @@ void EditorChrome::RenderMenuBar()
       if (!editor.m_table->IsLocked())
       {
          const ImGuiStyle &tabStyle = ImGui::GetStyle();
-         const float tabPadding = 12.f * dpi;
+         const float tabPadding = 10.f * dpi;
          const float tabGap = 0.f; // Tabs touch each other
          float tabsWidth = 0.f;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
             tabsWidth += ImGui::CalcTextSize(editor.m_pinned.GetWorkspace(i).name.c_str()).x + tabPadding * 2.f + (i > 0 ? tabGap : 0.f);
-         const float startX = max(ImGui::GetCursorPosX() + tabStyle.ItemSpacing.x, 0.5f * (ImGui::GetWindowWidth() - tabsWidth));
+         const float startX = ImGui::GetCursorPosX() + tabStyle.ItemSpacing.x; // Blender: straight after the menus
          const ImVec2 barPos = ImGui::GetWindowPos();
          const float barBottom = barPos.y + ImGui::GetWindowHeight();
          const float savedScreenY = ImGui::GetCursorScreenPos().y;
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
-         drawList->AddLine(ImVec2(barPos.x, barBottom - 1.f), ImVec2(barPos.x + ImGui::GetWindowWidth(), barBottom - 1.f), EditorTheme::TabActive, 1.f); // Bottom rule
+         drawList->AddLine(ImVec2(barPos.x, barBottom - 1.f), ImVec2(barPos.x + ImGui::GetWindowWidth(), barBottom - 1.f), EditorTheme::Rgb(22, 22, 22), 1.f); // Bottom rule
          float x = barPos.x + startX;
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
          {
@@ -505,7 +506,7 @@ void EditorChrome::RenderMenuBar()
             const bool hovered = ImGui::IsItemHovered();
             const ImVec2 tabMin = ImGui::GetItemRectMin();
             const ImVec2 tabMax = ImGui::GetItemRectMax();
-            drawList->AddRectFilled(tabMin, tabMax, active ? EditorTheme::TabActive : (hovered ? EditorTheme::TabHover : 0u), 5.f * dpi, ImDrawFlags_RoundCornersTop);
+            drawList->AddRectFilled(tabMin, tabMax, active ? EditorTheme::Workspace : (hovered ? EditorTheme::Rgb(46, 46, 46) : EditorTheme::WorkspaceOff), 3.f * dpi, ImDrawFlags_RoundCornersTop);
             drawList->AddText(ImVec2(tabMin.x + tabPadding, tabMin.y + 0.5f * (tabSize.y - textSize.y)), active ? IM_COL32_WHITE : EditorTheme::TextDim, name.c_str());
             {
                const string shortcut = "Ctrl+" + std::to_string(i + 1);
@@ -547,6 +548,7 @@ void EditorChrome::RenderMenuBar()
       m_menuBarHeight = ImGui::GetWindowSize().y;
       ImGui::EndMainMenuBar();
    }
+   ImGui::PopStyleVar();
    ImGui::PopStyleColor(2);
    ImGui::PopStyleVar();
 }
@@ -569,7 +571,7 @@ void EditorChrome::RenderToolbar()
    ImGui::PopStyleColor();
    ImGui::PopStyleVar(2);
    // 1 px separator between the toolbar and the area panels below
-   ImGui::GetWindowDrawList()->AddLine(ImVec2(viewport->Pos.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), EditorTheme::TabActive, 1.f);
+   ImGui::GetWindowDrawList()->AddLine(ImVec2(viewport->Pos.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + m_menuBarHeight + m_toolBarHeight - 1.f), EditorTheme::Rgb(22, 22, 22), 1.f);
    if (editor.IsInspectMode())
    {
       if (ToolButton(editor.m_player->IsPlaying() ? ICON_LC_PAUSE : ICON_LC_PLAY))
@@ -1399,8 +1401,8 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       const ImVec2 chipMax(x + keySize.x + 2.f * chipPadX, chipMin.y + keySize.y + 2.f * chipPadY);
       draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
       draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
-      draw->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), EditorTheme::TextDim, hint.key.c_str());
-      draw->AddText(ImVec2(chipMax.x + gap, textY), EditorTheme::TextDim, hint.label.c_str());
+      draw->AddText(ImVec2(chipMin.x + chipPadX, chipMin.y + chipPadY), EditorTheme::Rgb(135, 135, 135), hint.key.c_str());
+      draw->AddText(ImVec2(chipMax.x + gap, textY), EditorTheme::Rgb(135, 135, 135), hint.label.c_str());
       x += width + hintGap;
    }
    ImGui::End();

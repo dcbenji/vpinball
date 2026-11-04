@@ -81,8 +81,8 @@ static void PushRowColors(const bool selected, const bool inactive)
       return;
    }
    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.f, 0.f, 0.f, 0.f));
-   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Rgb(70, 70, 70)));
+   ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::Rgb(70, 70, 70)));
 }
 
 // Tree node with a line chevron instead of ImGui's filled triangle: the node is submitted with an invisible text (same ID, click, keyboard and
@@ -92,7 +92,7 @@ static bool ChevronTreeNode(const char *label, const ImGuiTreeNodeFlags flags = 
    const ImGuiStyle &style = ImGui::GetStyle();
    const ImVec2 pos = ImGui::GetCursorScreenPos();
    const float textOffsetY = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
-   const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+   const ImU32 textColor = EditorTheme::Rgb(195, 195, 195); // Blender's outliner name grey
    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
    const bool opened = ImGui::TreeNodeEx(label, flags);
    ImGui::PopStyleColor();
@@ -336,6 +336,8 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    ImGui::SetNextWindowSize(size);
    constexpr ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
       | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse; // The tree scrolls in its own child, under the header
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Rgb(40, 40, 40))); // Blender's Outliner is 40 (the other areas 48), header included
+   ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorTheme::V(EditorTheme::Rgb(40, 40, 40)));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -409,7 +411,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::SetKeyboardFocusHere();
          m_focusFilter = false;
       }
-      ImGui::InputTextWithHint("##OutlinerFilter", "Search", &m_filter);
+      EditorTheme::WithTextField([&] { return ImGui::InputTextWithHint("##OutlinerFilter", "Search", &m_filter); });
       ImGui::SetItemTooltip("Name words, t:light, m:<material>, n:<name> (Ctrl+F)");
       if (!m_filter.empty())
       {
@@ -464,6 +466,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
    // The tree scrolls under the header
    ImGui::BeginChild("##OutlinerTree", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 1.f * editor.m_liveUI.GetDPI())); // Blender's 20 px row pitch: 19 px frame + 1
 
    // Drag & drop of parts and part groups to move them between groups (not supported in inspection
    // mode as the inspected table is a live copy). The drag payload is just a marker: the moved parts
@@ -559,17 +562,34 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       IEditable *const editable = edit->GetEditable();
       m_listedParts.push_back(edit);
       const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
+      const ImGuiStyle &rowStyle = ImGui::GetStyle();
+      const float rowHeight = ImGui::GetFrameHeight();
+      const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+      if ((itemCounter & 1) != 0)
+      {
+         // Alternating rows (Blender): white at alpha 4 over the 40 background, spanning the pitch
+         const ImGuiWindow *const rowWindow = ImGui::GetCurrentWindow();
+         const float y = ImGui::GetCursorScreenPos().y;
+         rowWindow->DrawList->AddRectFilled(ImVec2(rowWindow->WorkRect.Min.x, y), ImVec2(rowWindow->WorkRect.Max.x, y + rowHeight + rowStyle.ItemSpacing.y), IM_COL32(255, 255, 255, 4));
+      }
       PushRowColors(editor.IsPartSelected(edit), inactiveSel);
+      // Frame height rows, so the highlight fills the whole pitch (the name and icon below are shifted down by the frame padding)
       const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(),
-         editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
+         editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.f, rowHeight));
       ImGui::PopStyleColor(3);
+      if (edit == editor.m_selection.GetPart() && editor.IsPartSelected(edit))
+      {
+         // Outline of the active row
+         const ImGuiWindow *const rowWindow = ImGui::GetCurrentWindow();
+         rowWindow->DrawList->AddRect(ImVec2(rowWindow->WorkRect.Min.x, ImGui::GetItemRectMin().y), ImVec2(rowWindow->WorkRect.Max.x, ImGui::GetItemRectMax().y + rowStyle.ItemSpacing.y - 1.f), EditorTheme::Rgb(91, 117, 168));
+      }
       {
          // The highlight spans the whole row: the part left of the selectable (the tree indentation) gets the same color
          const bool rowSelected = editor.IsPartSelected(edit);
          const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
          if (rowSelected || rowHovered)
          {
-            ImVec4 color = EditorTheme::V(rowSelected ? (rowHovered ? EditorTheme::RowSelectedHover : EditorTheme::RowSelected) : EditorTheme::Hover);
+            ImVec4 color = EditorTheme::V(rowSelected ? (rowHovered ? EditorTheme::RowSelectedHover : EditorTheme::RowSelected) : EditorTheme::Rgb(70, 70, 70));
             if (inactiveSel)
                color.w *= 0.4f;
             const float rowMinX = ImGui::GetCurrentWindow()->WorkRect.Min.x;
@@ -581,14 +601,19 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       {
          // Type icon (dim) and name (normal text, faint when the part is hidden) drawn over the selectable, indented under the parent group's name
          const char *const icon = TypeIcon(editable->GetItemType());
-         const ImVec2 textPos = ImVec2(ImGui::GetItemRectMin().x + indentX, ImGui::GetItemRectMin().y);
+         const ImVec2 textPos = ImVec2(ImGui::GetItemRectMin().x + indentX, ImGui::GetItemRectMin().y + ImGui::GetStyle().FramePadding.y);
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
          drawList->AddText(textPos, EditorTheme::TextDim, icon);
          const float nameX = textPos.x + ImGui::CalcTextSize(icon).x + 6.f;
          const float eyeScreenX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX; // Where the eye button is placed by SameLine(eyeX)
          const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
          const string shown = EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX);
-         drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : (hovered ? EditorTheme::TextDim : EditorTheme::TextFaint), shown.c_str());
+         // Blender: the active part's name is the orange 255,175,41, the other selected parts' 233,106,0, the rest 195
+         const ImU32 nameColor = !editable->IsUIVisible(false) ? (hovered ? EditorTheme::TextDim : EditorTheme::TextFaint)
+            : (edit == editor.m_selection.GetPart() && editor.IsPartSelected(edit)) ? EditorTheme::Rgb(255, 175, 41)
+            : inactiveSel ? EditorTheme::Rgb(233, 106, 0)
+            : EditorTheme::Rgb(195, 195, 195);
+         drawList->AddText(ImVec2(nameX, textPos.y), nameColor, shown.c_str());
          if (hovered && shown != editable->GetName() && ImGui::GetDragDropPayload() == nullptr)
             ImGui::SetTooltip("%s", editable->GetName().c_str()); // Full name of an ellipsized row
       }
@@ -626,6 +651,13 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
          ImGui::PopStyleColor(2);
+      }
+      // The eye button's line is taller than the frame (baseline offset): the next row starts one frame height + spacing below this one (Blender's 20 px pitch)
+      const float nextY = rowStart.y + rowHeight + rowStyle.ItemSpacing.y;
+      if (ImGui::GetCursorScreenPos().y > nextY + 0.5f)
+      {
+         ImGui::SetCursorScreenPos(ImVec2(rowStart.x, nextY - rowStyle.ItemSpacing.y));
+         ImGui::Dummy(ImVec2(0.f, 0.f));
       }
    };
 
@@ -966,6 +998,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       m_revealResource = false;
       ImGui::PopID();
    }
+   ImGui::PopStyleVar();
    ImGui::EndChild();
    if (dropRequested)
    {
@@ -984,6 +1017,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    }
 
    ImGui::End();
+   ImGui::PopStyleColor(2);
    ImGui::PopStyleVar(3);
 }
 
