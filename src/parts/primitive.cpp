@@ -2166,7 +2166,8 @@ void Primitive::RegeneratePlastic()
    if (!PlasticMesh::Build(outline, holes, params, res))
       return; // Degenerate outline: keep the meshes as they are
    m_plasticCrossingHoles = res.crossingHoles;
-   m_plasticCrossingWarn = res.crossingHoles > 0;
+   m_plasticSkippedHoles = res.skippedHoles;
+   m_plasticCrossingWarn = res.crossingHoles > 0 || res.skippedHoles > 0;
    setMesh(this, res.bottom);
    for (Primitive *const comp : GetPlasticCompanions())
    {

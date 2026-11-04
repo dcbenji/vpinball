@@ -2047,8 +2047,18 @@ void EditorUI::RenderUI()
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
             plastic->m_plasticCrossingWarn = false;
-            if (plastic->m_d.m_plasticGen) // Warning only: the hole stays as it is
-               Report("Warning: " + std::to_string(plastic->m_plasticCrossingHoles) + (plastic->m_plasticCrossingHoles == 1 ? " hole of " : " holes of ") + plastic->GetName() + " cross the outline edge");
+            if (plastic->m_d.m_plasticGen) // Warning only: the holes stay as they are
+            {
+               const int c = plastic->m_plasticCrossingHoles, o = plastic->m_plasticSkippedHoles;
+               string msg = "Warning: " + plastic->GetName() + ": ";
+               if (c > 0)
+                  msg += std::to_string(c) + (c == 1 ? " hole crosses" : " holes cross") + " the outline edge";
+               if (c > 0 && o > 0)
+                  msg += ", ";
+               if (o > 0)
+                  msg += std::to_string(o) + (o == 1 ? " hole is" : " holes are") + " outside the outline (left out)";
+               Report(msg);
+            }
          }
          if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty)
          {

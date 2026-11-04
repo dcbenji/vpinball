@@ -407,6 +407,7 @@ public:
    bool m_plasticEditHoles = false; // Transient: point edit works on the holes instead of the outline
    bool IsPlasticCompanion() const; // Names a host that exists (an orphan, e.g. after a script rename, behaves as a plain primitive)
    int m_plasticCrossingHoles = 0; // Holes reaching over the outline edge at the last rebuild (warning only)
+   int m_plasticSkippedHoles = 0; // Holes whose centre is outside the outline (left out of the mesh)
    bool m_plasticCrossingWarn = false; // The editor reports it once (status message) and clears this
    bool m_plasticPickDirty = false; // The mesh was rebuilt: the editor refreshes the picking collider
    void InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes); // Turns this (new) primitive into a plastic host
