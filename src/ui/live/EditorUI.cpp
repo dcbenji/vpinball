@@ -2034,7 +2034,7 @@ void EditorUI::Render3D()
 
 void EditorUI::RenderHiddenOverlay3D()
 {
-   if (IsSaveInProgress())
+   if (IsSaveInProgress() || IsInspectMode()) // (no overlay in a play test: writing the display state here would undo a script's visibility changes)
       return;
    // As Render3D for the parts which are not selected (the selection's edges follow), with the view's own shading and as an editor camera view
    LiveRenderContext ctx(m_player, nullptr, ViewMode::EditorCam, m_renderer->GetShadeMode(), false);
