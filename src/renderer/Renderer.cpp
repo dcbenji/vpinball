@@ -271,8 +271,8 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
             std::istringstream one { key };
             one.imbue(std::locale::classic());
             vec4 k;
-            char sep;
-            if (one >> k.x >> sep >> k.y >> sep >> k.z >> sep >> k.w)
+            char s0, s1, s2;
+            if (one >> k.x >> s0 >> k.y >> s1 >> k.z >> s2 >> k.w && s0 == ',' && s1 == ',' && s2 == ',')
                keys.push_back(k);
          }
       }

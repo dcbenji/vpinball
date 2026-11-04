@@ -2286,7 +2286,7 @@ Vertex2D PartLibraryPanel::DefaultPlacementPos() const
 
 bool PartLibraryPanel::PlaceItem(const LibraryItem &item)
 {
-   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr)
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr || m_editor.m_fileOp != nullptr)
       return false;
    // The default position is read before the placement replaces the selection
    const Vertex2D pos = m_hookPlaceHasPos ? m_hookPlacePos : DefaultPlacementPos();
@@ -2346,7 +2346,7 @@ static bool SetPartMaterial(IEditable *const part, const string &name, const boo
 // Nothing is imported (and no undo step made) when no selected part can take a material
 void PartLibraryPanel::ApplyMaterialItem(const LibraryItem &item)
 {
-   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr)
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr || m_editor.m_fileOp != nullptr)
       return;
    vector<IEditable *> targets;
    for (const std::shared_ptr<EditorUIPart> &uiPart : m_editor.m_multiSel)
