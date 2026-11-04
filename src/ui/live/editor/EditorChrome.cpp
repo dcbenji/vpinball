@@ -147,16 +147,20 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       ImGui::PopID();
       return pressedAny;
    };
-   const auto checkbox = [&](const char *id, const char *label, bool &value, const bool def) {
+   const auto checkbox = [&](const char *id, const char *label, bool &value, const bool def, const char *unavailable = nullptr) {
       ImGui::PushID(id);
+      ImGui::BeginDisabled(unavailable != nullptr); // The renderer does not have what this option drives: shown disabled, with the reason
       bool toggled = PropertyPane::FlatCheckbox("##cb", &value);
       ImGui::SameLine();
       ImGui::TextUnformatted(label);
-      if (ImGui::IsItemClicked())
+      if (ImGui::IsItemClicked() && unavailable == nullptr)
       {
          value = !value;
          toggled = true;
       }
+      ImGui::EndDisabled();
+      if (unavailable != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", unavailable);
       resetMenu([&]() { value = def; });
       ImGui::PopID();
       changed |= toggled;
@@ -174,6 +178,8 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       ImGui::PopID();
    };
    // The environment turn is a BGFX shader uniform: the GL and DX9 shaders do not have it
+   // Outline and Shadow ride the AO shader's aoFx uniform: BGFX, but not its stereo / VR variants
+   const char *const noScreenFx = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasScreenSpaceFx() ? "Not available with this renderer (the AO shader has no such effect, e.g. GL, DX9, stereo / VR)" : nullptr;
    const char *const noEnvRotation = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasEnvRotation() ? "Not available with this renderer (the shaders have no environment rotation)" : nullptr;
    // Theme / Custom colour: the swatch opens the picker, picking a colour makes it Custom
    const auto themeOrCustom = [&](const char *id, bool &custom, float (&rgb)[3]) {
@@ -237,6 +243,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       {
          checkbox("cull", "Backface Culling", o.backfaceCulling, def.backfaceCulling);
          checkbox("cavity", "Cavity", o.cavity, def.cavity);
+         checkbox("outline", "Outline", o.outline, def.outline, noScreenFx);
          checkbox("xraySolid", "X-Ray", o.xraySolid, def.xraySolid);
          if (o.xraySolid)
             slider("xrayAlpha", o.xrayAlpha, 0.f, 1.f, "Opacity  %.2f", def.xrayAlpha);
@@ -282,6 +289,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          std::copy(def.bg, def.bg + 3, o.bg);
          o.backfaceCulling = def.backfaceCulling;
          o.cavity = def.cavity;
+         o.outline = def.outline;
          o.xraySolid = def.xraySolid;
          o.xrayAlpha = def.xrayAlpha;
          o.hiddenSolid = def.hiddenSolid;

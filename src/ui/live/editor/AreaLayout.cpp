@@ -196,6 +196,8 @@ nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
       j["backface_culling"] = true;
    if (o.cavity)
       j["cavity"] = true;
+   if (o.outline)
+      j["outline"] = true;
    if (o.xraySolid)
       j["xray_solid"] = true;
    if (o.xrayAlpha != d.xrayAlpha)
@@ -256,6 +258,7 @@ ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
    color("background", o.bgCustom, o.bg);
    flag("backface_culling", o.backfaceCulling);
    flag("cavity", o.cavity);
+   flag("outline", o.outline);
    flag("xray_solid", o.xraySolid);
    num("xray_alpha", o.xrayAlpha, 0.f, 1.f);
    flag("xray", o.xray);

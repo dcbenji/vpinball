@@ -18,6 +18,7 @@ $input v_texcoord0
 uniform vec4 w_h_height;
 
 uniform vec4 AO_scale_timeblur; // actually vec2 extended to vec4
+uniform vec4 aoFx; // Editor Solid extras of this pass: x outline strength, zero otherwise
 
 SAMPLER2DSTEREO(tex_fb_filtered,  0); // Framebuffer (filtered)
 SAMPLER2DSTEREO(tex_depth,        4); // DepthBuffer
@@ -177,7 +178,19 @@ void main()
 		occlusion += step(falloff, diff_depth) * /*abs(rdotn)* for uniform*/ (diff_depth < depth_threshold_normal ? (1.0-diff_norm*diff_norm/dot(occ_normal,occ_normal)) : 1.0) * (1.0-smoothstep(falloff, area, diff_depth));
 	}
 	// weight with result(s) from previous frames
-	const float ao = 1.0 - total_strength * occlusion;
+	float ao = 1.0 - total_strength * occlusion;
+	#ifndef STEREO
+	// Editor Solid Outline: a dark line where the view space depth breaks (the second difference over the neighbour pixels, which a slanted plane does not have)
+	BRANCH if(aoFx.x > 0.0)
+	{
+		const float zl = depthToViewZ(u - vec2(w_h_height.x, 0.0), texStereoNoLod(tex_depth, u - vec2(w_h_height.x, 0.0)).x);
+		const float zr = depthToViewZ(u + vec2(w_h_height.x, 0.0), texStereoNoLod(tex_depth, u + vec2(w_h_height.x, 0.0)).x);
+		const float zu = depthToViewZ(u - vec2(0.0, w_h_height.y), texStereoNoLod(tex_depth, u - vec2(0.0, w_h_height.y)).x);
+		const float zd = depthToViewZ(u + vec2(0.0, w_h_height.y), texStereoNoLod(tex_depth, u + vec2(0.0, w_h_height.y)).x);
+		const float edge = max(abs(zl + zr - 2.0 * z0), abs(zu + zd - 2.0 * z0));
+		ao = min(ao, 1.0 - aoFx.x * smoothstep(4.0, 12.0, edge));
+	}
+	#endif
 	#if defined(NORMAL_TEX) && defined(MOTION)
 		// Reproject the previous frame AO using the camera & object motion vectors stored in the prepass
 		// (avoids smearing the temporal accumulation when the camera is dynamic, e.g. VR or headtracking)
