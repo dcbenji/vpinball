@@ -1314,7 +1314,14 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
             }
       }
       const Collection *const collection = editor.m_selection.GetType() == Selection::S_COLLECTION ? editor.m_selection.GetCollection() : nullptr;
-      const string stats = std::format("{} | Mesh Verts: {} | Mesh Faces: {} | Objects: {}", collection != nullptr ? collection->m_name : "Scene Collection"s, m_statsVerts, m_statsFaces, m_statsParts);
+      const auto grouped = [](size_t n)
+      {
+         string digits = std::to_string(n), out;
+         for (size_t i = 0; i < digits.size(); i++)
+            out += (i > 0 && (digits.size() - i) % 3 == 0 ? ","s : ""s) + digits[i];
+         return out;
+      };
+      const string stats = std::format("{} | Mesh Verts: {} | Mesh Faces: {} | Objects: {}", collection != nullptr ? collection->m_name : "Scene Collection"s, grouped(m_statsVerts), grouped(m_statsFaces), grouped(m_statsParts));
       const float x = barMax.x - pad - ImGui::CalcTextSize(stats.c_str()).x;
       draw->AddText(ImVec2(x, textY), EditorTheme::TextDim, stats.c_str());
       rightLimit = x - 2.f * pad;

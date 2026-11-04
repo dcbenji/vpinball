@@ -2328,7 +2328,13 @@ void EditorUI::RenderUI()
          snapValues[0] = snapValues[1] = snapValues[2] = m_snapMove;
          snapPtr = snapValues;
       }
+      // Drawn inside the viewport area only (not over the panels beside it when the part is outside the narrow viewport)
+      ImDrawList *const gizmoDrawList = ImGui::FindWindowByName("gizmo") != nullptr ? ImGui::FindWindowByName("gizmo")->DrawList : nullptr;
+      if (gizmoDrawList != nullptr && m_viewportVisible)
+         gizmoDrawList->PushClipRect(ImVec2(m_viewportRect.x0, m_viewportRect.y0), ImVec2(m_viewportRect.x1, m_viewportRect.y1), true);
       ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
+      if (gizmoDrawList != nullptr && m_viewportVisible)
+         gizmoDrawList->PopClipRect();
       gizmoManipulated = gizmoOperation != ImGuizmo::OPERATION(0);
       if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {

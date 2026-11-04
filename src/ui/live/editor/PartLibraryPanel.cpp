@@ -693,7 +693,12 @@ void PartLibraryPanel::RenderCatalogs(const float height)
    // A saved catalog that is not (or no longer) among the library's folders shows everything
    if (!m_catalog.empty() && !m_library.empty() && std::ranges::none_of(m_catalogs, [this](const string &c) { return lowerCase(c) == m_catalog; }))
       m_catalog.clear();
-   if (ImGui::BeginChild("##catalogs", ImVec2(130.f * dpi, height)))
+   // The column is as wide as its longest label (capped)
+   float labelW = ImGui::CalcTextSize("All").x;
+   for (const string &name : m_catalogs)
+      labelW = max(labelW, ImGui::CalcTextSize(name.c_str()).x);
+   const float columnW = min(labelW + 20.f * dpi, 140.f * dpi);
+   if (ImGui::BeginChild("##catalogs", ImVec2(columnW, height)))
    {
       ImDrawList *const drawList = ImGui::GetWindowDrawList();
       const auto entry = [&](const string &label, const string &key)
@@ -1549,7 +1554,7 @@ void PartLibraryPanel::RenderLightbox()
       m_lbOpening = false;
       // An insert has its controls in a column beside the preview (wider, not taller); never more than 90% of the display
       const bool wide = m_lbItem.kind == ItemKind::Insert;
-      ImGui::SetNextWindowSize(ImVec2(min((wide ? 800.f : 480.f) * dpi, 0.9f * io.DisplaySize.x), min((wide ? 560.f : 520.f) * dpi, 0.9f * io.DisplaySize.y)), ImGuiCond_Appearing);
+      ImGui::SetNextWindowSize(ImVec2(min((wide ? 760.f : 480.f) * dpi, 0.55f * io.DisplaySize.x), min(560.f * dpi, 0.7f * io.DisplaySize.y)), ImGuiCond_Appearing);
       ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
    }
    ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(0.9f * io.DisplaySize.x, 0.9f * io.DisplaySize.y));
@@ -1672,7 +1677,7 @@ void PartLibraryPanel::RenderLightbox()
    const float bodyH = max(32.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetTextLineHeightWithSpacing());
    if (column)
    {
-      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, bodyH), ImGuiChildFlags_None);
+      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, 0.f), ImGuiChildFlags_AutoResizeY); // As tall as its content
       ImGui::PushItemWidth(-135.f * dpi);
    // The card's look, live in the preview and carried into the placed part (kept per pack for the session; the pack is never written)
    if (m_lbHasCard && m_lbScratch != nullptr)
@@ -1731,6 +1736,9 @@ void PartLibraryPanel::RenderLightbox()
       ImGui::SameLine();
    }
 
+   // The render, the toolbar and the caption form the cell right of the look column
+   const float cellX = ImGui::GetCursorPosX(), cellW = ImGui::GetContentRegionAvail().x;
+   ImGui::BeginGroup();
    // Image area, orbited like a Sketchfab model: left drag, wheel zoom, double click frames
    const ImVec2 avail = ImGui::GetContentRegionAvail();
    const ImVec2 size(max(32.f, avail.x), bodyH);
@@ -1860,20 +1868,25 @@ void PartLibraryPanel::RenderLightbox()
       ImGui::SameLine();
       ImGui::BeginDisabled(m_lbLights.empty());
       static constexpr struct { const char *label; float state; } kStates[] = { { "Unlit", 0.f }, { "Lit", 1.f }, { "Blink", 2.f } };
+      // One joined group (no gap, square corners) with the active segment filled, like Blender's segmented enums
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, ImGui::GetStyle().ItemSpacing.y));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.f);
       for (int i = 0; i < 3; i++)
       {
          const bool active = m_lbState == kStates[i].state;
          if (i > 0)
             ImGui::SameLine();
          if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+         {
+            ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(EditorTheme::Fill));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::FillHovered));
+         }
          if (ImGui::Button(kStates[i].label) && !active)
             SetLightboxState(kStates[i].state);
          if (active)
-            ImGui::PopStyleColor();
+            ImGui::PopStyleColor(2);
       }
-      ImGui::PopStyleVar();
+      ImGui::PopStyleVar(2);
       ImGui::EndDisabled();
       if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("This pack has no Light");
@@ -1894,7 +1907,7 @@ void PartLibraryPanel::RenderLightbox()
       const bool material = m_lbItem.kind == ItemKind::Material;
       const char *const placeLabel = material ? ICON_FK_DOWNLOAD "  Apply" : ICON_FK_DOWNLOAD "  Place";
       const float placeW = ImGui::CalcTextSize(placeLabel).x + 2.f * ImGui::GetStyle().FramePadding.x;
-      ImGui::SameLine(max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - placeW - ImGui::GetStyle().WindowPadding.x));
+      ImGui::SameLine(max(ImGui::GetCursorPosX(), cellX + cellW - placeW)); // The end of the render's width
       ImGui::BeginDisabled(m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr);
       const bool place = ImGui::Button(placeLabel);
       ImGui::EndDisabled();
@@ -1903,6 +1916,7 @@ void PartLibraryPanel::RenderLightbox()
       {
          // Placed by the double click rule; the lightbox closes
          const LibraryItem item = m_lbItem;
+         ImGui::EndGroup();
          ImGui::CloseCurrentPopup();
          ImGui::EndPopup();
          CloseLightbox();
@@ -1916,6 +1930,7 @@ void PartLibraryPanel::RenderLightbox()
    static constexpr const char *kKinds[] = { "Part", "Material", "Insert" };
    ImGui::TextDisabled("%s: %s%s%s", kKinds[static_cast<int>(m_lbItem.kind)], m_lbItem.label.c_str(), insert ? ", Traced" : "",
       insert && m_lbHasCard && !(m_lbLook == m_lbPackLook) ? ", modified, applies on place" : "");
+   ImGui::EndGroup();
    ImGui::EndPopup();
 }
 
