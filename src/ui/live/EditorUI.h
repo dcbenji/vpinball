@@ -535,6 +535,7 @@ private:
    bool m_gizmoDragActive = false; // A gizmo drag is in progress (its undo record was pushed)
    Matrix3D m_gizmoStartTransform; // Selection transform when the current gizmo drag began
    bool m_gizmoDragTranslate = false; // The current gizmo drag is a translation
+   int TransformViewSlot() const;
    void BeginModalTransform(ModalOp op);
    void UpdateModalTransform();
    void EndModalTransform(bool confirm);

@@ -3249,7 +3249,7 @@ void EditorUI::RenderUI()
       else if (ImGui::IsKeyPressed(ImGuiKey_G))
       {
          // Grab (translate)
-         if (m_camMode == ViewMode::PreviewCam)
+         if (m_camMode == ViewMode::PreviewCam && TransformViewSlot() == -1)
             m_camMode = ViewMode::EditorCam;
          if (io.KeyAlt && !m_pointEditPart)
          {
@@ -3268,7 +3268,7 @@ void EditorUI::RenderUI()
          if (!io.KeyCtrl)
          {
             // Scale
-            if (m_camMode == ViewMode::PreviewCam)
+            if (m_camMode == ViewMode::PreviewCam && TransformViewSlot() == -1)
                m_camMode = ViewMode::EditorCam;
             if (io.KeyAlt && !m_pointEditPart)
             {
@@ -3285,7 +3285,7 @@ void EditorUI::RenderUI()
       else if (ImGui::IsKeyPressed(ImGuiKey_R))
       {
          // Rotate
-         if (m_camMode == ViewMode::PreviewCam)
+         if (m_camMode == ViewMode::PreviewCam && TransformViewSlot() == -1)
             m_camMode = ViewMode::EditorCam;
          if (io.KeyAlt && !m_pointEditPart)
          {
@@ -4849,11 +4849,24 @@ namespace
    }
 }
 
+// The view a G / R / S works in: a secondary view (its slot) under the mouse, else (over a panel) the last view the mouse was in, like the gizmo; -1 = the 3D
+// Viewport; -2 = none (the mouse is over a secondary view that shows no image)
+int EditorUI::TransformViewSlot() const
+{
+   if (m_secondaryViewHovered)
+      return m_secondaryViewSlot >= 0 && m_viewInfo[m_secondaryViewSlot].valid ? m_secondaryViewSlot : -2;
+   if (ImGui::GetIO().WantCaptureMouse && m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid)
+      return m_gizmoSlot;
+   return -1;
+}
+
 void EditorUI::BeginModalTransform(ModalOp op)
 {
    // G / R / S act on the 3D view under the mouse: a secondary view (its camera and image rect are used until the transform ends), else the 3D Viewport
-   const int viewSlot = m_secondaryViewHovered && m_secondaryViewSlot >= 0 && m_viewInfo[m_secondaryViewSlot].valid ? m_secondaryViewSlot : -1;
-   if (viewSlot < 0 && !m_viewportVisible)
+   const int viewSlot = TransformViewSlot();
+   if (viewSlot == -2 || (viewSlot < 0 && !m_viewportVisible))
+      return;
+   if (viewSlot >= 0 && (m_pointEditPart != nullptr || m_camMode == ViewMode::DesktopBackdrop)) // Those edits are 2D in the 3D Viewport's plane (as for the gizmo)
       return;
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
