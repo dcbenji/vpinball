@@ -1841,7 +1841,7 @@ void Primitive::Render(const unsigned int renderMask)
       if (domeLensRT)
       {
          params[19].w = clamp(m_d.m_domeLens, 0.f, 1.f);
-         params[21].w = FlasherDomeTune("lensw=", 4.f); // the gather disc, in quarter dome radii
+         params[21].w = FlasherDomeTune("lensw=", 12.f); // the gather disc, in quarter dome radii
          m_mesh.UpdateBounds();
          float xMin = 1.f, yMin = 1.f, xMax = -1.f, yMax = -1.f;
          for (int eye = 0; eye < m_renderer->m_renderDevice->m_nEyes; eye++)
