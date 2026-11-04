@@ -219,6 +219,101 @@ bool PinnedPanel::ResetToDefault(const PinKey &key)
    return true;
 }
 
+// Fields of the playfield mesh that are overridden by the table's playfield definition: their getter and setter go through the table, not the part
+static bool IsPlayfieldTableField(const IEditable *const part, const string &label)
+{
+   return part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsPlayfield() && (label == "Material" || label == "Image" || label == "Show in Editor" || label == "Reflection Strength");
+}
+
+// Fields whose setter is bound to the part's editor UI part (every Visible field, and Light Type, call its SetVisibility, which reads the UI part's own state): a copied value would call a UI part that is gone once the source part is deleted, and it also writes the per-session render visibility that undo does not cover
+static bool IsUIPartBoundField(const IEditable *const part, const string &label)
+{
+   return (part->GetItemType() == eItemLight && label == "Type") || label == "Visible" || label.ends_with(" Visible");
+}
+
+bool PinnedPanel::CanCopyValue(const PinKey &key, string *whyNot) const
+{
+   const auto fail = [whyNot](const char *msg)
+   {
+      if (whyNot != nullptr)
+         *whyNot = msg;
+      return false;
+   };
+   const Def *const def = key.kind == PinKind::Part ? FindDef(key) : nullptr;
+   const void *owner = nullptr;
+   const IEditable *const source = def != nullptr && def->copy ? static_cast<const IEditable *>(Resolve(PinKind::Part, key.name, &owner)) : nullptr;
+   if (source == nullptr)
+      return fail("This field cannot be copied");
+   if (IsPlayfieldTableField(source, def->label))
+      return fail("This field is set by the table's playfield definition");
+   if (IsUIPartBoundField(source, def->label))
+      return fail("This field cannot be copied (it is not part of the saved table, so the editor cannot undo it)");
+   return true;
+}
+
+bool PinnedPanel::CopyValue(const PinKey &key)
+{
+   if (!CanCopyValue(key))
+      return false;
+   const Def *const def = FindDef(key);
+   const void *owner = nullptr;
+   IEditable *const source = static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner));
+   // The value is read now, from the real part, and the part is not touched again: nothing is created, nothing is written until the paste
+   PinPasteFn clip;
+   if (!def->copy(static_cast<void *>(source), nullptr, false, &clip))
+      return false;
+   m_clip = std::move(clip);
+   m_clipProp = key.prop;
+   m_editor.m_liveUI.PushNotification("Copied the value of '"s + (def->label.empty() ? key.prop : def->label) + "'", 2500);
+   return true;
+}
+
+bool PinnedPanel::CanPasteValue(const PinKey &key, string *whyNot) const
+{
+   const auto fail = [whyNot](const char *msg)
+   {
+      if (whyNot != nullptr)
+         *whyNot = msg;
+      return false;
+   };
+   if (!m_clip)
+      return fail("Nothing copied: use Copy Value on a field first");
+   if (m_editor.IsInspectMode())
+      return fail("Not available in an inspection session");
+   if (key.kind != PinKind::Part)
+      return fail("Only part fields can be pasted to");
+   const Def *const def = FindDef(key);
+   const void *owner = nullptr;
+   IEditable *const target = static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner));
+   if (def == nullptr || !def->copy || target == nullptr)
+      return fail("This field cannot be pasted to");
+   if (m_editor.IsDragInProgress())
+      return fail("Not available while a transform is in progress");
+   if (m_editor.m_pointEditPart != nullptr)
+      return fail("Not available in point edit mode");
+   const string &label = def->label;
+   const ItemTypeEnum type = target->GetItemType();
+   // Not covered by the undo record (Save does not write them; render visibility is a per-session editor override): a paste would report success without being undoable
+   if (label == "Visible" || label.ends_with(" Visible") || (type == eItemLight && label == "Reflection Enabled") || (type == eItemBall && label == "Use Table Settings"))
+      return fail("Not available for this field (the editor cannot undo it)");
+   if (IsPlayfieldTableField(target, label))
+      return fail("This field is set by the table's playfield definition");
+   if (IsUIPartBoundField(target, label))
+      return fail("Not available for this field (the editor cannot undo it)");
+   if (key.prop != m_clipProp || !m_clip(static_cast<void *>(target), false))
+      return fail("The copied value is from a different kind of field");
+   return true;
+}
+
+bool PinnedPanel::PasteValue(const PinKey &key)
+{
+   if (!CanPasteValue(key))
+      return false;
+   m_pendingPaste = key;
+   m_hasPendingPaste = true;
+   return true;
+}
+
 void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
 {
    EditorUI &editor = m_editor;
@@ -317,6 +412,35 @@ void PinnedPanel::FlushPendingCopy()
                      sel->SyncVisibilityOverrides();
                m_editor.m_liveUI.PushNotification("Reset '"s + (rdef->label.empty() ? rkey.prop : rdef->label) + "' to its default", 2500);
             }
+         }
+      }
+   }
+   if (m_hasPendingPaste)
+   {
+      m_hasPendingPaste = false;
+      const PinKey pkey = m_pendingPaste;
+      const Def *const pdef = FindDef(pkey);
+      const void *powner = nullptr;
+      IEditable *const part = pdef != nullptr && pkey.kind == PinKind::Part ? static_cast<IEditable *>(Resolve(PinKind::Part, pkey.name, &powner)) : nullptr;
+      if (part != nullptr && CanPasteValue(pkey))
+      {
+         m_editor.m_undo.BeginUndo();
+         m_editor.m_undo.MarkForUndo(part);
+         m_editor.MarkDependentsForUndo(vector<IEditable *> { part }); // Rubbers following an edited post (guided rubbers), as Reset does
+         const bool ok = m_clip(static_cast<void *>(part), true);
+         m_editor.m_undo.SetFieldLabel("Paste Value: " + (pdef->label.empty() ? pkey.prop : pdef->label));
+         m_editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
+         m_editor.m_lastUndoPart = nullptr;
+         m_editor.m_lastUndoId = 0;
+         if (ok)
+         {
+            m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
+            m_editor.m_player->m_physics->Update(part);
+            for (const std::shared_ptr<EditorUIPart> &sel : m_editor.m_multiSel)
+               if (sel->GetEditable() == part)
+                  sel->SyncVisibilityOverrides();
+            m_editor.RefitDependents(vector<IEditable *> { part });
+            m_editor.m_liveUI.PushNotification("Pasted the value of '"s + (pdef->label.empty() ? pkey.prop : pdef->label) + "'", 2500);
          }
       }
    }

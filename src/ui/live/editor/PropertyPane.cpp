@@ -944,6 +944,19 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("%s", canCopy ? "Write this value to the other selected parts that have the same field (hold Alt while editing a field to do it live)"
                                          : "Select other parts that have this field (Ctrl+click in the outliner or viewport)");
+      string copyWhyNot;
+      if (ImGui::MenuItem(ICON_LC_COPY " Copy Value", nullptr, false, m_pins->CanCopyValue(key, &copyWhyNot)))
+         m_pins->CopyValue(key);
+      if (!copyWhyNot.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", copyWhyNot.c_str());
+      string pasteWhyNot;
+      const bool canPaste = !fieldDisabled && m_pins->CanPasteValue(key, &pasteWhyNot);
+      if (fieldDisabled)
+         pasteWhyNot = "This field is disabled";
+      if (ImGui::MenuItem(ICON_LC_CLIPBOARD_PASTE " Paste Value", nullptr, false, canPaste))
+         m_pins->PasteValue(key);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", canPaste ? "Write the copied value to this field (only this part)" : pasteWhyNot.c_str());
    }
    ImGui::EndPopup();
    ImGui::PopStyleVar();

@@ -110,6 +110,12 @@ public:
    // SetDefaults(false) (the factory defaults, not the user's saved default properties). Only the part fields that have a copy function
    bool CanResetToDefault(const PinKey &key, string *whyNot = nullptr) const;
    bool ResetToDefault(const PinKey &key); // Queues the reset (run by FlushPendingCopy, as one undo step)
+   // Copy Value / Paste Value (field menu): the value is read from the source part when copied and kept (no scratch part is made), written with the
+   // field's own setter at paste. Paste goes to the same field of a part of a type that field accepts, as one undo step
+   bool CanCopyValue(const PinKey &key, string *whyNot = nullptr) const;
+   bool CopyValue(const PinKey &key);
+   bool CanPasteValue(const PinKey &key, string *whyNot = nullptr) const;
+   bool PasteValue(const PinKey &key); // Queues the paste (run by FlushPendingCopy, as one undo step)
    void FlushPendingCopy(); // Runs the queued copy (and bulb apply), as one undo step: to be called outside of any undo record (after the areas are rendered)
    // "Apply N changed settings to all traced inserts" button: queues the copy of the settings touched on the traced insert to the other traced inserts (run by FlushPendingCopy)
    void RequestApplyBulb(IEditable *source, bool startup)
@@ -190,6 +196,10 @@ private:
    bool m_hasPendingCopy = false;
    PinKey m_pendingReset;
    bool m_hasPendingReset = false;
+   PinKey m_pendingPaste;
+   bool m_hasPendingPaste = false;
+   PinPasteFn m_clip; // Copy Value: the captured value and the setter that writes it (empty if nothing is copied)
+   string m_clipProp; // Field (PinKey::prop) the value was copied from
    void ApplyBulbToAllTraced(Primitive *source, bool startup);
    bool m_bulbStartup = false; // The pane showed the startup table (inspection Startup tab): the values go to the startup inserts
    IEditable *m_bulbSource = nullptr; // Traced insert whose bulb values are to be applied to all the others
