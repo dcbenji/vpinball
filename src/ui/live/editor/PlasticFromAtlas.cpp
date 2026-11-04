@@ -773,8 +773,6 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
             const float w = tex != nullptr && tex->m_width > 0 ? static_cast<float>(tex->m_width) : 1024.f;
             const float h = tex != nullptr && tex->m_height > 0 ? static_cast<float>(tex->m_height) : 1024.f;
             const float px = hypotf((t.measureUv[2] - t.measureUv[0]) * w, (t.measureUv[3] - t.measureUv[1]) * h);
-            const float newDpi = t.measureIn > 0.f ? px / t.measureIn : 0.f;
-            const bool ok = px >= 0.5f && newDpi >= 10.f && newDpi <= 2400.f;
             ImGui::Text("Measure: %.1f px apart", px);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(90.f * dpi);
@@ -782,6 +780,9 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
             ImGui::SetItemTooltip("The real distance between the two points in inches (47.06 VPU per inch)");
             if (t.measureIn < 0.f)
                t.measureIn = 0.f;
+            // After the field, so a value committed by clicking Apply is already in
+            const float newDpi = t.measureIn > 0.f ? px / t.measureIn : 0.f;
+            const bool ok = px >= 0.5f && newDpi >= 10.f && newDpi <= 2400.f;
             ImGui::SameLine();
             ImGui::BeginDisabled(!ok);
             if (ImGui::Button("Apply"))
