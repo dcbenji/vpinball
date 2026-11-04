@@ -230,6 +230,7 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[static_cast<unsigned int>(Shad
    SHADER_TECHNIQUE(AO_shaded_mv),
 #ifdef ENABLE_BGFX
    SHADER_TECHNIQUE(fb_resolve_depth_msaa),
+   SHADER_TECHNIQUE(fb_copy_depth),
    // Shaded normals variant (normals from the depth prepass instead of depth neighbors)
    SHADER_TECHNIQUE(SSReflection_shaded),
    // PBR specular resolve: masked SSR variants (skip PBR pixels), PBR half res march and full res composite
@@ -237,8 +238,6 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[static_cast<unsigned int>(Shad
    SHADER_TECHNIQUE(SSReflection_shaded_masked),
    SHADER_TECHNIQUE(PBR_march),
    SHADER_TECHNIQUE(PBR_resolve),
-   SHADER_TECHNIQUE(fb_resolve_depth_msaa),
-   SHADER_TECHNIQUE(fb_copy_depth),
 #endif
 
    SHADER_TECHNIQUE(NFAA),

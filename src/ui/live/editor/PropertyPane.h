@@ -513,9 +513,6 @@ template <class T, class Getter> bool PropertyPane::IsMixed(const Getter& getter
 template <class T, class Getter, class Setter, class V>
 void PropertyPane::EndSyncField(const SyncField<T>& sync, const vector<CoTarget<T>>& targets, const Getter& getter, const Setter& setter, const V& displayValue)
 {
-   // Esc while a field is being edited restores its initial value: the cancel is noted for the undo bookkeeping
-   if (ImGui::IsItemDeactivated() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-      m_editCancelled = true;
    const bool hasOthers = (sync.other != nullptr) || std::ranges::any_of(targets, [](const CoTarget<T>& target) { return target.other != nullptr; });
    if (!hasOthers)
       return;

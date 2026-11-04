@@ -40,7 +40,6 @@ public:
    string RedoLabel(size_t index) const;
 
    bool HasUndo() const;
-   size_t UndoCount() const { return m_undoRecords.size(); }
    bool HasRedo() const;
    // True if undoing the next record clears the redo records (it holds actions that can not snapshot their state). A multi-step undo stops before such a record.
    bool NextUndoClearsRedo() const;
