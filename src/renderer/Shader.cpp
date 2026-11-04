@@ -1355,8 +1355,7 @@ void Shader::ApplyUniform(const ShaderUniform uniformName)
          default: break;
          }
          const bgfx::TextureHandle texHandle = const_cast<Sampler*>(texel.get())->GetCoreTexture(filter != SamplerFilter::SF_NONE && filter != SamplerFilter::SF_BILINEAR);
-         assert(bgfx::isValid(texHandle));
-         if (!bgfx::isValid(texHandle))
+         if (!bgfx::isValid(texHandle)) // Sampler of a destroyed render target still held by this state (see Sampler::ReleaseRenderTargetTexture)
          {
             bgfx::setTexture(ShaderUniformDef::coreUniforms[static_cast<unsigned int>(uniformName)].tex_unit, desc, m_renderDevice->m_nullTexture->GetCoreTexture(false));
             return;
