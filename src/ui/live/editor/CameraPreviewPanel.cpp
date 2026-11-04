@@ -229,6 +229,38 @@ void CameraPreviewPanel::HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &im
    }
 }
 
+void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &imgSize, const bool hovered)
+{
+   // Left click in the image selects the part under the cursor, as in the 3D Viewport (EditorUI::SelectAtPoint: shift toggles, ctrl lists, a click on
+   // the same spot cycles the parts behind, empty clears), picking with this view's camera and image rect. A press moved more than the viewport's
+   // click threshold (4 px) before its release is a drag and selects nothing (the viewport box selects there; this view has no box select yet).
+   // No selection while the game is inspected, a part is being added, drag points edited, a modal runs, or Alt + left orbits this view.
+   const ImGuiIO &io = ImGui::GetIO();
+   EditorUI &e = m_editor;
+   const bool blocked = GameOwnsInput() || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr || e.m_modal.active || e.m_fileOp != nullptr;
+   if (m_navDragging || blocked)
+      m_clickPending = false;
+   else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt))
+   {
+      m_clickPending = true;
+      m_clickStart = ImGui::GetMousePos();
+   }
+   if (!m_clickPending || ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      return;
+   m_clickPending = false;
+   const ImVec2 end = ImGui::GetMousePos();
+   if (fabsf(end.x - m_clickStart.x) > 4.f || fabsf(end.y - m_clickStart.y) > 4.f)
+      return;
+   if (end.x < imgMin.x || end.y < imgMin.y || end.x >= imgMin.x + imgSize.x || end.y >= imgMin.y + imgSize.y)
+      return;
+   EditorUI::PickView view;
+   if (!m_editor.m_renderer->GetEditorViewMVP(m_slot, view.modelViewProj)) // The view as last rendered, which is what the image shows
+      return;
+   view.rectMin = imgMin;
+   view.rectSize = imgSize;
+   e.SelectAtPoint(end, &view);
+}
+
 void CameraPreviewPanel::HandleViewKeys(const float aspect)
 {
    // The view commands of the editor view, for the view under the mouse (the editor view ignores them meanwhile, see m_secondaryViewHovered)
@@ -424,13 +456,14 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             m_refresh = true;
          }
 
-         // The image, under an invisible button that takes this view's mouse input (no picking, no gizmo: P2 / P3)
+         // The image, under an invisible button that takes this view's mouse input (picking: HandleSelectInput; no gizmo: P3)
          ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (avail.x - imgW) * 0.5f, ImGui::GetCursorPosY() + 4.f * dpi)); // Top-anchored under the header
          ImGui::InvisibleButton("##ViewImage", ImVec2(imgW, imgH), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
          const ImVec2 imgMin = ImGui::GetItemRectMin(), imgMax = ImGui::GetItemRectMax();
          const bool imgHovered = ImGui::IsItemHovered(), imgActive = ImGui::IsItemActive();
          if (m_settings.freeOrbit)
             HandleOrbitInput(imgMin, ImVec2(imgW, imgH), imgHovered, imgActive);
+         HandleSelectInput(imgMin, ImVec2(imgW, imgH), imgHovered);
          if (hoveredWindow)
             HandleViewKeys(aspect);
          if (m_settings.freeOrbit && m_settings.orbitValid && aspect != m_lastAspect)
@@ -442,6 +475,16 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (undoId != m_lastUndoId)
          {
             m_lastUndoId = undoId;
+            m_refresh = true;
+         }
+         // The selection edges are part of the image
+         std::vector<const void *> selection;
+         for (const auto &part : m_editor.m_multiSel)
+            selection.push_back(part.get());
+         selection.push_back(m_editor.m_selection.GetPart().get());
+         if (selection != m_lastSelection)
+         {
+            m_lastSelection = std::move(selection);
             m_refresh = true;
          }
          // An interactive edit keeps one undo record from its start: render while it runs (on the schedule), and once when it ends
@@ -493,6 +536,14 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             const bool flipV = false;
 #endif
             drawList->AddImage(rt->GetColorSampler(), imgMin, imgMax, ImVec2(0.f, flipV ? 1.f : 0.f), ImVec2(1.f, flipV ? 0.f : 1.f));
+            // The selection's lines (the edges are in the image, drawn by its render pass)
+            EditorUI::PickView view;
+            if (renderer->GetEditorViewMVP(m_slot, view.modelViewProj))
+            {
+               view.rectMin = imgMin;
+               view.rectSize = ImVec2(imgW, imgH);
+               m_editor.DrawSelectionLines(drawList, view);
+            }
          }
          else
             drawList->AddRectFilled(imgMin, imgMax, IM_COL32(20, 20, 20, 255));

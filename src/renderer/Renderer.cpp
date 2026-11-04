@@ -5875,6 +5875,14 @@ RenderTarget* Renderer::GetEditorView(const int slot) const
    return m_editorViews[slot].lite ? m_sceneTargetSets[slot].backBuffer1 : m_editorViews[slot].out;
 }
 
+bool Renderer::GetEditorViewMVP(const int slot, Matrix3D& modelViewProj) const
+{
+   if (slot < 0 || slot >= kMaxEditorViews || !m_editorViews[slot].rendered)
+      return false;
+   modelViewProj = m_editorViews[slot].modelViewProj;
+   return true;
+}
+
 const ViewSetup& Renderer::GetRenderViewSetup() const
 {
    return m_editorPreviewViewSetup != nullptr ? *m_editorPreviewViewSetup : m_table->GetViewSetup();
@@ -6093,6 +6101,7 @@ void Renderer::RenderEditorView(const int slot)
       }
    }
    m_initialMVP = m_mvp;
+   v.modelViewProj = m_mvp.GetModelViewProj(0); // What the image shows, for picking in it
    for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       m_playfieldView[eye] = m_mvp.GetView(eye);
    m_renderDevice->m_basicShader->SetVector(
@@ -6238,6 +6247,12 @@ void Renderer::RenderEditorView(const int slot)
          ApplyTonemapping(renderedRT, v.out);
    }
    m_table = mainTable;
+   if (req.isolated == nullptr) // Not over a part library preview (its parts are scratch ones)
+   {
+      // The selection's edges over the finished image (the 3D Viewport draws them in its UI pass): into the LDR output, in place
+      m_renderDevice->SetRenderTarget("Editor View Selection"s, lite ? GetBackBufferTexture() : v.out);
+      g_pplayer->m_liveUI->RenderSelection3D();
+   }
    v.rendered = true;
 
    // Restore the main view state

@@ -31,6 +31,15 @@ public:
    void DrawHitObjects(IEditable *editable) const override;
    void DrawWireframe(IEditable *editable) const override;
 
+   // Overlay in another view than the 3D Viewport (a secondary view's image): the model view projection that view was rendered with and its screen rect
+   // (Project and the 2D lines follow them), and no 3D wireframe (the view draws the selection edges itself, in its own render pass)
+   void SetImageView(const Matrix3D &modelViewProj, const ImVec2 &rectMin, const ImVec2 &rectSize)
+   {
+      m_imageMVP = &modelViewProj;
+      m_rectMin = rectMin;
+      m_rectSize = rectSize;
+   }
+
    bool m_isSelected = false;
    bool m_isActive = false;
    int m_selectionDisplay = 0; // 0 = edges only, 1 = edges and tint, 2 = hidden (Editor/NavSelectionDisplay)
@@ -41,6 +50,8 @@ private:
    const ViewMode m_viewMode;
    const Renderer::ShadeMode m_shadeMode;
    const bool m_needsLiveTableSync;
+   const Matrix3D *m_imageMVP = nullptr;
+   ImVec2 m_rectMin { 0.f, 0.f }, m_rectSize { 0.f, 0.f };
 };
 
 }

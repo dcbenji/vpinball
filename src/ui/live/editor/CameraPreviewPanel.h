@@ -6,6 +6,7 @@
 #include "AreaLayout.h"
 
 #include <cstdint>
+#include <vector>
 
 class Matrix3D;
 class FRect3D;
@@ -16,7 +17,7 @@ namespace VPX::EditorUI
 class EditorUI;
 
 // Secondary 3D view, hosted by a Camera Preview editor area (up to AreaLayout::kMaxViewLeaves, one panel per renderer view slot): not the
-// editing viewport (no picking, no gizmo, no G/R/S), the scene rendered by the Renderer into an offscreen target beside it, with
+// editing viewport (click selects as in the 3D Viewport, see HandleSelectInput, but no gizmo and no G/R/S yet), the scene rendered by the Renderer into an offscreen target beside it, with
 // - camera: the Player view (the table's view setup, as the editor's Preview Camera shows it, Auto/Desktop/Cabinet/FSS) or its own Free orbit
 //   camera (turntable orbit, pan, zoom, numpad views, Frame Selected / Frame All, with the main viewport's mouse bindings, while hovered),
 // - shading: full PBR, or Wireframe (the editor's hidden line wireframe on the renderer's lite path: no post processing, no HDR targets).
@@ -59,6 +60,7 @@ private:
 
    void WriteBack(); // Settings to the layout leaf
    void HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered, bool active);
+   void HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered);
    void HandleViewKeys(float aspect);
    bool GameOwnsInput() const;
    void FrameBounds(const FRect3D &bounds, float aspect);
@@ -74,9 +76,12 @@ private:
    bool m_wasDragging = false;
    bool m_requested = false; // A view was requested since the last release
    bool m_navDragging = false; // Orbit / pan drag of this view in progress
+   bool m_clickPending = false; // A left press in the image, not released yet (a release within the click threshold selects)
+   ImVec2 m_clickStart;
    bool m_camMoved = false; // The orbit camera moved this frame (rendered this frame)
    float m_lastAspect = 1.f;
    uint64_t m_lastUndoId = ~0ull;
+   std::vector<const void *> m_lastSelection; // Selected parts (active last) of the last frame: a change re-renders (the selection edges are drawn in the view)
    int m_width = 0, m_height = 0; // Requested render size (px)
    int m_pendingWidth = 0, m_pendingHeight = 0, m_pendingFrames = 0;
    int m_rank = 0;

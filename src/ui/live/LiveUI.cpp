@@ -405,6 +405,12 @@ void LiveUI::Render3D()
       m_editorUI.Render3D();
 }
 
+void LiveUI::RenderSelection3D()
+{
+   if (m_editorUI.IsOpened())
+      m_editorUI.RenderSelection3D();
+}
+
 void LiveUI::RenderUI()
 {
    if (m_player == nullptr || m_player->GetCloseState() != Player::CS_PLAYING || m_rd->GetCurrentPass() == nullptr || m_player->m_playMode == Player::PlayMode::CaptureAttract)

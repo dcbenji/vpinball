@@ -28,9 +28,9 @@ bool LiveRenderContext::IsShowInvisible() const
 
 ImVec2 LiveRenderContext::Project(const Vertex3Ds &v) const
 {
-   const float rClipWidth = (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
-   const float rClipHeight = (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
-   const Matrix3D mvp = m_player->m_renderer->GetMVP().GetModelViewProj(0);
+   const float rClipWidth = m_imageMVP ? m_rectSize.x * 0.5f : (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
+   const float rClipHeight = m_imageMVP ? m_rectSize.y * 0.5f : (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
+   const Matrix3D mvp = m_imageMVP ? *m_imageMVP : m_player->m_renderer->GetMVP().GetModelViewProj(0);
    const float xp = mvp._11 * v.x + mvp._21 * v.y + mvp._31 * v.z + mvp._41;
    const float yp = mvp._12 * v.x + mvp._22 * v.y + mvp._32 * v.z + mvp._42;
    //const float zp = mvp._13 * v.x + mvp._23 * v.y + mvp._33 * v.z + mvp._43;
@@ -38,7 +38,7 @@ ImVec2 LiveRenderContext::Project(const Vertex3Ds &v) const
    if (wp <= 1e-10f) // behind camera (or degenerated)
       return ImVec2 { FLT_MAX, FLT_MAX };
    const float inv_wp = 1.0f / wp;
-   return ImVec2 { (wp + xp) * rClipWidth * inv_wp, (wp - yp) * rClipHeight * inv_wp };
+   return ImVec2 { m_rectMin.x + (wp + xp) * rClipWidth * inv_wp, m_rectMin.y + (wp - yp) * rClipHeight * inv_wp };
 }
 
 void LiveRenderContext::DrawLine(const Vertex3Ds &a, const Vertex3Ds &b, ImU32 color) const
@@ -92,6 +92,8 @@ void LiveRenderContext::DrawHitObjects(IEditable *editable) const
 
 void LiveRenderContext::DrawWireframe(IEditable *editable) const
 {
+   if (m_imageMVP != nullptr)
+      return;
    if (IsSelected())
    {
       // Selection overlay: like Blender's object mode, only the edges are drawn by default (the active part lighter), leaving the surface shading visible;

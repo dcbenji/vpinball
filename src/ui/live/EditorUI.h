@@ -78,6 +78,7 @@ public:
    void Open();
    bool IsOpened() const { return m_isOpened; }
    void Render3D();
+   void RenderSelection3D(); // The selection's edges in the 3D pass being recorded (the secondary views; the 3D Viewport draws them in RenderUI)
    void RenderUI();
    void Close();
 
@@ -149,8 +150,18 @@ private:
    void SelectPartsInGroup(const PartGroup *group);
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
    IEditable *HitEditable(const HitTestResult &hit) const;
-   void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const;
    bool IsEditableVisible(const IEditable *editable) const; // The view mode, the part and its groups are visible: the first half of IsEditablePickable
+   // The view a pick is made in: null (the default) is the main 3D view (its renderer MVP, the playfield window), else a secondary view's
+   // image (its model view projection as rendered, and the screen rect of its image)
+   struct PickView
+   {
+      Matrix3D modelViewProj;
+      ImVec2 rectMin, rectSize;
+   };
+   void PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &rayNear, Vertex3Ds &rayFar) const; // World space segment under the mouse
+   void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view = nullptr) const;
+   void DrawSelectionLines(ImDrawList *drawList, const PickView &view); // The 2D part of the selection overlay (lines, colliders) in a secondary view's image
+   void SelectAtPoint(const ImVec2 &mousePos, const PickView *view); // A click (no drag) at the mouse position: shift toggles, ctrl lists, else selects / cycles / clears, as in the 3D Viewport
    bool IsEditablePickable(const IEditable *editable) const;
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
@@ -529,7 +540,7 @@ private:
    bool m_orbitDragging = false; // Orbit / pan drag in progress
    bool m_orbitPivotValid = false; // m_orbitPivot (camera space) is the orbit pivot of the current drag
    vec3 m_orbitPivot;
-   bool PickDepthPoint(const ImVec2 &mousePos, vec3 &point) const;
+   bool PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickView *view = nullptr) const;
    float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
    void SetFov(float fovY);
    bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)

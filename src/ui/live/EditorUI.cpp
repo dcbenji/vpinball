@@ -2027,6 +2027,40 @@ void EditorUI::Render3D()
    m_partLibrary.Render3D();
 }
 
+void EditorUI::RenderSelection3D()
+{
+   if (m_multiSel.empty() || !m_selectionOverlay || IsSaveInProgress())
+      return;
+   // As the 3D Viewport's selection overlay (RenderUI), without its 2D lines (no draw list): the edges of the selected parts over the scene, active part lighter
+   if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
+      m_renderer->m_renderDevice->Clear(clearType::ZBUFFER, 0);
+   LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   ctx.m_selectionDisplay = m_navSelectionDisplay;
+   ctx.m_isSelected = true;
+   for (const auto &part : m_multiSel)
+   {
+      ctx.m_isActive = part == m_selection.GetPart();
+      part->Render(ctx);
+   }
+}
+
+void EditorUI::DrawSelectionLines(ImDrawList *drawList, const PickView &view)
+{
+   if (m_multiSel.empty() || !m_selectionOverlay || IsSaveInProgress())
+      return;
+   LiveRenderContext ctx(m_player, drawList, m_camMode, m_shadeMode, false);
+   ctx.SetImageView(view.modelViewProj, view.rectMin, view.rectSize); // The edges are drawn by the view's own pass (RenderSelection3D)
+   ctx.m_selectionDisplay = m_navSelectionDisplay;
+   ctx.m_isSelected = true;
+   drawList->PushClipRect(view.rectMin, ImVec2(view.rectMin.x + view.rectSize.x, view.rectMin.y + view.rectSize.y), true);
+   for (const auto &part : m_multiSel)
+   {
+      ctx.m_isActive = part == m_selection.GetPart();
+      part->Render(ctx);
+   }
+   drawList->PopClipRect();
+}
+
 void EditorUI::RenderUI()
 {
    const ImGuiIO &io = ImGui::GetIO();
@@ -2765,53 +2799,7 @@ void EditorUI::RenderUI()
                BoxSelectParts(m_boxSelectStart, end, io.KeyShift);
             else
             {
-               vector<HitTestResult> vhoHit;
-               RayCastParts(end, vhoHit);
-               if (io.KeyShift)
-               {
-                  // Shift+click toggles the front-most hit part in the multi selection
-                  if (!vhoHit.empty())
-                  {
-                     const auto it = m_editableMap.find(HitEditable(vhoHit.front()));
-                     if (it != m_editableMap.end())
-                     {
-                        TogglePartSelection(it->second);
-                        m_outlinerAnchor = it->second;
-                     }
-                  }
-               }
-               else if (vhoHit.empty())
-                  ClearSelection();
-               else
-               {
-                  // Click selects the nearest hit part, subsequent clicks cycle to the parts behind it
-                  vector<std::shared_ptr<EditorUIPart>> hitParts;
-                  for (const HitTestResult &hr : vhoHit)
-                  {
-                     const auto it = m_editableMap.find(HitEditable(hr));
-                     if (it != m_editableMap.end() && std::ranges::find(hitParts, it->second) == hitParts.end())
-                        hitParts.push_back(it->second);
-                  }
-                  if (hitParts.empty())
-                     ClearSelection();
-                  else if (io.KeyCtrl)
-                  {
-                     // Ctrl+click lists all the parts under the cursor to pick from
-                     m_pickList = hitParts;
-                     m_pickListPos = end;
-                     m_pickListOpen = true;
-                  }
-                  else
-                  {
-                     size_t selectionIndex = 0;
-                     const auto selIt = std::ranges::find(hitParts, m_selection.GetPart());
-                     if (selIt != hitParts.end())
-                        selectionIndex = static_cast<size_t>(selIt - hitParts.begin() + 1) % hitParts.size();
-                     SetSelection(Selection(hitParts[selectionIndex]));
-                     m_outlinerAnchor = hitParts[selectionIndex];
-                  }
-                  // TODO add debug action to make ball active: m_player->m_pactiveballDebug = m_pBall;
-               }
+               SelectAtPoint(end, nullptr);
             }
          }
       }
@@ -3820,22 +3808,80 @@ IEditable *EditorUI::HitEditable(const HitTestResult &hit) const
    return editable;
 }
 
-void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const
+void EditorUI::SelectAtPoint(const ImVec2 &mousePos, const PickView *view)
 {
-   // Compute mouse position in clip space
-   const float rClipWidth = (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
-   const float rClipHeight = (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
-   const float xcoord = (mousePos.x - rClipWidth) / rClipWidth;
-   const float ycoord = (rClipHeight - mousePos.y) / rClipHeight;
+   const ImGuiIO &io = ImGui::GetIO();
+   vector<HitTestResult> vhoHit;
+   RayCastParts(mousePos, vhoHit, view);
+   if (io.KeyShift)
+   {
+      // Shift+click toggles the front-most hit part in the multi selection
+      if (!vhoHit.empty())
+      {
+         const auto it = m_editableMap.find(HitEditable(vhoHit.front()));
+         if (it != m_editableMap.end())
+         {
+            TogglePartSelection(it->second);
+            m_outlinerAnchor = it->second;
+         }
+      }
+   }
+   else if (vhoHit.empty())
+      ClearSelection();
+   else
+   {
+      // Click selects the nearest hit part, subsequent clicks cycle to the parts behind it
+      vector<std::shared_ptr<EditorUIPart>> hitParts;
+      for (const HitTestResult &hr : vhoHit)
+      {
+         const auto it = m_editableMap.find(HitEditable(hr));
+         if (it != m_editableMap.end() && std::ranges::find(hitParts, it->second) == hitParts.end())
+            hitParts.push_back(it->second);
+      }
+      if (hitParts.empty())
+         ClearSelection();
+      else if (io.KeyCtrl)
+      {
+         // Ctrl+click lists all the parts under the cursor to pick from
+         m_pickList = hitParts;
+         m_pickListPos = mousePos;
+         m_pickListOpen = true;
+      }
+      else
+      {
+         size_t selectionIndex = 0;
+         const auto selIt = std::ranges::find(hitParts, m_selection.GetPart());
+         if (selIt != hitParts.end())
+            selectionIndex = static_cast<size_t>(selIt - hitParts.begin() + 1) % hitParts.size();
+         SetSelection(Selection(hitParts[selectionIndex]));
+         m_outlinerAnchor = hitParts[selectionIndex];
+      }
+      // TODO add debug action to make ball active: m_player->m_pactiveballDebug = m_pBall;
+   }
+}
+
+void EditorUI::PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &rayNear, Vertex3Ds &rayFar) const
+{
+   // Compute mouse position in clip space (the main view fills the playfield window, a secondary view its image rect)
+   const float rClipWidth = view ? view->rectSize.x * 0.5f : (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
+   const float rClipHeight = view ? view->rectSize.y * 0.5f : (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
+   const float xcoord = (mousePos.x - ((view ? view->rectMin.x : 0.f) + rClipWidth)) / rClipWidth;
+   const float ycoord = (((view ? view->rectMin.y : 0.f) + rClipHeight) - mousePos.y) / rClipHeight;
 
    // Use the inverse of our 3D transform to determine where in 3D space the
    // screen pixel the user clicked on is at.  Get the point at the near
    // clipping plane (z=0) and the far clipping plane (z=1) to get the whole
    // range we need to hit test
-   Matrix3D invMVP = m_renderer->GetMVP().GetModelViewProj(0);
+   Matrix3D invMVP = view ? view->modelViewProj : m_renderer->GetMVP().GetModelViewProj(0);
    invMVP.Invert();
-   const Vertex3Ds v3d = invMVP * Vertex3Ds { xcoord, ycoord, 0.f };
-   const Vertex3Ds v3d2 = invMVP * Vertex3Ds { xcoord, ycoord, 1.f };
+   rayNear = invMVP * Vertex3Ds { xcoord, ycoord, 0.f };
+   rayFar = invMVP * Vertex3Ds { xcoord, ycoord, 1.f };
+}
+
+void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view) const
+{
+   Vertex3Ds v3d, v3d2;
+   PickRay(mousePos, view, v3d, v3d2);
 
    // FIXME This is not really great as:
    // - picking depends on what was visible/enabled when quadtree was built (lazily at first pick), and also uses the physics quadtree for some parts
@@ -5044,17 +5090,13 @@ void EditorUI::FrameAll()
 // Editor Camera to an axis aligned view, keeping the orbit target and distance
 // Change the vertical field of view keeping the framing of the orbit target (the distance is adjusted so the view does not jump)
 // 3D point (camera space) under the cursor: the front-most pickable part hit by the mouse ray, else the playfield plane
-bool EditorUI::PickDepthPoint(const ImVec2 &mousePos, vec3 &point) const
+bool EditorUI::PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickView *view) const
 {
-   const float rClipWidth = (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
-   const float rClipHeight = (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
-   Matrix3D invMVP = m_renderer->GetMVP().GetModelViewProj(0);
-   invMVP.Invert();
-   const Vertex3Ds a = invMVP * Vertex3Ds { (mousePos.x - rClipWidth) / rClipWidth, (rClipHeight - mousePos.y) / rClipHeight, 0.f };
-   const Vertex3Ds b = invMVP * Vertex3Ds { (mousePos.x - rClipWidth) / rClipWidth, (rClipHeight - mousePos.y) / rClipHeight, 1.f };
+   Vertex3Ds a, b;
+   PickRay(mousePos, view, a, b);
    float t = -1.f;
    vector<HitTestResult> hits;
-   RayCastParts(mousePos, hits);
+   RayCastParts(mousePos, hits, view);
    if (!hits.empty())
       t = hits.front().m_time; // Sorted by distance from the viewer
    else if (fabsf(b.z - a.z) > 1e-10f)
