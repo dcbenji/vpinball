@@ -1979,6 +1979,19 @@ void EditorUI::SetPlayfieldCamera()
    m_camView = Matrix3D::MatrixLookAtRH(eye, at, up);
 }
 
+// ImGuizmo sets its own clip rect (the full display, not intersected) when it draws: the commands it added are clipped to the viewport area afterwards, so the
+// gizmo does not draw over the panels beside a narrow viewport
+static void ClipDrawCommands(ImDrawList *const list, const int firstCmd, const AreaRect *const rect)
+{
+   if (list == nullptr || rect == nullptr)
+      return;
+   for (int i = firstCmd; i < list->CmdBuffer.Size; i++)
+   {
+      ImVec4 &clip = list->CmdBuffer[i].ClipRect;
+      clip = ImVec4(max(clip.x, rect->x0), max(clip.y, rect->y0), min(clip.z, rect->x1), min(clip.w, rect->y1));
+   }
+}
+
 void EditorUI::Render3D()
 {
    // While a table save is running on the file operation worker thread, the table parts must not be
@@ -2330,11 +2343,9 @@ void EditorUI::RenderUI()
       }
       // Drawn inside the viewport area only (not over the panels beside it when the part is outside the narrow viewport)
       ImDrawList *const gizmoDrawList = ImGui::FindWindowByName("gizmo") != nullptr ? ImGui::FindWindowByName("gizmo")->DrawList : nullptr;
-      if (gizmoDrawList != nullptr && m_viewportVisible)
-         gizmoDrawList->PushClipRect(ImVec2(m_viewportRect.x0, m_viewportRect.y0), ImVec2(m_viewportRect.x1, m_viewportRect.y1), true);
+      const int gizmoFirstCmd = gizmoDrawList != nullptr ? max(0, gizmoDrawList->CmdBuffer.Size - 1) : 0;
       ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
-      if (gizmoDrawList != nullptr && m_viewportVisible)
-         gizmoDrawList->PopClipRect();
+      ClipDrawCommands(gizmoDrawList, gizmoFirstCmd, m_viewportVisible ? &m_viewportRect : nullptr);
       gizmoManipulated = gizmoOperation != ImGuizmo::OPERATION(0);
       if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {
@@ -4202,7 +4213,10 @@ void EditorUI::RenderNavCube()
       io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
       io.MouseDown[0] = false;
    }
+   ImDrawList *const cubeDrawList = ImGui::FindWindowByName("gizmo") != nullptr ? ImGui::FindWindowByName("gizmo")->DrawList : nullptr;
+   const int cubeFirstCmd = cubeDrawList != nullptr ? max(0, cubeDrawList->CmdBuffer.Size - 1) : 0;
    ImGuizmo::ViewManipulate(viewG, proj.m[0], ImGuizmo::TRANSLATE, ImGuizmo::WORLD, const_cast<float *>(identity), m_camDistance, pos, ImVec2(size, size), 0x40101010);
+   ClipDrawCommands(cubeDrawList, cubeFirstCmd, m_viewportVisible ? &m_viewportRect : nullptr);
    if (gizmoBusy)
    {
       io.MousePos = savedMousePos;

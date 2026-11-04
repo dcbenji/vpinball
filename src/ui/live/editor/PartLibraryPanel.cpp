@@ -1552,10 +1552,17 @@ void PartLibraryPanel::RenderLightbox()
    {
       ImGui::OpenPopup("###PartLibLightbox");
       m_lbOpening = false;
-      // An insert has its controls in a column beside the preview (wider, not taller); never more than 90% of the display
-      const bool wide = m_lbItem.kind == ItemKind::Insert;
-      ImGui::SetNextWindowSize(ImVec2(min((wide ? 760.f : 480.f) * dpi, 0.55f * io.DisplaySize.x), min(560.f * dpi, 0.7f * io.DisplaySize.y)), ImGuiCond_Appearing);
-      ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      // The render, toolbar and caption (the render ~460x420); the look column (an insert's gear toggle) widens it. Centred over the viewport area
+      const float columnW = m_lbItem.kind == ItemKind::Insert && m_lbShowLook ? 290.f * dpi + ImGui::GetStyle().ItemSpacing.x : 0.f;
+      ImGui::SetNextWindowSize(ImVec2(min(480.f * dpi + columnW, 0.9f * io.DisplaySize.x), min(500.f * dpi, 0.9f * io.DisplaySize.y)), ImGuiCond_Appearing);
+      const AreaRect &view = m_editor.m_viewportRect;
+      const ImVec2 center = m_editor.m_viewportVisible ? ImVec2(0.5f * (view.x0 + view.x1), 0.5f * (view.y0 + view.y1)) : ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+      ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+   }
+   if (m_lbPendingWiden != 0.f)
+   {
+      ImGui::SetNextWindowSize(ImVec2(clamp(m_lbLastSize.x + m_lbPendingWiden, 240.f * dpi, 0.9f * io.DisplaySize.x), m_lbLastSize.y), ImGuiCond_Always);
+      m_lbPendingWiden = 0.f;
    }
    ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(0.9f * io.DisplaySize.x, 0.9f * io.DisplaySize.y));
    bool open = true;
@@ -1567,6 +1574,7 @@ void PartLibraryPanel::RenderLightbox()
    // Kept inside the editor window every frame (it may have opened before the window got its size, or be resized smaller since): the size is capped by the
    // constraints above, the position here
    {
+      m_lbLastSize = ImGui::GetWindowSize();
       const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
       const ImVec2 clamped(clamp(pos.x, 0.f, max(0.f, io.DisplaySize.x - size.x)), clamp(pos.y, 0.f, max(0.f, io.DisplaySize.y - size.y)));
       if (clamped.x != pos.x || clamped.y != pos.y)
@@ -1673,7 +1681,7 @@ void PartLibraryPanel::RenderLightbox()
    // Layout: the render fills the panel, the insert's look sliders in a column beside it (behind a gear toggle when the panel is narrow), then a one-line
    // toolbar and a one-line caption
    const bool insert = m_lbItem.kind == ItemKind::Insert;
-   const bool column = insert && m_lbHasCard && (ImGui::GetWindowWidth() >= 700.f * dpi || m_lbShowLook);
+   const bool column = insert && m_lbHasCard && m_lbShowLook;
    const float bodyH = max(32.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetTextLineHeightWithSpacing());
    if (column)
    {
@@ -1890,14 +1898,17 @@ void PartLibraryPanel::RenderLightbox()
       ImGui::EndDisabled();
       if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("This pack has no Light");
-      if (m_lbHasCard && ImGui::GetWindowWidth() < 700.f * dpi)
+      if (m_lbHasCard)
       {
          ImGui::SameLine();
          const bool lookOn = m_lbShowLook; // Pushed and popped on the same value (the click flips the member in between)
          if (lookOn)
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
          if (ImGui::Button(ICON_FK_COG "##LookToggle"))
+         {
             m_lbShowLook = !m_lbShowLook;
+            m_lbPendingWiden = (m_lbShowLook ? 1.f : -1.f) * (290.f * dpi + ImGui::GetStyle().ItemSpacing.x); // The render keeps its size
+         }
          if (lookOn)
             ImGui::PopStyleColor();
          ImGui::SetItemTooltip("Look controls");
