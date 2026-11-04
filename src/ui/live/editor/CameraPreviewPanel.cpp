@@ -258,6 +258,12 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
       return;
    view.rectMin = imgMin;
    view.rectSize = imgSize;
+   if (!m_settings.freeOrbit) // A player view shows the parts of its own player mode (as the renderer sets it for the request), the orbit camera the editor view's
+   {
+      const ViewSetupID setup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : e.m_table->GetViewMode();
+      view.visibilityMask = setup == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
+         : setup == BG_FSS ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS : PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
+   }
    e.SelectAtPoint(end, &view);
 }
 

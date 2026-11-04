@@ -2034,7 +2034,7 @@ void EditorUI::RenderSelection3D()
    // As the 3D Viewport's selection overlay (RenderUI), without its 2D lines (no draw list): the edges of the selected parts over the scene, active part lighter
    if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
       m_renderer->m_renderDevice->Clear(clearType::ZBUFFER, 0);
-   LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
    ctx.m_selectionDisplay = m_navSelectionDisplay;
    ctx.m_isSelected = true;
    for (const auto &part : m_multiSel)
@@ -2048,7 +2048,7 @@ void EditorUI::DrawSelectionLines(ImDrawList *drawList, const PickView &view)
 {
    if (m_multiSel.empty() || !m_selectionOverlay || IsSaveInProgress())
       return;
-   LiveRenderContext ctx(m_player, drawList, m_camMode, m_shadeMode, false);
+   LiveRenderContext ctx(m_player, drawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
    ctx.SetImageView(view.modelViewProj, view.rectMin, view.rectSize); // The edges are drawn by the view's own pass (RenderSelection3D)
    ctx.m_selectionDisplay = m_navSelectionDisplay;
    ctx.m_isSelected = true;
@@ -2481,6 +2481,10 @@ void EditorUI::RenderUI()
          for (ImGuiID *id : { &imguiContext.HoveredId, &imguiContext.HoveredIdPreviousFrame, &imguiContext.ActiveId })
             if (*id == gizmoView->itemId)
                *id = 0;
+      // The letterbox and the header of the view's area are not the image: an item counts as hovered there, so ImGuizmo can not grab a handle nobody sees (clipped)
+      if (gizmoView != nullptr && !ImGuizmo::IsUsingAny() && !(io.MousePos.x >= gizmoView->rectMin.x && io.MousePos.y >= gizmoView->rectMin.y
+            && io.MousePos.x < gizmoView->rectMin.x + gizmoView->rectSize.x && io.MousePos.y < gizmoView->rectMin.y + gizmoView->rectSize.y))
+         imguiContext.HoveredId = gizmoView->itemId;
       ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
       imguiContext.HoveredId = savedIds[0];
       imguiContext.HoveredIdPreviousFrame = savedIds[1];
@@ -3962,22 +3966,24 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
    for (const auto &hr : vhoUnfilteredHit)
    {
       const auto editable = hr.m_obj->m_editable;
-      if (editable && !IsEditablePickable(editable))
+      if (editable && !IsEditablePickable(editable, view != nullptr ? view->visibilityMask : 0))
          continue;
       vhoHit.push_back(hr);
    }
 }
 
-bool EditorUI::IsEditableVisible(const IEditable *editable) const
+bool EditorUI::IsEditableVisible(const IEditable *editable, unsigned int visibilityMask) const
 {
    // In desktop backdrop mode, only backdrop parts can be picked, and conversely in the other view modes
    if (editable->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop))
       return false;
+   if (visibilityMask == 0)
+      visibilityMask = m_renderer->GetPlayerModeVisibilityMask(); // The 3D Viewport's; a secondary view brings its own
    const PartGroup *parent = editable->GetPartGroup();
    bool visible = editable->IsUIVisible(false);
    while (parent && visible)
    {
-      if ((parent->GetPlayerModeVisibilityMask() & m_renderer->GetPlayerModeVisibilityMask()) == 0)
+      if ((parent->GetPlayerModeVisibilityMask() & visibilityMask) == 0)
          visible = false;
       visible &= parent->IsUIVisible(false);
       parent = parent->GetPartGroup();
@@ -3985,9 +3991,9 @@ bool EditorUI::IsEditableVisible(const IEditable *editable) const
    return visible;
 }
 
-bool EditorUI::IsEditablePickable(const IEditable *editable) const
+bool EditorUI::IsEditablePickable(const IEditable *editable, unsigned int visibilityMask) const
 {
-   if (!IsEditableVisible(editable))
+   if (!IsEditableVisible(editable, visibilityMask))
       return false;
    const auto type = editable->GetItemType();
    if (!HasFlag(m_selectionFilter, SelectionFilter::Playfield) && type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())

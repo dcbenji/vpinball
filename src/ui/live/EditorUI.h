@@ -165,19 +165,20 @@ private:
    void SelectPartsInGroup(const PartGroup *group);
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
    IEditable *HitEditable(const HitTestResult &hit) const;
-   bool IsEditableVisible(const IEditable *editable) const; // The view mode, the part and its groups are visible: the first half of IsEditablePickable
+   bool IsEditableVisible(const IEditable *editable, unsigned int visibilityMask = 0) const; // The view mode, the part and its groups are visible: the first half of IsEditablePickable
    // The view a pick is made in: null (the default) is the main 3D view (its renderer MVP, the playfield window), else a secondary view's
    // image (its model view projection as rendered, and the screen rect of its image)
    struct PickView
    {
       Matrix3D modelViewProj;
       ImVec2 rectMin, rectSize;
+      unsigned int visibilityMask = 0; // Player mode visibility of a secondary view (0: the 3D Viewport's)
    };
    void PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &rayNear, Vertex3Ds &rayFar) const; // World space segment under the mouse
    void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view = nullptr) const;
    void DrawSelectionLines(ImDrawList *drawList, const PickView &view); // The 2D part of the selection overlay (lines, colliders) in a secondary view's image
    void SelectAtPoint(const ImVec2 &mousePos, const PickView *view); // A click (no drag) at the mouse position: shift toggles, ctrl lists, else selects / cycles / clears, as in the 3D Viewport
-   bool IsEditablePickable(const IEditable *editable) const;
+   bool IsEditablePickable(const IEditable *editable, unsigned int visibilityMask = 0) const; // Mask 0: the 3D Viewport's player mode visibility
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
 
