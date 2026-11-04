@@ -56,6 +56,10 @@ public:
    // the returned state is stored in the record and given back by Undo() (e.g. to restore the selection)
    void SetEditorStateCapture(const std::function<std::any()> &capture) { m_editorStateCapture = capture; }
 
+   // Registers the part state sync callback: called with (part, false) right before a part is saved into a record (and the redo snapshot of an undo), and with
+   // (part, true) right after a record was loaded back into it. The editor uses it to snapshot / restore the authored visibility instead of its display state
+   void SetPartStateSync(const std::function<void(IEditable *, bool)> &sync) { m_partStateSync = sync; }
+
 private:
    static constexpr size_t NoCleanPoint = static_cast<size_t>(-1);
    std::any ApplyRecord(UndoRecord &record, bool buildInverse, std::unique_ptr<UndoRecord> &inverse);
@@ -71,4 +75,5 @@ private:
    SaveDirtyState m_dirtyState = SaveDirtyState::Clean;
    size_t m_cleanpoint = 0; // Undo record at which table is in a non-dirty state (if bigger than undo records size, clean state can not be reached)
    std::function<std::any()> m_editorStateCapture;
+   std::function<void(IEditable *, bool)> m_partStateSync;
 };

@@ -92,6 +92,21 @@ EditorUI::EditorUI(LiveUI &liveUI)
 
    // Store the current selection in each undo record, so that undoing also restores it
    m_undo.SetEditorStateCapture([this]() { return std::any(CaptureUndoSelection()); });
+   // A part's m_d holds the editor display state (outliner hide, overlay) for the render visibility fields, the authored values live in the UI part: records hold
+   // the authored values (written back to m_d before a save), and a loaded record becomes the new authored values
+   m_undo.SetPartStateSync(
+      [this](IEditable *part, const bool loaded)
+      {
+         for (const auto &uiPart : m_editables)
+            if (uiPart->GetEditable() == part)
+            {
+               if (loaded)
+                  uiPart->SyncVisibilityOverrides();
+               else
+                  uiPart->RestorePartVisibility();
+               break;
+            }
+      });
 
    ClearSelection();
    LoadNavPreferences();

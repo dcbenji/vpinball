@@ -24,6 +24,7 @@ public:
    ~UndoRecord();
 
    void MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject = true);
+   bool IsMarked(IEditable *const pie) const { return FindIndexOf(m_vieMark, pie) != -1 || FindIndexOf(m_vieCreate, pie) != -1; }
    void MarkForCreate(IEditable *const pie);
    void MarkForDelete(IEditable *const pie);
 
@@ -280,6 +281,8 @@ void PinUndo::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bo
    if (m_nUndoLayer <= 0)
       BeginUndo();
 
+   if (m_partStateSync && !m_undoRecords.back()->IsMarked(pie)) // Only the first mark of a part in the record saves it
+      m_partStateSync(pie, false);
    m_undoRecords.back()->MarkForUndo(pie, saveForUndo, noteSubject);
 }
 
@@ -435,6 +438,8 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
          // Snapshot of the part before it is overwritten: restored when the inverse is applied
          auto inverseStm = std::make_unique<InMemStream>();
          inverseStm->Write(&pie, sizeof(IEditable *));
+         if (m_partStateSync)
+            m_partStateSync(pie, false);
          BiffWriter inverseWriter(inverseStm.get(), nullptr);
          pie->Save(inverseWriter, true);
          inverse->m_vieMark.push_back(pie);
@@ -442,12 +447,16 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
       }
       IScriptable *const scriptable = pie->GetIScriptable();
       const string nameBefore = scriptable ? scriptable->m_name : string();
+      const bool uiVisible = pie->IsUIVisible(false); // The editor's outliner hide is not an undoable edit (no record covers it): undo / redo leave it as it is
       pie->ClearForOverwrite();
 
       // Process the loaded PartGroup parenting to support undoing reparenting
       pie->m_onLoadExpectedPartGroup.clear();
       BiffReader reader(pstm->Data() + sizeof(IEditable *), static_cast<uint32_t>(pstm->Size() - sizeof(IEditable *)), CURRENT_FILE_FORMAT_VERSION, nullptr, 0);
       pie->Load(reader);
+      if (m_partStateSync)
+         m_partStateSync(pie, true);
+      pie->SetUIVisible(uiVisible);
 
       // Load writes the name directly: apply a restored name through the table to keep its name registry (and code view) in sync
       if (scriptable && scriptable->m_name != nameBefore && m_table->HasRegisteredName(pie))
