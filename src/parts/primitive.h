@@ -408,7 +408,8 @@ public:
    bool IsPlasticCompanion() const; // Names a host that exists (an orphan, e.g. after a script rename, behaves as a plain primitive)
    int m_plasticCrossingHoles = 0; // Holes reaching over the outline edge at the last rebuild (warning only)
    int m_plasticSkippedHoles = 0; // Holes whose centre is outside the outline (left out of the mesh)
-   bool m_plasticCrossingWarn = false; // The editor reports it once (status message) and clears this
+   int m_plasticReportedCrossing = 0, m_plasticReportedSkipped = 0; // The counts the editor last said (status message)
+   bool m_plasticCrossingWarn = false; // The two counts differ from the ones last said: the editor reports once and clears this
    bool m_plasticPickDirty = false; // The mesh was rebuilt: the editor refreshes the picking collider
    void InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes); // Turns this (new) primitive into a plastic host
    void RegeneratePlastic(); // Rebuilds the host mesh and the meshes of the companions found in the table (no-op unless m_d.m_plasticGen)

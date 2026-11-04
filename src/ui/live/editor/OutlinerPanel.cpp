@@ -622,7 +622,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + editable->GetName()).c_str()))
          {
             editable->SetUIVisible(!editable->IsUIVisible(false));
-            PlasticFromAtlas::SyncCompanionVisibility(editor);
+            PlasticFromAtlas::SyncCompanionVisibility({ editable });
             editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
          ImGui::PopStyleColor(2);

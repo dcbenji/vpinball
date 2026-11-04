@@ -265,7 +265,7 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       ed.Report("Plastic from Atlas: the outline needs 3 points or more");
       return;
    }
-   int crossing = 0;
+   int crossing = 0, skipped = 0;
    {
       // Build it first: a degenerate outline (collinear clicks) must not leave three default primitives behind
       vector<PlasticMesh::CurvePoint> outline;
@@ -280,9 +280,8 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
          ed.Report("Plastic from Atlas: the outline has no area (Backspace to fix it)");
          return;
       }
-      if (probe.skippedHoles > 0)
-         ed.Report("Plastic from Atlas: " + std::to_string(probe.skippedHoles) + " hole(s) outside the outline are left out");
       crossing = probe.crossingHoles;
+      skipped = probe.skippedHoles;
    }
    const float cx = 0.5f * (ed.m_table->m_left + ed.m_table->m_right), cy = 0.5f * (ed.m_table->m_top + ed.m_table->m_bottom);
    const string hostName = ed.m_table->GetUniqueName("Plastic"s);
@@ -333,8 +332,11 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
    ed.m_undo.SetLabel("Add Plastic from Atlas");
    ed.m_undo.EndUndo();
    ed.Report("Added " + hostName + " (with " + clearName + " and " + bevelName + ")"
-      + (crossing > 0 ? "  Warning: " + std::to_string(crossing) + (crossing == 1 ? " hole crosses" : " holes cross") + " the outline edge" : string()));
-   host->m_plasticCrossingWarn = false; // Said in the message above
+      + (crossing > 0 ? "  Warning: " + std::to_string(crossing) + (crossing == 1 ? " hole is on or near" : " holes are on or near") + " the outline edge" : string())
+      + (skipped > 0 ? (crossing > 0 ? ", " : "  Warning: ") + std::to_string(skipped) + (skipped == 1 ? " hole is" : " holes are") + " outside the outline (left out)" : string()));
+   host->m_plasticReportedCrossing = host->m_plasticCrossingHoles; // Said in the message above
+   host->m_plasticReportedSkipped = host->m_plasticSkippedHoles;
+   host->m_plasticCrossingWarn = false;
 
    s_lastImage = t.image;
    ed.m_perspectiveCam = t.prevPerspective;
@@ -371,13 +373,32 @@ void PlasticFromAtlas::Adjust(Primitive *const host, const float height, const f
    host->UpdatePlastic();
 }
 
-void PlasticFromAtlas::SyncCompanionVisibility(EditorUI &ed)
+void PlasticFromAtlas::SyncCompanionVisibility(const vector<IEditable *> &toggled)
 {
-   for (IEditable *const part : ed.m_table->GetParts())
+   for (IEditable *const part : toggled)
       if (IsHost(part))
          for (Primitive *const comp : static_cast<Primitive *>(part)->GetPlasticCompanions())
             if (comp->IsUIVisible(false) != part->IsUIVisible(false))
                comp->SetUIVisible(part->IsUIVisible(false));
+}
+
+std::map<const IEditable *, bool> PlasticFromAtlas::SnapshotHostVisibility(const EditorUI &ed)
+{
+   std::map<const IEditable *, bool> res;
+   for (IEditable *const part : ed.m_table->GetParts())
+      if (IsHost(part))
+         res[part] = part->IsUIVisible(false);
+   return res;
+}
+
+void PlasticFromAtlas::SyncChangedHostVisibility(const EditorUI &ed, const std::map<const IEditable *, bool> &before)
+{
+   vector<IEditable *> changed;
+   for (IEditable *const part : ed.m_table->GetParts()) // The live parts, looked up by address (a host deleted by the undo is never dereferenced)
+      if (IsHost(part))
+         if (const auto it = before.find(part); it != before.end() && it->second != part->IsUIVisible(false))
+            changed.push_back(part);
+   SyncCompanionVisibility(changed);
 }
 
 void PlasticFromAtlas::AddCompanions(vector<IEditable *> &parts)

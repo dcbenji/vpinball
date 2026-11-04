@@ -2047,17 +2047,22 @@ void EditorUI::RenderUI()
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
             plastic->m_plasticCrossingWarn = false;
-            if (plastic->m_d.m_plasticGen) // Warning only: the holes stay as they are
+            if (plastic->m_d.m_plasticGen) // Warning only: the holes stay as they are. Said once per change of the two counts (and not when they drop to 0)
             {
                const int c = plastic->m_plasticCrossingHoles, o = plastic->m_plasticSkippedHoles;
-               string msg = "Warning: " + plastic->GetName() + ": ";
-               if (c > 0)
-                  msg += std::to_string(c) + (c == 1 ? " hole crosses" : " holes cross") + " the outline edge";
-               if (c > 0 && o > 0)
-                  msg += ", ";
-               if (o > 0)
-                  msg += std::to_string(o) + (o == 1 ? " hole is" : " holes are") + " outside the outline (left out)";
-               Report(msg);
+               plastic->m_plasticReportedCrossing = c;
+               plastic->m_plasticReportedSkipped = o;
+               if (c > 0 || o > 0)
+               {
+                  string msg = "Warning: " + plastic->GetName() + ": ";
+                  if (c > 0)
+                     msg += std::to_string(c) + (c == 1 ? " hole is on or near" : " holes are on or near") + " the outline edge";
+                  if (c > 0 && o > 0)
+                     msg += ", ";
+                  if (o > 0)
+                     msg += std::to_string(o) + (o == 1 ? " hole is" : " holes are") + " outside the outline (left out)";
+                  Report(msg);
+               }
             }
          }
          if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty)
@@ -2859,6 +2864,7 @@ void EditorUI::RenderUI()
       m_boxSelectActive = false; // Canceled: button released outside of the playfield
       m_pointDragPending = false; // Same for a point drag (it would keep undo / redo off until the mouse comes back to the viewport)
       m_pointDragActive = false;
+      m_plasticBow = PlasticFromAtlas::Bow(); // Same for a bow: it is only driven inside the gate, a stale one would jump to the cursor on the next press
    }
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -3087,6 +3093,7 @@ void EditorUI::RenderUI()
          if (m_table->m_liveBaseTable == nullptr && !io.KeyCtrl) // No UI visibility in inspection mode
          {
             bool changed = false;
+            vector<IEditable *> toggled; // Parts whose eye changed (a plastic host reaches its companions, a companion alone does not)
             if (io.KeyAlt)
             { // Unhide all
                for (auto &part : m_editables)
@@ -3094,6 +3101,7 @@ void EditorUI::RenderUI()
                      && !part->GetEditable()->IsUIVisible(false))
                   {
                      part->GetEditable()->SetUIVisible(true);
+                     toggled.push_back(part->GetEditable());
                      changed = true;
                   }
             }
@@ -3104,6 +3112,7 @@ void EditorUI::RenderUI()
                      && part->GetEditable()->IsUIVisible(false))
                   {
                      part->GetEditable()->SetUIVisible(false);
+                     toggled.push_back(part->GetEditable());
                      changed = true;
                   }
             }
@@ -3113,13 +3122,14 @@ void EditorUI::RenderUI()
                   if (part->GetEditable()->IsUIVisible(false))
                   {
                      part->GetEditable()->SetUIVisible(false);
+                     toggled.push_back(part->GetEditable());
                      changed = true;
                   }
                ClearSelection();
             }
             if (changed)
             {
-               PlasticFromAtlas::SyncCompanionVisibility(*this); // A plastic's companions are hidden and shown with their host
+               PlasticFromAtlas::SyncCompanionVisibility(toggled); // A plastic's companions are hidden and shown with their host
                m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
             }
          }
@@ -3334,6 +3344,7 @@ void EditorUI::UndoSteps(const size_t count)
    std::any state;
    size_t done = 0;
    bool stoppedEarly = false;
+   const auto hostEyes = PlasticFromAtlas::SnapshotHostVisibility(*this);
    // TODO handle IsUndoPastCleanPoint
    for (; done < count && m_undo.HasUndo(); ++done)
    {
@@ -3348,6 +3359,7 @@ void EditorUI::UndoSteps(const size_t count)
          state = std::move(step);
    }
    RestoreUndoState(state);
+   PlasticFromAtlas::SyncChangedHostVisibility(*this, hostEyes);
    Report((done == 1 ? "Undo: " + label : "Undo: " + std::to_string(done) + " steps (" + label + ")") + (stoppedEarly ? ", stopped before a step that can not be redone" : ""));
 }
 
@@ -3360,6 +3372,7 @@ void EditorUI::RedoSteps(const size_t count)
    string label;
    std::any state;
    size_t done = 0;
+   const auto hostEyes = PlasticFromAtlas::SnapshotHostVisibility(*this);
    for (; done < count && m_undo.HasRedo(); ++done)
    {
       label = m_undo.RedoLabel(0);
@@ -3367,6 +3380,7 @@ void EditorUI::RedoSteps(const size_t count)
          state = std::move(step);
    }
    RestoreUndoState(state);
+   PlasticFromAtlas::SyncChangedHostVisibility(*this, hostEyes);
    Report(done == 1 ? "Redo: " + label : "Redo: " + std::to_string(done) + " steps (" + label + ")");
 }
 
@@ -5486,7 +5500,8 @@ DragPoint *EditorUI::HitTestDragPoint(const ImVec2 &mousePos) const
          for (const int j : { (i + n - 1) % n, (i + 1) % n })
             if (proj[j].x != FLT_MAX)
                shorter = min(shorter, hypotf(proj[j].x - pos.x, proj[j].y - pos.y));
-         radius = min(maxDist, shorter * (1.f / 3.f));
+         // Floor: the drawn handle can always be grabbed (4 px, coincident neighbours must not give 0); a line of 8 px or more can still be bowed from its middle
+         radius = min(maxDist, max(shorter * (1.f / 3.f), 4.f * m_liveUI.GetDPI()));
       }
       if (dist < bestDist && dist < radius)
       {

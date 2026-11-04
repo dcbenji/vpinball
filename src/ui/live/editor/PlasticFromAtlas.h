@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <map>
 #include "imgui/imgui.h"
 #include "math/matrix.h"
 #include "math/vector.h"
@@ -69,7 +70,10 @@ public:
    static void DrawTrace(EditorUI &ed, ImDrawList *draw, const LiveRenderContext &ctx);
 
    // Companions follow their host through the editor operations (same undo record)
-   static void SyncCompanionVisibility(EditorUI &ed); // The editor eye (H key, outliner) of a host reaches its companions
+   static void SyncCompanionVisibility(const vector<IEditable *> &toggled); // The editor eye (H key, outliner) of a host reaches its companions (only for the parts that were toggled)
+   // Undo / redo reload a host (its eye included) and not its companions: the companions of the hosts whose eye changed follow
+   static std::map<const IEditable *, bool> SnapshotHostVisibility(const EditorUI &ed);
+   static void SyncChangedHostVisibility(const EditorUI &ed, const std::map<const IEditable *, bool> &before);
    static void AddCompanions(vector<IEditable *> &parts); // Appends the companions of the plastic hosts in 'parts' that are not in it
    static void FixPasted(const vector<IEditable *> &pasted, const vector<string> &originalNames); // Pasted companions follow the pasted host copies, else become plain primitives
 
