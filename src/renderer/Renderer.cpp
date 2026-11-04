@@ -583,7 +583,9 @@ Renderer::~Renderer()
    m_lookdevLightList = nullptr;
    m_lookdevEnvSampler = nullptr;
    m_lookdevIrradianceSampler = nullptr;
-   m_solidEnvSampler = m_solidIrradianceSampler = m_tableDiffuseEnv = nullptr;
+   m_solidEnvSampler = m_solidIrradianceSampler = m_tableDiffuseEnv = m_flatSampler = nullptr;
+   m_solidRotatedEnvs.clear();
+   m_solidEnvTex = m_solidIrradianceTex = nullptr;
    m_aoDitherSampler = nullptr;
    delete m_renderDevice;
 }
@@ -1301,7 +1303,11 @@ void Renderer::DrawBackground()
    if (g_pplayer->m_liveUI->IsEditorViewMode() && !(m_editorPreviewPass && m_editorPreviewPlayerCam)) // An editor secondary view with a table view setup shows the player view
    {
       // The lite wireframe path is not tonemapped: its background is given display referred (about what the tonemapper makes of the main view's)
-      m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, m_editorLitePass ? 0x00262626 : 0x000D0D0D);
+      unsigned int background = m_editorLitePass ? 0x00262626 : 0x000D0D0D;
+      if ((IsSolidPass() || IsWireframeShade(m_shadeMode)) && m_viewShade.bgCustom) // Solid and Wireframe: the view's own background colour
+         background = (static_cast<unsigned int>(clamp(m_viewShade.bg[0], 0.f, 1.f) * 255.f + 0.5f) << 16) | (static_cast<unsigned int>(clamp(m_viewShade.bg[1], 0.f, 1.f) * 255.f + 0.5f) << 8)
+            | static_cast<unsigned int>(clamp(m_viewShade.bg[2], 0.f, 1.f) * 255.f + 0.5f);
+      m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, background);
       if (!g_pplayer->m_liveUI->IsEditorBackdropViewMode())
          return;
    }
@@ -2427,7 +2433,7 @@ void Renderer::RenderItem(IEditable* const editable, bool isNoBackdrop)
       // The lite wireframe path of the editor secondary views is not tonemapped: its fill is given display referred
       const float fill = m_editorLitePass ? (float)(96. / 255.) : (float)(32. / 255.);
       const vec4 fillColor = m_shadeMode == ShadeMode::NoDepthWireframe ? vec4(0.f, 0.f, 0.f, (float)(32. / 255.)) : vec4(fill, fill, fill, 1.f);
-      constexpr vec4 edgeColor{0.f, 0.f, 0.f, 1.f};
+      const vec4 edgeColor = m_viewShade.wireCustom ? vec4(m_viewShade.wire[0], m_viewShade.wire[1], m_viewShade.wire[2], 1.f) : vec4(0.f, 0.f, 0.f, 1.f);
       DrawWireframe(editable, fillColor, edgeColor, m_shadeMode != ShadeMode::NoDepthWireframe);
    }
 }
@@ -2463,6 +2469,27 @@ bool Renderer::IsTemporalAccumulationInProgress() const
    return false;
 }
 
+std::shared_ptr<BaseTexture> Renderer::RotateEnvU(const BaseTexture& src, const int degrees)
+{
+   // Turning an equirectangular environment about the vertical axis is a horizontal shift of its columns (the sampling direction's azimuth is u)
+   const unsigned int w = src.width(), h = src.height();
+   std::shared_ptr<BaseTexture> dst = BaseTexture::Create(w, h, src.m_format);
+   if (dst == nullptr || w == 0)
+      return dst;
+   const size_t pitch = src.pitch(), bpp = pitch / w;
+   const unsigned int shift = static_cast<unsigned int>(((lround(static_cast<double>(degrees) * w / 360.) % static_cast<long>(w)) + static_cast<long>(w)) % static_cast<long>(w));
+   const uint8_t* const __restrict from = static_cast<const uint8_t*>(src.datac());
+   uint8_t* const __restrict to = static_cast<uint8_t*>(dst->data());
+   for (unsigned int y = 0; y < h; y++)
+   {
+      const uint8_t* const s = from + y * pitch;
+      uint8_t* const d = to + y * pitch;
+      memcpy(d + shift * bpp, s, (w - shift) * bpp);
+      memcpy(d, s + (w - shift) * bpp, shift * bpp);
+   }
+   return dst;
+}
+
 void Renderer::ApplySolidEnv()
 {
    Shader* const basic = m_renderDevice->m_basicShader;
@@ -2470,8 +2497,9 @@ void Renderer::ApplySolidEnv()
    {
       const std::shared_ptr<const Sampler> diffuse = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
       if (diffuse != m_solidIrradianceSampler || m_solidIrradianceSampler == nullptr) // Never take the studio irradiance for the table's
-         m_tableDiffuseEnv = diffuse;
-      m_tableEnvScale = basic->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
+         if (m_flatSampler == nullptr || diffuse != m_flatSampler)
+            if (std::none_of(m_solidRotatedEnvs.begin(), m_solidRotatedEnvs.end(), [&](const RotatedSolidEnv& r) { return r.irradiance == diffuse; }))
+               m_tableDiffuseEnv = diffuse;
    }
    const bool solid = IsSolidPass();
    if (solid && !m_solidEnvTried)
@@ -2484,21 +2512,56 @@ void Renderer::ApplySolidEnv()
       if (env != nullptr)
       {
          const unsigned int irrHeight = min(env->height(), 256u) / 8;
-         m_solidIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance"s, EnvmapPrecalc(env, irrHeight * 2, irrHeight), false);
+         std::shared_ptr<BaseTexture> irradiance = EnvmapPrecalc(env, irrHeight * 2, irrHeight);
+         m_solidIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance"s, irradiance, false);
          m_solidEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Env"s, env, false);
+         m_solidEnvTex = env;
+         m_solidIrradianceTex = irradiance;
       }
    }
-   if (solid && m_solidEnvSampler != nullptr)
+   const ViewShadeOptions& opt = m_viewShade;
+   const float tableScale = m_table->m_envEmissionScale * m_sceneLighting.GetGlobalEmissionScale(); // As SetupShaders binds it
+   if (solid && opt.flat)
    {
-      basic->SetTexture(ShaderUniform::tex_env, m_solidEnvSampler);
-      basic->SetTexture(ShaderUniform::tex_diffuse_env, m_solidIrradianceSampler);
-      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, 1.f, static_cast<float>(m_solidEnvSampler->GetHeight()), 0.f, 0.f);
+      // Lighting Flat: a uniform white environment, which the PBR shading turns into the base colours (diffuse and reflected alike)
+      if (m_flatSampler == nullptr)
+      {
+         std::shared_ptr<BaseTexture> white = BaseTexture::Create(1, 1, BaseTexture::SRGB);
+         memset(white->data(), 255, white->pitch());
+         m_flatSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Flat"s, white, false);
+      }
+      basic->SetTexture(ShaderUniform::tex_env, m_flatSampler);
+      basic->SetTexture(ShaderUniform::tex_diffuse_env, m_flatSampler);
+      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, opt.brightness, 1.f, 0.f, 0.f);
+   }
+   else if (solid && m_solidEnvSampler != nullptr)
+   {
+      std::shared_ptr<const Sampler> env = m_solidEnvSampler, irradiance = m_solidIrradianceSampler;
+      const int degrees = static_cast<int>(lroundf(opt.lightAngle)) % 360;
+      if (degrees != 0)
+      {
+         auto it = std::find_if(m_solidRotatedEnvs.begin(), m_solidRotatedEnvs.end(), [&](const RotatedSolidEnv& r) { return r.degrees == degrees; });
+         if (it == m_solidRotatedEnvs.end())
+         {
+            if (m_solidRotatedEnvs.size() >= 6)
+               m_solidRotatedEnvs.erase(m_solidRotatedEnvs.begin());
+            m_solidRotatedEnvs.push_back({ degrees, std::make_shared<Sampler>(m_renderDevice, "Solid Env Rotated"s, RotateEnvU(*m_solidEnvTex, degrees), false),
+               std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance Rotated"s, RotateEnvU(*m_solidIrradianceTex, degrees), false) });
+            it = m_solidRotatedEnvs.end() - 1;
+         }
+         env = it->env;
+         irradiance = it->irradiance;
+      }
+      basic->SetTexture(ShaderUniform::tex_env, env);
+      basic->SetTexture(ShaderUniform::tex_diffuse_env, irradiance);
+      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, opt.brightness, static_cast<float>(m_solidEnvSampler->GetHeight()), 0.f, 0.f);
    }
    else if (m_tableDiffuseEnv != nullptr)
    {
+      // The table's environment (also what Solid shows when this build has no studio environment), at the view's level
       basic->SetTexture(ShaderUniform::tex_env, m_envSampler);
       basic->SetTexture(ShaderUniform::tex_diffuse_env, m_tableDiffuseEnv);
-      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, m_tableEnvScale.x, m_tableEnvScale.y, m_tableEnvScale.z, m_tableEnvScale.w);
+      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, tableScale * (solid ? opt.brightness : opt.envStrength), static_cast<float>(m_envSampler->GetHeight()), 0.f, 0.f);
    }
 }
 
@@ -2765,9 +2828,9 @@ void Renderer::PreparePBRPasses()
    if (!m_editorPreviewPass)
    {
       // Shadow pages are skipped for a Solid main view unless a secondary PBR view (recorded after this) shares them
-      bool needShadows = !IsSolidPass();
+      bool needShadows = !NoTableLights();
       for (int slot = 0; slot < kMaxEditorViews; slot++)
-         needShadows |= m_editorViews[slot].requested && !m_editorViews[slot].request.wireframe && !m_editorViews[slot].request.solid;
+         needShadows |= m_editorViews[slot].requested && !m_editorViews[slot].request.wireframe && !m_editorViews[slot].request.solid && m_editorViews[slot].request.shade.tableLights;
       if (needShadows)
       {
          UpdateVirtualShadowMaps();
@@ -3816,8 +3879,8 @@ void Renderer::UpdatePBRShadowCache()
 // VPX_T11=0 disables the sphere light radius (punctual specular) and the Traced insert proxy lights (A/B tests).
 void Renderer::ApplyPBRLightGrid2()
 {
-   // Solid: no table lights (so no shadows either, the shadow lookups are per light)
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, m_pbrLightGrid2.x, IsSolidPass() ? 0.f : m_pbrLightGrid2.y, m_pbrLightGrid2.z, m_pbrLightGrid2.w);
+   // Solid (or a view with the table lights off): no table lights (so no shadows either, the shadow lookups are per light)
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, m_pbrLightGrid2.x, NoTableLights() ? 0.f : m_pbrLightGrid2.y, m_pbrLightGrid2.z, m_pbrLightGrid2.w);
 }
 
 void Renderer::BuildPBRLightList()
@@ -6071,6 +6134,7 @@ void Renderer::RenderEditorView(const int slot)
    const vec4 ballLighting = m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting); // Keep the 'disable lighting for balls' state (z)
 
    const ShadeMode mainShadeMode = m_shadeMode;
+   const ViewShadeOptions mainViewShade = m_viewShade;
    // Device settings recorded by RenderStatics and read when the frame is executed (after the main scene AND this pass are recorded):
    // the main scene's depth prepass clones its draws into m_depthPrepassTarget at execution, so they must be the main scene's again
    RenderTarget* const mainDepthPrepassTarget = m_renderDevice->m_depthPrepassTarget;
@@ -6078,7 +6142,8 @@ void Renderer::RenderEditorView(const int slot)
    const bool mainDepthPrepassMotion = m_renderDevice->m_depthPrepassMotion;
    const bool mainPBRAOEnabled = m_renderDevice->m_pbrAOEnabled;
    const unsigned int mainRenderMask = m_render_mask;
-   m_shadeMode = lite ? ShadeMode::Wireframe : ShadeMode::Default; // The secondary view's own shading, whatever the editor view's
+   m_shadeMode = lite ? (req.shade.xray ? ShadeMode::NoDepthWireframe : ShadeMode::Wireframe) : ShadeMode::Default; // The secondary view's own shading, whatever the editor view's
+   m_viewShade = req.shade;
    m_editorPreviewPass = true;
    m_editorPreviewPlayerCam = req.playerCamera;
    m_editorLitePass = lite;
@@ -6275,6 +6340,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorSolidPass = false;
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
+   m_viewShade = mainViewShade;
    m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
    m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;
    m_renderDevice->m_depthPrepassMotion = mainDepthPrepassMotion;
@@ -6890,14 +6956,15 @@ RenderProbe::ReflectionMode Renderer::GetMaxReflectionMode() const
 int Renderer::GetAOMode() const // 0=Off, 1=Static, 2=Dynamic
 {
    // We must evaluate this dynamically since AO scale and enabled/disable can be changed from script
-   if (m_disableAO || IsSolidPass() || !m_table->m_enableAO || !m_renderDevice->DepthBufferReadBackAvailable() || m_table->m_AOScale == 0.f)
+   const bool cavity = IsSolidPass() && m_viewShade.cavity; // Solid: the view asks for AO (Cavity), whatever the table's AO settings
+   if (m_disableAO || (IsSolidPass() && !cavity) || (!cavity && (!m_table->m_enableAO || m_table->m_AOScale == 0.f)) || !m_renderDevice->DepthBufferReadBackAvailable())
       return 0;
    // Dynamic AO under a moving camera needs the depth prepass motion vectors to reproject its temporal
    // accumulation (the depth-only path smears): in VR only enable it when the depth prepass is active, the
    // shaded normals it relies on being then emitted by need without requiring the dedicated setting
    if (m_stereo3D == STEREO_VR && !IsUsingDepthPrepass())
       return 0;
-   if (m_dynamicAO)
+   if (m_dynamicAO || cavity)
       return 2;
    return IsUsingStaticPrepass() ? 1 : 0; // If AO is static prepass only, and we are running without it, disable AO
 }

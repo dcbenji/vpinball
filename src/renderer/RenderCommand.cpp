@@ -477,6 +477,11 @@ void RenderCommand::DisableAlphaBlend()
    m_renderState.SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
 }
 
+void RenderCommand::SetCullMode(const RenderState::RenderStateValue mode)
+{
+   m_renderState.SetRenderState(RenderState::CULLMODE, mode);
+}
+
 string RenderCommand::ToString(bool detailled) const
 {
    std::stringstream ss;

@@ -13,6 +13,7 @@
 #include "renderer/RenderProbe.h"
 #include "renderer/Sampler.h"
 #include "renderer/ViewSetup.h"
+#include "renderer/ViewShadeOptions.h"
 #include "renderer/VSMPagePool.h"
 
 class IEditable;
@@ -122,6 +123,7 @@ public:
    static bool IsWireframeShade(ShadeMode mode) { return mode == ShadeMode::Wireframe || mode == ShadeMode::NoDepthWireframe; }
    bool IsSolidPass() const { return m_editorPreviewPass ? m_editorSolidPass : m_shadeMode == ShadeMode::Solid; }
    void SetShadeMode(ShadeMode mode) { m_shadeMode = mode; };
+   void SetViewShade(const ViewShadeOptions& options) { m_viewShade = options; } // The main editor view's view-only shading options (the defaults outside the editor view)
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
    void Render3DScene(); // Records the passes of a full frame rendering the 3D scene to the output backbuffer
@@ -148,6 +150,7 @@ public:
       const vector<IEditable*>* isolated = nullptr;
       PinTable* isolatedTable = nullptr;
       bool solid = false; // Full PBR path in Solid shading (ignored for wireframe)
+      ViewShadeOptions shade; // The view's own view-only shading options
    };
    bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full PBR view beyond kMaxEditorPBRViews
    bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full PBR view
@@ -322,6 +325,7 @@ public:
    };
    unsigned int m_render_mask = DEFAULT; // Active pass render bit mask
    bool IsRenderPass(const RenderMask pass_mask) const { return (m_render_mask & pass_mask) != 0; }
+   bool IsBackfaceCullingForced() const { return IsSolidPass() && m_viewShade.backfaceCulling && (m_render_mask & (UI_FILL | UI_EDGES)) == 0; } // Editor Solid view option: faces seen from behind are culled
 
    ToneMapper m_toneMapper = TM_AGX;
    bool m_HDRforceDisableToneMapper = true;
@@ -576,10 +580,20 @@ private:
    bool m_editorPreviewPass = false; // True while recording an editor secondary view (not the main editor view)
    bool m_editorPreviewPlayerCam = false; // ... with a table view setup (the player view): drawn as the player sees it, not as the editor view
    bool m_editorSolidPass = false; // ... in Solid shading
-   void ApplySolidEnv(); // Binds the studio environment (assets/library/_preview/env.hdr) in a Solid pass, the table's otherwise
+   void ApplySolidEnv(); // Binds the studio environment (assets/library/_preview/env.hdr) in a Solid pass, the table's otherwise; with the view's brightness / rotation / strength
    std::shared_ptr<const Sampler> m_solidEnvSampler, m_solidIrradianceSampler, m_tableDiffuseEnv;
-   vec4 m_tableEnvScale = vec4(1.f, 1.f, 0.f, 0.f);
+   std::shared_ptr<const BaseTexture> m_solidEnvTex, m_solidIrradianceTex; // CPU copies, rotated for the view's light direction
+   struct RotatedSolidEnv
+   {
+      int degrees;
+      std::shared_ptr<const Sampler> env, irradiance;
+   };
+   vector<RotatedSolidEnv> m_solidRotatedEnvs; // A few recent rotations (several views at once use different ones)
+   std::shared_ptr<const Sampler> m_flatSampler; // 1 x 1 white environment: Solid lighting Flat
    bool m_solidEnvTried = false;
+   ViewShadeOptions m_viewShade; // View-only shading options of the view being drawn: the main editor view's, a secondary view's during its pass
+   bool NoTableLights() const { return IsSolidPass() || !m_viewShade.tableLights; } // No table lights (nor shadows) in the view being drawn
+   static std::shared_ptr<BaseTexture> RotateEnvU(const BaseTexture& src, int degrees); // Equirectangular image turned about the vertical axis
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
    bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)

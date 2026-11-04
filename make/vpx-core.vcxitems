@@ -1922,6 +1922,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/renderer/TextureManager.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VertexBuffer.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/ViewSetup.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/renderer/ViewShadeOptions.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VRDevice.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VSMPagePool.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/Window.h" />

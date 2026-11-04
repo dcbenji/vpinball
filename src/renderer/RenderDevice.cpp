@@ -3125,6 +3125,8 @@ void RenderDevice::DrawMesh(Shader* shader, const bool isTranparentPass, const V
       depth = g_pplayer->m_renderer->IsRenderPass(Renderer::REFLECTION_PASS) ? depthBias + center.z : depthBias - center.z;
    // We can not use the real opacity from render states since some legacy code uses the alpha part that writes to the depth buffer (rendered during transparent pass) to mask out opaque parts
    cmd->SetDrawMesh(shader, mb, type, startIndex, indexCount, isTranparentPass /* && !GetRenderState().IsOpaque() */, depth);
+   if (shader == m_basicShader && g_pplayer->m_renderer != nullptr && g_pplayer->m_renderer->IsBackfaceCullingForced() && cmd->GetRenderState().GetRenderState(RenderState::CULLMODE) == RenderState::CULL_NONE)
+      cmd->SetCullMode(g_pplayer->m_tblMirrorEnabled ? RenderState::CULL_CW : RenderState::CULL_CCW); // Editor Solid view with Backface Culling: double sided draws are culled too
    if (depthPrepass)
    {
       // Draws that do not write to the depth buffer (e.g. classic light inserts) can not contribute to the prepass

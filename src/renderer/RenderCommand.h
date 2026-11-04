@@ -45,6 +45,7 @@ public:
    void CopyFrom(const RenderCommand* src);
    void DisableColorWrites();
    void DisableAlphaBlend();
+   void SetCullMode(RenderState::RenderStateValue mode); // Overrides the cull mode of the recorded draw
 
    Shader* GetShader() const { return m_shader; }
 
