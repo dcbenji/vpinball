@@ -654,64 +654,76 @@ void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       if (PaddedButton(ICON_FK_REFRESH "  Refresh", ImGui::GetContentRegionAvail().x, dpi))
          m_rescanLibrary = true;
 
-      // Folder tree, collapsible, as a filter of the tiles
-      if (ImGui::TreeNodeEx("Folders", ImGuiTreeNodeFlags_SpanAvailWidth))
+      // The library folders: removable
+      if (m_library.empty())
+         ImGui::TextDisabled("No library folder defined");
+      for (size_t i = 0; i < m_library.size(); i++)
       {
-         if (m_library.empty())
-            ImGui::TextDisabled("No library folder defined");
-         if (!m_library.empty() && ImGui::Selectable("(all)", m_filterFolder.empty()))
-            m_filterFolder.clear();
-         for (size_t i = 0; i < m_library.size(); i++)
+         ImGui::PushID(static_cast<int>(i));
+         if (ImGui::SmallButton(ICON_FK_TRASH_O))
          {
-            ImGui::PushID(static_cast<int>(i));
-            if (ImGui::SmallButton(ICON_FK_TRASH_O))
-            {
-               RemoveLibraryFolder(m_library[i].path); // By path: m_library skips the stored folders missing on disk
-               ImGui::PopID();
-               break;
-            }
-            if (ImGui::IsItemHovered())
-               ImGui::SetTooltip("Remove this library folder");
-            ImGui::SameLine();
-            const LibraryFolder &root = m_library[i];
-            const string label = root.path.filename().empty() ? PathToUTF8(root.path) : PathToUTF8(root.path.filename());
-            RenderLibraryFolder(root, label);
+            RemoveLibraryFolder(m_library[i].path); // By path: m_library skips the stored folders missing on disk
             ImGui::PopID();
+            break;
          }
-         ImGui::TreePop();
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Remove this library folder");
+         ImGui::SameLine();
+         ImGui::TextUnformatted(PathToUTF8(m_library[i].path).c_str());
+         ImGui::PopID();
       }
 
-      // The grid is the last section: it takes the area height down to the bottom edge (at least a row and a half of tiles)
-      RenderGridControls();
+      // The catalog column and the grid take the area height down to the bottom edge (at least a row and a half of tiles)
       const float gridHeight = max(ImGui::GetContentRegionAvail().y - 4.f * dpi, 150.f * dpi);
-      if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, gridHeight), ImGuiChildFlags_Borders))
-         RenderGrid(ImGui::GetContentRegionAvail().y);
+      RenderCatalogs(gridHeight);
+      ImGui::SameLine();
+      if (ImGui::BeginChild("##gridcol", ImVec2(0.f, gridHeight)))
+      {
+         RenderGridControls();
+         if (ImGui::BeginChild("##LibraryGrid", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders))
+            RenderGrid(ImGui::GetContentRegionAvail().y);
+         ImGui::EndChild();
+      }
       ImGui::EndChild();
       sections.EndSection();
       }
    }
    m_editor.EndAreaWindow();
 }
-void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const string &label)
+
+void PartLibraryPanel::RenderCatalogs(const float height)
 {
-   // A folder node: clicking it filters the tiles to its packs (subfolders included)
-   const bool open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | (folder.subFolders.empty() ? ImGuiTreeNodeFlags_Leaf : 0)
-         | (folder.path == m_filterFolder ? ImGuiTreeNodeFlags_Selected : 0));
-   if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-      m_filterFolder = folder.path;
-   if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s", PathToUTF8(folder.path).c_str());
-   if (open)
+   const float dpi = m_editor.m_liveUI.GetDPI();
+   if (ImGui::BeginChild("##catalogs", ImVec2(130.f * dpi, height)))
    {
-      for (const LibraryFolder &sub : folder.subFolders)
-         RenderLibraryFolder(sub, PathToUTF8(sub.path.filename()));
-      ImGui::TreePop();
+      ImDrawList *const drawList = ImGui::GetWindowDrawList();
+      const auto entry = [&](const string &label, const string &key)
+      {
+         const bool active = m_catalog == key;
+         const ImVec2 p0 = ImGui::GetCursorScreenPos();
+         const float h = ImGui::GetFrameHeight();
+         if (ImGui::Selectable((label + "##" + key).c_str(), active, 0, ImVec2(0.f, h)))
+         {
+            m_catalog = key;
+            SaveGridView();
+         }
+         if (active)
+            drawList->AddRectFilled(p0, ImVec2(p0.x + 3.f * dpi, p0.y + h), EditorTheme::Accent); // The orange marker of the active entry
+      };
+      entry("All"s, ""s);
+      for (const string &name : m_catalogs)
+      {
+         string label = name;
+         label[0] = static_cast<char>(toupper(static_cast<unsigned char>(label[0])));
+         entry(label, lowerCase(name));
+      }
    }
+   ImGui::EndChild();
 }
 
 void PartLibraryPanel::SaveGridView() const
 {
-   g_settingsService.GetAppSettings().SetEditor_PartLibraryView(std::format("{};{};{}", m_filterKind, m_sortKind, m_search), false);
+   g_settingsService.GetAppSettings().SetEditor_PartLibraryView(std::format("{};{};{}", m_catalog, m_sortKind, m_search), false);
 }
 
 void PartLibraryPanel::RenderGridControls()
@@ -723,16 +735,16 @@ void PartLibraryPanel::RenderGridControls()
       const size_t a = stored.find(';'), b = a == string::npos ? string::npos : stored.find(';', a + 1);
       if (b != string::npos)
       {
-         m_filterKind = clamp(atoi(stored.substr(0, a).c_str()), 0, 3);
+         // The catalog (an old value was the kind filter, a number: dropped)
+         m_catalog = stored.substr(0, a);
+         if (std::ranges::all_of(m_catalog, [](const char c) { return c >= '0' && c <= '9'; }))
+            m_catalog.clear();
          m_sortKind = clamp(atoi(stored.substr(a + 1, b - a - 1).c_str()), 0, 1);
          strncpy(m_search, stored.substr(b + 1).c_str(), sizeof(m_search) - 1);
       }
    }
    const float dpi = m_editor.m_liveUI.GetDPI();
    bool changed = false;
-   ImGui::SetNextItemWidth(80.f * dpi);
-   changed |= ImGui::Combo("##kind", &m_filterKind, "All\0Insert\0Material\0Part\0");
-   ImGui::SameLine();
    ImGui::SetNextItemWidth(90.f * dpi);
    changed |= ImGui::Combo("##sort", &m_sortKind, "Sort: Name\0Sort: Kind\0");
    ImGui::SameLine();
@@ -748,18 +760,16 @@ void PartLibraryPanel::RenderGrid(const float height)
    const float tile = 96.f * dpi, labelH = ImGui::GetTextLineHeight() + 6.f * dpi;
    const ImGuiStyle &style = ImGui::GetStyle();
    const int columns = max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + style.ItemSpacing.x) / (tile + style.ItemSpacing.x)));
-   const string filter = m_filterFolder.empty() ? ""s : PathToUTF8(m_filterFolder / ""); // Trailing separator: /lib/foo does not match /lib/foobar
    ImDrawList *const drawList = ImGui::GetWindowDrawList();
    int shown = 0, loads = 0;
-   // The tiles to show: the folder, kind and name filters, in the sort order (name, or kind then name; kind badges stay)
+   // The tiles to show: the catalog and name filters, in the sort order (name, or kind then name)
    static constexpr int kKindRank[] = { 2, 1, 0 }; // Part, Material, Insert -> Insert first
    const string search = lowerCase(m_search);
    vector<size_t> order;
    for (size_t i = 0; i < m_items.size(); i++)
    {
       const LibraryItem &item = m_items[i];
-      if ((!filter.empty() && PathToUTF8(item.pack).rfind(filter, 0) != 0) || (m_filterKind > 0 && kKindRank[static_cast<int>(item.kind)] != m_filterKind - 1)
-         || (!search.empty() && lowerCase(item.label).find(search) == string::npos))
+      if ((!m_catalog.empty() && item.catalog != m_catalog) || (!search.empty() && lowerCase(item.label).find(search) == string::npos))
          continue;
       order.push_back(i);
    }
@@ -955,6 +965,7 @@ void PartLibraryPanel::RescanLibrary()
    AbortThumbnail();
    m_library.clear();
    m_items.clear();
+   m_catalogs.clear();
    m_thumbQueue.clear();
    m_packKeys.clear();
    m_thumbsRendered = m_thumbsCached = m_thumbsFailed = 0;
@@ -985,7 +996,7 @@ void PartLibraryPanel::RescanLibrary()
       }
    };
    // Tiles in tree order: a pack's kind, and its thumbnails' state (cached when the pack key matches and every thumbnail exists)
-   const std::function<void(const LibraryFolder &)> addItems = [this, &addItems](const LibraryFolder &node)
+   const std::function<void(const LibraryFolder &, const string &)> addItems = [this, &addItems](const LibraryFolder &node, const string &catalog)
    {
       for (const std::filesystem::path &pack : node.packs)
       {
@@ -998,6 +1009,7 @@ void PartLibraryPanel::RescanLibrary()
          {
             LibraryItem &item = m_items.emplace_back();
             item.pack = pack;
+            item.catalog = catalog;
             item.material = material;
             item.label = label;
             item.kind = kind;
@@ -1028,7 +1040,7 @@ void PartLibraryPanel::RescanLibrary()
          }
       }
       for (const LibraryFolder &sub : node.subFolders)
-         addItems(sub);
+         addItems(sub, catalog.empty() ? lowerCase(PathToUTF8(sub.path.filename())) : catalog);
    };
    for (const std::filesystem::path &folder : GetLibraryFolders())
    {
@@ -1037,9 +1049,17 @@ void PartLibraryPanel::RescanLibrary()
          continue;
       m_library.emplace_back().path = folder;
       scanFolder(m_library.back());
-      addItems(m_library.back());
+      addItems(m_library.back(), ""s);
+      // The catalogs: the first level subfolders, united across the library folders
+      for (const LibraryFolder &sub : m_library.back().subFolders)
+      {
+         const string name = PathToUTF8(sub.path.filename());
+         if (std::ranges::find_if(m_catalogs, [&name](const string &c) { return lowerCase(c) == lowerCase(name); }) == m_catalogs.end())
+            m_catalogs.push_back(name);
+      }
    }
    std::ranges::reverse(m_thumbQueue); // Rendered from the back: in tile order
+   std::ranges::sort(m_catalogs, [](const string &a, const string &b) { return lowerCase(a) < lowerCase(b); });
 }
 
 PartLibraryPanel::PackInfo PartLibraryPanel::ScanPack(const std::filesystem::path &path)

@@ -93,6 +93,7 @@ private:
    struct LibraryItem
    {
       std::filesystem::path pack;
+      string catalog; // The first level library folder it was found in (lower case), empty: at the root
       string material; // Material items: the material name
       string label;
       ItemKind kind = ItemKind::Part;
@@ -154,7 +155,7 @@ private:
    void AbortThumbnail();
    static uint64_t PackKey(const std::filesystem::path &pack);
    static std::filesystem::path ThumbFolder(const std::filesystem::path &pack);
-   void RenderLibraryFolder(const LibraryFolder &folder, const string &label);
+   void RenderCatalogs(float height); // The catalog column left of the grid
    vector<std::filesystem::path> GetLibraryFolders() const;
    void SetLibraryFolders(const vector<std::filesystem::path> &folders);
    void AddLibraryFolder(const std::filesystem::path &folder);
@@ -178,11 +179,11 @@ private:
    std::filesystem::path m_selectedPack;
    PackInfo m_selectedPackInfo;
    vector<LibraryItem> m_items;
-   int m_filterKind = 0; // 0 all, 1 insert, 2 material, 3 part
+   string m_catalog; // Active catalog (a first level folder of the library folders, lower case), empty: all
+   vector<string> m_catalogs; // The catalogs found (display names), sorted
    int m_sortKind = 0; // 0 name, 1 kind then name
    char m_search[64] = {};
    bool m_viewLoaded = false;
-   std::filesystem::path m_filterFolder; // Tiles shown: the packs under this folder, all if empty
 
    // Thumbnail rendering: the queue of items to render, the pack keys to write once their last item is rendered
    vector<size_t> m_thumbQueue;
