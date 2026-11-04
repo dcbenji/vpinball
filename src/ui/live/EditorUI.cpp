@@ -4906,7 +4906,12 @@ void EditorUI::EndModalTransform(const bool confirm)
 {
    if (!m_modal.active)
       return;
-   if (!confirm)
+   // A confirmed transform that changed nothing (typed 0, the mouse did not move) leaves no undo step: it is dropped as a cancel (a duplicate is a change)
+   Matrix3D confirmed;
+   bool unchanged = confirm && !m_modal.duplicate && GetSelectionTransform(confirmed); // (the parts store Euler angles: a round trip leaves float noise, so compare with a tolerance)
+   for (int i = 0; unchanged && i < 16; i++)
+      unchanged = fabsf(confirmed.m[i / 4][i % 4] - m_modal.initial.m[i / 4][i % 4]) <= 1e-4f * max(1.f, fabsf(m_modal.initial.m[i / 4][i % 4]));
+   if (!confirm || unchanged)
    {
       if (m_modal.hasUndo)
          RestoreUndoState(m_undo.Undo(false)); // Canceled: nothing to redo
@@ -4922,7 +4927,7 @@ void EditorUI::EndModalTransform(const bool confirm)
 
    // The confirmed operation can be adjusted (Adjust Last Operation)
    Matrix3D current;
-   if (confirm && m_modal.hasUndo && !m_pointEditPart && !m_multiSel.empty() && GetSelectionTransform(current))
+   if (confirm && !unchanged && m_modal.hasUndo && !m_pointEditPart && !m_multiSel.empty() && GetSelectionTransform(current))
    {
       if (m_modal.duplicate && m_undo.MergeLastIntoPrevious()) // One undo step for the duplicate and its grab
       {
@@ -4977,28 +4982,48 @@ void EditorUI::UpdateModalTransform()
          EndModalTransform(true);
          return;
       }
-      // Axis constraint (pressing the same axis again removes it), Shift constrains to the plane instead
+      // Axis constraint (pressing the same axis again removes it), Shift constrains to the plane instead. Not with Ctrl / Alt / Cmd held (Ctrl+Z is not Z)
+      const bool chord = io.KeyCtrl || io.KeyAlt || io.KeySuper;
       const std::pair<ImGuiKey, int> axisKeys[] = { { ImGuiKey_X, 0 }, { ImGuiKey_Y, 1 }, { ImGuiKey_Z, 2 } };
       for (const auto &[key, axis] : axisKeys)
-         if (ImGui::IsKeyPressed(key, false))
+         if (!chord && ImGui::IsKeyPressed(key, false))
          {
             const bool same = m_modal.axis == axis && m_modal.plane == io.KeyShift;
             m_modal.axis = same ? -1 : axis;
             m_modal.plane = !same && io.KeyShift;
          }
-      // Numeric input
-      for (int i = 0; i < io.InputQueueCharacters.Size; i++)
+      // Numeric input. The keys are read directly (the digit row and the keypad, the minus and the period): SDL sends no text input here, as no text field is
+      // active (the backend starts it only for those). Characters are used when the platform does send them (a layout whose digits are not on the digit keys)
+      const auto typeChar = [this](const char c)
       {
-         const ImWchar c = io.InputQueueCharacters[i];
-         if ((c >= '0' && c <= '9') || c == '.')
-            m_modal.typed += static_cast<char>(c);
-         else if (c == '-')
+         if (c == '-')
          {
             if (!m_modal.typed.empty() && m_modal.typed[0] == '-')
                m_modal.typed.erase(0, 1);
             else
                m_modal.typed.insert(0, "-");
          }
+         else if (c != '.' || m_modal.typed.find('.') == string::npos)
+            m_modal.typed += c;
+      };
+      if (io.InputQueueCharacters.Size > 0)
+      {
+         for (int i = 0; i < io.InputQueueCharacters.Size; i++)
+         {
+            const ImWchar c = io.InputQueueCharacters[i];
+            if ((c >= '0' && c <= '9') || c == '.' || c == '-')
+               typeChar(static_cast<char>(c));
+         }
+      }
+      else if (!chord && !io.KeyShift)
+      {
+         for (int digit = 0; digit <= 9; digit++)
+            if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit), false) || ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit), false))
+               typeChar(static_cast<char>('0' + digit));
+         if (ImGui::IsKeyPressed(ImGuiKey_Minus, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, false))
+            typeChar('-');
+         if (ImGui::IsKeyPressed(ImGuiKey_Period, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal, false))
+            typeChar('.');
       }
       if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !m_modal.typed.empty())
          m_modal.typed.pop_back();
