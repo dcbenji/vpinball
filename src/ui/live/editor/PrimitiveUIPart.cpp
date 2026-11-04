@@ -93,7 +93,7 @@ void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
          curve->PushPoint(std::make_unique<DragPoint>(curve, pos.x, pos.y, m_part->m_d.m_plasticHoleDia, false));
          return;
       }
-      // A corner on the nearest straight run of the control polygon, at the point of the traced outline closest to the position
+      // A corner on the nearest chord of the control polygon (the closest point of the chord, not of an arc: an arc next to it becomes a new circle)
       const auto& pts = curve->GetPoints();
       const int n = (int)pts.size();
       float best = FLT_MAX;
@@ -630,7 +630,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && props.BeginSection("Position"s))
+   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && !m_part->IsPlasticCompanion() && props.BeginSection("Position"s))
    {
       props.Separator("Position, Rotation & Size"s);
       props.InputFloat3<Primitive>(

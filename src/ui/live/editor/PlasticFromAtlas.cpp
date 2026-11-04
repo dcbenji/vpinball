@@ -102,6 +102,7 @@ string PlasticFromAtlas::DefaultImage(const EditorUI &ed)
 void PlasticFromAtlas::SetSheet(EditorUI &ed)
 {
    Trace &t = ed.m_plasticTrace;
+   t.dpi = clamp(t.dpi, 10.f, 4800.f);
    const Texture *const tex = ed.m_table->GetImage(t.image);
    const float w = tex != nullptr && tex->m_width > 0 ? static_cast<float>(tex->m_width) : 1024.f;
    const float h = tex != nullptr && tex->m_height > 0 ? static_cast<float>(tex->m_height) : 1024.f;
@@ -137,6 +138,9 @@ void PlasticFromAtlas::Start(EditorUI &ed)
    t.dpi = ParseDpi(t.image);
    t.holeDia = 12.f;
    t.prevPerspective = ed.m_perspectiveCam;
+   t.prevView = ed.m_camView;
+   t.prevDistance = ed.m_camDistance;
+   t.prevPredefined = static_cast<int>(ed.m_predefinedView);
    ed.m_plasticTrace = t;
    SetSheet(ed);
    // Top view, orthographic, framed on the sheet
@@ -152,6 +156,9 @@ void PlasticFromAtlas::Cancel(EditorUI &ed)
    if (!ed.m_plasticTrace.active)
       return;
    ed.m_perspectiveCam = ed.m_plasticTrace.prevPerspective;
+   ed.m_camView = ed.m_plasticTrace.prevView;
+   ed.m_camDistance = ed.m_plasticTrace.prevDistance;
+   ed.m_predefinedView = static_cast<EditorUI::PredefinedView>(ed.m_plasticTrace.prevPredefined);
    ed.m_plasticTrace = Trace();
    ed.Report("Plastic from Atlas cancelled");
 }
@@ -199,7 +206,7 @@ void PlasticFromAtlas::Keys(EditorUI &ed)
 Material *PlasticFromAtlas::EnsureMaterial(PinTable *const table, const int which)
 {
    static constexpr const char *names[3] = { "PBR.Plastic_Print_Plastics", "PBR.Plastic_Clear1", "PBR.Plastic_Clear1_Bevel" };
-   if (Material *const existing = table->GetMaterial(names[which]); existing != nullptr)
+   if (Material *const existing = table->GetMaterial(names[which]); !table->IsDummyMaterial(existing)) // GetMaterial never returns null
       return existing;
    // Police Force's values
    Material *const m = new Material();
@@ -257,6 +264,23 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
    {
       ed.Report("Plastic from Atlas: the outline needs 3 points or more");
       return;
+   }
+   {
+      // Build it first: a degenerate outline (collinear clicks) must not leave three default primitives behind
+      vector<PlasticMesh::CurvePoint> outline;
+      for (const Vertex3Ds &p : t.pts)
+         outline.push_back({ p.x, p.y, false });
+      vector<PlasticMesh::Hole> holes;
+      for (const Vertex3Ds &h : t.holeList)
+         holes.push_back({ h.x, h.y, h.z });
+      PlasticMesh::Result probe;
+      if (!PlasticMesh::Build(outline, holes, PlasticMesh::Params(), probe))
+      {
+         ed.Report("Plastic from Atlas: the outline has no area (Backspace to fix it)");
+         return;
+      }
+      if (probe.skippedHoles > 0)
+         ed.Report("Plastic from Atlas: " + std::to_string(probe.skippedHoles) + " hole(s) outside the outline are left out");
    }
    const float cx = 0.5f * (ed.m_table->m_left + ed.m_table->m_right), cy = 0.5f * (ed.m_table->m_top + ed.m_table->m_bottom);
    const string hostName = ed.m_table->GetUniqueName("Plastic"s);
@@ -439,6 +463,7 @@ bool PlasticFromAtlas::BowPress(EditorUI &ed, const ImVec2 &mouse, const bool do
    const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
    const Vertex2D p = ed.UnprojectToPlane(mouse, z), q = ed.UnprojectToPlane(ImVec2(mouse.x + 8.f * ed.m_liveUI.GetDPI(), mouse.y), z);
    const float tol = hypotf(q.x - p.x, q.y - p.y);
+   PLOGI << "Plastic from Atlas: press at table " << p.x << ' ' << p.y;
    const vector<Span> spans = Spans(host->m_plasticCurve);
    int best = -1;
    float bestDist = tol;
@@ -453,7 +478,7 @@ bool PlasticFromAtlas::BowPress(EditorUI &ed, const ImVec2 &mouse, const bool do
    const Span &sp = spans[best];
    if (doubleClick)
    {
-      if (sp.peak >= 0)
+      if (sp.peak >= 0 && host->m_plasticCurve.GetPoints().size() > 3) // An outline keeps 3 points
       {
          ed.m_undo.BeginUndo();
          ed.m_undo.MarkForUndo(host);
@@ -523,6 +548,7 @@ void PlasticFromAtlas::BowDrag(EditorUI &ed)
 void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
 {
    const float *uvm = nullptr;
+   float z = 0.f; // the plane of the handles: the top of a placed plastic, so the backdrop lines up in perspective too
    string image;
    if (ed.m_plasticTrace.active)
    {
@@ -534,6 +560,7 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
       const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
       uvm = host->m_d.m_plasticUvm;
       image = host->m_d.m_szImage;
+      z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
    }
    if (uvm == nullptr || image.empty())
       return;
@@ -548,7 +575,7 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
    for (int i = 0; i < 4; i++)
    {
       const Vertex2D t = UvToTable(m, us[i], vs[i]);
-      p[i] = ctx.Project(Vertex3Ds(t.x, t.y, 0.f));
+      p[i] = ctx.Project(Vertex3Ds(t.x, t.y, z));
       if (p[i].x == FLT_MAX)
          return;
    }

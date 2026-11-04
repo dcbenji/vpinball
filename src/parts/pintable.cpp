@@ -5192,6 +5192,8 @@ void PinTable::AddMaterial(Material * const pmat)
    }
 
    m_materials.push_back(pmat);
+   if (!m_materialMap.empty()) // GetMaterial looks in the map once it is built
+      m_materialMap[pmat->m_name] = pmat;
 }
 
 void PinTable::RemoveMaterial(Material * const pmat)

@@ -405,7 +405,8 @@ public:
    DragPointCurve m_plasticCurve;
    DragPointCurve m_plasticHoles;
    bool m_plasticEditHoles = false; // Transient: point edit works on the holes instead of the outline
-   bool IsPlasticCompanion() const { return !m_d.m_plasticHost.empty(); }
+   bool IsPlasticCompanion() const; // Names a host that exists (an orphan, e.g. after a script rename, behaves as a plain primitive)
+   bool m_plasticPickDirty = false; // The mesh was rebuilt: the editor refreshes the picking collider
    void InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes); // Turns this (new) primitive into a plastic host
    void RegeneratePlastic(); // Rebuilds the host mesh and the meshes of the companions found in the table (no-op unless m_d.m_plasticGen)
    void UpdatePlastic(); // RegeneratePlastic + renderable refresh of the host and its companions

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "imgui/imgui.h"
+#include "math/matrix.h"
 #include "math/vector.h"
 
 class IEditable;
@@ -39,6 +40,9 @@ public:
       vector<Vertex3Ds> holeList; // x, y, diameter
       float holeDia = 12.f;
       bool prevPerspective = true;
+      Matrix3D prevView; // The camera to come back to when the trace is cancelled
+      float prevDistance = 0.f;
+      int prevPredefined = 0;
    };
 
    static bool CanStart(const EditorUI &ed);

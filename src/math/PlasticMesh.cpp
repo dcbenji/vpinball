@@ -45,7 +45,10 @@ void AppendArc(std::vector<P2>& out, P2 a, P2 p, P2 b, double tol)
    const double chord = Len(b - a);
    if (std::fabs(c) < 1e-9 * (1.0 + chord * chord))
    {
-      out.push_back(p);
+      // Straight: keep p only if it lies between a and b (beyond them it would make a zero-width spike)
+      const double t = chord > 1e-12 ? Dot(p - a, b - a) / (chord * chord) : 0.5;
+      if (t > 0.0 && t < 1.0)
+         out.push_back(p);
       out.push_back(b);
       return;
    }
@@ -56,7 +59,9 @@ void AppendArc(std::vector<P2>& out, P2 a, P2 p, P2 b, double tol)
    const double r = Len(a - o);
    if (r > 1e7)
    {
-      out.push_back(p);
+      const double t = chord > 1e-12 ? Dot(p - a, b - a) / (chord * chord) : 0.5;
+      if (t > 0.0 && t < 1.0)
+         out.push_back(p);
       out.push_back(b);
       return;
    }

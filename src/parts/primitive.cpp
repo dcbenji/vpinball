@@ -2062,6 +2062,18 @@ void Primitive::InitWireform(const Vertex2D &pos)
 // Plastic from Atlas generator
 //////////////////////////////
 
+bool Primitive::IsPlasticCompanion() const
+{
+   if (m_d.m_plasticHost.empty())
+      return false;
+   if (m_ptable == nullptr) // Loading: the host may come later
+      return true;
+   for (const IEditable *const part : m_ptable->GetParts())
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_plasticGen && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+         return true;
+   return false;
+}
+
 vector<Primitive *> Primitive::GetPlasticCompanions() const
 {
    vector<Primitive *> res;
@@ -2134,6 +2146,7 @@ void Primitive::RegeneratePlastic()
          p->m_d.m_use3DMesh = true;
          // No m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit (RenderSetup) rebuilds it
          p->OnMeshVerticesChanged();
+         p->m_plasticPickDirty = true;
          p->m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate the collider (the transform itself did not change)
       };
    vector<PlasticMesh::CurvePoint> outline;
@@ -2471,7 +2484,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PBVL): m_d.m_plasticBevel = reader.AsFloat(); break;
          case FID(PBSG): m_d.m_plasticBevelSegs = clamp(reader.AsInt(), 1, 16); break;
          case FID(PHDI): m_d.m_plasticHoleDia = reader.AsFloat(); break;
-         case FID(PDPI): m_d.m_plasticDpi = reader.AsFloat(); break;
+         case FID(PDPI): m_d.m_plasticDpi = clamp(reader.AsFloat(), 10.f, 4800.f); break;
          case FID(PUVM): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[0] = v.x; m_d.m_plasticUvm[1] = v.y; m_d.m_plasticUvm[2] = v.z; break; }
          case FID(PUVV): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[3] = v.x; m_d.m_plasticUvm[4] = v.y; m_d.m_plasticUvm[5] = v.z; break; }
          case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break;

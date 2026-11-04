@@ -2039,6 +2039,20 @@ void EditorUI::RenderUI()
       m_addPartType = eItemInvalid;
    if (m_plasticTrace.active && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       PlasticFromAtlas::Cancel(*this);
+   // Plastics whose meshes were rebuilt: their picking colliders follow (the heavy update waits for the end of a drag)
+   if (m_player != nullptr && m_player->m_physics != nullptr && !IsInspectMode())
+      for (IEditable *const part : m_table->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty)
+         {
+            Primitive *const plastic = static_cast<Primitive *>(part);
+            if (m_modal.active || m_gizmoDragActive || m_plasticBow.active)
+               m_player->m_physics->UpdateUI(plastic);
+            else
+            {
+               plastic->m_plasticPickDirty = false;
+               m_player->m_physics->Update(plastic);
+            }
+         }
 
    // Drag point edit mode housekeeping: exit without restoring the selection if the edited part is no
    // longer the active selected part, and drop selected points that do not exist anymore (points are
@@ -3263,7 +3277,7 @@ string EditorUI::CountLabel(const char *verb, const size_t count, const string &
 }
 
 // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
-bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending; }
+bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending || m_plasticBow.pending || m_plasticBow.active; }
 
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
@@ -4031,6 +4045,8 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       m_table->AddPart(editable);
       m_undo.MarkForCreate(editable);
       pasted.push_back(editable);
+      if (editable->GetItemType() == eItemPrimitive && !static_cast<Primitive *>(editable)->m_d.m_plasticHost.empty())
+         continue; // A companion sits at the origin: not part of the pasted bounds
       const Vertex2D center = editable->GetCenter();
       pasteMin.x = min(pasteMin.x, center.x);
       pasteMin.y = min(pasteMin.y, center.y);
@@ -4094,7 +4110,9 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
    UpdateEditableList();
    m_multiSel.clear();
    for (IEditable *const editable : pasted)
-      if (const auto it = m_editableMap.find(editable); it != m_editableMap.end())
+      if (editable->GetItemType() == eItemPrimitive && !static_cast<Primitive *>(editable)->m_d.m_plasticHost.empty())
+         continue; // Companions follow their host, they are not selected (the host stays the active part)
+      else if (const auto it = m_editableMap.find(editable); it != m_editableMap.end())
          m_multiSel.push_back(it->second);
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
    m_outlinerAnchor = m_multiSel.empty() ? nullptr : m_multiSel.back();
@@ -5300,8 +5318,13 @@ void EditorUI::EnterPointEditMode()
 
 void EditorUI::ExitPointEditMode(bool restoreSelection)
 {
+   m_plasticBow = PlasticFromAtlas::Bow();
    if (m_pointEditPart)
+   {
       m_pointEditPart->SetPointEditContext(nullptr);
+      if (m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive)
+         static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_plasticEditHoles = false; // The gizmo pivot is the outline's
+   }
    m_pointEditPart.reset();
    m_pointEditCenter = false;
    m_centerSelected = false;
@@ -5359,10 +5382,12 @@ void EditorUI::AddPointOnNearestSegment()
    if (curve == nullptr)
       return;
    const auto &points = curve->GetPoints();
-   if (points.empty())
+   const bool plasticHoles = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_plasticGen
+      && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_plasticEditHoles;
+   if (points.empty() && !plasticHoles) // The first hole of a plastic is added like the next ones
       return;
    // Unproject the mouse position on the drag plane of the edited curve
-   const float z = m_pointEditPart->GetDragPointZ(m_pointSel.empty() ? points.front().get() : m_pointSel.front());
+   const float z = points.empty() ? m_pointEditPart->GetDragPointZ(nullptr) : m_pointEditPart->GetDragPointZ(m_pointSel.empty() ? points.front().get() : m_pointSel.front());
    const Vertex2D pos = UnprojectToPlane(ImGui::GetMousePos(), z);
    m_undo.BeginUndo();
    m_undo.MarkForUndo(m_pointEditPart->GetEditable());

@@ -2,7 +2,7 @@
 
 // Plastic from Atlas mesh builder: a closed outline (corner points and arc peaks) with circular drill holes becomes three meshes,
 // the bottom cap (the printed side, normals up), the top cap, and the walls with a bevel on the top side.
-// No engine dependency, so it can be checked standalone (tools/plasticmesh_check.cpp).
+// No engine dependency, so it can be checked standalone (tools/plasticmesh_check.cpp: clang++ -std=c++20 -I src tools/plasticmesh_check.cpp src/math/PlasticMesh.cpp).
 // Triangle winding follows WireSweep: the right-hand geometric normal of every triangle agrees with its vertex normals.
 
 #pragma once
