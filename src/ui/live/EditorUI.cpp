@@ -2451,6 +2451,7 @@ void EditorUI::RenderUI()
          };
          ImGui::PushStyleColor(ImGuiCol_PlotLines, IM_COL32(255, 0, 0, 255)); // We abuse ImGui colors to pass render colors
          ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(255, 0, 0, 64));
+         // Known limit: these are the gameplay colliders, rebuilt at the drag end only, so a dragged part's outline stays at its start until release
          for (auto pho : m_player->m_physics->GetHitObjects())
             if (pho != nullptr && (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && IsEditableSelected(pho->m_editable))))
                pho->DrawUI(project, overlayDrawList, true);

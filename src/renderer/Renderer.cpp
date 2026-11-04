@@ -2096,7 +2096,7 @@ void Renderer::RenderItem(IEditable* const editable, bool isNoBackdrop)
 {
    // Wireframe modes only apply to the main scene render, not to sub passes (UI wireframe fill/edges, light buffer, reflection probes)
    const bool isWireframe = IsWireframeShade(m_shadeMode) && (m_render_mask & (UI_FILL | UI_EDGES | LIGHT_BUFFER | REFLECTION_PASS)) == 0;
-   if (IsSolidPass() && editable->GetItemType() == eItemLight)
+   if (IsSolidPass() && editable->GetItemType() == eItemLight && (m_render_mask & (UI_FILL | UI_EDGES)) == 0)
       return; // Solid shading: no table lights (parts, nor the bulb light buffer which draws them)
    if (editable->GetIRenderable() == nullptr // Not renderable
       || (editable->m_desktopBackdrop && isNoBackdrop) // Don't render backdrop items in reflections or VR & cabinet modes
@@ -2148,9 +2148,11 @@ bool Renderer::IsTemporalAccumulationInProgress() const
 void Renderer::ApplySolidEnv()
 {
    Shader* const basic = m_renderDevice->m_basicShader;
-   if (basic->m_state->GetTexture(ShaderUniform::tex_env).get() == m_envSampler.get()) // The table's environment is bound: remember it
+   if (basic->m_state->GetTexture(ShaderUniform::tex_env).get() == m_envSampler.get()) // The table's environment is bound (SetupShaders rebinds it, not the diffuse env): remember it
    {
-      m_tableDiffuseEnv = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      const std::shared_ptr<const Sampler> diffuse = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      if (diffuse != m_solidIrradianceSampler || m_solidIrradianceSampler == nullptr) // Never take the studio irradiance for the table's
+         m_tableDiffuseEnv = diffuse;
       m_tableEnvScale = basic->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
    }
    const bool solid = IsSolidPass();

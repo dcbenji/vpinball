@@ -467,7 +467,6 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             req.viewSetup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : BG_INVALID;
             req.wireframe = m_settings.wireframe;
             req.solid = m_settings.solid;
-            req.solid = m_settings.solid;
             if (m_settings.freeOrbit)
                ComputeOrbit(static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
             if (renderer->RequestEditorView(m_slot, req))
