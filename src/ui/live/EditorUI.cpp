@@ -2966,11 +2966,13 @@ void EditorUI::RenderUI()
             {
                // A number field typed into: its own text undo (and redo) once its text was edited, the editor's while the text is untouched
                const ImGuiInputTextState *const text = ImGui::GetInputTextState(g.ActiveId);
-               globalKeyOverItem = playKey || text == nullptr || !text->EditedBefore;
+               globalKeyOverItem = text == nullptr || !text->EditedBefore; // F5 included: typed text is applied only when the field deactivates, so it would be lost
             }
          }
       }
    }
+   if (globalKeyOverItem)
+      ImGui::ClearActiveID(); // The held item keeps its old text, which it would write back (maybe into another part after the undo) when it deactivates
    if ((!io.WantCaptureKeyboard || globalKeyOverItem) && m_fileOp == nullptr && !modalWasActive && !gameKeys && (!tracing || ImGui::IsKeyReleased(ImGuiKey_Escape)))
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
