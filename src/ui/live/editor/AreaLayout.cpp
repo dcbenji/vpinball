@@ -191,6 +191,8 @@ nlohmann::json NodeToJson(const std::vector<AreaNode>& nodes, const int idx)
             j["view_camera"] = "orbit";
          if (v.wireframe)
             j["view_shading"] = "wireframe";
+         else if (v.solid)
+            j["view_shading"] = "solid";
          if (!v.live)
             j["live"] = false;
          if (v.orbitValid)
@@ -282,7 +284,9 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
             // View settings: malformed or unknown values mean the default (never a reason to reject the layout)
             AreaViewSettings& v = tmp.m_nodes[idx].view;
             v.freeOrbit = n.contains("view_camera") && n["view_camera"].is_string() && n["view_camera"].get<std::string>() == "orbit";
-            v.wireframe = n.contains("view_shading") && n["view_shading"].is_string() && n["view_shading"].get<std::string>() == "wireframe";
+            const std::string shading = n.contains("view_shading") && n["view_shading"].is_string() ? n["view_shading"].get<std::string>() : std::string();
+            v.wireframe = shading == "wireframe";
+            v.solid = shading == "solid";
             v.live = !(n.contains("live") && n["live"].is_boolean() && !n["live"].get<bool>());
             if (const auto o = n.find("orbit"); o != n.end() && o->is_object())
             {
@@ -304,7 +308,7 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
                v.orbitValid = ok;
                v.ortho = ok && o->contains("ortho") && (*o)["ortho"].is_boolean() && (*o)["ortho"].get<bool>();
                if (!ok)
-                  v = AreaViewSettings { v.freeOrbit, v.wireframe, v.live };
+                  v = AreaViewSettings { v.freeOrbit, v.wireframe, v.solid, v.live };
             }
          }
       }

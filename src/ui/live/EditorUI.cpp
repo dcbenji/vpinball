@@ -3137,7 +3137,8 @@ void EditorUI::RenderUI()
             {
             case Renderer::ShadeMode::Default: m_shadeMode = Renderer::ShadeMode::Wireframe; break;
             case Renderer::ShadeMode::Wireframe: m_shadeMode = Renderer::ShadeMode::NoDepthWireframe; break;
-            case Renderer::ShadeMode::NoDepthWireframe: m_shadeMode = Renderer::ShadeMode::Default; break;
+            case Renderer::ShadeMode::NoDepthWireframe: m_shadeMode = Renderer::ShadeMode::Solid; break;
+            case Renderer::ShadeMode::Solid: m_shadeMode = Renderer::ShadeMode::Default; break;
             }
          }
       }

@@ -116,8 +116,11 @@ public:
    {
       Default,
       Wireframe,
-      NoDepthWireframe
+      NoDepthWireframe,
+      Solid // PBR with the table lights, shadows, refraction probe, AO and bloom off (editor view shading)
    };
+   static bool IsWireframeShade(ShadeMode mode) { return mode == ShadeMode::Wireframe || mode == ShadeMode::NoDepthWireframe; }
+   bool IsSolidPass() const { return m_editorPreviewPass ? m_editorSolidPass : m_shadeMode == ShadeMode::Solid; }
    void SetShadeMode(ShadeMode mode) { m_shadeMode = mode; };
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
@@ -144,6 +147,7 @@ public:
       // Both pointers must stay valid until the request is rendered (next Render3DScene)
       const vector<IEditable*>* isolated = nullptr;
       PinTable* isolatedTable = nullptr;
+      bool solid = false; // Full PBR path in Solid shading (ignored for wireframe)
    };
    bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full PBR view beyond kMaxEditorPBRViews
    bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full PBR view
@@ -567,6 +571,9 @@ private:
    void ForgetRenderTargetSamplers(const vector<RenderTarget*>& targets); // No shader keeps a sampler of these (released) targets bound
    bool m_editorPreviewPass = false; // True while recording an editor secondary view (not the main editor view)
    bool m_editorPreviewPlayerCam = false; // ... with a table view setup (the player view): drawn as the player sees it, not as the editor view
+   bool m_editorSolidPass = false; // ... in Solid shading
+   void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
+   vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
    bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)
    const ViewSetup* m_editorPreviewViewSetup = nullptr; // Setup rendered by the preview pass while it records, null otherwise (see GetRenderViewSetup)
 

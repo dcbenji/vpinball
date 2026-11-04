@@ -32,18 +32,19 @@ enum class AreaType : uint8_t
 constexpr int kPanelTypeCount = 4; // types offered in editor-type menus (CameraPreview added only by task 5)
 
 // Settings of a CameraPreview leaf (a secondary 3D view), saved with the leaf. JSON keys, all optional (absent = the default; builds
-// before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" (default "pbr"),
+// before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" or "solid" (default "pbr"),
 // "live": false, "orbit": { "yaw", "pitch", "distance", "target": [x, y, z], "ortho" } (absent = framed on the table when first shown)
 struct AreaViewSettings
 {
    bool freeOrbit = false; // Camera: false = Player view (the table view setup previewView), true = its own orbit camera
    bool wireframe = false; // Shading: false = full PBR, true = wireframe (lite path)
+   bool solid = false; // Shading: PBR in Solid shading (no table lights, shadows, refraction, AO, bloom); exclusive with wireframe
    bool live = true; // Re-rendered continuously (every 2nd frame), else after changes only
    bool orbitValid = false; // The orbit camera below was set (else it frames the table when first shown)
    bool ortho = false;
    float yaw = 0.f, pitch = 0.f, distance = 0.f; // Degrees, degrees, VPX units
    float target[3] = { 0.f, 0.f, 0.f };
-   bool SameChoices(const AreaViewSettings& o) const { return freeOrbit == o.freeOrbit && wireframe == o.wireframe && live == o.live; }
+   bool SameChoices(const AreaViewSettings& o) const { return freeOrbit == o.freeOrbit && wireframe == o.wireframe && solid == o.solid && live == o.live; }
 };
 
 // Names used in the workspace JSON ("Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview")
