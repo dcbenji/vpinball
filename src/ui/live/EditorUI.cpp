@@ -311,6 +311,9 @@ void EditorUI::SaveTable()
       m_liveUI.PushNotification(m_table->IsLocked() ? "Nothing saved: the table is locked"s : "Nothing saved: a file operation is still in progress"s, 8000);
       return;
    }
+   for (IEditable *const part : m_drag.pendingPhysics) // A save during a drag: the file gets meshes that match the points
+      if (part->GetItemType() == eItemPrimitive && std::ranges::find(m_table->GetParts(), part) != m_table->GetParts().end())
+         static_cast<Primitive *>(part)->FlushGenDrag();
    PinTable *saveTable = m_table;
    if (IsInspectMode())
    {
@@ -3441,7 +3444,11 @@ void EditorUI::FlushDrag()
    const auto &parts = m_table->GetParts();
    for (IEditable *const part : m_drag.pendingPhysics)
       if (std::ranges::find(parts, part) != parts.end()) // Still in the table (a canceled drag restored it)
+      {
+         if (part->GetItemType() == eItemPrimitive)
+            static_cast<Primitive *>(part)->FlushGenDrag(); // Before its colliders, which read the mesh
          m_player->m_physics->Update(part);
+      }
    if (m_drag.shadowDirty)
       m_renderer->InvalidateShadowContent();
    m_drag = Drag();
@@ -5594,9 +5601,17 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          scale.Set(1.f, 1.f, 1.f);
       if (clearRot)
          rot.Set(0.f, 0.f, 0.f);
-      part->SetTransform(pos, scale, rot);
       IEditable *const edit = part->GetEditable();
-      if (edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->IsTransformedByMatrix() || static_cast<Primitive *>(edit)->m_d.m_plasticGen) // A primitive is drawn under its matrix (a plastic is rebuilt with its companions)
+      Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<Primitive *>(edit) : nullptr;
+      const bool generated = prim != nullptr && (prim->m_d.m_plasticGen || prim->m_d.m_wireGen);
+      // In a drag, a wire or a plastic is drawn under a matrix too (with its companions), its mesh is rebuilt at the drag end (FlushDrag)
+      const bool deferred = generated && (m_modal.active || m_gizmoDragActive) && prim->CanDeferGenMesh();
+      if (generated)
+         prim->m_genDragDefer = deferred;
+      part->SetTransform(pos, scale, rot);
+      if (generated)
+         prim->m_genDragDefer = false;
+      if (prim == nullptr || !prim->IsTransformedByMatrix() || (generated && !deferred)) // A primitive is drawn under its matrix (a generated one was rebuilt, its static buffer can only be replaced)
          m_renderer->ReinitRenderable(edit->GetIRenderable());
       if (m_modal.active || m_gizmoDragActive)
       {

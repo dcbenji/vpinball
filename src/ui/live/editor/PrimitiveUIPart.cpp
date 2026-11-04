@@ -49,8 +49,9 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
       SetCurveTransform(pos, scale, rot);
       if (fabsf(pos.z - z) > 1e-4f)
       {
-         m_part->m_d.m_plasticHeight += pos.z - z;
-         m_part->RegeneratePlastic();
+         const float dz = pos.z - z;
+         m_part->m_d.m_plasticHeight += dz;
+         m_part->OnGenPointsMoved(Matrix3D::MatrixTranslate(0.f, 0.f, dz));
       }
       return;
    }
@@ -66,7 +67,7 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
       {
          for (const auto& pt : pts)
             pt->SetZ(pt->GetZ() + pos.z - z);
-         m_part->RegenerateWire();
+         m_part->OnGenPointsMoved(Matrix3D::MatrixTranslate(0.f, 0.f, pos.z - z));
       }
       return;
    }

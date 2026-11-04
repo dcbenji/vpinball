@@ -423,6 +423,8 @@ const Matrix3D& Primitive::RecalculateMatrices()
    m_fullMatrix = (Matrix3D::MatrixScale(m_d.m_vSize.x, m_d.m_vSize.y, m_d.m_vSize.z)
                  * RTmatrix)
                  * Matrix3D::MatrixTranslate(m_d.m_vPosition.x, m_d.m_vPosition.y, m_d.m_vPosition.z);
+   if (m_genDragMoved)
+      m_fullMatrix = m_fullMatrix * m_genDragMatrix;
    return m_fullMatrix;
 }
 
@@ -1928,6 +1930,55 @@ void Primitive::UpdateAnimation(const float diff_time_msec)
 // Positioning
 //////////////////////////////
 
+// x' = a x + b y + c, y' = d x + e y + f
+static Matrix3D GenAffine(const float a, const float b, const float c, const float d, const float e, const float f)
+{
+   return Matrix3D { a, d, 0.f, 0.f, b, e, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, c, f, 0.f, 1.f };
+}
+
+// The drawn parts of a generated primitive: nothing can be deferred when one is not drawn under its own matrix (rendered in a group)
+bool Primitive::CanDeferGenMesh() const
+{
+   if (m_renderer == nullptr || m_groupdRendering || m_skipRendering)
+      return false;
+   if (m_d.m_plasticGen)
+      for (const Primitive *const comp : GetPlasticCompanions())
+         if (comp->m_renderer == nullptr || comp->m_groupdRendering || comp->m_skipRendering)
+            return false;
+   return true;
+}
+
+// The wire or plastic points just moved by t. In an editor drag the live buffers are drawn under t until FlushGenDrag rebuilds the mesh at the drag end,
+// like a plain primitive's matrix (no mesh build and no buffers per frame, and the vertex count can not change under a queued frame); else the mesh is rebuilt now
+void Primitive::OnGenPointsMoved(const Matrix3D &t)
+{
+   if (!m_genDragDefer)
+   {
+      RegenerateWire();
+      RegeneratePlastic();
+      return;
+   }
+   const auto move = [&t](Primitive *const p)
+   {
+      p->m_genDragMatrix = p->m_genDragMoved ? p->m_genDragMatrix * t : t;
+      p->m_genDragMoved = true;
+   };
+   move(this);
+   if (m_d.m_plasticGen)
+      for (Primitive *const comp : GetPlasticCompanions())
+         move(comp);
+}
+
+void Primitive::FlushGenDrag()
+{
+   if (!m_genDragMoved)
+      return;
+   RegenerateWire();
+   RegeneratePlastic();
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this);
+}
+
 void Primitive::Translate(const Vertex2D &offset)
 {
    if (IsPlasticCompanion()) // Derived from its host (identity transform, the host carries the curve)
@@ -1937,14 +1988,14 @@ void Primitive::Translate(const Vertex2D &offset)
       m_plasticCurve.TranslatePoints(offset);
       m_plasticHoles.TranslatePoints(offset);
       PlasticMapTransform({ 1.f, 0.f, offset.x, 0.f, 1.f, offset.y });
-      RegeneratePlastic();
+      OnGenPointsMoved(Matrix3D::MatrixTranslate(offset.x, offset.y, 0.f));
       return;
    }
    if (m_d.m_wireGen)
    {
-      // Only the mesh is rebuilt here: the callers (gizmo / SetSelectionTransform) reinit the renderable and update the collider themselves
+      // The callers (SetSelectionTransform) reinit the renderable and update the collider themselves
       m_wireCurve.TranslatePoints(offset);
-      RegenerateWire();
+      OnGenPointsMoved(Matrix3D::MatrixTranslate(offset.x, offset.y, 0.f));
       return;
    }
    m_d.m_vPosition.x += offset.x;
@@ -1963,13 +2014,15 @@ void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool use
       m_plasticCurve.RotatePoints(ang, c);
       m_plasticHoles.RotatePoints(ang, c);
       PlasticMapTransform({ cs, -sn, c.x - cs * c.x + sn * c.y, sn, cs, c.y - sn * c.x - cs * c.y });
-      RegeneratePlastic();
+      OnGenPointsMoved(GenAffine(cs, -sn, c.x - cs * c.x + sn * c.y, sn, cs, c.y - sn * c.x - cs * c.y));
       return;
    }
    if (!m_d.m_wireGen)
       return IEditable::Rotate(ang, pvCenter, useElementCenter);
-   m_wireCurve.RotatePoints(ang, useElementCenter ? GetCenter() : pvCenter);
-   RegenerateWire();
+   const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
+   const float sn = sinf(ANGTORAD(ang)), cs = cosf(ANGTORAD(ang));
+   m_wireCurve.RotatePoints(ang, c);
+   OnGenPointsMoved(GenAffine(cs, -sn, c.x - cs * c.x + sn * c.y, sn, cs, c.y - sn * c.x - cs * c.y));
 }
 
 void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter)
@@ -1984,13 +2037,14 @@ void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pv
       for (const auto &h : m_plasticHoles.GetPoints()) // The diameter follows the scale
          h->SetZ(h->GetZ() * 0.5f * (fabsf(scalex) + fabsf(scaley)));
       PlasticMapTransform({ scalex, 0.f, c.x * (1.f - scalex), 0.f, scaley, c.y * (1.f - scaley) });
-      RegeneratePlastic();
+      OnGenPointsMoved(GenAffine(scalex, 0.f, c.x * (1.f - scalex), 0.f, scaley, c.y * (1.f - scaley)));
       return;
    }
    if (!m_d.m_wireGen)
       return IEditable::Scale(scalex, scaley, pvCenter, useElementCenter);
-   m_wireCurve.ScalePoints(scalex, scaley, useElementCenter ? GetCenter() : pvCenter);
-   RegenerateWire();
+   const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
+   m_wireCurve.ScalePoints(scalex, scaley, c);
+   OnGenPointsMoved(GenAffine(scalex, 0.f, c.x * (1.f - scalex), 0.f, scaley, c.y * (1.f - scaley)));
 }
 
 Vertex2D Primitive::GetCenter() const
@@ -2025,7 +2079,8 @@ void Primitive::RegenerateWire()
    for (float &v : m_d.m_aRotAndTra)
       v = 0.f;
    m_d.m_use3DMesh = true;
-   m_vertexBufferRegenerate = true;
+   m_genDragMoved = false;
+   // No m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit (RenderSetup) rebuilds it
    OnMeshVerticesChanged();
    m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate to force the collider rebuild (the transform itself did not change)
 }
@@ -2144,6 +2199,7 @@ void Primitive::RegeneratePlastic()
          for (float &v : p->m_d.m_aRotAndTra)
             v = 0.f;
          p->m_d.m_use3DMesh = true;
+         p->m_genDragMoved = false;
          // No m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit (RenderSetup) rebuilds it
          p->OnMeshVerticesChanged();
          p->m_plasticPickDirty = true;

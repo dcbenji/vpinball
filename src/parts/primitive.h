@@ -418,6 +418,12 @@ public:
    void SetPlasticDpi(float dpi); // Rescales the atlas about the outline's centroid
    vector<Primitive *> GetPlasticCompanions() const; // Primitives of the table whose host is this one
 
+   // Editor drag of a generated part (wire, plastic): see OnGenPointsMoved
+   bool m_genDragDefer = false; // Set by the editor around the transform of a drag frame
+   bool CanDeferGenMesh() const;
+   void OnGenPointsMoved(const Matrix3D &t);
+   void FlushGenDrag(); // Drag end: rebuilds the mesh from the points and reinitializes the renderable (no-op when not moved)
+
    bool m_lockedByLS = false;
    bool m_inPlayState = false;
 
@@ -446,6 +452,8 @@ private:
    Matrix3D m_prevFullMatrix; // Previous frame transform, for the depth prepass motion vectors
    bool m_prevFullMatrixValid = false;
    Matrix3D m_physicMatrix;
+   Matrix3D m_genDragMatrix; // Applied after m_fullMatrix while m_genDragMoved, a rebuild of the mesh drops it
+   bool m_genDragMoved = false;
    bool m_skipRendering = false;
    bool m_groupdRendering = false;
 public:
