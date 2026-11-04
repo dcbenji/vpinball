@@ -2414,9 +2414,11 @@ bool Renderer::IsTemporalAccumulationInProgress() const
 void Renderer::ApplySolidEnv()
 {
    Shader* const basic = m_renderDevice->m_basicShader;
-   if (basic->m_state->GetTexture(ShaderUniform::tex_env).get() == m_envSampler.get()) // The table's environment is bound: remember it
+   if (basic->m_state->GetTexture(ShaderUniform::tex_env).get() == m_envSampler.get()) // The table's environment is bound (SetupShaders rebinds it, not the diffuse env): remember it
    {
-      m_tableDiffuseEnv = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      const std::shared_ptr<const Sampler> diffuse = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      if (diffuse != m_solidIrradianceSampler || m_solidIrradianceSampler == nullptr) // Never take the studio irradiance for the table's
+         m_tableDiffuseEnv = diffuse;
       m_tableEnvScale = basic->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
    }
    const bool solid = IsSolidPass();
