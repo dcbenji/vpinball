@@ -2616,6 +2616,7 @@ void EditorUI::RenderUI()
       }
 
       // In drag point edit mode, render the drag points of the edited part's curve (or its center point)
+      PlasticFromAtlas::DrawPointEdit(*this, overlayDrawList, ctx);
       if (m_pointEditPart)
       {
          if (m_pointEditCenter)

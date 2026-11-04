@@ -633,6 +633,48 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
       draw->AddImageQuad(sampler, p[0], p[1], p[2], p[3], ImVec2(0.f, 0.f), ImVec2(1.f, 0.f), ImVec2(1.f, 1.f), ImVec2(0.f, 1.f));
 }
 
+static constexpr ImU32 kOutlineColor = IM_COL32(255, 60, 220, 255);
+
+// A line that stays readable over any art: the colour on a dark edge
+static void DrawOutlineSegment(ImDrawList *const draw, const ImVec2 &a, const ImVec2 &b, const float dpi)
+{
+   draw->AddLine(a, b, IM_COL32(0, 0, 0, 200), 3.5f * dpi);
+   draw->AddLine(a, b, kOutlineColor, 1.5f * dpi);
+}
+
+void PlasticFromAtlas::DrawPointEdit(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
+{
+   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsHost(ed.m_pointEditPart->GetEditable()))
+      return;
+   const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
+   const float dpi = ed.m_liveUI.GetDPI();
+   const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   vector<PlasticMesh::CurvePoint> pts;
+   for (const auto &point : host->m_plasticCurve.GetPoints())
+      pts.push_back({ point->GetX(), point->GetY(), point->IsSmooth() });
+   if (pts.size() >= 3)
+   {
+      const vector<PlasticMesh::CurvePoint> flat = PlasticMesh::FlattenOutline(pts, 0.25f);
+      for (size_t i = 0; i < flat.size(); i++)
+      {
+         const PlasticMesh::CurvePoint &n = flat[(i + 1) % flat.size()];
+         const ImVec2 a = ctx.Project(Vertex3Ds(flat[i].x, flat[i].y, z)), b = ctx.Project(Vertex3Ds(n.x, n.y, z));
+         if (a.x != FLT_MAX && b.x != FLT_MAX)
+            DrawOutlineSegment(draw, a, b, dpi);
+      }
+   }
+   for (const auto &hole : host->m_plasticHoles.GetPoints())
+   {
+      const ImVec2 c = ctx.Project(Vertex3Ds(hole->GetX(), hole->GetY(), z)), e = ctx.Project(Vertex3Ds(hole->GetX() + 0.5f * hole->GetZ(), hole->GetY(), z));
+      if (c.x != FLT_MAX && e.x != FLT_MAX)
+      {
+         const float r = hypotf(e.x - c.x, e.y - c.y);
+         draw->AddCircle(c, r, IM_COL32(0, 0, 0, 200), 32, 3.5f * dpi);
+         draw->AddCircle(c, r, kOutlineColor, 32, 1.5f * dpi);
+      }
+   }
+}
+
 void PlasticFromAtlas::DrawTrace(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
 {
    const Trace &t = ed.m_plasticTrace;
@@ -654,7 +696,7 @@ void PlasticFromAtlas::DrawTrace(EditorUI &ed, ImDrawList *const draw, const Liv
             break;
          const ImVec2 a = project(flat[i].x, flat[i].y), b = project(flat[(i + 1) % flat.size()].x, flat[(i + 1) % flat.size()].y);
          if (a.x != FLT_MAX && b.x != FLT_MAX)
-            draw->AddLine(a, b, IM_COL32(255, 210, 60, 255), 1.5f * dpi);
+            DrawOutlineSegment(draw, a, b, dpi);
       }
    }
    for (size_t i = 0; i < t.pts.size(); i++)
@@ -704,7 +746,7 @@ void PlasticFromAtlas::DrawTrace(EditorUI &ed, ImDrawList *const draw, const Liv
    {
       const ImVec2 last = project(t.pts.back().x, t.pts.back().y);
       if (last.x != FLT_MAX)
-         draw->AddLine(last, ImGui::GetMousePos(), IM_COL32(255, 210, 60, 110), dpi);
+         draw->AddLine(last, ImGui::GetMousePos(), IM_COL32(255, 60, 220, 110), dpi);
    }
 }
 

@@ -71,6 +71,7 @@ public:
    // The atlas drawn as a backdrop on the playfield plane (trace state, and Tab on a placed plastic) and the traced points over it
    static void DrawBackdrop(EditorUI &ed, ImDrawList *draw, const LiveRenderContext &ctx);
    static void DrawTrace(EditorUI &ed, ImDrawList *draw, const LiveRenderContext &ctx);
+   static void DrawPointEdit(EditorUI &ed, ImDrawList *draw, const LiveRenderContext &ctx); // Tab on a placed plastic: its exact outline and holes in colour
 
    // Companions follow their host through the editor operations (same undo record)
    static void SyncCompanionVisibility(const vector<IEditable *> &toggled); // The editor eye (H key, outliner) of a host reaches its companions (only for the parts that were toggled)
