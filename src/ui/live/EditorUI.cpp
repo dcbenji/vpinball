@@ -3115,6 +3115,8 @@ void EditorUI::RenderUI()
                      toggled.push_back(part->GetEditable());
                      changed = true;
                   }
+               for (const auto &part : m_multiSel) // Companions are never selected: a selected plastic keeps them
+                  toggled.push_back(part->GetEditable());
             }
             else
             { // Hide selected
