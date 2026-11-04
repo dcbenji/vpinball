@@ -242,6 +242,7 @@ private:
    double m_lbAnimUntil = 0.0; // Lit / Unlit: animate until the fade settled or this time
    InsertLook m_lbLook, m_lbPackLook; // Edited look, and the pack's own
    bool m_lbHasCard = false; // The scratch table has a Traced card
+   bool m_lbShowLook = false; // The look column shown by the gear toggle (a narrow panel)
    bool m_lbReal = false; // 'Table brightness': the normalization is off
    vector<InsertLook> m_lbOrig; // Each Traced card's own values
    std::map<std::filesystem::path, LookOverride> m_looks; // Overrides of the packs, for the session (never written to a pack)

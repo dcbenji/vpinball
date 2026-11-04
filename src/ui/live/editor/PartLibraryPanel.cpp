@@ -1528,7 +1528,7 @@ void PartLibraryPanel::RenderLightbox()
    }
    ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(0.9f * io.DisplaySize.x, 0.9f * io.DisplaySize.y));
    bool open = true;
-   if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+   if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
    {
       CloseLightbox();
       return;
@@ -1631,40 +1631,23 @@ void PartLibraryPanel::RenderLightbox()
             break;
          }
 
-   // Header: name, kind and counts
-   static constexpr const char *kKinds[] = { "Part", "Material", "Insert" };
-   ImGui::TextUnformatted(m_lbItem.label.c_str());
-   ImGui::SameLine();
-   ImGui::TextDisabled("%s", kKinds[static_cast<int>(m_lbItem.kind)]);
-   ImGui::TextDisabled("%d part(s), %d material(s), %d image(s)%s%s", m_lbInfo.parts, m_lbInfo.materials, m_lbInfo.images, m_lbItem.material.empty() ? "" : ", material ", m_lbItem.material.c_str());
+   // The light fades are stepped while the lightbox is open, and re-rendered only while they move (blinking: always)
+   if (m_lbScratch != nullptr && !m_lbLights.empty())
+   {
+      const bool changed = AnimateLights(min(io.DeltaTime * 1000.f, 100.f));
+      if (m_lbState == 2.f || (changed && m_lbClock < m_lbAnimUntil))
+         m_lbDirty = true;
+   }
 
-   // An insert's controls: a column left of the preview
-   const bool column = m_lbItem.kind == ItemKind::Insert;
+   // Layout: the render fills the panel, the insert's look sliders in a column beside it (behind a gear toggle when the panel is narrow), then a one-line
+   // toolbar and a one-line caption
+   const bool insert = m_lbItem.kind == ItemKind::Insert;
+   const bool column = insert && m_lbHasCard && (ImGui::GetWindowWidth() >= 700.f * dpi || m_lbShowLook);
+   const float bodyH = max(32.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetTextLineHeightWithSpacing());
    if (column)
    {
-      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing()), ImGuiChildFlags_None);
+      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, bodyH), ImGuiChildFlags_None);
       ImGui::PushItemWidth(-135.f * dpi);
-   }
-   // Insert states, through the pack's own Light
-   if (m_lbItem.kind == ItemKind::Insert)
-   {
-      ImGui::BeginDisabled(m_lbLights.empty());
-      static constexpr struct { const char *label; float state; } kStates[] = { { "Lit", 1.f }, { "Unlit", 0.f }, { "Blink", 2.f } };
-      for (const auto &st : kStates)
-      {
-         const bool active = m_lbState == st.state;
-         if (active)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-         if (ImGui::Button(st.label) && !active)
-            SetLightboxState(st.state);
-         if (active)
-            ImGui::PopStyleColor();
-         ImGui::SameLine();
-      }
-      ImGui::EndDisabled();
-      if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("This pack has no Light");
-   }
    // The card's look, live in the preview and carried into the placed part (kept per pack for the session; the pack is never written)
    if (m_lbHasCard && m_lbScratch != nullptr)
    {
@@ -1717,27 +1700,14 @@ void PartLibraryPanel::RenderLightbox()
          m_lbDirty = true;
       }
    }
-   if (ImGui::Button("Reset View") && m_lbScratch != nullptr)
-      FrameLightbox(true);
-   if (column)
-   {
       ImGui::PopItemWidth();
       ImGui::EndChild();
       ImGui::SameLine();
    }
 
-   // The light fades are stepped while the lightbox is open, and re-rendered only while they move (blinking: always)
-   if (m_lbScratch != nullptr && !m_lbLights.empty())
-   {
-      const bool changed = AnimateLights(min(io.DeltaTime * 1000.f, 100.f));
-      if (m_lbState == 2.f || (changed && m_lbClock < m_lbAnimUntil))
-         m_lbDirty = true;
-   }
-
    // Image area, orbited like a Sketchfab model: left drag, wheel zoom, double click frames
-   const float hintH = ImGui::GetTextLineHeightWithSpacing();
    const ImVec2 avail = ImGui::GetContentRegionAvail();
-   const ImVec2 size(max(32.f, avail.x), max(32.f, avail.y - hintH));
+   const ImVec2 size(max(32.f, avail.x), bodyH);
    const ImVec2 imgMin = ImGui::GetCursorScreenPos(), imgMax(imgMin.x + size.x, imgMin.y + size.y);
    ImGui::InvisibleButton("##view", size);
    const bool hovered = ImGui::IsItemHovered();
@@ -1854,7 +1824,71 @@ void PartLibraryPanel::RenderLightbox()
    if (note != nullptr)
       drawList->AddText(ImVec2(imgMin.x + 6.f * dpi, imgMax.y - ImGui::GetTextLineHeight() - 4.f * dpi), EditorTheme::TextDim, note);
    drawList->AddRect(imgMin, imgMax, hovered ? EditorTheme::Accent : EditorTheme::WorkspaceOff, 0.f, 0, 1.f);
-   ImGui::TextDisabled("Drag: orbit   Wheel: zoom   Double click: frame   Esc: close");
+
+   // Toolbar: reset view, the insert states (segmented), the look gear when the column is hidden, and Place at the right
+   if (ImGui::Button(ICON_FK_CROSSHAIRS "##ResetView") && m_lbScratch != nullptr)
+      FrameLightbox(true);
+   ImGui::SetItemTooltip("Reset view (also: double click the render). Drag orbits, the wheel zooms");
+   if (insert)
+   {
+      ImGui::SameLine();
+      ImGui::BeginDisabled(m_lbLights.empty());
+      static constexpr struct { const char *label; float state; } kStates[] = { { "Unlit", 0.f }, { "Lit", 1.f }, { "Blink", 2.f } };
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, ImGui::GetStyle().ItemSpacing.y));
+      for (int i = 0; i < 3; i++)
+      {
+         const bool active = m_lbState == kStates[i].state;
+         if (i > 0)
+            ImGui::SameLine();
+         if (active)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+         if (ImGui::Button(kStates[i].label) && !active)
+            SetLightboxState(kStates[i].state);
+         if (active)
+            ImGui::PopStyleColor();
+      }
+      ImGui::PopStyleVar();
+      ImGui::EndDisabled();
+      if (m_lbLights.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("This pack has no Light");
+      if (m_lbHasCard && ImGui::GetWindowWidth() < 700.f * dpi)
+      {
+         ImGui::SameLine();
+         if (m_lbShowLook)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+         if (ImGui::Button(ICON_FK_COG "##LookToggle"))
+            m_lbShowLook = !m_lbShowLook;
+         if (m_lbShowLook)
+            ImGui::PopStyleColor();
+         ImGui::SetItemTooltip("Look controls");
+      }
+   }
+   {
+      const bool material = m_lbItem.kind == ItemKind::Material;
+      const char *const placeLabel = material ? ICON_FK_DOWNLOAD "  Apply" : ICON_FK_DOWNLOAD "  Place";
+      const float placeW = ImGui::CalcTextSize(placeLabel).x + 2.f * ImGui::GetStyle().FramePadding.x;
+      ImGui::SameLine(max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - placeW - ImGui::GetStyle().WindowPadding.x));
+      ImGui::BeginDisabled(m_editor.m_table->IsLocked());
+      const bool place = ImGui::Button(placeLabel);
+      ImGui::EndDisabled();
+      ImGui::SetItemTooltip(material ? "Import the material and apply it to the selected parts" : "Place it at the selection centre, or the table centre");
+      if (place)
+      {
+         // Placed by the double click rule; the lightbox closes
+         const LibraryItem item = m_lbItem;
+         ImGui::CloseCurrentPopup();
+         ImGui::EndPopup();
+         CloseLightbox();
+         if (material)
+            ApplyMaterialItem(item);
+         else
+            PlaceItem(item);
+         return;
+      }
+   }
+   static constexpr const char *kKinds[] = { "Part", "Material", "Insert" };
+   ImGui::TextDisabled("%s: %s%s%s", kKinds[static_cast<int>(m_lbItem.kind)], m_lbItem.label.c_str(), insert ? ", Traced" : "",
+      insert && m_lbHasCard && !(m_lbLook == m_lbPackLook) ? ", modified, applies on place" : "");
    ImGui::EndPopup();
 }
 
