@@ -3761,7 +3761,7 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
    }
 }
 
-bool EditorUI::IsEditablePickable(const IEditable *editable) const
+bool EditorUI::IsEditableVisible(const IEditable *editable) const
 {
    // In desktop backdrop mode, only backdrop parts can be picked, and conversely in the other view modes
    if (editable->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop))
@@ -3775,7 +3775,12 @@ bool EditorUI::IsEditablePickable(const IEditable *editable) const
       visible &= parent->IsUIVisible(false);
       parent = parent->GetPartGroup();
    }
-   if (!visible)
+   return visible;
+}
+
+bool EditorUI::IsEditablePickable(const IEditable *editable) const
+{
+   if (!IsEditableVisible(editable))
       return false;
    const auto type = editable->GetItemType();
    if (!HasFlag(m_selectionFilter, SelectionFilter::Playfield) && type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())

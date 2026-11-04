@@ -2101,15 +2101,26 @@ void PartLibraryPanel::UpdatePlacement(const ImVec2 &mousePos)
    PlaceAt(m_editor.UnprojectToPlane(mousePos, 0.f));
 }
 
-// Moves the pack content to the given playfield XY point, resting on the topmost surface under it (a vertical ray cast: the UI quadtree holds all
-// parts, collidable or not)
+// Moves the pack content to the given playfield XY point, resting on the topmost visible surface under it (a vertical ray cast: the UI quadtree holds all
+// parts, collidable or not). Hits are filtered as the editor's click picking does (EditorUI::IsEditableVisible: hidden parts and hidden groups do not count),
+// and lights and additive primitives (lightmaps) are skipped as they are not surfaces; 0 when nothing qualifies
 void PartLibraryPanel::PlaceAt(const Vertex2D &pos)
 {
    const float zTop = m_editor.m_table->m_glassTopHeight + 500.f;
    const float zBottom = -500.f;
    vector<HitTestResult> hits;
    m_editor.m_player->m_physics->RayCast(Vertex3Ds(pos.x, pos.y, zTop), Vertex3Ds(pos.x, pos.y, zBottom), true, hits);
-   const float restZ = hits.empty() ? 0.f : zTop + hits.front().m_time * (zBottom - zTop);
+   float restZ = 0.f;
+   for (const HitTestResult &hit : hits)
+   {
+      const IEditable *const editable = hit.m_obj != nullptr ? hit.m_obj->m_editable : nullptr;
+      if (editable == nullptr || !m_editor.IsEditableVisible(editable) || editable->GetItemType() == eItemLight)
+         continue;
+      if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->m_d.m_addBlend)
+         continue;
+      restZ = zTop + hit.m_time * (zBottom - zTop);
+      break;
+   }
 
    if (pos.x == m_previewPos.x && pos.y == m_previewPos.y && restZ == m_previewZ)
    {

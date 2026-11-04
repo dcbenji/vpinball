@@ -150,6 +150,7 @@ private:
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
    IEditable *HitEditable(const HitTestResult &hit) const;
    void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const;
+   bool IsEditableVisible(const IEditable *editable) const; // The view mode, the part and its groups are visible: the first half of IsEditablePickable
    bool IsEditablePickable(const IEditable *editable) const;
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
