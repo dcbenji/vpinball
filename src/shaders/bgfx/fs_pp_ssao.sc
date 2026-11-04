@@ -20,6 +20,8 @@ uniform vec4 w_h_height;
 uniform vec4 AO_scale_timeblur; // actually vec2 extended to vec4
 uniform vec4 aoFx; // Editor Solid extras of this pass: x outline strength, zero otherwise
 
+uniform vec4 aoLightDir; // Editor Solid Shadow: xyz view space direction towards the light, w strength (zero = off)
+
 SAMPLER2DSTEREO(tex_fb_filtered,  0); // Framebuffer (filtered)
 SAMPLER2DSTEREO(tex_depth,        4); // DepthBuffer
 SAMPLER2D      (tex_ao_dither,    5); // AO Dither
@@ -33,6 +35,7 @@ SAMPLER2DSTEREO(tex_normals,      6); // Shaded view space normals from the dept
 #else
 	uniform mat4 matProjInv;
 	#define mProjInv matProjInv
+	uniform mat4 matProj;
 #endif
 
 #ifdef STEREO
@@ -189,6 +192,30 @@ void main()
 		const float zd = depthToViewZ(u + vec2(0.0, w_h_height.y), texStereoNoLod(tex_depth, u + vec2(0.0, w_h_height.y)).x);
 		const float edge = max(abs(zl + zr - 2.0 * z0), abs(zu + zd - 2.0 * z0));
 		ao = min(ao, 1.0 - aoFx.x * smoothstep(4.0, 12.0, edge));
+	}
+	// Editor Solid Shadow: march from the surface towards the light in view space and look for the depth buffer in front of the ray (jittered start for a soft edge)
+	BRANCH if(aoLightDir.w > 0.0)
+	{
+		float sh = 0.0;
+		UNROLL for(int i = 0; i < 16; ++i)
+		{
+			const float t = (float(i) + ushift.x) * (1.0 / 16.0);
+			const vec3 p = vp0 + aoLightDir.xyz * (300.0 * t);
+			vec4 c = mul(matProj, vec4(p, 1.0));
+			c.xyz /= c.w;
+			#if TEX_V_IS_UP
+				const vec2 su = vec2(c.x * 0.5 + 0.5, c.y * 0.5 + 0.5);
+			#else
+				const vec2 su = vec2(c.x * 0.5 + 0.5, 0.5 - c.y * 0.5);
+			#endif
+			BRANCH if(su.x > 0.0 && su.x < 1.0 && su.y > 0.0 && su.y < 1.0)
+			{
+				const float sd = texStereoNoLod(tex_depth, su).x;
+				const float diff = depthToViewZ(su, sd) - p.z; // > 0: the depth buffer holds something closer to the camera than the ray
+				sh = max(sh, smoothstep(2.0, 8.0, diff) * (1.0 - smoothstep(60.0, 120.0, diff)));
+			}
+		}
+		ao = min(ao, 1.0 - aoLightDir.w * sh);
 	}
 	#endif
 	#if defined(NORMAL_TEX) && defined(MOTION)

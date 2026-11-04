@@ -450,7 +450,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, bloom_dither_colorgrade, 1), SHADER_UNIFORM(ShaderUniformType::Float4, exposure_wcg, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, agx_params, 1), SHADER_UNIFORM(ShaderUniformType::Float4, spline1, 1), SHADER_UNIFORM(ShaderUniformType::Float2, spline2, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, SSR_bumpHeight_fresnelRefl_scale_FS, 1), SHADER_UNIFORM(ShaderUniformType::Float2, AO_scale_timeblur, 1),
-   SHADER_UNIFORM(ShaderUniformType::Float4, aoFx, 1),
+   SHADER_UNIFORM(ShaderUniformType::Float4, aoFx, 1), SHADER_UNIFORM(ShaderUniformType::Float4, aoLightDir, 1),
    SHADER_SAMPLER(tex_fb_unfiltered, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_NONE), // Framebuffer (unfiltered)
    SHADER_SAMPLER(tex_fb_filtered, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // Framebuffer (filtered)
    SHADER_SAMPLER(tex_bloom, 1, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // Bloom

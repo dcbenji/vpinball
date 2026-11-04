@@ -2478,6 +2478,8 @@ bool Renderer::IsTemporalAccumulationInProgress() const
 
 bool Renderer::HasScreenSpaceFx() const { return m_renderDevice->m_FBShader != nullptr && m_renderDevice->m_FBShader->HasUniform(ShaderUniform::aoFx); }
 
+bool Renderer::HasSolidShadow() const { return m_renderDevice->m_FBShader != nullptr && m_renderDevice->m_FBShader->HasUniform(ShaderUniform::aoLightDir); }
+
 bool Renderer::HasEnvRotation() const { return m_renderDevice->m_basicShader->HasUniform(ShaderUniform::envRotation); }
 
 void Renderer::ApplySolidEnv()
@@ -4368,6 +4370,25 @@ void Renderer::UpdateAmbientOcclusion(RenderTarget* renderedRT, unsigned int jit
    m_renderDevice->m_FBShader->SetMatrix(ShaderUniform::matProjInv, &matProjInv[0], nEyes);
    if (HasScreenSpaceFx()) // Not on GL, DX9 and the BGFX stereo / VR variants, whose AO shader has no such uniform
       m_renderDevice->m_FBShader->SetVector(ShaderUniform::aoFx, IsSolidPass() && m_viewShade.outline ? 1.f : 0.f, 0.f, 0.f, 0.f); // Solid Outline (zero elsewhere)
+   if (HasSolidShadow()) // Same: only where the AO shader has the uniform
+   {
+      // Solid Shadow (strength zero elsewhere): the light sits at the Light Direction (turned from the table's upper left front) and at 55 degrees plus the Light Elevation above the table
+      Vertex3Ds lightDir(0.f, 0.f, 1.f);
+      float strength = 0.f;
+      if (IsSolidPass() && m_viewShade.shadow)
+      {
+         const float az = (135.f + m_viewShade.lightAngle) * (float)(M_PI / 180.), el = clamp(55.f + m_viewShade.lightElevation, 10.f, 85.f) * (float)(M_PI / 180.);
+         const Vertex3Ds world(cosf(el) * cosf(az), cosf(el) * sinf(az), sinf(el));
+         lightDir = GetMVP().GetView(0).MultiplyVectorNoTranslate(world);
+         lightDir.Normalize();
+         strength = 0.65f;
+      }
+      m_renderDevice->m_FBShader->SetVector(ShaderUniform::aoLightDir, lightDir.x, lightDir.y, lightDir.z, strength);
+      Matrix3D matProj[2];
+      for (int eye = 0; eye < nEyes; eye++)
+         matProj[eye] = GetMVP().GetFlippedProj(eye);
+      m_renderDevice->m_FBShader->SetMatrix(ShaderUniform::matProj, &matProj[0], nEyes);
+   }
    // When the depth prepass generated camera motion vectors (dynamic AO while the static prepass is disabled,
    // e.g. VR, headtracking or the editor), they are sampled along the normals to reproject the previous frame AO
    // history
@@ -6973,7 +6994,7 @@ RenderProbe::ReflectionMode Renderer::GetMaxReflectionMode() const
 int Renderer::GetAOMode() const // 0=Off, 1=Static, 2=Dynamic
 {
    // We must evaluate this dynamically since AO scale and enabled/disable can be changed from script
-   const bool cavity = IsSolidPass() && (m_viewShade.cavity || (m_viewShade.outline && HasScreenSpaceFx())); // Solid: the view asks for the AO pass (Cavity, or its Outline), whatever the table's AO settings
+   const bool cavity = IsSolidPass() && (m_viewShade.cavity || (m_viewShade.outline && HasScreenSpaceFx()) || (m_viewShade.shadow && HasSolidShadow())); // Solid: the view asks for the AO pass (Cavity, or its Outline), whatever the table's AO settings
    if (m_disableAO || (IsSolidPass() && !cavity) || (!cavity && (!m_table->m_enableAO || m_table->m_AOScale == 0.f)) || !m_renderDevice->DepthBufferReadBackAvailable())
       return 0;
    // Dynamic AO under a moving camera needs the depth prepass motion vectors to reproject its temporal

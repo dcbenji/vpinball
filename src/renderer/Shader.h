@@ -475,6 +475,7 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4, SSR_bumpHeight_fresnelRefl_scale_FS, 1),
    SHADER_UNIFORM(ShaderUniformType::Float2, AO_scale_timeblur, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, aoFx, 1), // BGFX only: editor Solid screen space extras of the AO pass: x outline strength
+   SHADER_UNIFORM(ShaderUniformType::Float4, aoLightDir, 1), // BGFX only: editor Solid Shadow: xyz view space direction towards the light, w strength (0 = off)
    SHADER_SAMPLER(tex_fb_unfiltered, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_NONE), // Framebuffer (unfiltered)
    SHADER_SAMPLER(tex_fb_filtered, 0, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // Framebuffer (filtered)
    SHADER_SAMPLER(tex_bloom, 1, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_BILINEAR), // Bloom

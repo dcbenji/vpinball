@@ -178,8 +178,9 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       ImGui::PopID();
    };
    // The environment turn is a BGFX shader uniform: the GL and DX9 shaders do not have it
-   // Outline and Shadow ride the AO shader's aoFx uniform: BGFX, but not its stereo / VR variants
+   // Outline and Shadow ride the AO shader's aoFx / aoLightDir uniforms: BGFX, but not its stereo / VR variants
    const char *const noScreenFx = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasScreenSpaceFx() ? "Not available with this renderer (the AO shader has no such effect, e.g. GL, DX9, stereo / VR)" : nullptr;
+   const char *const noSolidShadow = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasSolidShadow() ? "Not available with this renderer (the AO shader has no such effect, e.g. GL, DX9, stereo / VR)" : nullptr;
    const char *const noEnvRotation = g_pplayer != nullptr && g_pplayer->m_renderer != nullptr && !g_pplayer->m_renderer->HasEnvRotation() ? "Not available with this renderer (the shaders have no environment rotation)" : nullptr;
    // Theme / Custom colour: the swatch opens the picker, picking a colour makes it Custom
    const auto themeOrCustom = [&](const char *id, bool &custom, float (&rgb)[3]) {
@@ -244,6 +245,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          checkbox("cull", "Backface Culling", o.backfaceCulling, def.backfaceCulling);
          checkbox("cavity", "Cavity", o.cavity, def.cavity);
          checkbox("outline", "Outline", o.outline, def.outline, noScreenFx);
+         checkbox("shadow", "Shadow", o.shadow, def.shadow, noSolidShadow);
          checkbox("xraySolid", "X-Ray", o.xraySolid, def.xraySolid);
          if (o.xraySolid)
             slider("xrayAlpha", o.xrayAlpha, 0.f, 1.f, "Opacity  %.2f", def.xrayAlpha);
@@ -290,6 +292,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          o.backfaceCulling = def.backfaceCulling;
          o.cavity = def.cavity;
          o.outline = def.outline;
+         o.shadow = def.shadow;
          o.xraySolid = def.xraySolid;
          o.xrayAlpha = def.xrayAlpha;
          o.hiddenSolid = def.hiddenSolid;

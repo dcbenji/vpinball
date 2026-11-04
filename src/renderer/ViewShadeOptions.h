@@ -18,6 +18,7 @@ struct ViewShadeOptions
    bool xraySolid = false; // Solid X-Ray: every part see-through
    float xrayAlpha = 0.5f; // ... by this opacity (0 .. 1, 1 = opaque)
    bool outline = false; // Solid Outline: parts outlined where the depth breaks (screen space)
+   bool shadow = false; // Solid Shadow: one soft shadow from the light direction (screen space)
    bool cavity = false; // Ambient occlusion (the renderer's dynamic AO), off in Solid otherwise
    // Wireframe
    bool xray = false; // Secondary views only (the main view's is its NoDepthWireframe shade mode): wireframe seen through the parts
@@ -47,6 +48,7 @@ struct ViewShadeOptions
          && xrayAlpha == o.xrayAlpha
          && cavity == o.cavity
          && outline == o.outline
+         && shadow == o.shadow
          && xray == o.xray
          && wireCustom == o.wireCustom
          && wire[0] == o.wire[0]
