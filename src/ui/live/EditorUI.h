@@ -16,6 +16,7 @@
 #include "editor/PartLibraryPanel.h"
 #include "editor/PinnedPanel.h"
 #include "editor/PropertiesPanel.h"
+#include "editor/PlasticFromAtlas.h"
 #include "editor/RubberBetweenPosts.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ConvertToPBRModal.h"
@@ -68,6 +69,7 @@ class EditorUI final
    friend class SearchPalette;
    friend class SetOrigin;
    friend class RubberBetweenPosts;
+   friend class PlasticFromAtlas;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -146,6 +148,7 @@ private:
    void SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &part);
    void SelectPartsInGroup(const PartGroup *group);
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
+   IEditable *HitEditable(const HitTestResult &hit) const;
    void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const;
    bool IsEditablePickable(const IEditable *editable) const;
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
@@ -254,7 +257,7 @@ private:
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
    struct LastOperation
    {
-      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts, Wireform };
+      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts, Wireform, PlasticFromAtlas };
       Type type = Type::None;
       uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
       vector<std::shared_ptr<EditorUIPart>> selection;
@@ -276,6 +279,12 @@ private:
       float bendRadius = 8.f;
       float spacing = 12.f;
       int ends = 0;
+      float plHeight = 50.f; // Plastic from Atlas: the created plastic (host) is the selection, adjusting rebuilds it in place
+      float plThickness = 5.6f;
+      float plBevel = 1.9f;
+      int plSegs = 2;
+      float plHoleDia = 12.f;
+      float plDpi = 150.f;
       bool expanded = true;
    } m_lastOp;
    bool m_adjustPopupOpen = false; // F9
@@ -321,6 +330,7 @@ private:
    // Add/Remove parts
    void DeleteSelection();
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
+   PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false);
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts

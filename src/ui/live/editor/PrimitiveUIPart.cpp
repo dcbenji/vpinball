@@ -17,6 +17,10 @@ PrimitiveUIPart::PrimitiveUIPart(Primitive* primitive)
 
 PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform)
 {
+   if (m_part->IsPlasticCompanion())
+      return TM_None; // Derived from its host: not moved, and not picked by a box select
+   if (m_part->m_d.m_plasticGen)
+      return GetCurveTransform(transform, m_part->m_d.m_plasticHeight + m_part->m_d.m_plasticThickness);
    if (m_part->m_d.m_wireGen)
    {
       // Metal Wire Guide: the wire points are in table coordinates, the gizmo works on them like on a ramp curve
@@ -37,6 +41,19 @@ PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform
 
 void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec3& rot)
 {
+   if (m_part->IsPlasticCompanion())
+      return;
+   if (m_part->m_d.m_plasticGen)
+   {
+      const float z = m_part->m_d.m_plasticHeight + m_part->m_d.m_plasticThickness;
+      SetCurveTransform(pos, scale, rot);
+      if (fabsf(pos.z - z) > 1e-4f)
+      {
+         m_part->m_d.m_plasticHeight += pos.z - z;
+         m_part->RegeneratePlastic();
+      }
+      return;
+   }
    if (m_part->m_d.m_wireGen)
    {
       const auto& pts = m_part->m_wireCurve.GetPoints();
@@ -67,6 +84,40 @@ void PrimitiveUIPart::RenderOverlay(const EditorRenderContext& ctx)
 
 void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
 {
+   if (m_part->m_d.m_plasticGen)
+   {
+      DragPointCurve* const curve = GetDragPointCurve();
+      if (m_part->m_plasticEditHoles)
+      {
+         // A new hole at the position, with the current hole diameter
+         curve->PushPoint(std::make_unique<DragPoint>(curve, pos.x, pos.y, m_part->m_d.m_plasticHoleDia, false));
+         return;
+      }
+      // A corner on the nearest straight run of the control polygon, at the point of the traced outline closest to the position
+      const auto& pts = curve->GetPoints();
+      const int n = (int)pts.size();
+      float best = FLT_MAX;
+      int at = 0;
+      Vertex2D out(pos);
+      for (int i = 0; i < n; i++)
+      {
+         const DragPoint* const a = pts[i].get();
+         const DragPoint* const b = pts[(i + 1) % n].get();
+         const float dx = b->GetX() - a->GetX(), dy = b->GetY() - a->GetY();
+         const float len2 = dx * dx + dy * dy;
+         const float t = len2 > 0.f ? clamp(((pos.x - a->GetX()) * dx + (pos.y - a->GetY()) * dy) / len2, 0.f, 1.f) : 0.f;
+         const float px = a->GetX() + t * dx, py = a->GetY() + t * dy;
+         const float d2 = (px - pos.x) * (px - pos.x) + (py - pos.y) * (py - pos.y);
+         if (d2 < best)
+         {
+            best = d2;
+            at = i + 1;
+            out = Vertex2D(px, py);
+         }
+      }
+      curve->InsertPoint(at, std::make_unique<DragPoint>(curve, out.x, out.y, 0.f, false));
+      return;
+   }
    // Open path: insert on the nearest segment (the default implementation assumes a closed 2D curve), z interpolated
    DragPointCurve* const curve = &m_part->m_wireCurve;
    vector<RenderVertex3D> vv;
@@ -88,6 +139,15 @@ void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
 
 void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
 {
+   if (m_part->m_d.m_plasticGen)
+   {
+      if (m_part->m_plasticEditHoles) // A hole keeps its diameter in z
+         props.InputFloat<DragPoint>(
+            point, "Diameter"s, //
+            [](const DragPoint* p) { return p->GetZ(); }, //
+            [](DragPoint* p, float v) { p->SetZ(max(v, 0.5f)); }, PropertyPane::Unit::VPLength, 2, "Diameter of this hole");
+      return;
+   }
    props.InputFloat<DragPoint>(
       point, "Z Offset"s, //
       [](const DragPoint* p) { return p->GetZ(); }, //
@@ -96,7 +156,7 @@ void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
 
 void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 {
-   props.EditableHeader(m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
+   props.EditableHeader(m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
 
    UpdateCurveSection(props);
 
@@ -134,6 +194,45 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Sides"s, //
          [](const Primitive* p) { return p->m_d.m_wireSides; }, //
          [](Primitive* p, int v) { p->m_d.m_wireSides = clamp(v, 3, 32); p->UpdateWire(); }, "Segments around the wire");
+      props.EndSection();
+   }
+
+   if (m_part->m_d.m_plasticGen && props.BeginSection("Plastic from Atlas"s))
+   {
+      props.InputFloat<Primitive>(
+         m_part, "Height"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticHeight; }, //
+         [](Primitive* p, float v) { p->m_d.m_plasticHeight = clamp(v, -1000.f, 2000.f); p->UpdatePlastic(); }, PropertyPane::Unit::VPLength, 2, "Underside of the plastic above the playfield");
+      props.InputFloat<Primitive>(
+         m_part, "Thickness"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticThickness; }, //
+         [](Primitive* p, float v) { p->m_d.m_plasticThickness = clamp(v, 0.1f, 100.f); p->UpdatePlastic(); }, PropertyPane::Unit::VPLength, 2, "Plastic thickness (3 mm = 5.6)");
+      props.InputFloat<Primitive>(
+         m_part, "Bevel"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticBevel; }, //
+         [](Primitive* p, float v) { p->m_d.m_plasticBevel = clamp(v, 0.f, p->m_d.m_plasticThickness); p->UpdatePlastic(); }, PropertyPane::Unit::VPLength, 2, "Bevel on the top side, offset inward (1 mm = 1.9)");
+      props.InputInt<Primitive>(
+         m_part, "Bevel Segments"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticBevelSegs; }, //
+         [](Primitive* p, int v) { p->m_d.m_plasticBevelSegs = clamp(v, 1, 16); p->UpdatePlastic(); }, "1 = chamfer, more = rounded");
+      props.InputFloat<Primitive>(
+         m_part, "Hole Diameter"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticHoleDia; }, //
+         [](Primitive* p, float v) { p->m_d.m_plasticHoleDia = clamp(v, 0.5f, 100.f); }, PropertyPane::Unit::VPLength, 2, "Diameter of the next hole placed (M3 clearance 6.4, post 12, large post 16)");
+      props.InputFloat<Primitive>(
+         m_part, "Sheet DPI"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticDpi; }, //
+         [](Primitive* p, float v) { p->SetPlasticDpi(v); p->UpdatePlastic(); }, PropertyPane::Unit::None, 1, "Scale of the atlas: 47.06 VPU per inch at this DPI (the art scales about the plastic)");
+      if (GetPointEditContext() != nullptr)
+         props.Combo<Primitive>(
+            m_part, "Edit"s, vector<string> { "Outline"s, "Holes"s }, //
+            [](const Primitive* p) { return p->m_plasticEditHoles ? 1 : 0; }, //
+            [](Primitive* p, int v) { p->m_plasticEditHoles = v == 1; }, "H switches while editing points");
+      props.EndSection();
+   }
+   else if (m_part->IsPlasticCompanion() && props.BeginSection("Plastic from Atlas"s))
+   {
+      ImGui::TextDisabled("Companion of %s: its mesh is derived from the host", m_part->m_d.m_plasticHost.c_str());
       props.EndSection();
    }
 
@@ -531,7 +630,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && props.BeginSection("Position"s))
+   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && props.BeginSection("Position"s))
    {
       props.Separator("Position, Rotation & Size"s);
       props.InputFloat3<Primitive>(

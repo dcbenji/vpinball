@@ -2037,6 +2037,8 @@ void EditorUI::RenderUI()
    // while not in drag point edit mode, so cancel it if one of these conditions is no longer met
    if (m_addPartType != eItemInvalid && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       m_addPartType = eItemInvalid;
+   if (m_plasticTrace.active && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
+      PlasticFromAtlas::Cancel(*this);
 
    // Drag point edit mode housekeeping: exit without restoring the selection if the edited part is no
    // longer the active selected part, and drop selected points that do not exist anymore (points are
@@ -2134,7 +2136,10 @@ void EditorUI::RenderUI()
    if (showFullUI)
       m_palette.Render();
    if (showFullUI)
+   {
       RenderAdjustPanel();
+      PlasticFromAtlas::RenderPanel(*this);
+   }
    m_chrome.RenderStatusBar(showFullUI);
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
@@ -2412,6 +2417,7 @@ void EditorUI::RenderUI()
    {
       LiveRenderContext ctx(m_player, overlayDrawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
       ctx.m_selectionDisplay = m_navSelectionDisplay;
+      PlasticFromAtlas::DrawBackdrop(*this, overlayDrawList, ctx); // The atlas under the points (trace state, Tab on a placed plastic)
       if (!m_multiSel.empty() && m_selectionOverlay && !IsSaveInProgress())
       {
          if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
@@ -2482,6 +2488,8 @@ void EditorUI::RenderUI()
             }
          }
       }
+
+      PlasticFromAtlas::DrawTrace(*this, overlayDrawList, ctx);
 
       if (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && !m_multiSel.empty()))
       {
@@ -2629,7 +2637,9 @@ void EditorUI::RenderUI()
          && !ImGuizmo::IsUsingViewManipulate()) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
-         if (m_partLibrary.IsPlacementArmed())
+         if (m_plasticTrace.active)
+            PlasticFromAtlas::Click(*this, m_boxSelectStart, io.KeyShift);
+         else if (m_partLibrary.IsPlacementArmed())
          {
             // Part library placement mode: drop the previewed part at its ghost position
             m_partLibrary.CommitPlacement();
@@ -2713,7 +2723,7 @@ void EditorUI::RenderUI()
                   // Shift+click toggles the front-most hit part in the multi selection
                   if (!vhoHit.empty())
                   {
-                     const auto it = m_editableMap.find(vhoHit.front().m_obj->m_editable);
+                     const auto it = m_editableMap.find(HitEditable(vhoHit.front()));
                      if (it != m_editableMap.end())
                      {
                         TogglePartSelection(it->second);
@@ -2729,7 +2739,7 @@ void EditorUI::RenderUI()
                   vector<std::shared_ptr<EditorUIPart>> hitParts;
                   for (const HitTestResult &hr : vhoHit)
                   {
-                     const auto it = m_editableMap.find(hr.m_obj->m_editable);
+                     const auto it = m_editableMap.find(HitEditable(hr));
                      if (it != m_editableMap.end() && std::ranges::find(hitParts, it->second) == hitParts.end())
                         hitParts.push_back(it->second);
                   }
@@ -2890,12 +2900,18 @@ void EditorUI::RenderUI()
          RequestClose(Player::CS_STOP_PLAY);
    }
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape() | ConsumedPaneEscape(); // The Esc that closed a popup is not an editor Esc
-   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive && !gameKeys)
+   // Trace state of Plastic from Atlas: Enter, Backspace and H are its own, and Esc is the only other editor key
+   const bool tracing = m_plasticTrace.active;
+   if (tracing && m_fileOp == nullptr && !modalWasActive && !gameKeys)
+      PlasticFromAtlas::Keys(*this);
+   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !modalWasActive && !gameKeys && (!tracing || ImGui::IsKeyReleased(ImGuiKey_Escape)))
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
       {
          if (m_suppressNextEscape)
             m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
+         else if (m_plasticTrace.active)
+            PlasticFromAtlas::Cancel(*this); // Cancel the whole add
          else if (m_gizmoOperation != ImGuizmo::OPERATION(0))
             m_gizmoOperation = ImGuizmo::OPERATION(0); // Cancel current operation
          else if (m_boxSelectActive)
@@ -3021,6 +3037,15 @@ void EditorUI::RenderUI()
       else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
       {
          DuplicateSelection(); // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
+      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && m_pointEditPart != nullptr && m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive
+         && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_plasticGen)
+      {
+         // Editing the points of a plastic: H switches between its outline and its holes
+         Primitive *const plastic = static_cast<Primitive *>(m_pointEditPart->GetEditable());
+         plastic->m_plasticEditHoles = !plastic->m_plasticEditHoles;
+         m_pointSel.clear();
+         Report(plastic->m_plasticEditHoles ? "Editing the holes of " + plastic->GetName() + " (H: outline)" : "Editing the outline of " + plastic->GetName() + " (H: holes)");
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_H))
       {
@@ -3675,6 +3700,17 @@ void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
    UpdateEditableList(); // Refresh the outliner paths and ordering
 }
 
+// The part a hit stands for: a click on a companion of a plastic lands on its host
+IEditable *EditorUI::HitEditable(const HitTestResult &hit) const
+{
+   IEditable *const editable = hit.m_obj->m_editable;
+   if (editable != nullptr && editable->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editable)->IsPlasticCompanion())
+      for (IEditable *const part : m_table->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_plasticGen && StrCompareNoCase(part->GetName(), static_cast<Primitive *>(editable)->m_d.m_plasticHost))
+            return part;
+   return editable;
+}
+
 void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const
 {
    // Compute mouse position in clip space
@@ -3924,6 +3960,7 @@ void EditorUI::CopySelection()
    for (const auto &part : m_multiSel)
       if (IEditable *const editable = part->GetEditable(); editable != nullptr)
          parts.push_back(editable);
+   PlasticFromAtlas::AddCompanions(parts); // A plastic is copied with its companions
    RestorePartsVisibility(); // Copy the authored visibility, not the editor display state
    VPX::EditorClipboard::CopyParts(parts);
    if (!parts.empty())
@@ -4022,6 +4059,7 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
          d.m_postRoundness = 0.f;
       }
    }
+   PlasticFromAtlas::FixPasted(pasted, originalNames);
    if (!pasted.empty())
       m_undo.SetLabel(CountLabel("Paste", pasted.size(), pasted.front()->GetName()));
    m_undo.EndUndo();
@@ -4047,6 +4085,9 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
       if (editable->GetIHitable())
          m_player->m_physics->Add(editable);
    }
+   for (IEditable *const editable : pasted) // The copies of a plastic: companions rebuilt from their host copy
+      if (editable->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editable)->m_d.m_plasticGen)
+         static_cast<Primitive *>(editable)->UpdatePlastic();
    // Select the pasted parts
    UpdateEditableList();
    m_multiSel.clear();
@@ -4209,6 +4250,7 @@ void EditorUI::DeleteSelection()
          for (IEditable *const edit : m_table->GetParts())
             if (edit->GetPartGroup() == partsToDelete[i] && edit->GetItemType() != eItemBall && std::ranges::find(partsToDelete, edit) == partsToDelete.end())
                partsToDelete.push_back(edit);
+   PlasticFromAtlas::AddCompanions(partsToDelete); // A plastic goes with its companions
    if (partsToDelete.empty())
       return;
 
@@ -5178,7 +5220,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          rot.Set(0.f, 0.f, 0.f);
       part->SetTransform(pos, scale, rot);
       IEditable *const edit = part->GetEditable();
-      if (edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->IsTransformedByMatrix()) // A primitive is drawn under its matrix
+      if (edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->IsTransformedByMatrix() || static_cast<Primitive *>(edit)->m_d.m_plasticGen) // A primitive is drawn under its matrix (a plastic is rebuilt with its companions)
          m_renderer->ReinitRenderable(edit->GetIRenderable());
       if (m_modal.active || m_gizmoDragActive)
       {
@@ -5525,6 +5567,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    {
    case LastOperation::Type::Add: return "Add Part";
    case LastOperation::Type::Wireform: return "Add Metal Wire Guide";
+   case LastOperation::Type::PlasticFromAtlas: return "Add Plastic from Atlas";
    case LastOperation::Type::Paste: return "Paste";
    case LastOperation::Type::Duplicate: return "Duplicate";
    case LastOperation::Type::Move: return "Move";
@@ -5607,6 +5650,12 @@ void EditorUI::ApplyLastOperation()
          prim->m_d.m_wireSpacing = m_lastOp.spacing;
          prim->UpdateWire();
       }
+      return;
+   case LastOperation::Type::PlasticFromAtlas:
+      if (m_lastOp.selection.empty() || m_lastOp.selection.front()->GetEditable()->GetItemType() != eItemPrimitive)
+         return;
+      PlasticFromAtlas::Adjust(static_cast<Primitive *>(m_lastOp.selection.front()->GetEditable()), m_lastOp.plHeight, m_lastOp.plThickness, m_lastOp.plBevel, m_lastOp.plSegs, m_lastOp.plHoleDia,
+         m_lastOp.plDpi);
       return;
    case LastOperation::Type::None: return;
    }
@@ -5696,6 +5745,22 @@ bool EditorUI::RenderAdjustParameters()
          row("Spacing");
          changed |= ImGui::DragFloat("##WSpc", &m_lastOp.spacing, 0.1f, 0.f, 200.f, "%.2f");
       }
+      break;
+   }
+   case LastOperation::Type::PlasticFromAtlas:
+   {
+      row("Height");
+      changed |= ImGui::DragFloat("##PlHgt", &m_lastOp.plHeight, 0.1f, -1000.f, 2000.f, "%.2f");
+      row("Thickness");
+      changed |= ImGui::DragFloat("##PlThk", &m_lastOp.plThickness, 0.05f, 0.1f, 100.f, "%.2f");
+      row("Bevel");
+      changed |= ImGui::DragFloat("##PlBvl", &m_lastOp.plBevel, 0.05f, 0.f, 100.f, "%.2f");
+      row("Bevel Segments");
+      changed |= ImGui::SliderInt("##PlSeg", &m_lastOp.plSegs, 1, 8);
+      row("Hole Diameter");
+      changed |= ImGui::DragFloat("##PlHole", &m_lastOp.plHoleDia, 0.1f, 0.5f, 100.f, "%.1f");
+      row("Sheet DPI");
+      changed |= ImGui::DragFloat("##PlDpi", &m_lastOp.plDpi, 1.f, 10.f, 2400.f, "%.0f");
       break;
    }
    case LastOperation::Type::Rotate:

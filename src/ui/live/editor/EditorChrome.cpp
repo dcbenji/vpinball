@@ -279,6 +279,8 @@ void EditorChrome::RenderMenuBar()
             editor.m_addPartType = eItemPrimitive;
             editor.m_addWireform = true;
          }
+         if (ImGui::MenuItem("Add Plastic from Atlas", nullptr, false, PlasticFromAtlas::CanStart(editor)))
+            PlasticFromAtlas::Start(editor);
          ImGui::Separator();
          if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
             editor.SetGizmoOperation(ImGuizmo::TRANSLATE);
@@ -880,6 +882,12 @@ void EditorChrome::RenderToolbar()
          ImGui::EndDisabled();
          if (!canRubber)
             ImGui::SetItemTooltip("Select two or more primitives (the posts) first");
+         if (ImGui::Selectable("Plastic from Atlas"))
+         {
+            PlasticFromAtlas::Start(editor);
+            ImGui::CloseCurrentPopup();
+         }
+         ImGui::SetItemTooltip("Trace a plastic on a print atlas image");
          ImGui::EndPopup();
       }
    }
@@ -1269,8 +1277,14 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       default: hints = { { "LMB", "Select" }, { "Wheel", "Scroll" } }; break;
       }
    }
+   else if (editor.m_plasticTrace.active)
+      hints = { { "LMB", editor.m_plasticTrace.holes ? "Place Hole" : "Corner" }, { "Shift+LMB", "Arc Peak" }, { "Backspace", "Remove Last" }, { "H", editor.m_plasticTrace.holes ? "Outline" : "Holes" },
+         { "Enter", "Close Loop" }, { "Esc", "Cancel" } };
    else if (editor.m_addPartType != eItemInvalid)
       hints = { { "LMB", editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
+   else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_plasticGen)
+      hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "H", static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_plasticEditHoles ? "Outline" : "Holes" },
+         { "Del", "Delete" }, { "Tab", "Exit" }, { "F9", "Profile" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireGen)
       hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Metal Wire Guide" } };
    else if (editor.m_pointEditPart)

@@ -368,6 +368,8 @@ set(VPX_SOURCES
    src/ui/live/editor/SetOrigin.cpp
    src/ui/live/editor/RubberBetweenPosts.h
    src/ui/live/editor/RubberBetweenPosts.cpp
+   src/ui/live/editor/PlasticFromAtlas.h
+   src/ui/live/editor/PlasticFromAtlas.cpp
    src/ui/live/editor/RubberFit.h
    src/ui/live/editor/RubberFit.cpp
    src/ui/live/editor/RendererInspectionModal.h
