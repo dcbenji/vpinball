@@ -33,6 +33,7 @@
 #include <thread>
 
 class LiveUI;
+class EngineMcp;
 class PinTable;
 class Player;
 class InputManager;
@@ -57,6 +58,7 @@ class EditorUI final
 {
    // The editor's UI is split between sub components which, for the time being, access
    // the shared editor state directly (to be refined as domain objects are extracted)
+   friend class ::EngineMcp;
    friend class EditorChrome;
    friend class OutlinerPanel;
    friend class PropertiesPanel;
@@ -96,6 +98,10 @@ public:
 
    // Posts a message in the status bar (last operation report, fades after a few seconds)
    void Report(const string &message);
+   // Development only (EngineMcp): look at camera in table space (VPU, Z up), vertical FOV in degrees; a null fov goes back to the preview camera
+   void SetLookAtCamera(const vec3 &eye, const vec3 &target, float fovY, Renderer::ShadeMode shading);
+   // Development only: the part of the display showing the 3D view, as fractions of its size; false when it is hidden
+   bool GetViewportFraction(float (&rect)[4]) const;
 
    // True if the top row digit (0..9) is a view navigation key (numpad emulation) rather than a game key: editor UI up and game not running (edit mode, or inspect mode while paused)
    bool IsDigitNavKey(int digit) const;

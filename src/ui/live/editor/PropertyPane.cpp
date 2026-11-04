@@ -34,6 +34,37 @@ Material *MaterialEditUndo::Find(const PinTable *table, uint64_t uid)
    return it == table->m_materials.end() ? nullptr : *it;
 }
 
+void MaterialEditUndo::Record(PinUndo &undo, PinTable *table, const Material *material, std::shared_ptr<Material> before, const string &label)
+{
+   undo.BeginUndo();
+   undo.SetFieldLabel(label);
+   // Undoable and redoable: undoing captures the state it replaces so that the step can be redone
+   const uint64_t uid = material->m_uid.Value();
+   undo.MarkForAction(
+      [table, uid, before = std::move(before)]()
+      {
+         if (Material *const material = Find(table, uid))
+            *material = *before;
+         else
+            NoteSkipped();
+      },
+      // Also used for the inverse record: the material is in either state (edited or restored), the restore applies the other one
+      [table, uid]() -> std::function<void()>
+      {
+         const Material *const material = Find(table, uid);
+         if (material == nullptr)
+            return []() { NoteSkipped(); };
+         return [table, uid, state = std::make_shared<Material>(*material)]()
+         {
+            if (Material *const target = Find(table, uid))
+               *target = *state;
+            else
+               NoteSkipped();
+         };
+      });
+   undo.EndUndo();
+}
+
 bool MaterialEditUndo::Commit(int modifiedField, const string &label)
 {
    // The step being dragged / typed (same material, pane and field): only its first frame records a step
@@ -68,33 +99,7 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
    s_field = field;
    // The material is found again by its runtime identity (not by address or name: a material deleted since is not undoable, and a new one of
    // the same name may have been imported at the freed address). If it is gone the step is skipped, see ConsumeSkipped
-   m_undo.BeginUndo();
-   m_undo.SetFieldLabel(label);
-   // Undoable and redoable: undoing captures the state it replaces so that the step can be redone
-   const uint64_t uid = m_material->m_uid.Value();
-   m_undo.MarkForAction(
-      [table = m_table, uid, before = std::shared_ptr<Material>(std::move(m_before))]()
-      {
-         if (Material *const material = Find(table, uid))
-            *material = *before;
-         else
-            NoteSkipped();
-      },
-      // Also used for the inverse record: the material is in either state (edited or restored), the restore applies the other one
-      [table = m_table, uid]() -> std::function<void()>
-      {
-         const Material *const material = Find(table, uid);
-         if (material == nullptr)
-            return []() { NoteSkipped(); };
-         return [table, uid, state = std::make_shared<Material>(*material)]()
-         {
-            if (Material *const target = Find(table, uid))
-               *target = *state;
-            else
-               NoteSkipped();
-         };
-      });
-   m_undo.EndUndo();
+   Record(m_undo, m_table, m_material, std::shared_ptr<Material>(std::move(m_before)), label);
    s_record = m_undo.TopRecordId();
    return true;
 }

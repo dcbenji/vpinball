@@ -1,6 +1,6 @@
 # Fast iteration on a running table
 
-A development feature, off unless its environment variable is set, for people and AI agents working on shaders or table look. Linux and macOS, BGFX only; other builds compile it out.
+Two development features, both off unless their environment variables are set, for people and AI agents working on shaders or table look. Linux and macOS, BGFX only; other builds compile them out.
 
 ## Shader hot reload
 
@@ -24,3 +24,58 @@ Measured on an RTX 4070 with Vulkan on Police Force, 1080p, from file saved to t
 
 Metal uses the same code path with `--platform osx -p metal21-11`. It has not been run yet: the new source files pass a syntax-only compile with the Mac flags and shaderc produces Metal blobs on a Mac (0.28 s per `fs_pbr` variant), nothing more. A shader that shaderc accepts but Metal's own compiler rejects at load time is the untested case.
 
+## MCP server
+
+```bash
+VPX_MCP_PORT=9077 VPX_MCP_TOKEN=<secret> ./VPinballX_BGFX -LiveEdit table.vpz
+claude mcp add --transport http vpx-engine http://127.0.0.1:9077/mcp --header "Authorization: Bearer <secret>"
+```
+
+HTTP on `127.0.0.1` only, bearer token required, Host and Origin checked. It speaks plain JSON responses (no server stream). From a shell: `tools/dev/vpxmcp.py`.
+
+Tools shared in name and shape with the VPX Editor's MCP server:
+
+- `vpx_guide`: start here.
+- `vpx_table`: `overview`, `parts` (`type`, `nameRegex`, `limit`), `part` (`name`).
+- `vpx_part`: `modify` with `part:{partName, <fields>}`. Applies unless `preview:true`.
+- `vpx_material`: `list`, `modify` with `name` + `patch`. A preview until `confirm:true`.
+- `vpx_history`: `undo`, `redo`. One history with the live editor.
+- `vpx_view`: a PNG of the 3D view, inline (`max_width`) or saved (`path`). `area:"window"` includes the editor panels.
+
+Only in the engine:
+
+- `vpx_engine_status`: mode, frame, playing, shader reload state.
+- `vpx_engine_camera`: `eye`, `target`, `fov`, `shading` (`pbr`, `solid`, `wireframe`), or `release:true`.
+- `vpx_engine_lights`: hold a lamp or flasher at `level`; no `level` releases it.
+- `vpx_engine_run`: `pause`, `resume`, `step` (`ms`, or one physics step), `wait_frames` (`n`).
+- `vpx_engine_timing`: fps, frame and GPU ms over the last frames (`last`, `reset`).
+- `vpx_engine_shaders`: `status`, `reload` (`file`).
+- `vpx_engine_reload`: one `part` or `material` from the pack folder; `mesh:true` also reloads a primitive's mesh, not undoable.
+- `vpx_engine_quit`: closes the player. Unsaved edits are lost.
+
+Worth knowing:
+
+- Field names are the keys of the pack files (`parts/*.json`, `materials/*.json`), read through the same serializers. `vpx_table action:"part"` shows them. An unknown key or a wrong type is refused before anything changes.
+- Nothing here saves. Edits are on the live table until you save in the editor.
+- Undo needs an edit session (`-LiveEdit`). In play or inspection, edits go to the live copy and the reply says `"undo":false`.
+- A part edit runs the code undo runs: `Load` over the saved state, then a rebuild of the renderable and colliders. Pane setters with side effects beyond the part's data do not run.
+- In play, changing a part with colliders pauses the game (the physics engine does that); the reply's `playing` says so, `vpx_engine_run action:"resume"` goes on.
+- In play, `vpx_engine_camera` stays until the layout changes (a resize, for example): set it again then.
+- After an edit the table's shadows rebuild over some frames with wrong light on the way. In an edit session `vpx_view` waits for that (at most 5 s, `settled` in the reply), which also makes it slower than a bare capture.
+- A capture stalls the frame it reads back by a few hundred ms. Do not capture while measuring frame time.
+- In an edit session the capture shows the view gizmo and editor overlays that sit on the 3D view.
+- Any local process with the token can drive the player and write captures to `.png` or `.jpg` paths. Keep the token out of shared logs.
+
+### Example: change a material, capture before and after
+
+```bash
+export VPX_MCP_PORT=9077 VPX_MCP_TOKEN=<secret>
+tools/dev/vpxmcp.py vpx_engine_camera eye='[476,1900,520]' target='[560,950,60]' fov=45
+tools/dev/vpxmcp.py vpx_view path=/tmp/before.png
+tools/dev/vpxmcp.py vpx_material action=modify name=PF_Playfield patch='{"roughness":0.03,"metallic":0.9}'   # a preview
+tools/dev/vpxmcp.py vpx_material action=modify name=PF_Playfield patch='{"roughness":0.03,"metallic":0.9}' confirm=true
+tools/dev/vpxmcp.py vpx_view path=/tmp/after.png
+tools/dev/vpxmcp.py vpx_history action=undo
+```
+
+On the rig above: 4.1 s for all of it with an undo and a third capture, same process throughout. A restart alone takes about 8 s to the first capture. Before and after differ on 10 to 12% of the pixels, before and undone on 0.4 to 2%. With no edit at all, the table's own light animation moves up to 3% between two captures.

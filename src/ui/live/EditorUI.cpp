@@ -3428,6 +3428,37 @@ void EditorUI::RenderUI()
    }
 }
 
+bool EditorUI::GetViewportFraction(float (&rect)[4]) const
+{
+   const ImVec2 display = ImGui::GetIO().DisplaySize;
+   if (!m_viewportVisible || m_viewportContentRect.Width() <= 0.f || m_viewportContentRect.Height() <= 0.f || display.x <= 0.f || display.y <= 0.f)
+      return false;
+   rect[0] = m_viewportContentRect.x0 / display.x;
+   rect[1] = m_viewportContentRect.y0 / display.y;
+   rect[2] = m_viewportContentRect.Width() / display.x;
+   rect[3] = m_viewportContentRect.Height() / display.y;
+   return true;
+}
+
+void EditorUI::SetLookAtCamera(const vec3 &eye, const vec3 &target, const float fovY, const Renderer::ShadeMode shading)
+{
+   if (fovY <= 0.f)
+   {
+      m_camMode = ViewMode::PreviewCam;
+      return;
+   }
+   m_camMode = ViewMode::EditorCam;
+   m_shadeMode = shading;
+   m_perspectiveCam = true;
+   m_navFovY = fovY;
+   vec3 dir = target - eye;
+   m_camDistance = max(dir.Length(), 1.f);
+   dir.Normalize();
+   // Same convention as Renderer::SetLookAtCamera: right handed look at in a table space mirrored along Z. The projection is rebuilt from these each frame
+   const Vertex3Ds up = fabsf(dir.z) > 0.999f ? Vertex3Ds(0.f, -1.f, 0.f) : Vertex3Ds(0.f, 0.f, -1.f);
+   m_camView = Matrix3D::MatrixLookAtRH(Vertex3Ds(eye.x, eye.y, -eye.z), Vertex3Ds(target.x, target.y, -target.z), up);
+}
+
 void EditorUI::PushUndo(IEditable * part, unsigned int undoId, const string &label)
 {
    // No undo support in inspection mode (not implemented as it needs to handle both version of the table)

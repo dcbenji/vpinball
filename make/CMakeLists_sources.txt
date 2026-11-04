@@ -263,6 +263,8 @@ set(VPX_SOURCES
    src/renderer/Shader.h
    src/renderer/ShaderHotReload.cpp
    src/renderer/ShaderHotReload.h
+   src/core/EngineMcp.cpp
+   src/core/EngineMcp.h
    src/renderer/TextRenderer.cpp
    src/renderer/TextRenderer.h
    src/renderer/Texture.cpp

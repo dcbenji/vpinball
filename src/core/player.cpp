@@ -17,6 +17,7 @@
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
 #include "renderer/ShaderHotReload.h"
+#include "core/EngineMcp.h"
 #include "parts/ball.h"
 #include "parts/flasher.h"
 #include "parts/light.h"
@@ -2643,6 +2644,8 @@ void Player::PrepareFrame()
    #ifdef VPX_DEV_TOOLS
    if (ShaderHotReload* const hotReload = ShaderHotReload::Get(); hotReload && m_closing == CS_PLAYING)
       hotReload->Update(this);
+   if (EngineMcp* const mcp = EngineMcp::Get(); mcp && m_closing == CS_PLAYING)
+      mcp->Update(this);
    #endif
 
    m_pluginAPI.BroadcastVPXMsg(m_onPrepareFrameMsgId, nullptr);

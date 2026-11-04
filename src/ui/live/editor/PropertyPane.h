@@ -36,6 +36,8 @@ public:
    // Called once the pane is drawn: `modifiedField` is the id of the field edited this frame (0 if none)
    // Returns true when a new undo step was recorded (the caller then breaks the part edit coalescing)
    bool Commit(int modifiedField, const string &label);
+   // Records an undo step restoring `before` over a material just edited (undoable and redoable)
+   static void Record(PinUndo &undo, PinTable *table, const Material *material, std::shared_ptr<Material> before, const string &label);
    // The material of the table with this runtime identity (Material::m_uid), null if it was deleted since
    static Material *Find(const PinTable *table, uint64_t uid);
    // Material undo / redo steps skipped since the last call because their material is gone (the caller reports it)

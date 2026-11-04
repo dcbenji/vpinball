@@ -376,6 +376,53 @@ std::any PinUndo::Redo()
    return editorState;
 }
 
+// Replaces the state of a part from a saved one and rebuilds what the player derives from it
+void PinUndo::OverwritePart(IEditable *const pie, IObjectReader &reader)
+{
+   IScriptable *const scriptable = pie->GetIScriptable();
+   const string nameBefore = scriptable ? scriptable->m_name : string();
+   const bool uiVisible = pie->IsUIVisible(false); // The editor's outliner hide is not an undoable edit (no record covers it): undo / redo leave it as it is
+   pie->ClearForOverwrite();
+
+   // Process the loaded PartGroup parenting to support undoing reparenting
+   pie->m_onLoadExpectedPartGroup.clear();
+   pie->Load(reader);
+   if (m_partStateSync)
+      m_partStateSync(pie, true);
+   pie->SetUIVisible(uiVisible);
+
+   // Load writes the name directly: apply a restored name through the table to keep its name registry (and code view) in sync
+   if (scriptable && scriptable->m_name != nameBefore && m_table->HasRegisteredName(pie))
+   {
+      const string restoredName = scriptable->m_name;
+      scriptable->m_name = nameBefore;
+      if (lowerCase(restoredName) == lowerCase(nameBefore) || m_table->IsNameUnique(restoredName))
+         m_table->RenamePart(pie, restoredName);
+      else
+         PLOGW << "Undo could not restore the name '" << restoredName << "' of '" << nameBefore << "' as it is now used by another part";
+   }
+   // The record holds the name of the part's group (empty when it had none, which is only valid for part groups)
+   if (!pie->m_onLoadExpectedPartGroup.empty())
+   {
+      const string groupName = pie->m_onLoadExpectedPartGroup;
+      for (IEditable *const edit : pie->GetPTable()->GetParts())
+         if (edit->GetItemType() == eItemPartGroup && StrCompareNoCase(edit->GetIScriptable()->m_name, groupName))
+         {
+            pie->SetPartGroup(static_cast<PartGroup *>(edit));
+            break;
+         }
+   }
+   else if (pie->GetItemType() == eItemPartGroup)
+      pie->SetPartGroup(nullptr);
+   if (g_pplayer)
+   {
+      if (pie->GetIRenderable())
+         g_pplayer->m_renderer->ReinitRenderable(pie->GetIRenderable());
+      if (pie->GetIHitable())
+         g_pplayer->m_physics->Update(pie);
+   }
+}
+
 // Applies a record (restores the state it was started from) and builds the record that reverts this application (the redo record when undoing, the undo record when redoing)
 std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::unique_ptr<UndoRecord> &inverseOut)
 {
@@ -445,49 +492,8 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
          inverse->m_vieMark.push_back(pie);
          inverse->m_vstm.push_back(std::move(inverseStm));
       }
-      IScriptable *const scriptable = pie->GetIScriptable();
-      const string nameBefore = scriptable ? scriptable->m_name : string();
-      const bool uiVisible = pie->IsUIVisible(false); // The editor's outliner hide is not an undoable edit (no record covers it): undo / redo leave it as it is
-      pie->ClearForOverwrite();
-
-      // Process the loaded PartGroup parenting to support undoing reparenting
-      pie->m_onLoadExpectedPartGroup.clear();
       BiffReader reader(pstm->Data() + sizeof(IEditable *), static_cast<uint32_t>(pstm->Size() - sizeof(IEditable *)), CURRENT_FILE_FORMAT_VERSION, nullptr, 0);
-      pie->Load(reader);
-      if (m_partStateSync)
-         m_partStateSync(pie, true);
-      pie->SetUIVisible(uiVisible);
-
-      // Load writes the name directly: apply a restored name through the table to keep its name registry (and code view) in sync
-      if (scriptable && scriptable->m_name != nameBefore && m_table->HasRegisteredName(pie))
-      {
-         const string restoredName = scriptable->m_name;
-         scriptable->m_name = nameBefore;
-         if (lowerCase(restoredName) == lowerCase(nameBefore) || m_table->IsNameUnique(restoredName))
-            m_table->RenamePart(pie, restoredName);
-         else
-            PLOGW << "Undo could not restore the name '" << restoredName << "' of '" << nameBefore << "' as it is now used by another part";
-      }
-      // The record holds the name of the part's group (empty when it had none, which is only valid for part groups)
-      if (!pie->m_onLoadExpectedPartGroup.empty())
-      {
-         const string groupName = pie->m_onLoadExpectedPartGroup;
-         for (IEditable *const edit : m_table->GetParts())
-            if (edit->GetItemType() == eItemPartGroup && StrCompareNoCase(edit->GetIScriptable()->m_name, groupName))
-            {
-               pie->SetPartGroup(static_cast<PartGroup *>(edit));
-               break;
-            }
-      }
-      else if (pie->GetItemType() == eItemPartGroup)
-         pie->SetPartGroup(nullptr);
-      if (g_pplayer)
-      {
-         if (pie->GetIRenderable())
-            g_pplayer->m_renderer->ReinitRenderable(pie->GetIRenderable());
-         if (pie->GetIHitable())
-            g_pplayer->m_physics->Update(pie);
-      }
+      OverwritePart(pie, reader);
    }
 
    record.m_ownsCreateRefs = false; // Uncreate drops the creation references

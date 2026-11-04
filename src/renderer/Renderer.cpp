@@ -51,6 +51,11 @@ using namespace Concurrency::diagnostic;
 extern marker_series series;
 #endif
 
+#include "renderer/ShaderHotReload.h"
+#include "core/EngineMcp.h"
+
+std::atomic<uint64_t> g_shadowWork { 0 }; // Shadow pages and cached shadows rendered so far: stands still once they are all up to date (EngineMcp)
+std::atomic<int> g_shadowBakesPending { 0 }; // Lights of the shadow cache waiting for their bake (EngineMcp)
 std::atomic<int> g_perfVsmPages { 0 }; // VSM shadow pages rendered since the last VPX_PERF_LOG line (see RenderDevice)
 // VPX_FRAME_LOG (per-frame CSV, see RenderDevice): shadow pages, lit PBR lights and the summed level of the lights named in
 // VPX_FRAME_LOG_LIGHTS (comma separated, e.g. the ROM flashers), accumulated by the logic thread since the last logged frame
@@ -2806,6 +2811,10 @@ void Renderer::PreparePBRPasses()
    // Both are view independent (light space shadow pages over the table bounds, a world XY light grid): built once per frame by the main
    // scene, the editor secondary views (recorded after it in the same frame) reuse them
 #ifdef ENABLE_BGFX
+   #ifdef VPX_DEV_TOOLS
+   if (EngineMcp* const control = EngineMcp::Get())
+      control->ApplyHeldLights(m_table);
+   #endif
    // VPX_FLASH_TEST=<l1,l2,l3> (diagnostic): drive these lights on a fixed 8 s schedule, overriding the script/ROM, so perf
    // runs compare identical flashes: 1-2 s l1, 3-4 s l2, 5-6 s l3, 6.5-7.5 s all three, each held at VPX_FLASH_TEST_LEVEL (0.45)
    if (static const char* const flashTest = std::getenv("VPX_FLASH_TEST"); flashTest != nullptr)
@@ -3570,6 +3579,7 @@ void Renderer::UpdateVirtualShadowMaps()
    }
 
    g_perfVsmPages += rendered;
+   g_shadowWork += rendered;
    g_frameVsmPages += rendered;
    if (!jobs.empty() || !m_vsmTouchedRTs.empty())
    {
@@ -3781,6 +3791,7 @@ void Renderer::UpdatePBRShadowCache()
 
    // Stale bakes (light moved, range, penumbra or tier changed, caster content edited) and the publication of the valid ones
    ShadowCacheEntry* toBake = nullptr;
+   int bakesPending = 0;
    for (ShadowCacheEntry& e : m_shadowCache)
    {
       if (e.layer < 0)
@@ -3793,6 +3804,7 @@ void Renderer::UpdatePBRShadowCache()
          e.baked = false;
       const int slot = l->m_pbrShadowSlot;
       const bool hasMap = slot >= 0 && slot < m_vsmMaxLights && l->m_pbrShadowLayout == VSM::LAYOUT_CUBE;
+      bakesPending += hasMap && !e.baked && l->m_currentIntensity > 0.f; // A light that is off stays unbaked, and does not show
       if (e.baked && hasMap && e.validFrame <= m_vsmFrame)
          table[slot] = vec4(e.map.x, e.map.y, e.map.z, (float)(e.layer + 1));
       if (e.baked || toBake != nullptr || !hasMap || l->m_pbrShadowBakedSlot != slot || l->m_pbrShadowBakedSerial != m_vsmRebuildSerial || l->m_pbrShadowBakedPos.x != pos.x
@@ -3806,6 +3818,8 @@ void Renderer::UpdatePBRShadowCache()
       if (warm)
          toBake = &e;
    }
+
+   g_shadowBakesPending = bakesPending;
 
    if (toBake != nullptr && receiver != nullptr)
    {
@@ -3864,6 +3878,7 @@ void Renderer::UpdatePBRShadowCache()
             e.sphereRadius = sphereRadius;
             e.mode = (int)l->m_d.m_shadows;
             e.serial = m_vsmRebuildSerial;
+            g_shadowWork++;
             PLOGI << "PBR shadow cache: baked " << l->GetName() << " (tile " << e.w << "x" << e.h << " at " << e.map.w << " VPU per texel, layer " << e.layer << "), submitted in "
                   << (double)(usec() - t0) / 1000.0 << " ms, " << (double)(usec() - setupStart) / 1000.0 << " ms after cache setup (GPU time: 'PBR Shadow Bake' in VPX_FRAME_LOG)";
          }

@@ -47,6 +47,8 @@
 #include <bgfx/bgfx.h>
 #include <bimg/bimg.h>
 #include "shaders/bgfx_mipmap.h"
+#include "renderer/ShaderHotReload.h"
+#include "core/EngineMcp.h"
 #if defined(__STANDALONE__) && !defined(_MSC_VER)
 #pragma pop_macro("_WIN64")
 #endif
@@ -1124,6 +1126,11 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
             for (const uint64_t length : gpuLengths)
                avg += length;
             avgGPUFrameLength = avg / gpuLengths.size();
+
+            #ifdef VPX_DEV_TOOLS
+            if (EngineMcp* const control = EngineMcp::Get())
+               control->OnFramePresented(lastSyncTimestamp, m_lastGPUFrameLength);
+            #endif
 
             // VPX_PERF_LOG: once per second, log frame interval and GPU time (avg/max) and the VSM shadow pages rendered
             static const bool perfLog = getenv("VPX_PERF_LOG") != nullptr;

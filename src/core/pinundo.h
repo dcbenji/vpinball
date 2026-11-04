@@ -24,6 +24,9 @@ public:
    // A record with an action without snapshotForRedo can not be redone: undoing it clears the redo records.
    void MarkForAction(std::function<void()> undo, std::function<std::function<void()>()> snapshotForRedo = nullptr);
    void EndUndo();
+   void OverwritePart(IEditable *const pie, IObjectReader &reader); // Replaces the state of a part from a saved one, as undo does
+   // The part state sync callback, for a caller saving and restoring a part by itself: (part, false) before saving, OverwritePart does (part, true)
+   void SyncPartBeforeSave(IEditable *const pie) const { if (m_partStateSync) m_partStateSync(pie, false); }
    // Undoes the last record, returning the editor state captured when it was begun (empty if none). The undone record can be redone
    // (until a new record is begun) unless keepForRedo is false, which is used to cancel the record that has just been begun
    std::any Undo(bool keepForRedo = true);
