@@ -95,6 +95,7 @@ public:
    bool IsBackdropEditMode() const { return m_camMode == ViewMode::DesktopBackdrop; }
 
    bool IsInspectMode() const { return m_table->m_liveBaseTable != nullptr; }
+   bool IsLocalView() const { return m_localView.active; } // The 3D Viewport shows a Local View (View > Local View)
 
    // Posts a message in the status bar (last operation report, fades after a few seconds)
    void Report(const string &message);
@@ -181,7 +182,9 @@ private:
       ImVec2 rectMin, rectSize;
       unsigned int visibilityMask = 0; // Player mode visibility of a secondary view (0: the 3D Viewport's)
       bool hiddenInPlay = true; // The view shows the parts hidden in play: they can be picked (else they can not, they are not drawn)
+      const LocalViewParts *local = nullptr; // The view's Local View: only its parts can be picked (null: the 3D Viewport's)
    };
+   bool IsInLocalView(const PickView *view, const IEditable *editable) const { return (view != nullptr ? view->local : &m_localView) == nullptr || (view != nullptr ? view->local : &m_localView)->Allows(editable); }
    void PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &rayNear, Vertex3Ds &rayFar) const; // World space segment under the mouse
    void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view = nullptr) const;
    void DrawSelectionLines(ImDrawList *drawList, const PickView &view); // The 2D part of the selection overlay (lines, colliders) in a secondary view's image
@@ -507,7 +510,7 @@ private:
    ImGuizmo::MODE m_gizmoMode = ImGuizmo::WORLD;
    void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
    bool GetSelectionTransform(Matrix3D &transform) const;
-   bool GetSelectionBounds(FRect3D &bounds) const;
+   bool GetSelectionBounds(FRect3D &bounds, const LocalViewParts *local = nullptr) const; // With a Local View, only the selected parts it shows
 
    // Blender style modal transform (G / R / S then move the mouse, X / Y / Z to constrain to an axis (Shift for the plane
    // perpendicular to it), type a number for an exact value, Enter / left click to confirm, Esc / right click to cancel)
@@ -591,6 +594,31 @@ private:
    void CycleCamera();
    void FrameSelection(); // Editor camera centered on the selection, zoomed to fill the view (Blender's View Selected, F / numpad .)
    void FrameAll(); // Same for the whole table (Home)
+   // Local View (Blender's numpad /, View > Local View): a view limited to the parts selected when it was entered, hiding all the others in that view only, framed;
+   // again, everything and the camera it was entered from. View-only: no part, undo step, table change or file is touched; it ends with a play session or a table change.
+   // Each view (the 3D Viewport, each secondary view) has its own, see LocalViewParts
+   LocalViewParts m_localView;
+   struct LocalViewCamera
+   {
+      ViewMode camMode;
+      bool perspective;
+      PredefinedView predefined;
+      Matrix3D view;
+      float distance;
+   } m_localViewCamera;
+   void ToggleLocalView(); // The 3D Viewport's
+   void EndLocalViews(); // All of them, cameras given back (a play session or a table change)
+   bool BuildLocalViewParts(LocalViewParts &parts) const; // The selection (a part group's parts too) as a Local View's parts; false when nothing is selected
+   bool GetLocalViewBounds(const LocalViewParts &parts, FRect3D &bounds) const; // The bounds of the parts a Local View shows (what it frames); false when it has none
+   void ExtendBoundsWithPart(FRect3D &bounds, const std::shared_ptr<EditorUIPart> &part) const; // Hit boxes and position of one part
+   const LocalViewParts *KeyLocalView() const; // The Local View a view key works on: the hovered secondary view's, else the 3D Viewport's
+   const LocalViewParts &ViewLocalView(int slot) const; // The Local View of a view: a secondary view's slot, or -1 for the 3D Viewport
+   bool SelectionInView(int slot) const; // Every selected part is in the view's Local View (always, when it is not local): the gizmo, G / R / S and the pivot work only then, nothing is transformed unseen
+   // A part added while a view is local joins it (as Blender's): UpdateLocalViews finds the new parts of the table, by the table's parts of the previous frame
+   std::map<const IEditable *, string> m_localKnown; // Parts of the table (and their names) as of the last frame a view was local
+   bool m_localUndoRan = false; // An undo / redo ran since the Local Views were last updated: a part which then appears may be one it returned
+   vector<string> m_localHiddenLost; // Names of the parts which left the table (deleted) while hidden by every view: an undo bringing one back does not show it
+   void UpdateLocalViews(); // Every frame: drops the parts which left the table from the Local Views, takes them back if an undo returns them
    void OrbitStep(bool yaw, float sign); // 15 degree orbit step
    bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
    bool m_fitPlayfieldCamera = false;

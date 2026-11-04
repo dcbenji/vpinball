@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "unordered_dense.h"
 #include "gpuprofiler.h"
 #include "math/matrix.h"
 #include "math/ModelViewProj.h"
@@ -76,6 +77,9 @@ struct RenderMeshDesc
    const Vertex3D_NoTex2* edgeVertices = nullptr; // Vertices, required by UIEdgeMode::Outline
 };
 
+// The parts a view of the live editor is limited to (its Local View), by address: never dereferenced
+using LocalViewSet = ankerl::unordered_dense::set<const IEditable *>;
+
 class Renderer final
 {
 public:
@@ -124,6 +128,7 @@ public:
    bool IsSolidPass() const { return m_editorPreviewPass ? m_editorSolidPass : m_shadeMode == ShadeMode::Solid; }
    void SetShadeMode(ShadeMode mode) { m_shadeMode = mode; };
    void SetViewShade(const ViewShadeOptions& options) { m_viewShade = options; } // The main editor view's view-only shading options (the defaults outside the editor view)
+   void SetLocalView(const LocalViewSet* parts) { m_localView = parts; } // The main editor view's Local View: only these parts are drawn in it (null: all of them)
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
    void Render3DScene(); // Records the passes of a full frame rendering the 3D scene to the output backbuffer
@@ -151,6 +156,7 @@ public:
       PinTable* isolatedTable = nullptr;
       bool solid = false; // Full PBR path in Solid shading (ignored for wireframe)
       ViewShadeOptions shade; // The view's own view-only shading options
+      const LocalViewSet* localView = nullptr; // The view's Local View (null: all the parts), must stay valid until the request is rendered
    };
    bool RequestEditorView(int slot, const EditorViewRequest& request); // False (nothing requested) for a full PBR view beyond kMaxEditorPBRViews
    bool CanRenderEditorPBRView(int slot) const; // False when kMaxEditorPBRViews other slots hold or requested a full PBR view
@@ -387,8 +393,11 @@ public:
    void RenderItemOfTable(IEditable* const renderable, PinTable* const table, bool isNoBackdrop)
    {
       PinTable* const saved = m_table;
+      const LocalViewSet* const savedLocalView = m_localView;
       m_table = table;
+      m_localView = nullptr; // The ghost is not a part of the table, a Local View does not hide it
       RenderItem(renderable, isNoBackdrop);
+      m_localView = savedLocalView;
       m_table = saved;
    }
 
@@ -600,6 +609,7 @@ private:
    std::shared_ptr<const Sampler> m_flatSampler; // 1 x 1 white environment: Solid lighting Flat
    bool m_solidEnvTried = false;
    ViewShadeOptions m_viewShade; // View-only shading options of the view being drawn: the main editor view's, a secondary view's during its pass
+   const LocalViewSet* m_localView = nullptr; // Local View of the view being drawn (see RenderItem): null = every part, the only check when no view is local
    bool NoTableLights() const { return IsSolidPass() || !m_viewShade.tableLights; } // No table lights (nor shadows) in the view being drawn
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);

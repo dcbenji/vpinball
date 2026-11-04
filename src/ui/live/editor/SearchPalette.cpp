@@ -143,13 +143,14 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Right", "Ctrl+Numpad 3", nullptr, [&ed]() { ed.SetView(PV::Right); });
    add("View" + sep + "Perspective / Orthographic", "Numpad 5", nullptr, [&ed]() { ed.m_camMode = ViewMode::EditorCam; ed.m_perspectiveCam = !ed.m_perspectiveCam; });
    add("View" + sep + "Cycle Camera (Preview / Editor / Backdrop)", "Numpad 0", nullptr, [&ed]() { ed.CycleCamera(); });
-   add("View" + sep + "Lock Orbit", "Numpad /", nullptr, [&ed]() { ed.m_orbitLock = !ed.m_orbitLock; });
+   add("View" + sep + "Lock Orbit", "", nullptr, [&ed]() { ed.m_orbitLock = !ed.m_orbitLock; });
    add("View" + sep + "Orbit Left", "Numpad 4", nullptr, [&ed]() { ed.OrbitStep(true, 1.f); });
    add("View" + sep + "Orbit Right", "Numpad 6", nullptr, [&ed]() { ed.OrbitStep(true, -1.f); });
    add("View" + sep + "Orbit Up", "Numpad 8", nullptr, [&ed]() { ed.OrbitStep(false, 1.f); });
    add("View" + sep + "Orbit Down", "Numpad 2", nullptr, [&ed]() { ed.OrbitStep(false, -1.f); });
    add("View" + sep + "Frame Selected", "F", hasPart, [&ed]() { ed.FrameSelection(); });
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
+   add("View" + sep + (ed.IsLocalView() ? "Local View (on)" : "Local View"), "Numpad /  (US: / \\)", nullptr, [&ed]() { ed.ToggleLocalView(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Favorites", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Favorites); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });

@@ -4,8 +4,11 @@
 
 #include "imgui/imgui.h"
 #include "AreaLayout.h"
+#include "renderer/Renderer.h"
 
 #include <cstdint>
+#include <map>
+#include <string>
 #include <vector>
 
 class Matrix3D;
@@ -15,6 +18,25 @@ namespace VPX::EditorUI
 {
 
 class EditorUI;
+
+// A view's Local View (Blender's numpad /): the parts the view is limited to, as they were selected when it was entered. View-only: nothing of the parts, the
+// table, the undo history or a file changes, and none of it is saved or kept over a table change or a play session (see EditorUI::ToggleLocalView)
+struct LocalViewParts
+{
+   bool active = false;
+   LocalViewSet set; // The parts of the table it is limited to, by address: what the renderer draws and the picking accepts
+   std::map<const IEditable *, std::string> names; // Their names, to take a part back that an undo returns as another object
+   std::vector<std::string> lost; // Names of the parts which left the table (deleted)
+   void Clear()
+   {
+      active = false;
+      set.clear();
+      names.clear();
+      lost.clear();
+   }
+   const LocalViewSet *ForRenderer() const { return active ? &set : nullptr; } // Null (the renderer's nil check) when the view is not local
+   bool Allows(const IEditable *part) const { return !active || set.contains(part); }
+};
 
 // Secondary 3D view, hosted by a Camera Preview editor area (up to AreaLayout::kMaxViewLeaves, one panel per renderer view slot): not the
 // editing viewport (click selects as in the 3D Viewport, see HandleSelectInput; the gizmo and G / R / S work in the view under the mouse, see EditorUI::RenderUI), the scene rendered by the Renderer into an offscreen target beside it, with
@@ -46,6 +68,12 @@ public:
    bool HasImage() const { return m_hasImage; } // Last frame: the area was big enough for an image (see EditorUI::RenderAreas, the render schedule)
    void SetRank(int rank) { m_rank = rank; } // Rank among the views on the render schedule of the same shading (PBR / Wireframe), sets the render phase
 
+   // Local View of this view (Blender's numpad /, see EditorUI::ToggleLocalView); the camera it was entered from comes back on exit
+   const LocalViewParts &GetLocalView() const { return m_local; }
+   LocalViewParts &GetLocalView() { return m_local; }
+   void ExitLocalView(); // Ends it, giving the camera back (no report)
+   void LocalViewChanged() { m_refresh = true; } // Its parts changed (some left the table or came back): re-render
+
    // View setup shown by the Player camera: -1 = Auto (the one the player uses, the table's active view mode), else BG_DESKTOP / BG_FULLSCREEN / BG_FSS.
    // Rendering another one never changes the table's or the player's view mode. JSON names (per workspace layout leaf): "desktop",
    // "cabinet", "fss"; Auto is written as no key.
@@ -65,6 +93,7 @@ private:
    bool GameOwnsInput() const;
    void FrameBounds(const FRect3D &bounds, float aspect);
    void FrameAll(float aspect);
+   void ToggleLocalView(float aspect);
 
    EditorUI &m_editor;
    const int m_slot; // Renderer view slot
@@ -86,6 +115,8 @@ private:
    int m_pendingWidth = 0, m_pendingHeight = 0, m_pendingFrames = 0;
    int m_rank = 0;
    bool m_hasImage = true;
+   LocalViewParts m_local;
+   AreaViewSettings m_localSaved; // The settings (camera) the Local View was entered from
 };
 
 }

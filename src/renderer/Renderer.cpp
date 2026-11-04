@@ -2426,6 +2426,9 @@ void Renderer::RenderItem(IEditable* const editable, bool isNoBackdrop)
       || (editable->m_desktopBackdrop && isNoBackdrop) // Don't render backdrop items in reflections or VR & cabinet modes
       || (editable->GetPartGroup() != nullptr && ((editable->GetPartGroup()->GetPlayerModeVisibilityMask() & m_visibilityMask) == 0))) // Apply player mode visibility mask
       return;
+   // The view's Local View: the other parts are not drawn (nor their selection or hidden in play overlays); the lights, reflection and refraction probes and shadow pages still see them
+   if (m_localView != nullptr && (m_render_mask & (LIGHT_BUFFER | REFLECTION_PASS | SHADOW_MAP)) == 0 && !m_localView->contains(editable))
+      return;
 
    const PartGroupData::SpaceReference spaceReference = editable->GetPartGroup() ? editable->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD;
    SetSpaceReference(spaceReference, false);
@@ -2456,7 +2459,8 @@ bool Renderer::IsUsingStaticPrepass() const
       && !GetMSAABackBufferTexture()->IsMSAA() // Static prepass is not compatible with BGFX's MSAA (BGFX does not allow to blit between MSAA textures). OpenGL backend is able to support it, but it is disabled as the resource to maintain it are too low and it is EOL
       && m_shadeMode == ShadeMode::Default // TODO Wireframe rendering modes are not tested for prerendering optimization yet
       && m_disableStaticPrepass <= 0 // Something resuested to disable static part accumulation (for example headtracking,...)
-      && !m_editorPreviewPass; // The editor camera preview has its own render targets, the static prepass belongs to the main view
+      && !m_editorPreviewPass // The editor camera preview has its own render targets, the static prepass belongs to the main view
+      && m_localView == nullptr; // A Local View hides parts the prepass would have drawn
 }
 
 bool Renderer::IsUsingDepthPrepass() const
@@ -6177,6 +6181,8 @@ void Renderer::RenderEditorView(const int slot)
    const unsigned int mainRenderMask = m_render_mask;
    m_shadeMode = lite ? (req.shade.xray ? ShadeMode::NoDepthWireframe : ShadeMode::Wireframe) : ShadeMode::Default; // The secondary view's own shading, whatever the editor view's
    m_viewShade = req.shade;
+   const LocalViewSet* const mainLocalView = m_localView;
+   m_localView = req.localView;
    m_editorPreviewPass = true;
    m_editorPreviewPlayerCam = req.playerCamera;
    m_editorLitePass = lite;
@@ -6395,6 +6401,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
    m_viewShade = mainViewShade;
+   m_localView = mainLocalView;
    m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
    m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;
    m_renderDevice->m_depthPrepassMotion = mainDepthPrepassMotion;

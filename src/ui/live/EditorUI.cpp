@@ -52,6 +52,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <span>
 #include <unordered_set>
 
 #if defined(ENABLE_DX9)
@@ -258,6 +259,7 @@ void EditorUI::Close()
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
    m_renderer->SetViewShade(ViewShadeOptions {});
+   EndLocalViews(); // A play session (or the editor closing) ends the Local Views
 }
 
 void EditorUI::SetTable(PinTable *const table)
@@ -290,6 +292,7 @@ void EditorUI::SetTable(PinTable *const table)
    m_addPartType = eItemInvalid;
    m_partLibrary.CancelPlacement();
    m_boxSelectActive = false;
+   EndLocalViews(); // They belong to the previous table's parts
 }
 
 void EditorUI::PlayTest()
@@ -2081,6 +2084,8 @@ void EditorUI::DrawSelectionLines(ImDrawList *drawList, const PickView &view)
    drawList->PushClipRect(view.rectMin, ImVec2(view.rectMin.x + view.rectSize.x, view.rectMin.y + view.rectSize.y), true);
    for (const auto &part : m_multiSel)
    {
+      if (view.local != nullptr && !view.local->Allows(part->GetEditable()))
+         continue; // Selected, but not in the view's Local View
       ctx.m_isActive = part == m_selection.GetPart();
       part->Render(ctx);
    }
@@ -2093,6 +2098,7 @@ void EditorUI::RenderUI()
    ImGuizmo::SetOrthographic(m_camMode == ViewMode::DesktopBackdrop || (m_camMode == ViewMode::EditorCam && !m_perspectiveCam));
    ImGuizmo::BeginFrame();
    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+   UpdateLocalViews(); // Before anything reads the sets (the gizmo, the overlays, the renderer)
 
    // In desktop backdrop mode, only backdrop parts can be selected and edited, and conversely
    {
@@ -2405,7 +2411,7 @@ void EditorUI::RenderUI()
          m_gizmoSlot = -1; // The view is gone
    }
    const SecondaryViewInfo *const gizmoView = m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid ? &m_viewInfo[m_gizmoSlot] : nullptr;
-   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost && SelectionInView(m_gizmoSlot)
       && (m_gizmoSlot >= 0 ? (gizmoView != nullptr && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop) : m_viewportVisible))
    {
       float camViewLH[16];
@@ -2585,6 +2591,7 @@ void EditorUI::RenderUI()
 
    m_renderer->SetShadeMode(m_shadeMode);
    m_renderer->SetViewShade(m_camMode == ViewMode::EditorCam && !IsInspectMode() ? m_viewShade : ViewShadeOptions {}); // The options are the editor view's only
+   m_renderer->SetLocalView(m_localView.ForRenderer());
 
    // Selection and physic colliders overlay (suspended while a save is running: the part renders
    // would write into the parts' data being serialized on the worker thread, see Render3D)
@@ -2599,6 +2606,8 @@ void EditorUI::RenderUI()
          ctx.m_isSelected = true;
          for (const auto &part : m_multiSel)
          {
+            if (!m_localView.Allows(part->GetEditable()))
+               continue; // Selected, but not in the Local View: nothing of it is drawn
             ctx.m_isActive = part == m_selection.GetPart();
             part->Render(ctx);
          }
@@ -2606,7 +2615,7 @@ void EditorUI::RenderUI()
          ctx.m_isSelected = false;
       }
 
-      if (isSelectionTransformValid)
+      if (isSelectionTransformValid && SelectionInView(-1)) // Not for a selection the view does not show
       {
          const ImVec2 pos = ctx.Project(transform.GetOrthoNormalPos());
          // Not over the panels beside the viewport (the part may be outside the narrow viewport)
@@ -2649,7 +2658,7 @@ void EditorUI::RenderUI()
 
       // In drag point edit mode, render the drag points of the edited part's curve (or its center point)
       PlasticFromAtlas::DrawPointEdit(*this, overlayDrawList, ctx);
-      if (m_pointEditPart)
+      if (m_pointEditPart && m_localView.Allows(m_pointEditPart->GetEditable())) // A part the Local View hides has no points drawn
       {
          if (m_pointEditCenter)
          {
@@ -2691,7 +2700,8 @@ void EditorUI::RenderUI()
          ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(255, 0, 0, 64));
          // Gameplay colliders: the dragged parts' ones are rebuilt per frame while this overlay is on (see SetSelectionTransform), else at the drag end
          for (auto pho : m_player->m_physics->GetHitObjects())
-            if (pho != nullptr && (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && IsEditableSelected(pho->m_editable))))
+            if (pho != nullptr && (pho->m_editable == nullptr || m_localView.Allows(pho->m_editable)) // Only the colliders of the parts the Local View shows
+               && (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && IsEditableSelected(pho->m_editable))))
                pho->DrawUI(project, overlayDrawList, true);
          ImGui::PopStyleColor(2);
       }
@@ -3112,7 +3122,8 @@ void EditorUI::RenderUI()
       }
       else if (m_secondaryViewHovered
          && ((!io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_Z)
-                || ImGui::IsKeyPressed(ImGuiKey_F) || ImGui::IsKeyPressed(ImGuiKey_Home) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide)))
+                || ImGui::IsKeyPressed(ImGuiKey_F) || ImGui::IsKeyPressed(ImGuiKey_Home) || ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide)
+                || ImGui::IsKeyPressed(ImGuiKey_Slash) || ImGui::IsKeyPressed(ImGuiKey_Backslash))) // The view's own: Local View
             || IsNumpadPressed(0) || IsNumpadPressed(1) || IsNumpadPressed(2) || IsNumpadPressed(3) || IsNumpadPressed(4) || IsNumpadPressed(5) || IsNumpadPressed(6)
             || IsNumpadPressed(7) || IsNumpadPressed(8) || IsNumpadPressed(9)))
       {
@@ -3373,10 +3384,9 @@ void EditorUI::RenderUI()
          FrameSelection(); // Blender's View Selected
       else if (ImGui::IsKeyPressed(ImGuiKey_Home))
          FrameAll();
-      else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDivide))
-      {
-         m_orbitLock = !m_orbitLock;
-      }
+      else if (!io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift
+         && (ImGui::IsKeyPressed(ImGuiKey_Slash, false) || ImGui::IsKeyPressed(ImGuiKey_Backslash, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide, false)))
+         ToggleLocalView(); // Blender's numpad /, also on / and \ (no numpad on a laptop); Lock Orbit is the header's lock button
       else if (IsNumpadPressed(2) || IsNumpadPressed(4) || IsNumpadPressed(6) || IsNumpadPressed(8))
          OrbitStep(IsNumpadPressed(4) || IsNumpadPressed(6), (IsNumpadPressed(4) || IsNumpadPressed(8)) ? 1.f : -1.f);
       else if (IsNumpadPressed(7))
@@ -3437,6 +3447,8 @@ void EditorUI::RenderUI()
          if (liveParts.contains(uiPart->GetEditable()))
             uiPart->ApplyDisplayVisibility();
    }
+   if (m_isOpened)
+      UpdateLocalViews(); // A part added or returned by an undo this frame is in the sets before the next render (which comes before the next frame's update)
 }
 
 bool EditorUI::GetViewportFraction(float (&rect)[4]) const
@@ -3528,6 +3540,7 @@ void EditorUI::UndoSteps(const size_t count)
 {
    if (!CanUndo() || count == 0)
       return;
+   m_localUndoRan = true;
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
    string label;
@@ -3557,6 +3570,7 @@ void EditorUI::RedoSteps(const size_t count)
 {
    if (!CanRedo() || count == 0)
       return;
+   m_localUndoRan = true;
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
    string label;
@@ -3620,6 +3634,11 @@ void EditorUI::DuplicateSelection()
    if (!CanDuplicate())
       return;
    const int grabSlot = TransformViewSlot();
+   if (!SelectionInView(grabSlot)) // The grab which follows would be refused: no copy then
+   {
+      Report("Local View: the selection has parts this view does not show");
+      return;
+   }
    if (m_navBlenderTransform && (grabSlot == -2 || (grabSlot >= 0 && !CanStartModalIn(grabSlot)))) // The grab could not start in a view: no copy then (without the 3D Viewport shown it copies in place)
    {
       Report("Duplicate needs the 3D Viewport or a view that can be edited under the mouse");
@@ -4061,7 +4080,7 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
    for (const auto &hr : vhoUnfilteredHit)
    {
       const auto editable = hr.m_obj->m_editable;
-      if (editable && !IsEditablePickable(editable, view != nullptr ? view->visibilityMask : 0))
+      if (editable && (!IsEditablePickable(editable, view != nullptr ? view->visibilityMask : 0) || !IsInLocalView(view, editable)))
          continue;
       if (editable && !hiddenInPlayPickable)
       {
@@ -4113,11 +4132,12 @@ bool EditorUI::IsEditablePickable(const IEditable *editable, unsigned int visibi
 void EditorUI::SelectAllParts()
 {
    // Select all the pickable parts
+   const LocalViewParts &local = *KeyLocalView(); // What the view under the mouse shows (a secondary view's own set, else the 3D Viewport's)
    m_multiSel.clear();
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable))
+      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable) && local.Allows(editable))
          m_multiSel.push_back(uiPart);
    }
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
@@ -4138,7 +4158,7 @@ void EditorUI::BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !IsEditablePickable(editable) || !IsPartPickableInView(uiPart, hiddenInPlayPickable))
+      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !IsEditablePickable(editable) || !IsInLocalView(nullptr, editable) || !IsPartPickableInView(uiPart, hiddenInPlayPickable))
          continue;
       Matrix3D transform;
       if (uiPart->GetTransform(transform) == EditorUIPart::TM_None)
@@ -5019,6 +5039,12 @@ void EditorUI::BeginModalTransform(ModalOp op)
    const int viewSlot = TransformViewSlot();
    if (!CanStartModalIn(viewSlot))
       return;
+   UpdateLocalViews(); // A part just added (Duplicate) is already in the Local View
+   if (!SelectionInView(viewSlot))
+   {
+      Report("Local View: the selection has parts this view does not show");
+      return;
+   }
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
       return;
@@ -5425,13 +5451,227 @@ void EditorUI::CycleCamera()
 void EditorUI::FrameSelection()
 {
    FRect3D bounds;
-   if (GetSelectionBounds(bounds))
+   if (GetSelectionBounds(bounds, &m_localView))
       FrameBounds(bounds);
+}
+
+void EditorUI::EndLocalViews()
+{
+   if (m_localView.active)
+      ToggleLocalView(); // Gives the 3D Viewport's camera back
+   for (CameraPreviewPanel &panel : m_cameraPreviews)
+      panel.ExitLocalView();
+   m_localKnown.clear();
+   m_localHiddenLost.clear();
+}
+
+void EditorUI::ToggleLocalView()
+{
+   if (m_localView.active)
+   {
+      m_camMode = m_localViewCamera.camMode;
+      m_perspectiveCam = m_localViewCamera.perspective;
+      m_predefinedView = m_localViewCamera.predefined;
+      m_camView = m_localViewCamera.view;
+      m_camDistance = m_localViewCamera.distance;
+      m_localView.Clear();
+      m_renderer->SetLocalView(nullptr);
+      Report("Local View off");
+      return;
+   }
+   if (IsInspectMode() && m_player->IsGameRunning())
+      return; // The keys are the game's while it runs
+   if (!BuildLocalViewParts(m_localView))
+   {
+      Report("Local View: nothing selected");
+      return;
+   }
+   m_localView.active = true;
+   m_localViewCamera = { m_camMode, m_perspectiveCam, m_predefinedView, m_camView, m_camDistance };
+   m_renderer->SetLocalView(m_localView.ForRenderer());
+   if (FRect3D bounds; GetLocalViewBounds(m_localView, bounds)) // The set's, so that a part group alone (no bounds of its own) frames its parts
+      FrameBounds(bounds);
+   Report("Local View");
+}
+
+bool EditorUI::BuildLocalViewParts(LocalViewParts &parts) const
+{
+   parts.Clear();
+   const auto add = [&parts](const IEditable *editable)
+   {
+      if (parts.set.insert(editable).second)
+         parts.names[editable] = editable->GetName();
+   };
+   for (const auto &part : m_multiSel)
+   {
+      const IEditable *const editable = part->GetEditable();
+      if (editable == nullptr)
+         continue;
+      add(editable);
+      if (editable->GetItemType() == eItemPartGroup) // A part group stands for its parts
+         for (const auto &other : m_editables)
+            if (other->GetEditable() != nullptr)
+               for (const PartGroup *group = other->GetEditable()->GetPartGroup(); group != nullptr; group = group->GetPartGroup())
+                  if (static_cast<const IEditable *>(group) == editable)
+                  {
+                     add(other->GetEditable());
+                     break;
+                  }
+   }
+   return !parts.set.empty();
+}
+
+bool EditorUI::GetLocalViewBounds(const LocalViewParts &parts, FRect3D &bounds) const
+{
+   bounds.Clear();
+   for (const auto &uiPart : m_editables)
+      if (parts.Allows(uiPart->GetEditable()))
+         ExtendBoundsWithPart(bounds, uiPart);
+   return bounds.left <= bounds.right;
+}
+
+const LocalViewParts &EditorUI::ViewLocalView(const int slot) const
+{
+   return slot >= 0 && slot < AreaLayout::kMaxViewLeaves ? m_cameraPreviews[slot].GetLocalView() : m_localView;
+}
+
+const LocalViewParts *EditorUI::KeyLocalView() const
+{
+   return &ViewLocalView(m_secondaryViewHovered ? m_secondaryViewSlot : -1);
+}
+
+bool EditorUI::SelectionInView(const int slot) const
+{
+   const LocalViewParts &local = ViewLocalView(slot);
+   if (!local.active)
+      return true;
+   for (const auto &part : m_multiSel)
+      if (!local.Allows(part->GetEditable()))
+         return false;
+   return m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr || local.Allows(m_selection.GetPart()->GetEditable());
+}
+
+void EditorUI::UpdateLocalViews()
+{
+   LocalViewParts *views[1 + AreaLayout::kMaxViewLeaves];
+   int n = 0;
+   if (m_localView.active)
+      views[n++] = &m_localView;
+   for (CameraPreviewPanel &panel : m_cameraPreviews)
+      if (panel.GetLocalView().active)
+         views[n++] = &panel.GetLocalView();
+   if (n == 0)
+   {
+      m_localKnown.clear();
+      m_localHiddenLost.clear();
+      m_localUndoRan = false;
+      return; // Nothing to do when no view is local
+   }
+   if (IsInspectMode() && m_player->IsGameRunning())
+   {
+      EndLocalViews(); // The game runs again (resumed from a paused inspection): it is shown whole, and the keys are its own
+      return;
+   }
+   // A part which left the table (deleted) drops out of the views, by address: it is not dereferenced; one an undo returns (as another object) is taken back by name
+   const ankerl::unordered_dense::set<const IEditable *> liveParts(m_table->GetParts().begin(), m_table->GetParts().end());
+   const bool firstFrame = m_localKnown.empty(); // The parts present when the first view went local are not new
+   // A part hidden by every view which leaves the table: when an undo returns it, it stays hidden
+   for (auto it = m_localKnown.begin(); it != m_localKnown.end();)
+   {
+      if (liveParts.contains(it->first))
+      {
+         ++it;
+         continue;
+      }
+      const IEditable *const gonePart = it->first;
+      if (std::ranges::none_of(std::span(views, static_cast<size_t>(n)), [gonePart](const LocalViewParts *view) { return view->set.contains(gonePart); }))
+         m_localHiddenLost.push_back(it->second);
+      it = m_localKnown.erase(it);
+   }
+   bool changed[1 + AreaLayout::kMaxViewLeaves] = {};
+   for (int i = 0; i < n; i++)
+   {
+      LocalViewParts &view = *views[i];
+      vector<const IEditable *> gone;
+      for (const IEditable *const part : view.set)
+         if (!liveParts.contains(part))
+            gone.push_back(part);
+      for (const IEditable *const part : gone)
+      {
+         view.lost.push_back(view.names[part]);
+         view.names.erase(part);
+         view.set.erase(part);
+         changed[i] = true;
+      }
+      for (auto &[part, name] : view.names)
+         if (const string &current = part->GetName(); current != name)
+            name = current;
+      for (size_t k = 0; k < view.lost.size();)
+      {
+         const auto it = std::ranges::find_if(m_table->GetParts(), [&](const IEditable *part) { return part->GetItemType() != eItemPartGroup && part->GetName() == view.lost[k] && !view.set.contains(part); });
+         if (it == m_table->GetParts().end())
+            k++;
+         else
+         {
+            view.set.insert(*it);
+            view.names[*it] = view.lost[k];
+            view.lost.erase(view.lost.begin() + static_cast<ptrdiff_t>(k));
+            changed[i] = true;
+         }
+      }
+   }
+   // A part new to the table (Duplicate, Paste, Add Part, a library placement, a redo) joins every Local View, so that it is drawn and can be clicked, as in Blender
+   for (const IEditable *const part : m_table->GetParts())
+   {
+      const auto known = m_localKnown.find(part);
+      if (known != m_localKnown.end())
+      {
+         if (known->second != part->GetName())
+            known->second = part->GetName();
+         continue;
+      }
+      m_localKnown[part] = part->GetName();
+      if (firstFrame)
+         continue;
+      if (std::ranges::any_of(std::span(views, static_cast<size_t>(n)), [part](const LocalViewParts *view) { return view->set.contains(part); }))
+         continue; // Taken back by name above
+      if (const auto hidden = std::ranges::find(m_localHiddenLost, part->GetName()); hidden != m_localHiddenLost.end())
+      {
+         m_localHiddenLost.erase(hidden); // Whatever it is, the name is not a deleted part's any more
+         if (m_localUndoRan)
+            continue; // Returned by an undo, and it was not in the views (without an undo it is a new part which took the free name: it joins)
+      }
+      for (int i = 0; i < n; i++)
+      {
+         views[i]->set.insert(part);
+         views[i]->names[part] = part->GetName();
+         changed[i] = true;
+      }
+   }
+   m_localUndoRan = false;
+   for (int i = 0; i < n; i++)
+   {
+      if (changed[i])
+         for (CameraPreviewPanel &panel : m_cameraPreviews)
+            if (&panel.GetLocalView() == views[i])
+               panel.LocalViewChanged();
+      if (views[i]->set.empty()) // Every part it showed was deleted: nothing is left to show, it ends (the 3D Viewport's camera comes back)
+      {
+         if (views[i] == &m_localView)
+            ToggleLocalView();
+         else
+            for (CameraPreviewPanel &panel : m_cameraPreviews)
+               if (&panel.GetLocalView() == views[i])
+                  panel.ExitLocalView();
+      }
+   }
 }
 
 void EditorUI::FrameAll()
 {
    FRect3D bounds(0.f, m_table->m_right, 0.f, m_table->m_bottom, 0.f, m_table->m_glassTopHeight);
+   if (FRect3D shown; m_localView.active && GetLocalViewBounds(m_localView, shown))
+      bounds = shown; // What the Local View shows (the table's box if that has no size)
    FrameBounds(bounds);
 }
 
@@ -5568,13 +5808,28 @@ bool EditorUI::GetSelectionTransform(Matrix3D &transform) const
 bool EditorUI::GetNavPivot(vec3 & target) const
 {
    FRect3D bounds;
-   if (!m_navOrbitSelection || m_camMode == ViewMode::DesktopBackdrop || !GetSelectionBounds(bounds))
+   if (!m_navOrbitSelection || m_camMode == ViewMode::DesktopBackdrop || !GetSelectionBounds(bounds, &m_localView))
       return false;
    target = vec3(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
    return true;
 }
 
-bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
+void EditorUI::ExtendBoundsWithPart(FRect3D &bounds, const std::shared_ptr<EditorUIPart> &part) const
+{
+   IEditable *const editable = part->GetEditable();
+   if (editable->GetIHitable() != nullptr)
+      for (const HitObject *const hitObject : m_player->m_physics->GetUIHitObjects(editable))
+         bounds.Extend(hitObject->m_hitBBox);
+   // Also include the part's position to cover parts without hit objects
+   Matrix3D transform;
+   if (part->GetTransform(transform) != EditorUIPart::TM_None)
+   {
+      const Vertex3Ds pos = transform.GetOrthoNormalPos();
+      bounds.Extend(FRect3D(pos.x, pos.x, pos.y, pos.y, pos.z, pos.z));
+   }
+}
+
+bool EditorUI::GetSelectionBounds(FRect3D &bounds, const LocalViewParts *local) const
 {
    bounds.Clear();
    if (m_pointEditPart)
@@ -5598,24 +5853,11 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
    }
    else
    {
-      const auto extendWithPart = [this, &bounds](const std::shared_ptr<EditorUIPart> &part)
-      {
-         IEditable *const editable = part->GetEditable();
-         if (editable->GetIHitable() != nullptr)
-            for (const HitObject *const hitObject : m_player->m_physics->GetUIHitObjects(editable))
-               bounds.Extend(hitObject->m_hitBBox);
-         // Also include the part's position to cover parts without hit objects
-         Matrix3D transform;
-         if (part->GetTransform(transform) != EditorUIPart::TM_None)
-         {
-            const Vertex3Ds pos = transform.GetOrthoNormalPos();
-            bounds.Extend(FRect3D(pos.x, pos.x, pos.y, pos.y, pos.z, pos.z));
-         }
-      };
       for (const auto &part : m_multiSel)
-         extendWithPart(part);
-      if (m_multiSel.empty() && m_selection.GetPart())
-         extendWithPart(m_selection.GetPart());
+         if (local == nullptr || local->Allows(part->GetEditable()))
+            ExtendBoundsWithPart(bounds, part);
+      if (m_multiSel.empty() && m_selection.GetPart() && (local == nullptr || local->Allows(m_selection.GetPart()->GetEditable())))
+         ExtendBoundsWithPart(bounds, m_selection.GetPart());
    }
    return bounds.left <= bounds.right;
 }
@@ -5815,6 +6057,11 @@ void EditorUI::EnterPointEditMode()
 {
    if (!CanEnterPointEdit())
       return;
+   if (!m_localView.Allows(m_selection.GetPart()->GetEditable()))
+   {
+      Report("Local View: the part is not in this view");
+      return;
+   }
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
    m_savedOutlinerAnchor = m_outlinerAnchor;

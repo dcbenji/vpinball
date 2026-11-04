@@ -756,7 +756,7 @@ void EditorChrome::RenderMenuBar()
          }
          if (ImGui::MenuItem("Cycle Camera (Preview / Editor / Backdrop)", "Numpad 0"))
             editor.CycleCamera();
-         if (ImGui::MenuItem("Lock Orbit", "Numpad /", editor.m_orbitLock))
+         if (ImGui::MenuItem("Lock Orbit", nullptr, editor.m_orbitLock))
             editor.m_orbitLock = !editor.m_orbitLock;
          ImGui::Separator();
          if (ImGui::MenuItem("Orbit Left", "Numpad 4"))
@@ -772,6 +772,8 @@ void EditorChrome::RenderMenuBar()
             editor.FrameSelection();
          if (ImGui::MenuItem("Frame All", "Home"))
             editor.FrameAll();
+         if (ImGui::MenuItem("Local View", "Numpad /  (US: / \\)", editor.IsLocalView())) // Blender's numpad /: the selection alone in the 3D Viewport (over a secondary view the key is its own)
+            editor.ToggleLocalView();
          ImGui::Separator();
          static constexpr const char *workspaceKeys[PinnedPanel::WorkspaceCount] = { "Ctrl+1", "Ctrl+2", "Ctrl+3" };
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
@@ -1417,7 +1419,7 @@ void EditorChrome::RenderStatusOverlay()
       editor.m_orbitLock = !editor.m_orbitLock;
    if (stylePushed)
       ImGui::PopStyleColor();
-   Tip("Lock Camera Orbit", "Numpad /");
+   Tip("Lock Camera Orbit");
    const float lockToggleWidth = ImGui::GetItemRectSize().x;
    ImGui::End();
 
@@ -1487,6 +1489,11 @@ void EditorChrome::RenderStatusOverlay()
       break;
    }
    case ViewMode::DesktopBackdrop: ShadowedText("Desktop Backdrop"); break;
+   }
+   if (editor.IsLocalView()) // Blender's viewport name, "(Local)" after it
+   {
+      ImGui::SameLine(0.f, ImGui::CalcTextSize(" ").x);
+      ShadowedText("(Local)");
    }
    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + ImGui::GetStyle().FramePadding.x, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
    const char *gizmoIcon = nullptr;

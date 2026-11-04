@@ -28,8 +28,34 @@ CameraPreviewPanel::CameraPreviewPanel(EditorUI &editor, const int slot)
 {
 }
 
+namespace
+{
+   // The orbit camera of the settings (what Local View frames, and gives back)
+   void CopyCamera(AreaViewSettings &to, const AreaViewSettings &from)
+   {
+      to.freeOrbit = from.freeOrbit;
+      to.ortho = from.ortho;
+      to.yaw = from.yaw;
+      to.pitch = from.pitch;
+      to.distance = from.distance;
+      std::copy(from.target, from.target + 3, to.target);
+      to.orbitValid = from.orbitValid;
+   }
+}
+
+void CameraPreviewPanel::ExitLocalView()
+{
+   if (!m_local.active)
+      return;
+   CopyCamera(m_settings, m_localSaved);
+   m_local.Clear();
+   m_camMoved = true;
+   m_refresh = true;
+}
+
 void CameraPreviewPanel::NotHosted()
 {
+   ExitLocalView(); // The view goes away: its Local View ends with it, the leaf keeps the camera it had
    m_leafId = -1; // Rebound (settings read from the leaf) when shown again
    if (!m_requested)
       return;
@@ -44,6 +70,7 @@ void CameraPreviewPanel::NotHosted()
 void CameraPreviewPanel::Bind(const int leafId, const int previewView, const AreaViewSettings &settings)
 {
    m_leafId = leafId;
+   m_local.Clear();
    m_view = (previewView >= BG_DESKTOP && previewView < BG_INVALID) ? previewView : -1;
    m_settings = settings;
    m_refresh = true;
@@ -54,6 +81,13 @@ void CameraPreviewPanel::WriteBack()
    if (m_leafId < 0)
       return;
    m_editor.m_areas.SetPreviewView(m_leafId, m_view);
+   if (m_local.active) // The Local View is not saved with the layout: nor the camera it framed
+   {
+      AreaViewSettings saved = m_settings;
+      CopyCamera(saved, m_localSaved);
+      m_editor.m_areas.SetViewSettings(m_leafId, saved);
+      return;
+   }
    m_editor.m_areas.SetViewSettings(m_leafId, m_settings);
 }
 
@@ -164,7 +198,33 @@ void CameraPreviewPanel::FrameBounds(AreaViewSettings &s, const FRect3D &bounds,
 void CameraPreviewPanel::FrameAll(const float aspect)
 {
    const PinTable *const table = m_editor.m_table;
-   FrameBounds(FRect3D(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight), aspect);
+   FRect3D bounds(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight);
+   if (FRect3D shown; m_local.active && m_editor.GetLocalViewBounds(m_local, shown))
+      bounds = shown; // What the Local View shows
+   FrameBounds(bounds, aspect);
+}
+
+void CameraPreviewPanel::ToggleLocalView(const float aspect)
+{
+   // Blender's Local View for this view: the selected parts alone, framed; again, everything and the camera it was entered from
+   if (m_local.active)
+   {
+      ExitLocalView();
+      m_editor.Report("Local View off");
+      return;
+   }
+   if (!m_editor.BuildLocalViewParts(m_local))
+   {
+      m_editor.Report("Local View: nothing selected");
+      return;
+   }
+   m_local.active = true;
+   m_localSaved = m_settings;
+   FRect3D bounds;
+   if (m_settings.freeOrbit && m_editor.GetLocalViewBounds(m_local, bounds)) // A player view keeps the table's camera; the set's bounds, so a part group alone frames its parts
+      FrameBounds(bounds, aspect);
+   m_refresh = true;
+   m_editor.Report("Local View");
 }
 
 bool CameraPreviewPanel::GameOwnsInput() const
@@ -265,6 +325,7 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
       view.visibilityMask = setup == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
          : setup == BG_FSS ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS : PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
    }
+   view.local = &m_local; // Only what the view shows can be picked
    view.hiddenInPlay = m_settings.wireframe ? m_settings.shade.hiddenWire : m_settings.solid ? m_settings.shade.hiddenSolid : m_settings.shade.hiddenPbr;
    e.SelectAtPoint(end, &view);
 }
@@ -276,6 +337,12 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
    if (io.WantTextInput || m_editor.m_fileOp != nullptr || m_editor.m_modal.active || GameOwnsInput())
       return;
    EditorUI &e = m_editor;
+   if (!io.KeyCtrl && !io.KeyAlt && !io.KeyShift
+      && (ImGui::IsKeyPressed(ImGuiKey_Slash, false) || ImGui::IsKeyPressed(ImGuiKey_Backslash, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadDivide, false)))
+   {
+      ToggleLocalView(aspect); // Blender's numpad /, also on / and \ (no numpad on a laptop)
+      return;
+   }
    if (e.IsNumpadPressed(0))
    {
       m_settings.freeOrbit = !m_settings.freeOrbit; // Blender's camera view toggle: the Player view, or back to the orbit camera
@@ -307,7 +374,7 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
    else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift))
    {
       FRect3D bounds;
-      if (e.GetSelectionBounds(bounds))
+      if (e.GetSelectionBounds(bounds, &m_local))
          FrameBounds(bounds, aspect); // Frame Selected
    }
    else if (ImGui::IsKeyPressed(ImGuiKey_Home))
@@ -513,6 +580,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             req.wireframe = m_settings.wireframe;
             req.solid = m_settings.solid;
             req.shade = m_settings.shade;
+            req.localView = m_local.ForRenderer();
             if (m_settings.freeOrbit)
                ComputeOrbit(m_settings, m_editor.m_navFovY, static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
             if (renderer->RequestEditorView(m_slot, req))
@@ -540,6 +608,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             {
                view.rectMin = imgMin;
                view.rectSize = ImVec2(imgW, imgH);
+               view.local = &m_local;
                m_editor.DrawSelectionLines(drawList, view);
                // The camera and rect for the gizmo and the G / R / S modal transforms (see EditorUI::RenderUI)
                EditorUI::SecondaryViewInfo &info = m_editor.m_viewInfo[m_slot];
@@ -562,6 +631,14 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             const char *const msg = "2 PBR views at most: set this one to Wireframe";
             const ImVec2 ts = ImGui::CalcTextSize(msg);
             drawList->AddText(ImVec2(0.5f * (imgMin.x + imgMax.x - ts.x), 0.5f * (imgMin.y + imgMax.y - ts.y)), EditorTheme::TextDim, msg);
+         }
+         if (m_local.active) // As the 3D Viewport's header names it
+         {
+            const float dpi = m_editor.m_liveUI.GetDPI();
+            const ImVec2 ts = ImGui::CalcTextSize("(Local)");
+            const ImVec2 at(imgMin.x + 8.f * dpi, imgMin.y + 6.f * dpi);
+            drawList->AddRectFilled(ImVec2(at.x - 6.f * dpi, at.y - 2.f * dpi), ImVec2(at.x + ts.x + 6.f * dpi, at.y + ts.y + 2.f * dpi), IM_COL32(20, 20, 22, 200), 3.f * dpi);
+            drawList->AddText(at, IM_COL32(255, 255, 255, 255), "(Local)");
          }
          drawList->AddRect(imgMin, imgMax, imgHovered && m_settings.freeOrbit ? EditorTheme::Accent : EditorTheme::WorkspaceOff, 0.f, 0, 1.f);
          if (imgHovered && m_settings.freeOrbit)
