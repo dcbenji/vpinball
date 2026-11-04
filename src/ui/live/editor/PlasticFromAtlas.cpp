@@ -83,14 +83,18 @@ string PlasticFromAtlas::DefaultImage(const EditorUI &ed)
    for (const Texture *const tex : images)
       if (tex->m_name == s_lastImage)
          return tex->m_name;
+   // An image with "plastic" in its name; the biggest one if there are several (the atlas, not a part's texture)
+   const Texture *best = nullptr;
    for (const Texture *const tex : images)
    {
       string s = tex->m_name;
       for (char &c : s)
          c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-      if (s.find("plastic") != string::npos)
-         return tex->m_name;
+      if (s.find("plastic") != string::npos && (best == nullptr || static_cast<uint64_t>(tex->m_width) * tex->m_height > static_cast<uint64_t>(best->m_width) * best->m_height))
+         best = tex;
    }
+   if (best != nullptr)
+      return best->m_name;
    return images.empty() ? string() : images.front()->m_name;
 }
 
@@ -483,9 +487,8 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
           ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
              | ImGuiWindowFlags_NoMove))
    {
-      ImGui::TextUnformatted("Plastic from Atlas: trace");
-      ImGui::Separator();
-      ImGui::PushItemWidth(220.f * dpi);
+      ImGui::Text("Plastic from Atlas: trace    %d point(s), %d hole(s)", static_cast<int>(t.pts.size()), static_cast<int>(t.holeList.size()));
+      ImGui::SetNextItemWidth(300.f * dpi);
       if (ImGui::BeginCombo("Atlas", t.image.c_str()))
       {
          for (const Texture *const tex : ed.m_table->GetImageList())
@@ -497,11 +500,15 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
             }
          ImGui::EndCombo();
       }
-      if (ImGui::DragFloat("Sheet DPI", &t.dpi, 1.f, 10.f, 2400.f, "%.0f"))
+      ImGui::SetNextItemWidth(90.f * dpi);
+      if (ImGui::DragFloat("Sheet DPI", &t.dpi, 0.5f, 10.f, 2400.f, "%.1f"))
          SetSheet(ed);
       ImGui::SetItemTooltip("47.06 VPU per inch at this DPI. Traced points stay where they are, the sheet is rescaled about its centre");
-      ImGui::DragFloat("Hole Diameter", &t.holeDia, 0.1f, 0.5f, 100.f, "%.1f");
-      ImGui::PopItemWidth();
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70.f * dpi);
+      ImGui::DragFloat("Hole", &t.holeDia, 0.1f, 0.5f, 100.f, "%.1f");
+      ImGui::SetItemTooltip("Hole diameter");
+      ImGui::SameLine();
       if (ImGui::Button("M3 6.4"))
          t.holeDia = 6.4f;
       ImGui::SameLine();
@@ -515,9 +522,7 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
       ImGui::SameLine();
       if (ImGui::RadioButton("Holes (H)", t.holes))
          t.holes = true;
-      ImGui::Text("%d point(s), %d hole(s)", static_cast<int>(t.pts.size()), static_cast<int>(t.holeList.size()));
-      ImGui::TextDisabled("LMB corner, Shift+LMB arc peak, Backspace removes the last");
-      ImGui::TextDisabled("H outline / holes, Enter closes the loop, Esc cancels");
+      ImGui::SameLine();
       if (ImGui::Button("Close Loop (Enter)"))
          Finish(ed);
       ImGui::SameLine();

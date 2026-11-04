@@ -5760,7 +5760,7 @@ bool EditorUI::RenderAdjustParameters()
       row("Hole Diameter");
       changed |= ImGui::DragFloat("##PlHole", &m_lastOp.plHoleDia, 0.1f, 0.5f, 100.f, "%.1f");
       row("Sheet DPI");
-      changed |= ImGui::DragFloat("##PlDpi", &m_lastOp.plDpi, 1.f, 10.f, 2400.f, "%.0f");
+      changed |= ImGui::DragFloat("##PlDpi", &m_lastOp.plDpi, 0.5f, 10.f, 2400.f, "%.1f");
       break;
    }
    case LastOperation::Type::Rotate:
