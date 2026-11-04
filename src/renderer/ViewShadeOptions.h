@@ -29,9 +29,25 @@ struct ViewShadeOptions
 
    bool operator==(const ViewShadeOptions &o) const
    {
-      return brightness == o.brightness && lightAngle == o.lightAngle && flat == o.flat && bgCustom == o.bgCustom && bg[0] == o.bg[0] && bg[1] == o.bg[1] && bg[2] == o.bg[2]
-         && backfaceCulling == o.backfaceCulling && cavity == o.cavity && xray == o.xray && wireCustom == o.wireCustom && wire[0] == o.wire[0] && wire[1] == o.wire[1]
-         && wire[2] == o.wire[2] && envStrength == o.envStrength && tableLights == o.tableLights && hiddenWire == o.hiddenWire && hiddenSolid == o.hiddenSolid && hiddenPbr == o.hiddenPbr;
+      return brightness == o.brightness
+         && lightAngle == o.lightAngle
+         && flat == o.flat
+         && bgCustom == o.bgCustom
+         && bg[0] == o.bg[0]
+         && bg[1] == o.bg[1]
+         && bg[2] == o.bg[2]
+         && backfaceCulling == o.backfaceCulling
+         && cavity == o.cavity
+         && xray == o.xray
+         && wireCustom == o.wireCustom
+         && wire[0] == o.wire[0]
+         && wire[1] == o.wire[1]
+         && wire[2] == o.wire[2]
+         && envStrength == o.envStrength
+         && tableLights == o.tableLights
+         && hiddenWire == o.hiddenWire
+         && hiddenSolid == o.hiddenSolid
+         && hiddenPbr == o.hiddenPbr;
    }
    bool operator!=(const ViewShadeOptions &o) const { return !(*this == o); }
 };
