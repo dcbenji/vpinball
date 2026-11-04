@@ -1935,10 +1935,24 @@ void Player::ProcessOSMessages(const bool isInitialized)
       case SDL_EVENT_KEY_UP:
       case SDL_EVENT_KEY_DOWN:
          isPFWnd = (SDL_GetWindowFromID(e.key.windowID) == m_playfieldWnd->GetCore()) || IsVR();
-         // Shift+F5 stops a play test also while the editor is hidden (plain F5 play); the editor handles it itself when shown
-         if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.scancode == SDL_SCANCODE_F5 && (e.key.mod & SDL_KMOD_SHIFT) && !(e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))
-            && HasStackedTableSession() && m_liveUI && !m_liveUI->IsEditorUIOpened())
-            m_liveUI->m_editorUI.RequestClose(CS_STOP_PLAY); // Deferred while a save runs, like the editor's Stop
+         // Shift+F5 stops a play test also while the editor is hidden (plain F5 play); the editor handles it itself when shown.
+         // The F5 press (and its repeats and release) is swallowed: the table script and F5 input bindings never see it
+         {
+            static bool swallowF5Up = false;
+            if (e.type == SDL_EVENT_KEY_UP && e.key.scancode == SDL_SCANCODE_F5 && swallowF5Up)
+            {
+               swallowF5Up = false;
+               continue;
+            }
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F5 && (e.key.mod & SDL_KMOD_SHIFT) && !(e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT))
+               && HasStackedTableSession() && m_liveUI && !m_liveUI->IsEditorUIOpened())
+            {
+               if (!e.key.repeat)
+                  m_liveUI->m_editorUI.RequestClose(CS_STOP_PLAY); // Deferred while a save runs, like the editor's Stop
+               swallowF5Up = true;
+               continue;
+            }
+         }
          break;
 
       case SDL_EVENT_TEXT_INPUT:
