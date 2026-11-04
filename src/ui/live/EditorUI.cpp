@@ -224,6 +224,7 @@ void EditorUI::Close()
    SDLInputHandler::ClearSwallowedMouseButtons(); // The editor stops drawing: no nav cube press can stay swallowed
    m_deferredStop = -1;
    m_gizmoDragActive = false;
+   FlushDrag();
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
    RestorePartsVisibility();
@@ -2351,6 +2352,7 @@ void EditorUI::RenderUI()
    if (m_gizmoDragActive && (gizmoLost || !ImGuizmo::IsUsing()))
    {
       m_gizmoDragActive = false;
+      FlushDrag();
       m_gizmoDragSelection.clear();
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
@@ -3189,6 +3191,16 @@ bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragAc
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
 bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !IsDragInProgress() && m_fileOp == nullptr; }
+
+// Gameplay colliders of the parts moved during a drag (modal or gizmo), once at the drag end
+void EditorUI::FlushDrag()
+{
+   const auto &parts = m_table->GetParts();
+   for (IEditable *const part : m_drag.pendingPhysics)
+      if (std::ranges::find(parts, part) != parts.end()) // Still in the table (a canceled drag restored it)
+         m_player->m_physics->Update(part);
+   m_drag = Drag();
+}
 
 void EditorUI::RestoreUndoState(const std::any &state)
 {
@@ -4354,6 +4366,7 @@ void EditorUI::EndModalTransform(const bool confirm)
          SetSelectionTransform(m_modal.initial);
    }
    m_modal.active = false;
+   FlushDrag(); // After the restore of a canceled drag
    m_gizmoOperation = m_modal.savedGizmo; // The gizmo comes back after the transform
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
@@ -4887,8 +4900,18 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       if (clearRot)
          rot.Set(0.f, 0.f, 0.f);
       part->SetTransform(pos, scale, rot);
-      m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
-      m_player->m_physics->Update(part->GetEditable());
+      IEditable *const edit = part->GetEditable();
+      if (edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->IsTransformedByMatrix()) // A primitive is drawn under its matrix
+         m_renderer->ReinitRenderable(edit->GetIRenderable());
+      if (m_modal.active || m_gizmoDragActive)
+      {
+         // Per frame while dragging: only the picking tree, the gameplay colliders follow at the drag end (FlushDrag)
+         m_player->m_physics->UpdateUI(edit);
+         if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
+            m_drag.pendingPhysics.push_back(edit);
+      }
+      else
+         m_player->m_physics->Update(edit);
    };
 
    if (clearPosition || clearScale || clearRotation)

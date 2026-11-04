@@ -30,6 +30,7 @@ public:
    // immediately updates the colliders (they may be displayed in the editor), and defers the static
    // quadtree rebuild to the next physics update (see FlushStaticQuadTree)
    void Update(IEditable *editable);
+   void UpdateUI(IEditable *editable); // Only the UI (picking) quadtree, the gameplay colliders follow with a later Update
    void Add(IEditable *editable);
    void Remove(IEditable *editable);
 
