@@ -230,6 +230,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       {
          checkbox("cull", "Backface Culling", o.backfaceCulling, def.backfaceCulling);
          checkbox("cavity", "Cavity", o.cavity, def.cavity);
+         checkbox("hidden", "Hidden in Play", o.hiddenSolid, def.hiddenSolid);
       }
    }
    else if (mode == 0)
@@ -242,7 +243,10 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          themeOrCustom("background", o.bgCustom, o.bg);
       }
       if (section("Options"))
+      {
          checkbox("xray", "X-Ray", xray, false);
+         checkbox("hidden", "Hidden in Play", o.hiddenWire, def.hiddenWire);
+      }
    }
    else
    {
@@ -251,6 +255,8 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          checkbox("lights", "Table Lights", o.tableLights, def.tableLights);
          slider("strength", o.envStrength, 0.f, 4.f, "Environment Strength  %.2f", def.envStrength);
       }
+      if (section("Options"))
+         checkbox("hidden", "Hidden in Play", o.hiddenPbr, def.hiddenPbr);
    }
    ImGui::Spacing();
    if (ImGui::Button("Reset", ImVec2(-FLT_MIN, 0.f)))
@@ -264,6 +270,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          std::copy(def.bg, def.bg + 3, o.bg);
          o.backfaceCulling = def.backfaceCulling;
          o.cavity = def.cavity;
+         o.hiddenSolid = def.hiddenSolid;
       }
       else if (mode == 0)
       {
@@ -271,12 +278,14 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          o.bgCustom = def.bgCustom;
          std::copy(def.bg, def.bg + 3, o.bg);
          o.wireCustom = def.wireCustom;
+         o.hiddenWire = def.hiddenWire;
          std::copy(def.wire, def.wire + 3, o.wire);
       }
       else
       {
          o.envStrength = def.envStrength;
          o.tableLights = def.tableLights;
+         o.hiddenPbr = def.hiddenPbr;
       }
       changed = true;
    }

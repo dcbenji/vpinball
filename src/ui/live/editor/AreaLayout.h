@@ -36,7 +36,7 @@ constexpr int kPanelTypeCount = 4; // types offered in editor-type menus (Camera
 
 // Settings of a CameraPreview leaf (a secondary 3D view), saved with the leaf. JSON keys, all optional (absent = the default; builds
 // before multi-viewport P1 ignore them): "view_camera": "orbit" (default "player"), "view_shading": "wireframe" or "solid" (default "pbr"),
-// "view_shade": { "brightness", "light_angle", "flat", "background": [r, g, b], "backface_culling", "cavity", "xray", "wire_color": [r, g, b], "env_strength", "table_lights" }
+// "view_shade": { "brightness", "light_angle", "flat", "background": [r, g, b], "backface_culling", "cavity", "xray", "wire_color": [r, g, b], "env_strength", "table_lights", "hidden_wire", "hidden_solid", "hidden_pbr" }
 // (the view-only shading options, only the ones off their default), "live": false, "orbit": { "yaw", "pitch", "distance", "target": [x, y, z], "ortho" } (absent = framed on the table when first shown)
 struct AreaViewSettings
 {

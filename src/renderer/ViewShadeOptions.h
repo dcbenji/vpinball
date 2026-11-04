@@ -19,6 +19,10 @@ struct ViewShadeOptions
    bool xray = false; // Secondary views only (the main view's is its NoDepthWireframe shade mode): wireframe seen through the parts
    bool wireCustom = false; // Wire colour: custom instead of black
    float wire[3] = { 0.f, 0.f, 0.f };
+   // Overlay: parts hidden in play but shown in the editor (physics posts, walls, baked meshes) drawn as a grey fill with black edges over the scene, per mode
+   bool hiddenWire = true; // Wireframe (as before the option existed)
+   bool hiddenSolid = false; // Solid: only what the player renders
+   bool hiddenPbr = false; // PBR: as the player renders it
    // PBR
    float envStrength = 1.f; // Level of the table's environment light in this view (0 .. 4, 1 = the table's)
    bool tableLights = true; // The table's lights (and their shadows) light this view
@@ -27,7 +31,7 @@ struct ViewShadeOptions
    {
       return brightness == o.brightness && lightAngle == o.lightAngle && flat == o.flat && bgCustom == o.bgCustom && bg[0] == o.bg[0] && bg[1] == o.bg[1] && bg[2] == o.bg[2]
          && backfaceCulling == o.backfaceCulling && cavity == o.cavity && xray == o.xray && wireCustom == o.wireCustom && wire[0] == o.wire[0] && wire[1] == o.wire[1]
-         && wire[2] == o.wire[2] && envStrength == o.envStrength && tableLights == o.tableLights;
+         && wire[2] == o.wire[2] && envStrength == o.envStrength && tableLights == o.tableLights && hiddenWire == o.hiddenWire && hiddenSolid == o.hiddenSolid && hiddenPbr == o.hiddenPbr;
    }
    bool operator!=(const ViewShadeOptions &o) const { return !(*this == o); }
 };

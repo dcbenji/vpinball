@@ -265,6 +265,7 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
       view.visibilityMask = setup == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
          : setup == BG_FSS ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS : PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
    }
+   view.hiddenInPlay = m_settings.wireframe ? m_settings.shade.hiddenWire : m_settings.solid ? m_settings.shade.hiddenSolid : m_settings.shade.hiddenPbr;
    e.SelectAtPoint(end, &view);
 }
 

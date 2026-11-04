@@ -202,6 +202,12 @@ nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
       j["env_strength"] = o.envStrength;
    if (!o.tableLights)
       j["table_lights"] = false;
+   if (o.hiddenWire != d.hiddenWire)
+      j["hidden_wire"] = o.hiddenWire;
+   if (o.hiddenSolid != d.hiddenSolid)
+      j["hidden_solid"] = o.hiddenSolid;
+   if (o.hiddenPbr != d.hiddenPbr)
+      j["hidden_pbr"] = o.hiddenPbr;
    return j;
 }
 
@@ -245,6 +251,9 @@ ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
    color("wire_color", o.wireCustom, o.wire);
    num("env_strength", o.envStrength, 0.f, 4.f);
    flag("table_lights", o.tableLights);
+   flag("hidden_wire", o.hiddenWire);
+   flag("hidden_solid", o.hiddenSolid);
+   flag("hidden_pbr", o.hiddenPbr);
    return o;
 }
 

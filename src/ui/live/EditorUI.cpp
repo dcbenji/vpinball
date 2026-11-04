@@ -3976,6 +3976,9 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
    // We would need a dedicated quadtree for UI with all parts, and filter after picking by visibility
    vector<HitTestResult> vhoUnfilteredHit;
    m_player->m_physics->RayCast(v3d, v3d2, true, vhoUnfilteredHit);
+   // The Hidden in Play option of the view clicked (the 3D Viewport's only applies to its editor camera, as its options do)
+   const bool hiddenInPlayPickable = view != nullptr ? view->hiddenInPlay
+      : (m_camMode != ViewMode::EditorCam || IsInspectMode()) || (Renderer::IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : m_shadeMode == Renderer::ShadeMode::Solid ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr);
 
    // Filter out the colliders that should not be picked
    for (const auto &hr : vhoUnfilteredHit)
@@ -3983,6 +3986,12 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
       const auto editable = hr.m_obj->m_editable;
       if (editable && !IsEditablePickable(editable, view != nullptr ? view->visibilityMask : 0))
          continue;
+      if (editable && !hiddenInPlayPickable)
+      {
+         const auto it = m_editableMap.find(editable);
+         if (it != m_editableMap.end() && it->second->IsHiddenInPlay())
+            continue; // The view does not draw it: a click selects what is visible
+      }
       vhoHit.push_back(hr);
    }
 }

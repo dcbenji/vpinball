@@ -173,6 +173,7 @@ private:
       Matrix3D modelViewProj;
       ImVec2 rectMin, rectSize;
       unsigned int visibilityMask = 0; // Player mode visibility of a secondary view (0: the 3D Viewport's)
+      bool hiddenInPlay = true; // The view shows the parts hidden in play: they can be picked (else they can not, they are not drawn)
    };
    void PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &rayNear, Vertex3Ds &rayFar) const; // World space segment under the mouse
    void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view = nullptr) const;

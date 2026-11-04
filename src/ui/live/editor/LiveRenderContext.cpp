@@ -106,8 +106,8 @@ void LiveRenderContext::DrawWireframe(IEditable *editable) const
    else
    {
       // "Invisible" part, but UI visible
-      // Solid shows only what the player renders: the grey fill would cover the real parts and its black edges break up against that fill
-      if (m_shadeMode == Renderer::ShadeMode::Solid)
+      // The view's Hidden in Play option (off in Solid and PBR): the grey fill would cover the real parts and its black edges break up against that fill
+      if (!g_pplayer->m_renderer->ShowsHiddenInPlay())
          return;
       const vec4 fillColor = m_shadeMode == Renderer::ShadeMode::NoDepthWireframe ? vec4(0.f, 0.f, 0.f, 32.f / 255.f) : vec4(32.f / 255.f, 32.f / 255.f, 32.f / 255.f, 1.f);
       const vec4 edgeColor(0.f, 0.f, 0.f, 1.f);

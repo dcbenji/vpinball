@@ -66,6 +66,7 @@ public:
    {
    }
    virtual ~EditorUIPart() { }
+   virtual bool IsHiddenInPlay() const { return false; } // The part is not drawn by the player (the editor overlay shows it), see the Hidden in Play shading option
 
    IEditable* GetEditable() const { return m_editable; }
 
@@ -297,6 +298,8 @@ private:
             return i;
       return m_visibilityFields.size();
    }
+
+   bool IsHiddenInPlay() const override { return IsShadowHidden(); }
 
    bool IsShadowHidden() const
    {
