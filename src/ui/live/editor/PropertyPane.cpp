@@ -773,11 +773,12 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          window->DrawList->AddRectFilled(m_rowMin, rowMax, ImGui::GetColorU32(ImVec4(accent.x, accent.y, accent.z, 0.35f * alpha)), 2.f);
       }
    }
+   const bool fieldDisabled = (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && rowHovered)
       ImGui::OpenPopup("##PinMenu");
    // Blender: Backspace over a field resets it (not while typing in a text field or dragging a field)
    if (rowHovered && part != nullptr && ImGui::IsKeyPressed(ImGuiKey_Backspace, false) && !ImGui::GetIO().WantTextInput && ImGui::GetActiveID() == 0
-      && !ImGui::IsPopupOpen("##PinMenu"))
+      && !ImGui::IsPopupOpen("##PinMenu") && !fieldDisabled) // Not a greyed-out field
       m_pins->ResetToDefault(key);
    if (!ImGui::BeginPopup("##PinMenu"))
       return;
@@ -815,11 +816,13 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    if (part != nullptr)
    {
       string whyNot;
-      const bool canReset = m_pins->CanResetToDefault(key, &whyNot);
+      const bool canReset = !fieldDisabled && m_pins->CanResetToDefault(key, &whyNot);
+      if (fieldDisabled)
+         whyNot = "This field is disabled";
       if (ImGui::MenuItem(ICON_LC_UNDO_2 " Reset to Default", "Backspace", false, canReset))
          m_pins->ResetToDefault(key);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("%s", canReset ? "Set this field back to the default of a new part of this type" : whyNot.c_str());
+         ImGui::SetTooltip("%s", canReset ? "Set this field back to the default of a new part of this type (only this part, even with several selected)" : whyNot.c_str());
    }
    if (part != nullptr)
    {

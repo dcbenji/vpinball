@@ -5291,7 +5291,9 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          // Per frame while dragging: the static shadow pages and the gameplay colliders follow at the drag end (FlushDrag)
          m_drag.shadowDirty = true;
          // The collider overlay shows the gameplay colliders: while it is on, the dragged parts' colliders follow per frame (1-2 ms each)
-         if (m_physOverlay != PhysicOverlay::None)
+         // Above kMaxLiveColliderParts dragged parts (~1.7 ms each) the per-frame rebuild is skipped: the overlay catches up at the drag end (FlushDrag)
+         constexpr size_t kMaxLiveColliderParts = 32;
+         if (m_physOverlay != PhysicOverlay::None && m_multiSel.size() <= kMaxLiveColliderParts)
             m_player->m_physics->Update(edit);
          else
             m_player->m_physics->UpdateUI(edit);
