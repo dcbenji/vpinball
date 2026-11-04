@@ -47,6 +47,11 @@ public:
    static void CopyTouchedTraced(const Primitive* source, Primitive* target);
 
 private:
+   void UpdateRailPanel(PropertyPane& props); // WireRailPanel.cpp
+   void RenderRailOverlay(const EditorRenderContext& ctx);
+   int m_railWire = 0; // The wire selected in the cross-section
+   bool m_railDrag = false;
+
    void ImportMesh();
    void ExportMesh();
    void UpdateMeshUnitsUI();

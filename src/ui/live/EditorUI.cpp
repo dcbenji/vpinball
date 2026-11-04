@@ -2369,6 +2369,13 @@ void EditorUI::RenderUI()
    }
 
    // Selection manipulator
+   // A Wire Rail, as VPE: double-click the route to insert a point, double-click a point to delete it. Before the gizmo, which the first click of it put on the point
+   if (m_pointEditPart != nullptr && !m_pointEditCenter && m_viewportVisible && (!io.WantCaptureMouse || ImGuizmo::IsOver()) && !io.KeyShift && !m_modal.active && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+      && !ImGuizmo::IsViewManipulateHovered() && RailPointDoubleClick(HitTestDragPoint(ImGui::GetMousePos()), ImGui::GetMousePos()))
+   {
+      m_pointDragPending = false;
+      m_boxSelectActive = false;
+   }
    Matrix3D transform;
    const bool isSelectionTransformValid = GetSelectionTransform(transform);
    if (isSelectionTransformValid && !m_hadSelectionTransform && m_gizmoOperation == ImGuizmo::OPERATION(0) && !m_modal.active)
@@ -2423,7 +2430,10 @@ void EditorUI::RenderUI()
       }
       const Matrix3D prevTransform(transform);
       ImGuizmo::OPERATION gizmoOperation = m_gizmoOperation;
-      if (m_pointEditPart || m_camMode == ViewMode::DesktopBackdrop)
+      // A Wire Rail's route is 3D: its points keep the Z handle (the predefined views still restrict to their plane, below)
+      const bool railPoints = m_pointEditPart && !m_pointEditCenter && gizmoOperation == ImGuizmo::TRANSLATE && m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive
+         && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
+      if ((m_pointEditPart && !railPoints) || m_camMode == ViewMode::DesktopBackdrop)
       {
          // Drag point curves are 2D in the table XY plane, and backdrop parts are 2D in the backdrop XY plane: restrict gizmo operations to this plane
          if (gizmoOperation == ImGuizmo::TRANSLATE)
@@ -2828,7 +2838,7 @@ void EditorUI::RenderUI()
             // Add part mode: create the pending part at the picked point of the playfield XY plane
             const ItemTypeEnum type = m_addPartType;
             m_addPartType = eItemInvalid;
-            CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f), m_addWireform && type == eItemPrimitive);
+            CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f), m_addWireform && type == eItemPrimitive, m_addWireRail && type == eItemPrimitive);
          }
          else if (m_pointEditPart != nullptr && m_pointEditCenter)
          {
@@ -4087,6 +4097,8 @@ bool EditorUI::IsEditablePickable(const IEditable *editable, unsigned int visibi
    if (!IsEditableVisible(editable, visibilityMask))
       return false;
    const auto type = editable->GetItemType();
+   if (type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsRailChannel())
+      return false;
    if (!HasFlag(m_selectionFilter, SelectionFilter::Playfield) && type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
       return false;
    if (!HasFlag(m_selectionFilter, SelectionFilter::Primitives) && type == ItemTypeEnum::eItemPrimitive)
@@ -4139,7 +4151,7 @@ void EditorUI::BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool
       m_selection = Selection(m_multiSel.back());
 }
 
-void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bool wireform)
+void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bool wireform, const bool wireRail)
 {
    IEditable *const pie = EditableRegistry::CreateAndInit(type, m_table, pos.x, pos.y);
    if (pie == nullptr)
@@ -4148,16 +4160,45 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
    // Same initialization sequence as the WinUI editor
    if (auto *const scriptable = pie->GetIScriptable(); scriptable)
    {
-      if (wireform)
+      if (wireRail)
+         scriptable->m_name = m_table->GetUniqueName("WireRail"s);
+      else if (wireform)
          scriptable->m_name = m_table->GetUniqueName("MetalWireGuide"s);
       else
          m_table->GetUniqueName(type, scriptable->m_name);
    }
-   if (wireform)
+   if (wireRail)
+      static_cast<Primitive *>(pie)->InitWireRail(pos);
+   else if (wireform)
       static_cast<Primitive *>(pie)->InitWireform(pos);
    pie->m_desktopBackdrop = (m_camMode == ViewMode::DesktopBackdrop);
    m_table->AddPart(pie);
    pie->SetPartGroup(GetPartGroupForNewPart());
+   // A Wire Rail's ball channel, a hidden part: not in the outliner, deleted, copied and moved with the rail, its mesh derived from it
+   Primitive *channel = nullptr;
+   if (wireRail)
+   {
+      const string channelName = pie->GetName() + "_Channel";
+      channel = static_cast<Primitive *>(EditableRegistry::CreateAndInit(eItemPrimitive, m_table, pos.x, pos.y));
+      if (channel != nullptr)
+      {
+         channel->GetIScriptable()->m_name = m_table->IsNameUnique(channelName) ? channelName : m_table->GetUniqueName(channelName);
+         channel->m_desktopBackdrop = pie->m_desktopBackdrop;
+         m_table->AddPart(channel);
+         channel->SetPartGroup(pie->GetPartGroup());
+         channel->m_d.m_plasticHost = pie->GetName();
+         channel->m_d.m_plasticRole = kRailChannelRole;
+         channel->m_d.m_visible = false;
+         channel->m_d.m_reflectionEnabled = false;
+         channel->m_d.m_collision_reductionFactor = 0.f;
+         channel->SetUILock(true);
+         static_cast<Primitive *>(pie)->RegenerateRail();
+         m_player->TimerSetup(channel);
+         channel->GetIRenderable()->RenderSetup(m_renderer.get());
+         if (channel->GetIHitable())
+            m_player->m_physics->Add(channel);
+      }
+   }
 
    // Same player side setup as player initialization
    if (type == eItemBall)
@@ -4170,7 +4211,9 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
 
    m_undo.BeginUndo();
    m_undo.MarkForCreate(pie);
-   m_undo.SetLabel(wireform ? "Add Metal Wire Guide"s : "Add " + pie->GetName());
+   if (channel != nullptr)
+      m_undo.MarkForCreate(channel);
+   m_undo.SetLabel(wireRail ? "Add Wire Rail"s : wireform ? "Add Metal Wire Guide"s : "Add " + pie->GetName());
    m_undo.EndUndo();
    Report("Added " + pie->GetName());
 
@@ -4180,7 +4223,18 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
    {
       SetSelection(Selection(it->second));
       m_outlinerAnchor = it->second;
-      if (wireform)
+      if (wireRail)
+      {
+         // F9: applied in place (the undo record above already holds the state before the add)
+         Matrix3D placed;
+         GetSelectionTransform(placed);
+         SetLastOperation(LastOperation::Type::WireRail, placed);
+         const PrimitiveData &d = static_cast<Primitive *>(pie)->m_d;
+         m_lastOp.rails = d.m_railCount;
+         m_lastOp.railDiameter = d.m_wireThickness * 2.f;
+         m_lastOp.wireHeight = 0.f;
+      }
+      else if (wireform)
       {
          // F9: the wire profile, applied in place (the undo record above already holds the state before the add)
          Matrix3D placed;
@@ -5612,11 +5666,14 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
+         const bool rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
          for (DragPoint *point : m_pointSel)
          {
             const Vertex3Ds v = delta * point->GetVertex();
             point->SetX(v.x);
             point->SetY(v.y);
+            if (rail)
+               point->SetZ(v.z);
          }
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
          DetachRubberRefs(m_pointEditPart->GetEditable());
@@ -5828,6 +5885,60 @@ void EditorUI::EndPointEdit()
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
+}
+
+// Wire Rail, as VPE: double-click the route to insert a point there, double-click a point to delete it. False: not a rail, or nothing near the mouse
+bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
+{
+   if (m_table->IsLocked() || m_pointEditPart->GetEditable()->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail)
+      return false;
+   Primitive *const rail = static_cast<Primitive *>(m_pointEditPart->GetEditable());
+   if (hitPoint != nullptr)
+   {
+      m_pointSel.clear();
+      m_pointSel.push_back(hitPoint);
+      DeleteSelectedPoints(); // Keeps the two points of an open route
+      return true;
+   }
+   vector<RenderVertex3D> fine;
+   rail->m_wireCurve.GetRgVertex(fine, false, 0.25f);
+   const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   float best = 8.f * m_liveUI.GetDPI();
+   Vertex2D at;
+   bool found = false;
+   for (size_t i = 0; i + 1 < fine.size(); i++)
+   {
+      const ImVec2 a = ctx.Project(Vertex3Ds(fine[i].x, fine[i].y, fine[i].z)), b = ctx.Project(Vertex3Ds(fine[i + 1].x, fine[i + 1].y, fine[i + 1].z));
+      if (a.x == FLT_MAX || b.x == FLT_MAX)
+         continue;
+      const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+      const float t = len2 > 0.f ? clamp(((mousePos.x - a.x) * dx + (mousePos.y - a.y) * dy) / len2, 0.f, 1.f) : 0.f;
+      const float d = sqrtf((a.x + t * dx - mousePos.x) * (a.x + t * dx - mousePos.x) + (a.y + t * dy - mousePos.y) * (a.y + t * dy - mousePos.y));
+      if (d < best)
+      {
+         best = d;
+         at = Vertex2D(fine[i].x + t * (fine[i + 1].x - fine[i].x), fine[i].y + t * (fine[i + 1].y - fine[i].y));
+         found = true;
+      }
+   }
+   if (!found)
+      return false;
+   m_undo.BeginUndo();
+   m_undo.MarkForUndo(rail);
+   m_undo.SetFieldLabel("Add Point");
+   m_undo.EndUndo();
+   DragPoint *const point = m_pointEditPart->AddPointOnCurve(at);
+   if (point == nullptr)
+   {
+      m_undo.Discard();
+      return true;
+   }
+   m_pointSel.clear();
+   m_pointSel.push_back(point);
+   m_renderer->ReinitRenderable(rail->GetIRenderable());
+   m_renderer->InvalidateShadowContent();
+   m_player->m_physics->Update(rail);
+   return true;
 }
 
 void EditorUI::AddPointOnNearestSegment()
@@ -6071,6 +6182,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    {
    case LastOperation::Type::Add: return "Add Part";
    case LastOperation::Type::Wireform: return "Add Metal Wire Guide";
+   case LastOperation::Type::WireRail: return "Add Wire Rail";
    case LastOperation::Type::PlasticFromAtlas: return "Add Plastic from Atlas";
    case LastOperation::Type::Paste: return "Paste";
    case LastOperation::Type::Duplicate: return "Duplicate";
@@ -6152,6 +6264,20 @@ void EditorUI::ApplyLastOperation()
          prim->m_d.m_wireEnds = m_lastOp.ends;
          prim->m_d.m_wireRails = m_lastOp.rails;
          prim->m_d.m_wireSpacing = m_lastOp.spacing;
+         prim->UpdateWire();
+      }
+      return;
+   case LastOperation::Type::WireRail:
+      if (m_lastOp.selection.empty() || m_lastOp.selection.front()->GetEditable()->GetItemType() != eItemPrimitive)
+         return;
+      {
+         Primitive *const prim = static_cast<Primitive *>(m_lastOp.selection.front()->GetEditable());
+         prim->SetRailWires(WireRail::ResizeWires(prim->GetRailWires(), clamp(m_lastOp.rails, 1, WireRail::kMaxWires), prim->m_d.m_railThirdRight));
+         prim->m_d.m_wireThickness = clamp(m_lastOp.railDiameter, 0.1f, 50.f) * 0.5f;
+         const auto &points = prim->m_wireCurve.GetPoints();
+         const float dz = points.empty() ? 0.f : m_lastOp.wireHeight - points.front()->GetZ();
+         for (const auto &point : points)
+            point->SetZ(point->GetZ() + dz);
          prim->UpdateWire();
       }
       return;
@@ -6249,6 +6375,16 @@ bool EditorUI::RenderAdjustParameters()
          row("Spacing");
          changed |= ImGui::DragFloat("##WSpc", &m_lastOp.spacing, 0.1f, 0.f, 200.f, "%.2f");
       }
+      break;
+   }
+   case LastOperation::Type::WireRail:
+   {
+      row("Height");
+      changed |= ImGui::DragFloat("##RlHgt", &m_lastOp.wireHeight, 0.5f, -1000.f, 2000.f, "%.1f");
+      row("Rails");
+      changed |= ImGui::SliderInt("##RlRails", &m_lastOp.rails, 1, WireRail::kMaxWires);
+      row("Wire Diameter");
+      changed |= ImGui::DragFloat("##RlDia", &m_lastOp.railDiameter, 0.05f, 0.1f, 50.f, "%.2f");
       break;
    }
    case LastOperation::Type::PlasticFromAtlas:

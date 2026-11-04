@@ -6,6 +6,7 @@
 #include "math/Mesh.h"
 #include "math/MeshUtils.h"
 #include "math/dragpoint.h"
+#include "math/wirerail.h"
 #include "math/matrix.h"
 #include "parts/pintable.h"
 #include "physics/hitable.h"
@@ -28,6 +29,8 @@ class MeshBuffer;
 //  ObjRotX = 6
 //  ObjRotY = 7
 //  ObjRotZ = 8
+inline constexpr int kRailChannelRole = 3; // m_plasticRole of a Wire Rail's channel part
+
 class PrimitiveData final : public BaseProperty
 {
 public:
@@ -115,6 +118,16 @@ public:
    int m_wireRails = 1; // 1..3 (addition to VPE)
    float m_wireSpacing = 12.f; // between rails
    int m_wireSides = 12;
+   // Wire Rail (freezy's VPE Wire Rail, on top of the wire generator: the points are the route, height in their z, roll per point; m_wireThickness is half the
+   // Wire Diameter, m_wireSides the Tube Sides). Fields only saved when on. The primitive is the visible tubes (a toy for older engines) and owns the ball channel colliders
+   bool m_wireRail = false;
+   int m_railCount = 4; // Rails, 1..6
+   WireRail::Wire m_railWires[WireRail::kMaxWires];
+   bool m_railThirdRight = true; // Third Rail side
+   float m_railCapBevel = WireRail::kDefaultCapBevel;
+   float m_railBallDiameter = WireRail::kDefaultBallDiameter; // The channel fit only
+   int m_railCurvatureDetail = WireRail::kDefaultCurvatureDetail;
+   bool m_railShowCollider = false;
    // Plastic from Atlas generator (editor operator): host = the print primitive (bottom cap, the atlas image), companions = top cap and bevel. Fields only saved when on
    bool m_plasticGen = false;
    float m_plasticHeight = 50.f; // underside above the playfield
@@ -125,7 +138,7 @@ public:
    float m_plasticDpi = 150.f; // atlas scale: 47.06 VPU per inch
    float m_plasticUvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to UV: u = a x + b y + c, v = d x + e y + f
    string m_plasticHost; // companions: name of the host primitive (empty = not a companion)
-   int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel
+   int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel, kRailChannelRole = the ball channel of a Wire Rail (m_plasticHost = the rail)
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -400,6 +413,18 @@ public:
    void InitWireform(const Vertex2D &pos); // Turns this (new) primitive into a Metal Wire Guide: 3 point arc at pos, VPE defaults
    void UpdateWire(); // RegenerateWire + renderable / collider refresh (after a parameter change)
    void RegenerateWire(); // Rebuilds m_mesh from m_wireCurve and the wire parameters (no-op unless m_d.m_wireGen)
+   // Wire Rail generator
+   void InitWireRail(const Vertex2D &pos); // Turns this (new) primitive into a Wire Rail: 2 points, 500 long, four wire habitrail, VPE defaults
+   void RegenerateRail(); // RegenerateWire of a rail: the tubes, the ball channel, the mesh of its hidden channel part
+   bool IsRailChannel() const; // The hidden part holding the channel of a rail: a real collider for older engines, in this one the rail itself collides
+   void SetRailWires(const vector<WireRail::Wire> &wires);
+   vector<WireRail::Wire> GetRailWires() const;
+   bool GradeRail(int firstPoint, int lastPoint); // Heights between two points on a straight grade by plan distance along the route
+   const WireRail::Channel &GetRailChannel() const { return m_railChannel; }
+   const vector<WireRail::Frame> &GetRailFrames() const { return m_railFrames; }
+   const WireRail::Profile &GetRailProfile() const { return m_railProfile; }
+   const string &GetRailError() const { return m_railError; } // Why the profile can not be fitted (the rail then has no collider), empty when it fits
+   float GetRailMinRadius() const { return m_railMinRadius; }
 
    // Plastic from Atlas generator: outline (x, y, smooth = arc peak) and holes (x, y, z = diameter) in table coordinates, the mesh is built from them (PlasticMesh)
    DragPointCurve m_plasticCurve;
@@ -453,6 +478,11 @@ private:
    Matrix3D m_prevFullMatrix; // Previous frame transform, for the depth prepass motion vectors
    bool m_prevFullMatrixValid = false;
    Matrix3D m_physicMatrix;
+   WireRail::Channel m_railChannel;
+   vector<WireRail::Frame> m_railFrames;
+   WireRail::Profile m_railProfile;
+   string m_railError;
+   float m_railMinRadius = 0.f;
    Matrix3D m_genDragMatrix; // Applied after m_fullMatrix while m_genDragMoved, a rebuild of the mesh drops it
    bool m_genDragMoved = false;
    bool m_skipRendering = false;

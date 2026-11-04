@@ -62,6 +62,7 @@ public:
    inline void SetTextureCoordinateU(const float v) { m_texturecoord = v; }
 
    bool m_slingshot = false;
+   float m_roll = 0.f; // Wire Rail: degrees about the route, positive raises the right side. Only saved when set
    bool m_uiLocked = false; // Can not be dragged in the editor
    bool m_uiVisible = true; // UI visibility (not the same as rendering visibility which is a member of part data)
 

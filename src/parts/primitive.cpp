@@ -34,11 +34,16 @@ Primitive *Primitive::CopyForPlay() const
    STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Primitive)
    dst->m_mesh = m_mesh;
    for (const auto &dpt : m_wireCurve.GetPoints())
+   {
       dst->m_wireCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_wireCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+      dst->m_wireCurve.GetPoints().back()->m_roll = dpt->m_roll; // Wire Rail bank
+   }
    for (const auto &dpt : m_plasticCurve.GetPoints())
       dst->m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
    for (const auto &dpt : m_plasticHoles.GetPoints())
       dst->m_plasticHoles.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticHoles, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+   if (dst->m_d.m_wireRail)
+      dst->RegenerateRail(); // The play copy has its channel before PhysicSetup (RenderSetup comes later); the table is not set yet, so the channel part is left alone
    return dst;
 }
 
@@ -117,6 +122,15 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_wireRails = wireDefaults.m_wireRails;
    m_d.m_wireSpacing = wireDefaults.m_wireSpacing;
    m_d.m_wireSides = wireDefaults.m_wireSides;
+   m_d.m_wireRail = wireDefaults.m_wireRail;
+   m_d.m_railCount = wireDefaults.m_railCount;
+   for (int i = 0; i < WireRail::kMaxWires; i++)
+      m_d.m_railWires[i] = wireDefaults.m_railWires[i];
+   m_d.m_railThirdRight = wireDefaults.m_railThirdRight;
+   m_d.m_railCapBevel = wireDefaults.m_railCapBevel;
+   m_d.m_railBallDiameter = wireDefaults.m_railBallDiameter;
+   m_d.m_railCurvatureDetail = wireDefaults.m_railCurvatureDetail;
+   m_d.m_railShowCollider = wireDefaults.m_railShowCollider;
    m_d.m_rubberGuideRadius = wireDefaults.m_rubberGuideRadius;
    m_d.m_plasticGen = wireDefaults.m_plasticGen;
    m_d.m_plasticHeight = wireDefaults.m_plasticHeight;
@@ -223,7 +237,10 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    //
 
-   if (!isUI && m_d.m_toy)
+   if (IsRailChannel()) // Not picked, and the rail itself collides (below)
+      return;
+
+   if (!isUI && m_d.m_toy && !m_d.m_wireRail)
       return;
 
    RecalculateMatrices();
@@ -231,6 +248,27 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    m_physicMatrix = m_fullMatrix; // Cache transform to avoid rebuilding everything if not needed
 
    //
+
+   if (!isUI && m_d.m_wireRail)
+   {
+      // The ball channel, not the tubes: its facets, the long edges (see WireRail::BuildChannel), the row vertices
+      const auto toV = [](const WireRail::V3 &v) { return Vertex3Ds(v.x, v.y, v.z); };
+      const vector<WireRail::V3> &cv = m_railChannel.verts;
+      for (size_t i = 0; i + 2 < m_railChannel.tris.size(); i += 3)
+      {
+         Vertex3Ds rgv3D[3] = { toV(cv[m_railChannel.tris[i]]), toV(cv[m_railChannel.tris[i + 2]]), toV(cv[m_railChannel.tris[i + 1]]) };
+         HitTriangle *const ht = new HitTriangle(this, rgv3D);
+         if (ht->IsDegenerate())
+            delete ht;
+         else
+            SetupHitObject(physics, ht, isUI);
+      }
+      for (const auto &e : m_railChannel.edges)
+         SetupHitObject(physics, new HitLine3D(this, toV(cv[e.first]), toV(cv[e.second])), isUI);
+      for (const WireRail::V3 &v : cv)
+         SetupHitObject(physics, new HitPoint(this, v.x, v.y, v.z), isUI);
+      return;
+   }
 
    // TODO limit vertex count for UI
    const unsigned int reduced_vertices = max((unsigned int)pow((double)m_vertices.size(), saturate(1.f - m_d.m_collision_reductionFactor) * 0.25f + 0.75f), 420u); //!! 420 = magic
@@ -2070,6 +2108,11 @@ void Primitive::RegenerateWire()
 {
    if (!m_d.m_wireGen)
       return;
+   if (m_d.m_wireRail)
+   {
+      RegenerateRail();
+      return;
+   }
    vector<RenderVertex3D> path;
    m_wireCurve.GetRgVertex(path, false, 4.f);
    for (RenderVertex3D &v : path)
@@ -2093,6 +2136,8 @@ void Primitive::RegenerateWire()
 
 void Primitive::UpdateWire()
 {
+   if (m_d.m_wireRail)
+      RegenerateRail(); // Before the physics update below, whatever the renderer does
    if (m_renderer)
       m_renderer->ReinitRenderable(this); // RenderSetup regenerates the mesh
    else
@@ -2120,6 +2165,150 @@ void Primitive::InitWireform(const Vertex2D &pos)
 }
 
 //////////////////////////////
+// Wire Rail generator
+//////////////////////////////
+
+vector<WireRail::Wire> Primitive::GetRailWires() const
+{
+   return vector<WireRail::Wire>(m_d.m_railWires, m_d.m_railWires + clamp(m_d.m_railCount, 1, WireRail::kMaxWires));
+}
+
+void Primitive::SetRailWires(const vector<WireRail::Wire> &wires)
+{
+   m_d.m_railCount = clamp((int)wires.size(), 1, WireRail::kMaxWires);
+   for (int i = 0; i < m_d.m_railCount; i++)
+      m_d.m_railWires[i] = wires[i];
+}
+
+void Primitive::InitWireRail(const Vertex2D &pos)
+{
+   m_d.m_wireGen = true;
+   m_d.m_wireRail = true;
+   m_d.m_collidable = true;
+   m_d.m_toy = true; // For older engines, which would collide with the tubes: the channel part holds the collider there
+   m_d.m_overwritePhysics = true;
+   m_d.m_elasticity = 0.3f; // WireRailComponent defaults
+   m_d.m_elasticityFalloff = 0.5f;
+   m_d.m_friction = 0.15f;
+   m_d.m_scatter = 0.f;
+   m_d.m_wireHeight = 0.f; // A point's z is its height
+   m_d.m_wireThickness = WireRail::kDefaultWireDiameter * 0.5f;
+   m_d.m_wireSides = WireRail::kDefaultSides;
+   m_d.m_wireEnds = 3;
+   m_d.m_wireRails = 1;
+   SetRailWires(WireRail::DefaultWires(4, true));
+   m_wireCurve.ClearPoints();
+   // VPE: a straight route of 500 on the playfield (z 0), you raise it. In VPX it is centred on the click, as a new ramp is
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y - WireRail::kDefaultLength * 0.5f, 0.f, true));
+   m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y + WireRail::kDefaultLength * 0.5f, 0.f, true));
+   RegenerateRail();
+}
+
+bool Primitive::IsRailChannel() const
+{
+   return m_d.m_plasticRole == kRailChannelRole && IsPlasticCompanion();
+}
+
+void Primitive::RegenerateRail()
+{
+   vector<RenderVertex3D> fine;
+   m_wireCurve.GetRgVertex(fine, false, 0.05f);
+   if (fine.size() < 2)
+      return;
+   const auto &points = m_wireCurve.GetPoints();
+   vector<WireRail::PathPoint> path;
+   vector<float> rolls;
+   size_t next = 0;
+   for (const RenderVertex3D &v : fine)
+   {
+      path.push_back({ v.x, v.y, v.z, v.controlPoint });
+      if (!v.controlPoint)
+         continue;
+      while (next < points.size() && (points[next]->GetX() != v.x || points[next]->GetY() != v.y || points[next]->GetZ() != v.z)) // Coincident points give no span
+         next++;
+      rolls.push_back(next < points.size() ? points[next]->m_roll : 0.f);
+   }
+   rolls.push_back(points.empty() ? 0.f : points.back()->m_roll);
+   m_railFrames = WireRail::BuildFrames(WireRail::BuildRows(path, rolls, m_d.m_railCurvatureDetail));
+   m_railMinRadius = WireRail::MinRadius(m_railFrames);
+
+   const float radius = max(m_d.m_wireThickness, 0.05f);
+   vector<Vertex3D_NoTex2> verts;
+   vector<unsigned int> idx;
+   const vector<WireRail::Wire> wires = GetRailWires();
+   if (WireRail::BuildTubes<Vertex3D_NoTex2>(m_railFrames, wires, radius, m_d.m_wireSides, m_d.m_railCapBevel, verts, idx))
+   {
+      m_mesh.Clear();
+      m_mesh.m_vertices = std::move(verts);
+      m_mesh.m_indices = std::move(idx);
+   }
+   // The mesh is in table coordinates: identity transform
+   const auto identity = [](Primitive *const p)
+   {
+      p->m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f);
+      p->m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
+      for (float &v : p->m_d.m_aRotAndTra)
+         v = 0.f;
+      p->m_d.m_use3DMesh = true;
+      p->m_genDragMoved = false;
+      p->OnMeshVerticesChanged(); // No m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit (RenderSetup) rebuilds it
+      p->m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate the collider (the transform itself did not change)
+   };
+   identity(this);
+
+   m_railError.clear();
+   const bool fits = WireRail::FitProfile(wires, radius, max(m_d.m_railBallDiameter, 1.f) * 0.5f, m_railProfile, m_railError);
+   m_railChannel = fits ? WireRail::BuildChannel(m_railFrames, m_railProfile) : WireRail::Channel {};
+   m_plasticPickDirty = true; // The editor refreshes the picking collider (same as the plastics) once the mesh has been rebuilt
+
+   for (Primitive *const comp : GetPlasticCompanions())
+   {
+      if (m_railChannel.verts.empty())
+         continue; // No fit: the channel part keeps its last mesh for older engines, this engine shows the error and has no collider
+      comp->m_mesh.Clear();
+      comp->m_mesh.m_vertices.resize(m_railChannel.verts.size());
+      for (size_t i = 0; i < m_railChannel.verts.size(); i++)
+      {
+         const WireRail::V3 &v = m_railChannel.verts[i];
+         comp->m_mesh.m_vertices[i] = Vertex3D_NoTex2 { v.x, v.y, v.z, 0.f, 0.f, 1.f, 0.f, 0.f };
+      }
+      comp->m_mesh.m_indices = m_railChannel.tris;
+      identity(comp);
+   }
+}
+
+bool Primitive::GradeRail(const int firstPoint, const int lastPoint)
+{
+   const auto &points = m_wireCurve.GetPoints();
+   vector<RenderVertex3D> fine;
+   m_wireCurve.GetRgVertex(fine, false, 0.05f);
+   vector<float> plan(points.size(), 0.f), z;
+   float along = 0.f;
+   size_t next = 0;
+   for (size_t i = 0; i < fine.size(); i++)
+   {
+      if (i > 0)
+         along += sqrtf((fine[i].x - fine[i - 1].x) * (fine[i].x - fine[i - 1].x) + (fine[i].y - fine[i - 1].y) * (fine[i].y - fine[i - 1].y));
+      if (fine[i].controlPoint)
+      {
+         while (next < points.size() && (points[next]->GetX() != fine[i].x || points[next]->GetY() != fine[i].y || points[next]->GetZ() != fine[i].z))
+            plan[next++] = along;
+         if (next < points.size())
+            plan[next++] = along;
+      }
+   }
+   while (next < points.size())
+      plan[next++] = along;
+   for (const auto &p : points)
+      z.push_back(p->GetZ());
+   if (!WireRail::Grade(plan, z, firstPoint, lastPoint))
+      return false;
+   for (int i = firstPoint + 1; i < lastPoint; i++)
+      points[i]->SetZ(z[i]);
+   return true;
+}
+
+//////////////////////////////
 // Plastic from Atlas generator
 //////////////////////////////
 
@@ -2130,7 +2319,7 @@ bool Primitive::IsPlasticCompanion() const
    if (m_ptable == nullptr) // Loading: the host may come later
       return true;
    for (const IEditable *const part : m_ptable->GetParts())
-      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_plasticGen && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail) && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
          return true;
    return false;
 }
@@ -2138,7 +2327,7 @@ bool Primitive::IsPlasticCompanion() const
 vector<Primitive *> Primitive::GetPlasticCompanions() const
 {
    vector<Primitive *> res;
-   if (m_ptable == nullptr || !m_d.m_plasticGen || GetName().empty())
+   if (m_ptable == nullptr || (!m_d.m_plasticGen && !m_d.m_wireRail) || GetName().empty())
       return res;
    const string name = GetName();
    for (IEditable *const part : m_ptable->GetParts())
@@ -2268,6 +2457,22 @@ void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool>
 
 void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
 {
+   if (!saveForUndo && m_ptable != nullptr && m_d.m_plasticRole == kRailChannelRole) // The channel part collides in older engines: with the physics of its rail
+      for (const IEditable *const part : m_ptable->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireRail && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+         {
+            const PrimitiveData &rail = static_cast<const Primitive *>(part)->m_d;
+            m_d.m_elasticity = rail.m_elasticity;
+            m_d.m_elasticityFalloff = rail.m_elasticityFalloff;
+            m_d.m_friction = rail.m_friction;
+            m_d.m_scatter = rail.m_scatter;
+            m_d.m_overwritePhysics = rail.m_overwritePhysics;
+            m_d.m_szPhysicsMaterial = rail.m_szPhysicsMaterial;
+            m_d.m_collidable = rail.m_collidable;
+            m_d.m_hitEvent = rail.m_hitEvent;
+            m_d.m_threshold = rail.m_threshold;
+            m_d.m_toy = false; // A default Toy would give the older engine no collider
+         }
    writer.WriteVector4(FID(VPOS), vec4(m_d.m_vPosition.x, m_d.m_vPosition.y, m_d.m_vPosition.z, 0.f));
    writer.WriteVector4(FID(VSIZ), vec4(m_d.m_vSize.x, m_d.m_vSize.y, m_d.m_vSize.z, 0.f));
    writer.WriteFloat(FID(RTV0), m_d.m_aRotAndTra[0]);
@@ -2395,6 +2600,19 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteInt(FID(WRLS), m_d.m_wireRails);
       writer.WriteFloat(FID(WSPC), m_d.m_wireSpacing);
       writer.WriteInt(FID(WSEG), m_d.m_wireSides);
+      if (m_d.m_wireRail) // Optional fields: only written for rails, so wire guides save byte-identical
+      {
+         writer.WriteBool(FID(WRAL), true);
+         writer.WriteInt(FID(RLCT), m_d.m_railCount);
+         static constexpr int wireFields[WireRail::kMaxWires] = { FID(RLW1), FID(RLW2), FID(RLW3), FID(RLW4), FID(RLW5), FID(RLW6) };
+         for (int i = 0; i < m_d.m_railCount; i++)
+            writer.WriteVector3(wireFields[i], vec3(m_d.m_railWires[i].x, m_d.m_railWires[i].z, m_d.m_railWires[i].active ? 1.f : 0.f));
+         writer.WriteBool(FID(RLTH), m_d.m_railThirdRight);
+         writer.WriteFloat(FID(RLBV), m_d.m_railCapBevel);
+         writer.WriteFloat(FID(RLBD), m_d.m_railBallDiameter);
+         writer.WriteInt(FID(RLCD), m_d.m_railCurvatureDetail);
+         writer.WriteBool(FID(RLSC), m_d.m_railShowCollider);
+      }
       m_wireCurve.SavePoints(writer);
    }
    if (m_d.m_plasticGen) // Optional fields: only written for plastic hosts and companions, so other primitives save byte-identical
@@ -2542,6 +2760,20 @@ void Primitive::Load(IObjectReader& reader)
          case FID(WRLS): m_d.m_wireRails = clamp(reader.AsInt(), 1, 3); break;
          case FID(WSPC): m_d.m_wireSpacing = reader.AsFloat(); break;
          case FID(WSEG): m_d.m_wireSides = clamp(reader.AsInt(), 3, 32); break;
+         case FID(WRAL): m_d.m_wireRail = reader.AsBool(); break;
+         case FID(RLCT): m_d.m_railCount = clamp(reader.AsInt(), 1, WireRail::kMaxWires); break;
+         case FID(RLW1): case FID(RLW2): case FID(RLW3): case FID(RLW4): case FID(RLW5): case FID(RLW6):
+         {
+            const vec3 v = reader.AsVector3();
+            const int i = tag == FID(RLW1) ? 0 : tag == FID(RLW2) ? 1 : tag == FID(RLW3) ? 2 : tag == FID(RLW4) ? 3 : tag == FID(RLW5) ? 4 : 5;
+            m_d.m_railWires[i] = { v.x, v.y, v.z != 0.f };
+            break;
+         }
+         case FID(RLTH): m_d.m_railThirdRight = reader.AsBool(); break;
+         case FID(RLBV): m_d.m_railCapBevel = reader.AsFloat(); break;
+         case FID(RLBD): m_d.m_railBallDiameter = reader.AsFloat(); break;
+         case FID(RLCD): m_d.m_railCurvatureDetail = clamp(reader.AsInt(), 2, 32); break;
+         case FID(RLSC): m_d.m_railShowCollider = reader.AsBool(); break;
          case FID(DPNT): m_wireCurve.LoadPointToken(reader); break; // Moved to the plastic outline after the load if this is a plastic host
          case FID(PGEN): m_d.m_plasticGen = reader.AsBool(); break;
          case FID(PHGT): m_d.m_plasticHeight = reader.AsFloat(); break;
@@ -2554,7 +2786,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PUVV): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[3] = v.x; m_d.m_plasticUvm[4] = v.y; m_d.m_plasticUvm[5] = v.z; break; }
          case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break;
          case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
-         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, 2); break;
+         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kRailChannelRole); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
          case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
          case FID(M3VN):

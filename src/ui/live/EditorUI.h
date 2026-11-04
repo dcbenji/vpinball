@@ -230,6 +230,7 @@ private:
    void BoxSelectPoints(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    Vertex2D UnprojectToPlane(const ImVec2 &mousePos, float z) const;
    void AddPointOnNearestSegment();
+   bool RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos);
    void DeleteSelectedPoints();
 
    // DragPointEditContext implementation
@@ -295,7 +296,7 @@ private:
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
    struct LastOperation
    {
-      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts, Wireform, PlasticFromAtlas };
+      enum class Type { None, Add, Paste, Duplicate, Move, Rotate, Scale, RubberBetweenPosts, Wireform, PlasticFromAtlas, WireRail };
       Type type = Type::None;
       uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
       vector<std::shared_ptr<EditorUIPart>> selection;
@@ -317,6 +318,7 @@ private:
       float bendRadius = 8.f;
       float spacing = 12.f;
       int ends = 0;
+      float railDiameter = 6.5f; // Wire Rail (rails, wireHeight = height of the route's first point)
       float plHeight = 50.f; // Plastic from Atlas: the created plastic (host) is the selection, adjusting rebuilds it in place
       float plThickness = 5.6f;
       float plBevel = 1.9f;
@@ -371,7 +373,8 @@ private:
    PlasticFromAtlas::Bow m_plasticBow;
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
-   void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false);
+   bool m_addWireRail = false; // Same: a Wire Rail
+   void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false, bool wireRail = false);
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
    vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first

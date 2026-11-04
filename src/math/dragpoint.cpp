@@ -258,6 +258,8 @@ void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag) const
       writer.WriteFloat(FID(TEXC), pdp->GetTextureCoordinateU());
       writer.WriteBool(FID(LOCK), pdp->m_uiLocked);
       writer.WriteBool(FID(LVIS), pdp->m_uiVisible);
+      if (pdp->m_roll != 0.f) // Optional field, points of other parts save byte-identical
+         writer.WriteFloat(FID(ROLL), pdp->m_roll);
       writer.EndObject();
    }
 }
@@ -284,6 +286,7 @@ void DragPointCurve::LoadPointToken(IObjectReader &reader)
          case FID(TEXC): pdp->SetTextureCoordinateU(reader.AsFloat()); break;
          case FID(LOCK): pdp->m_uiLocked = reader.AsBool(); break;
          case FID(LVIS): pdp->m_uiVisible = reader.AsBool(); break;
+         case FID(ROLL): pdp->m_roll = reader.AsFloat(); break;
          // Old save would wrongly save these fields which do not apply to dragpoint
          case FID(LAYR): reader.AsInt(); break;
          case FID(LANR): reader.AsString(); break;

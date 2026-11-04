@@ -619,6 +619,13 @@ void EditorChrome::RenderMenuBar()
          {
             editor.m_addPartType = eItemPrimitive;
             editor.m_addWireform = true;
+            editor.m_addWireRail = false;
+         }
+         if (ImGui::MenuItem("Add Wire Rail", nullptr, false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))
+         {
+            editor.m_addPartType = eItemPrimitive;
+            editor.m_addWireform = false;
+            editor.m_addWireRail = true;
          }
          if (ImGui::MenuItem("Add Plastic from Atlas", nullptr, false, PlasticFromAtlas::CanStart(editor)))
             PlasticFromAtlas::Start(editor);
@@ -1105,6 +1112,7 @@ void EditorChrome::RenderToolbar()
             const char *name;
             const char *file;
             bool wire = false;
+            bool rail = false;
          } addParts[] = {
             { eItemSurface, "Surface", "editor/wall.png" }, //
             { eItemGate, "Gate", "editor/gate.png" }, //
@@ -1127,11 +1135,12 @@ void EditorChrome::RenderToolbar()
             { eItemFlasher, "Flasher", "editor/flasher.png" }, //
             { eItemRubber, "Rubber", "editor/rubber.png" }, //
             { eItemPrimitive, "Metal Wire Guide", "editor/ramp.png", true }, // Primitive with the wire generator (no dedicated icon yet)
+            { eItemPrimitive, "Wire Rail", "editor/ramp.png", false, true }, // Primitive with the wire and rail generators (no dedicated icon yet)
          };
          for (const auto &def : addParts)
          {
             std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, def.file));
-            m_addPartButtons.push_back({ def.type, def.name, tex ? std::make_shared<Sampler>(editor.m_renderer->m_renderDevice, def.name, tex, false) : nullptr, def.wire });
+            m_addPartButtons.push_back({ def.type, def.name, tex ? std::make_shared<Sampler>(editor.m_renderer->m_renderDevice, def.name, tex, false) : nullptr, def.wire, def.rail });
          }
       }
       // Add part button, opening the part type picker popup (same as the Shift+A shortcut)
@@ -1209,6 +1218,7 @@ void EditorChrome::RenderToolbar()
             {
                editor.m_addPartType = button.type;
                editor.m_addWireform = button.wire;
+               editor.m_addWireRail = button.rail;
                ImGui::CloseCurrentPopup();
             }
             Tip((string("Add ") + button.name).c_str());
@@ -1644,10 +1654,12 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       hints = { { "LMB", editor.m_plasticTrace.holes ? "Place Hole" : "Corner" }, { "Backspace", "Remove Last" }, { "H", editor.m_plasticTrace.holes ? "Outline" : "Holes" },
          { "Enter", "Close Loop" }, { "Esc", "Cancel" } };
    else if (editor.m_addPartType != eItemInvalid)
-      hints = { { "LMB", editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
+      hints = { { "LMB", editor.m_addWireRail ? "Place Wire Rail" : editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_plasticGen)
       hints = { { "LMB", "Select Point" }, { "Drag Line", "Bow" }, { "Dbl-click", "Straight" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "H", static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_plasticEditHoles ? "Outline" : "Holes" },
          { "Del", "Delete" }, { "Tab", "Exit" }, { "F9", "Profile" } };
+   else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireRail)
+      hints = { { "LMB", "Select Point" }, { "Dbl-click", "Insert or Delete" }, { "G", "Move" }, { "Gizmo Z", "Height" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Grade, Roll" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireGen)
       hints = { { "LMB", "Select Point" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Metal Wire Guide" } };
    else if (editor.m_pointEditPart)

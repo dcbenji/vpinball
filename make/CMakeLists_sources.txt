@@ -103,6 +103,7 @@ set(VPX_SOURCES
    src/math/MeshGLTF.cpp
    src/math/MeshUtils.h
    src/math/wiresweep.h
+   src/math/wirerail.h
    src/math/PlasticMesh.h
    src/math/PlasticMesh.cpp
    src/math/ModelViewProj.h
@@ -375,6 +376,7 @@ set(VPX_SOURCES
    src/ui/live/editor/RubberBetweenPosts.cpp
    src/ui/live/editor/PlasticFromAtlas.h
    src/ui/live/editor/PlasticFromAtlas.cpp
+   src/ui/live/editor/WireRailPanel.cpp
    src/ui/live/editor/RubberFit.h
    src/ui/live/editor/RubberFit.cpp
    src/ui/live/editor/RendererInspectionModal.h

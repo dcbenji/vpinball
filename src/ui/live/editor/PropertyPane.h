@@ -133,6 +133,16 @@ public:
    };
    // Hook run right after the pane header (name row): the panel draws its curated sections and the Advanced header there
    void SetAfterHeader(std::function<void(PropertyPane &)> hook) { m_afterHeader = std::move(hook); }
+   // Runs before the hook above, for the pane being drawn
+   void PrependAfterHeader(std::function<void(PropertyPane &)> first)
+   {
+      m_afterHeader = [first = std::move(first), then = std::move(m_afterHeader)](PropertyPane &p)
+      {
+         first(p);
+         if (then)
+            then(p);
+      };
+   }
    // While set, sections and fields are skipped (the full sheet is collapsed under the Advanced header)
    void SkipRest(bool skip) { m_skipRest = skip; }
    // Dial surfaces (curated sections, pinned overlay): float fields with a known range draw as sliders (ctrl+click still types)
@@ -259,6 +269,16 @@ public:
    void PropertyLabel(const string& label, const char* tooltip = nullptr);
 
    int GetModifiedField() const { return m_modified; }
+   // A field drawn by hand (no typed widget): counts as one field for the undo chain, 'edited' = its value changed this frame
+   void CustomField(const bool edited, const string &label)
+   {
+      m_modifyFieldId++;
+      if (edited)
+      {
+         m_modified = m_modifyFieldId;
+         m_modifiedLabel = label;
+      }
+   }
    // Label of the field modified last (for the undo history); set by the pinnable fields
    const string &GetModifiedLabel() const { return m_modifiedLabel; }
 

@@ -194,6 +194,14 @@ void SearchPalette::BuildOperators()
       {
          ed.m_addPartType = eItemPrimitive;
          ed.m_addWireform = true;
+         ed.m_addWireRail = false;
+      });
+   add("Object" + sep + "Add Wire Rail", "", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; },
+      [&ed]()
+      {
+         ed.m_addPartType = eItemPrimitive;
+         ed.m_addWireform = false;
+         ed.m_addWireRail = true;
       });
    add("Object" + sep + "Add Plastic from Atlas", "", [&ed]() { return PlasticFromAtlas::CanStart(ed); }, [&ed]() { PlasticFromAtlas::Start(ed); });
    add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
@@ -250,8 +258,12 @@ void SearchPalette::BuildIndex()
       if (itemType == eItemTable)
          continue;
       int type;
+      if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->IsRailChannel())
+         continue;
       // A Metal Wire Guide shows other property rows than a plain primitive (the Properties panel branches on it): give it its own type
-      if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireGen)
+      if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireRail)
+         type = TypeIndex("wirerail"s, "Wire Rail"s);
+      else if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireGen)
          type = TypeIndex("wireguide"s, "Metal Wire Guide"s);
       else if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_plasticGen)
          type = TypeIndex("plastichost"s, "Plastic from Atlas"s);

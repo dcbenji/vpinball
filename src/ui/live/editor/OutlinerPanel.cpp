@@ -10,6 +10,7 @@
 #include "parts/Collection.h"
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
+#include "parts/primitive.h"
 #include "parts/Sound.h"
 #include "PlasticFromAtlas.h"
 #include "PropertiesPanel.h"
@@ -721,7 +722,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                m_groupStack.push_back(static_cast<const PartGroup *>(editable));
                continue;
             }
-            const bool listed = editable->m_desktopBackdrop == backdropView && (m_typeMask & (1u << CategoryOf(editable->GetItemType()))) != 0 && (!m_selectedOnly || editor.IsPartSelected(uiPart))
+            const bool listed = !(editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsRailChannel()) && editable->m_desktopBackdrop == backdropView && (m_typeMask & (1u << CategoryOf(editable->GetItemType()))) != 0 && (!m_selectedOnly || editor.IsPartSelected(uiPart))
                && (!hasTokens || MatchesPartCached(i) || std::ranges::any_of(m_groupStack, [this](const PartGroup *group) { return m_matchedGroups.contains(group); }));
             m_showPart[i] = listed;
             if (!listed)

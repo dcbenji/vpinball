@@ -183,7 +183,11 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
 
 void PrimitiveUIPart::RenderOverlay(const EditorRenderContext& ctx)
 {
+   if (m_part->IsRailChannel())
+      return;
    ctx.DrawWireframe(m_part);
+   if (m_part->m_d.m_wireRail)
+      RenderRailOverlay(ctx);
 }
 
 void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
@@ -239,6 +243,16 @@ void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
    const float len2 = dx * dx + dy * dy;
    const float t = len2 > 0.f ? clamp(((out.x - vv[seg].x) * dx + (out.y - vv[seg].y) * dy) / len2, 0.f, 1.f) : 0.f;
    curve->InsertPoint(icp, std::make_unique<DragPoint>(curve, out.x, out.y, vv[seg].z + t * (vv[seg + 1].z - vv[seg].z), true));
+   if (m_part->m_d.m_wireRail && icp > 0 && icp + 1 < (int)curve->GetPoints().size())
+   {
+      // On a banked rail the new point takes the roll between its neighbours, by plan distance
+      const auto &pts = curve->GetPoints();
+      const DragPoint *const a = pts[icp - 1].get();
+      const DragPoint *const b = pts[icp + 1].get();
+      const float da = sqrtf((out.x - a->GetX()) * (out.x - a->GetX()) + (out.y - a->GetY()) * (out.y - a->GetY()));
+      const float db = sqrtf((out.x - b->GetX()) * (out.x - b->GetX()) + (out.y - b->GetY()) * (out.y - b->GetY()));
+      pts[icp]->m_roll = da + db > 0.f ? a->m_roll + (b->m_roll - a->m_roll) * da / (da + db) : a->m_roll;
+   }
 }
 
 void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
@@ -252,6 +266,18 @@ void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
             [](DragPoint* p, float v) { p->SetZ(max(v, 0.5f)); }, PropertyPane::Unit::VPLength, 2, "Diameter of this hole");
       return;
    }
+   if (m_part->m_d.m_wireRail)
+   {
+      props.InputFloat<DragPoint>(
+         point, "Height"s, //
+         [](const DragPoint* p) { return p->GetZ(); }, //
+         [](DragPoint* p, float v) { p->SetZ(v); }, PropertyPane::Unit::VPLength, 1, "Height of the route at this point (the Z handle of the gizmo moves it too)");
+      props.InputFloat<DragPoint>(
+         point, "Roll"s, //
+         [](const DragPoint* p) { return p->m_roll; }, //
+         [](DragPoint* p, float v) { p->m_roll = clamp(v, -180.f, 180.f); }, PropertyPane::Unit::Degree, 1, "Rolls the wires around the route at this point, positive raises the right side: bank a turn");
+      return;
+   }
    props.InputFloat<DragPoint>(
       point, "Z Offset"s, //
       [](const DragPoint* p) { return p->GetZ(); }, //
@@ -260,11 +286,19 @@ void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
 
 void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
 {
-   props.EditableHeader(m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
+   if (m_part->m_d.m_wireRail) // A rail is made here: above the tabs
+      props.PrependAfterHeader(
+         [this](PropertyPane& p)
+         {
+            UpdateCurveSection(p);
+            UpdateRailPanel(p);
+         });
+   props.EditableHeader(m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireRail ? "Wire Rail"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
 
-   UpdateCurveSection(props);
+   if (!m_part->m_d.m_wireRail)
+      UpdateCurveSection(props);
 
-   if (m_part->m_d.m_wireGen && props.BeginSection("Metal Wire Guide"s))
+   if (m_part->m_d.m_wireGen && !m_part->m_d.m_wireRail && props.BeginSection("Metal Wire Guide"s))
    {
       props.InputFloat<Primitive>(
          m_part, "Height"s, //
@@ -834,6 +868,8 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Collidable"s, //
          [](const Primitive* surf) { return surf->m_d.m_collidable; }, //
          [](Primitive* surf, bool v) { surf->m_d.m_collidable = v; });
+      if (!m_part->m_d.m_wireRail) // A rail's collider is its ball channel
+      {
       props.Checkbox<Primitive>(
          m_part, "Toy"s, //
          [](const Primitive* surf) { return surf->m_d.m_toy; }, //
@@ -843,6 +879,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_collision_reductionFactor; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_collision_reductionFactor = v; }, PropertyPane::Unit::None, 3,
          "Simplify the physics collision mesh (higher = fewer collision points, faster but less accurate)");
+      }
       props.EndSection();
    }
 

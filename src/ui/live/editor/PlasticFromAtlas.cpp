@@ -24,7 +24,9 @@ namespace
 {
 string s_lastImage; // The atlas used last, offered first next time
 
-bool IsHost(const IEditable *part) { return part != nullptr && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_plasticGen; }
+bool IsHost(const IEditable *part) { return part != nullptr && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail); } // A Wire Rail's channel part is kept the same way
+// The point edit tools (backdrop, bow, outline) are the plastic generator's only; the companion handling also keeps a Wire Rail's channel part
+bool IsPointEditHost(const IEditable *part) { return IsHost(part) && static_cast<const Primitive *>(part)->m_d.m_plasticGen; }
 
 // Inverse of the table-to-UV mapping: the table position of an atlas UV
 Vertex2D UvToTable(const float (&m)[6], const float u, const float v)
@@ -502,7 +504,7 @@ float SpanDistance(const DragPointCurve &curve, const Span &sp, const Vertex2D &
 bool PlasticFromAtlas::BowPress(EditorUI &ed, const ImVec2 &mouse, const bool doubleClick)
 {
    ed.m_plasticBow = Bow();
-   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsHost(ed.m_pointEditPart->GetEditable()))
+   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsPointEditHost(ed.m_pointEditPart->GetEditable()))
       return false;
    Primitive *const host = static_cast<Primitive *>(ed.m_pointEditPart->GetEditable());
    if (host->m_plasticEditHoles || ed.m_table->IsLocked())
@@ -551,7 +553,7 @@ void PlasticFromAtlas::BowDrag(EditorUI &ed)
    Bow &bow = ed.m_plasticBow;
    if (!bow.pending && !bow.active)
       return;
-   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ed.m_pointEditPart == nullptr || !IsHost(ed.m_pointEditPart->GetEditable()))
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ed.m_pointEditPart == nullptr || !IsPointEditHost(ed.m_pointEditPart->GetEditable()))
    {
       bow = Bow();
       return;
@@ -602,7 +604,7 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
       uvm = ed.m_plasticTrace.uvm;
       image = ed.m_plasticTrace.image;
    }
-   else if (ed.m_pointEditPart != nullptr && IsHost(ed.m_pointEditPart->GetEditable()))
+   else if (ed.m_pointEditPart != nullptr && IsPointEditHost(ed.m_pointEditPart->GetEditable()))
    {
       const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
       uvm = host->m_d.m_plasticUvm;
@@ -644,7 +646,7 @@ static void DrawOutlineSegment(ImDrawList *const draw, const ImVec2 &a, const Im
 
 void PlasticFromAtlas::DrawPointEdit(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
 {
-   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsHost(ed.m_pointEditPart->GetEditable()))
+   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsPointEditHost(ed.m_pointEditPart->GetEditable()))
       return;
    const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
    const float dpi = ed.m_liveUI.GetDPI();
