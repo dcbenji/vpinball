@@ -1,5 +1,13 @@
 # Fast iteration on a running table
 
+**Sessions on the ben-pc rig:** one player at a time, no restart between edits.
+
+1. Start, waits its turn for the rig: `ssh ben@ben-pc '~/Games/VPX-fastiter/start.sh edit'` (`play` for a running game; a pack dir as 2nd argument; `FI_ENGINE=<dir>` for your own build with these features).
+2. Call tools: `ssh ben@ben-pc '~/Games/VPX-fastiter/mcp vpx_view path=/tmp/a.png'`; `mcp` alone lists them, `mcp vpx_guide` to begin. Field names: `mcp vpx_table action=part name=<part>`.
+3. Edit shaders in `~/Games/VPX-fastiter/shaders/` (reset to the engine's at each start; `FI_KEEP_SHADERS=1` keeps them): they swap in by themselves, `mcp vpx_engine_shaders action=status` tells the time or the error.
+4. Compare only captures from `vpx_view`: right after an edit the shadows are wrong for about 40 frames, it waits for that in an edit session. A still table moves up to 3% of its pixels by itself.
+5. Always finish with `ssh ben@ben-pc '~/Games/VPX-fastiter/stop.sh'`: it frees the rig. Nothing is saved, the pack on disk stays as it was.
+
 Two development features, both off unless their environment variables are set, for people and AI agents working on shaders or table look. Linux and macOS, BGFX only; other builds compile them out.
 
 ## Shader hot reload
