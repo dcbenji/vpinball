@@ -772,7 +772,7 @@ void main()
 		const vec3 rFace = reflect(-V, normalize(-rF - s * slope * vec3(-rF.z, 0.0, rF.x)));
 		const vec2 offF = mul(mView, vec4(rFace.x * ex + rFace.y * up + rFace.z * ez, 0.0)).xy * (1.6 * R / mmPx);
 		const vec3 faceT = clamp(texStereoLod(tex_pbr_refr, (gl_FragCoord.xy + toC + offF) * w_h_height.xy, clamp(log2(max(R / mmPx, 1.0)), 0.0, domeParams[24].w)).rgb, vec3_splat(0.0), vec3_splat(16.0));
-		const vec3 bg = mix(bgAll, faceT, 0.7);
+		const vec3 bg = mix(bgAll, faceT, 0.7 * (1.0 - aaF)); // a flute only a few pixels wide shows the average (no shimmer at the player's distance)
 		// the plastic also swallows light at every wavelength, red included: longer paths (ridges, grazing views) go darker, a cherry red (Ben 11-03)
 		const vec3 trL = exp(-(sigma + vec3_splat(DOME_ABSORB)) * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
 		// the foil: total internal reflection at this face (smooth over the critical angle), each face its own strength
