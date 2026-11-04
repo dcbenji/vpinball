@@ -513,6 +513,7 @@ private:
       ImVec2 startMouse;
       float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
       Matrix3D initial; // Selection transform when the operation began
+      bool zOnly = false; // Rotation fixed to the table Z axis (parts that can not keep a tilted one)
       Matrix3D applied; // The last one set (the reported selection transform does not carry a rotation or scale for drag points and translation only parts)
       struct SDL_Window *textWindow = nullptr; // The window whose text input this modal turned on
       vec3 duplicateOrigin { 0.f, 0.f, 0.f }; // Position of the duplicated selection

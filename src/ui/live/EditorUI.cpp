@@ -236,6 +236,7 @@ void EditorUI::Close()
 {
    if (!m_isOpened)
       return;
+   EndModalTransform(false); // A running modal ends here (its text input too)
    m_isOpened = false;
    m_flyMode = false;
    if (ImGuiContext *const context = ImGui::GetCurrentContext())
@@ -3545,7 +3546,8 @@ void EditorUI::DuplicateSelection()
    // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
    if (!CanDuplicate())
       return;
-   if (m_navBlenderTransform && !CanStartModalIn(TransformViewSlot())) // The grab could not start: no copy then
+   const int grabSlot = TransformViewSlot();
+   if (m_navBlenderTransform && (grabSlot == -2 || (grabSlot >= 0 && !CanStartModalIn(grabSlot)))) // The grab could not start in a view: no copy then (without the 3D Viewport shown it copies in place)
    {
       Report("Duplicate needs the 3D Viewport or a view that can be edited under the mouse");
       return;
@@ -4898,6 +4900,23 @@ void EditorUI::BeginModalTransform(ModalOp op)
       m_modal.textWindow = window;
    }
    m_modal.op = op;
+   if (op == ModalOp::Rotate)
+   {
+      // Drag points keep X and Y only, curve and translation only parts keep no tilt: a free or X / Y axis rotation would lose its Z every frame and drift (the gizmo
+      // does the same with ROTATE_Z). Those rotate about the table Z axis
+      bool zOnly = m_pointEditPart != nullptr;
+      for (const auto &part : m_multiSel)
+      {
+         Matrix3D unused;
+         const int mask = static_cast<int>(part->GetTransform(unused));
+         zOnly |= (mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
+      }
+      if (zOnly)
+      {
+         m_modal.axis = 2;
+         m_modal.zOnly = true;
+      }
+   }
    m_modal.initial = initial;
    m_modal.applied = initial;
    m_modal.startMouse = ImGui::GetMousePos();
@@ -5010,7 +5029,7 @@ void EditorUI::UpdateModalTransform()
       const bool chord = io.KeyCtrl || io.KeyAlt || io.KeySuper;
       const std::pair<ImGuiKey, int> axisKeys[] = { { ImGuiKey_X, 0 }, { ImGuiKey_Y, 1 }, { ImGuiKey_Z, 2 } };
       for (const auto &[key, axis] : axisKeys)
-         if (!chord && ImGui::IsKeyPressed(key, false))
+         if (!chord && !m_modal.zOnly && ImGui::IsKeyPressed(key, false))
          {
             const bool same = m_modal.axis == axis && m_modal.plane == io.KeyShift;
             m_modal.axis = same ? -1 : axis;
@@ -5035,8 +5054,8 @@ void EditorUI::UpdateModalTransform()
          for (int i = 0; i < io.InputQueueCharacters.Size; i++)
          {
             const ImWchar c = io.InputQueueCharacters[i];
-            if ((c >= '0' && c <= '9') || c == '.' || c == '-')
-               typeChar(static_cast<char>(c));
+            if ((c >= '0' && c <= '9') || c == '.' || c == ',' || c == '-')
+               typeChar(c == ',' ? '.' : static_cast<char>(c)); // A decimal comma (some locales' keypad)
          }
       }
       else if (!chord && !io.KeyShift)
@@ -5224,8 +5243,8 @@ void EditorUI::UpdateModalTransform()
    case ModalOp::Scale:
    {
       float factor = hasValue ? value : curDist / m_modal.startDist;
-      if (hasValue && fabsf(factor) < 1e-3f)
-         factor = 1.f; // "0" on the way to "0.5": a zero scale would collapse the curve parts and the drag points for good (multiplicative)
+      if (fabsf(factor) < 1e-3f)
+         factor = hasValue ? 1.f : copysignf(1e-3f, factor); // Never singular (the next frame inverts it); "0" on the way to "0.5" holds 1: a zero scale would collapse curves and drag points for good
       if (!hasValue && IsSnapActive(SnapKind::Scale) && m_snapScale > 0.f)
       {
          factor = max(roundf(factor / m_snapScale) * m_snapScale, m_snapScale);
@@ -5238,8 +5257,11 @@ void EditorUI::UpdateModalTransform()
    }
    }
    m_modal.hud = text;
-   SetSelectionTransform(result, false, false, false, &m_modal.applied);
-   m_modal.applied = result;
+   if (memcmp(result.m, m_modal.applied.m, sizeof(result.m)) != 0) // Nothing to apply while the mouse rests
+   {
+      SetSelectionTransform(result, false, false, false, &m_modal.applied);
+      m_modal.applied = result;
+   }
 }
 
 // Cycle the camera: preview camera, editor camera, desktop backdrop
@@ -5611,10 +5633,9 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 
    // Apply the active part's transform delta to every selected part
    Matrix3D delta;
-   const EditorUIPart::TransformMask activeMask = m_selection.GetPart()->GetTransform(delta);
-   constexpr int kRotScale = EditorUIPart::TM_RotX | EditorUIPart::TM_RotY | EditorUIPart::TM_RotZ | EditorUIPart::TM_ScaleX | EditorUIPart::TM_ScaleY | EditorUIPart::TM_ScaleZ | EditorUIPart::TM_ScaleAll;
-   if (reference != nullptr && (static_cast<int>(activeMask) & kRotScale) == 0)
-      delta = *reference; // A translation only active part never reports the rotation or scale applied to the others: the delta is taken from the last applied transform
+   m_selection.GetPart()->GetTransform(delta);
+   if (reference != nullptr)
+      delta = *reference; // The active part may not report (or keep) the rotation or scale applied to the others (translation only parts, curve parts without a Z scale): the delta is taken from the last applied transform
    delta.Invert();
    delta = delta * newTransform;
    for (const auto &part : m_multiSel)
