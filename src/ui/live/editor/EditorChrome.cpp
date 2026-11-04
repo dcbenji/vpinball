@@ -1062,7 +1062,7 @@ void EditorChrome::RenderStatusOverlay()
          | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav);
    const bool stylePushed = editor.m_orbitLock;
    if (stylePushed)
-      ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+      ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(EditorTheme::Fill)); // On reads brighter than the 84 default (Raised 66 read darker)
    if (ImGui::Button(editor.m_orbitLock ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN))
       editor.m_orbitLock = !editor.m_orbitLock;
    if (stylePushed)
