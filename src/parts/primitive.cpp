@@ -1864,7 +1864,8 @@ void Primitive::Render(const unsigned int renderMask)
          // the gather disc reaches past the dome a little: widen the area
          const float mx = 0.25f * (xMax - xMin), my = 0.25f * (yMax - yMin);
          lensProbe->ExtendAreaOfInterest(xMin - mx, xMax + mx, yMin - my, yMax + my);
-         m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_refraction, domeLensRT->GetColorSampler());
+         params[24].w = (float)(domeLensRT->GetMipCount() - 1);
+         m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_refr, domeLensRT->GetColorSampler());
          m_renderer->m_renderDevice->AddRenderTargetDependencyOnNextRenderCommand(domeLensRT);
       }
       m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::domeParams, params, 25);

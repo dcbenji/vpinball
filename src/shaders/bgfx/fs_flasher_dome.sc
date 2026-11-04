@@ -45,7 +45,7 @@
 //      (table space), w source radius (table units); then rgb irradiance at the dome (relative to the room light), w unused
 //      ([17].w: dome_frost's gain; [19].w: dome_lens (0 = off, set only when a refraction probe is bound); [21].w: its slice width
 //      in flutes); [23].w: the feet's lit glow gain)
-// [24] xy the dome's centre on screen (render target uv, in gl_FragCoord's orientation; z 1 = set), for dome_lens
+// [24] xy the dome's centre on screen (render target uv, in gl_FragCoord's orientation; z 1 = set), w the probe's last mip, for dome_lens
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -61,7 +61,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0
 #include "common.sh"
 
 uniform vec4 domeParams[25];
-SAMPLER2DSTEREO(tex_refraction, 6); // dome_lens: the dome's refraction probe (a copy of the scene behind it)
+SAMPLER2DSTEREO(tex_pbr_refr, 15); // dome_lens: a screen space transparency probe (a copy of the scene behind the dome, with mips)
 uniform vec4 w_h_height; // x/y: 1 / render target size
 SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R glow (x2, gamma 2.2), G wall thickness (0..4 mm)
 
@@ -657,7 +657,7 @@ void main()
 			float capL = 0.0;
 			if (capW > 0.0 && !tir)
 			{
-				const vec3 Pd = Pin + d2 * (4.0 / max(-d2.y, 0.3));
+				const vec3 Pd = Pin + d2 * (0.2 / max(-d2.y, 0.3)); // the ribs are moulded on the cap's underside, ~1/8" under the top (Ben 11-03: 4 mm deeper read too far down)
 				const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
 				const float eC = fC - floor(fC + 0.5);
 				capL = domeLine(eC, 0.05, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
@@ -749,6 +749,9 @@ void main()
 		if (domeParams[24].z > 0.5)
 			toC = domeParams[24].xy / w_h_height.xy - gl_FragCoord.xy;
 		const float rD = domeParams[21].w * 0.2 * R / mmPx; // the disc (lensw= 4: 0.8 dome radius), pixels
+		// each tap reads a mip as wide as the gap between taps: an average, not one pixel (single pixels flickered as the scene
+		// moved under them)
+		const float lodL = clamp(log2(max(0.45 * rD, 1.0)), 0.0, domeParams[24].w);
 		vec3 sum = vec3_splat(0.0), hot = vec3_splat(0.0);
 		UNROLL for (int k = 0; k < 16; k++)
 		{
@@ -756,7 +759,7 @@ void main()
 			const vec2 dir = vec2(cos(a), sin(a));
 			const float rr = sqrt((float(k) + 0.5) / 16.0);
 			// clamped: the copy can hold blown-out or invalid pixels where a flash lights the playfield under the dome
-			const vec3 t = clamp(texStereoLod(tex_refraction, (gl_FragCoord.xy + toC + dir * (rr * rD)) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
+			const vec3 t = clamp(texStereoLod(tex_pbr_refr, (gl_FragCoord.xy + toC + dir * (rr * rD)) * w_h_height.xy, lodL).rgb, vec3_splat(0.0), vec3_splat(16.0));
 			sum += t;
 			hot = max(hot, t);
 		}
@@ -765,8 +768,8 @@ void main()
 		// the foil: total internal reflection at this face (smooth over the critical angle), each face its own strength
 		const float ciF = saturate(dot(VrIn, nFlank));
 		const float st2F = 1.49 * 1.49 * (1.0 - ciF * ciF);
-		const float tirF = smoothstep(0.8, 1.05, st2F);
-		const float foilL = mix(mix(0.2, 1.9, tirF) * (0.7 + 0.6 * domeHash(flankId * 4.37 + 2.1)), 0.9, aaF);
+		const float tirF = smoothstep(0.6, 1.15, st2F); // soft: a hard switch flickered as the view moved
+		const float foilL = mix(mix(0.3, 1.7, tirF) * (0.7 + 0.6 * domeHash(flankId * 4.37 + 2.1)), 0.9, aaF);
 		const float edgeL = max(fwA > 0.0 ? domeLine(eRoot, 0.035, fwA) : exp(-(eRoot / 0.035) * (eRoot / 0.035)),
 			fwA > 0.0 ? domeLine(eTip, 0.035, fwA) : exp(-(eTip / 0.035) * (eTip / 0.035)));
 		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * foilL * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv);
