@@ -283,9 +283,9 @@ void main()
 	// mm across the radius, for the line filters below
 	const float fwRad = abs(dFdx(length(Pin.xz))) + abs(dFdy(length(Pin.xz)));
 	const float fwF = (abs(Pin.z) * (abs(dFdx(Pin.x)) + abs(dFdy(Pin.x))) + abs(Pin.x) * (abs(dFdx(Pin.z)) + abs(dFdy(Pin.z)))) / max(dot(Pin.xz, Pin.xz), 1e-3) * domeParams[3].y / (2.0 * DOME_PI);
-	// the flute coordinate's screen gradient (flute periods per pixel, x and y) and the top edge's footprint, for dome_lens
-	const vec2 gF = vec2(Pin.x * dFdx(Pin.z) - Pin.z * dFdx(Pin.x), Pin.x * dFdy(Pin.z) - Pin.z * dFdy(Pin.x)) / max(dot(Pin.xz, Pin.xz), 1e-3) * domeParams[3].y / (2.0 * DOME_PI);
+	// footprints for the top zigzag line and dome_lens's gather disc
 	const float fwTop = abs(dFdx(P.y)) + abs(dFdy(P.y));
+	const float mmPx = max(max(length(dFdx(P)), length(dFdy(P))), 1e-3); // mm per pixel on the dome (dome_lens)
 	const float fluteF = theta / period;
 	const float idx = floor(fluteF + 0.5);
 	const float eP = fluteF - idx;
@@ -723,35 +723,33 @@ void main()
 		orb = orbK * domeParams[14].w * lvlG * mix(1.0, 3.0, heatW) * strips * col * thru;
 	}
 
-	// Lens (dome_lens, see-through walls): each flute is a small cylinder lens, showing a mirrored slice of what lies behind the
-	// dome a few flutes wide, squeezed into the flute; the slices jump at the flute edges, which draws the fine vertical lines.
-	// What lies behind comes from the dome's refraction probe, through the plastic (two walls); thin dark lines at the edges
-	// (light turned away there). It replaces most of the milky interior; not on the cap (one moulding, it looks at the bulb)
+	// Lens (dome_lens): light from behind the dome, dispersed through it, never a view through it (Ben 11-03: like a crystal
+	// with a faceted crystal inside: held up to a light it glows, but you never see the other side). The light behind the
+	// whole dome is gathered (12 taps of the screen copy over a disc a dome wide round the pixel: its mean, plus a share of its
+	// brightest tap so a hot light right behind comes through as hotness), filtered through the plastic, then broken up by the
+	// dome's own flutes (a soft band per flute, each flank its own strength): the pattern stays on the dome as the view moves,
+	// only the light under it changes. Thin darker lines at the flute edges. Not on the cap; fades at the silhouette
 	vec3 lens = vec3_splat(0.0);
 	const float lensK = saturate(domeParams[19].w);
 	BRANCH if (lensK > 0.0 && mode > 1.5 && capW < 0.99 && lvlG < 0.999)
 	{
-		const vec2 gN = gF / max(dot(gF, gF), 1e-6); // pixels per flute period, across the flutes
-		const vec2 offPix = -eP * domeParams[21].w * gN;
-		// what comes through is light, not a picture (Ben 11-03: a real dome's inside is indiscernible): the thick wall, the
-		// inner flutes and the outer cylinder scramble it, so the slice is blurred both ways over ~3 flutes (8-tap disc),
-		// keeping only its soft light and colour and how it shifts flute by flute
-		const vec2 uvL = (gl_FragCoord.xy + offPix) * w_h_height.xy;
-		const float rB = 3.0 / max(length(gF), 1e-3); // pixels
-		vec3 bg = vec3_splat(0.0);
-		UNROLL for (int k = 0; k < 8; k++)
+		const float rB = domeParams[21].w * 0.25 * R / mmPx; // pixels (lensw= 4: one dome radius)
+		vec3 sum = vec3_splat(0.0), hot = vec3_splat(0.0);
+		UNROLL for (int k = 0; k < 12; k++)
 		{
 			const float a = float(k) * 2.39996 + 0.5;
-			const float rr = sqrt((float(k) + 0.5) / 8.0);
+			const float rr = sqrt((float(k) + 0.5) / 12.0);
 			// clamped: the copy can hold blown-out or invalid pixels where a flash lights the playfield under the dome
-			bg += clamp(texStereoLod(tex_refraction, uvL + vec2(cos(a), sin(a)) * (rr * rB) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
+			const vec3 t = clamp(texStereoLod(tex_refraction, (gl_FragCoord.xy + vec2(cos(a), sin(a)) * (rr * rB)) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
+			sum += t;
+			hot = max(hot, t);
 		}
-		bg *= 1.0 / 8.0;
-		// filtered, not added: through both walls and the scattering plastic (deep red; the long path at the flute edges darker)
+		const vec3 bg = sum * (1.0 / 12.0) + 0.25 * hot;
 		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
+		const float facetL = mix((0.55 + 0.45 * cos(2.0 * DOME_PI * eP)) * (0.6 + 0.8 * domeHash(flankId * 4.37 + 2.1)), 0.75, aaF);
 		const float edgeL = max(fwA > 0.0 ? domeLine(eRoot, 0.035, fwA) : exp(-(eRoot / 0.035) * (eRoot / 0.035)),
 			fwA > 0.0 ? domeLine(eTip, 0.035, fwA) : exp(-(eTip / 0.035) * (eTip / 0.035)));
-		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv); // fades at the silhouette
+		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * facetL * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv);
 	}
 
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange
