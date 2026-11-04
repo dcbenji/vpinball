@@ -470,7 +470,13 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    RefreshFilterCache();
 
    // The tree scrolls under the header
-   ImGui::BeginChild("##OutlinerTree", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
+   // Whole rows only, so that no sliver of the next row shows at the bottom edge (Blender clips partial rows, but a sliver reads as a glitch)
+   const float rowPitch = ImGui::GetFrameHeight() + 1.f * editor.m_liveUI.GetDPI();
+   if (m_displayMode != 0)
+      m_rootRowExtra = 0.f; // Only the View Layer tree has the shorter root row (its extra is measured there)
+   const float treeHeight = m_rootRowExtra + std::floor((ImGui::GetContentRegionAvail().y - m_rootRowExtra) / rowPitch) * rowPitch; // The root row is shorter than the others: the rows below it start m_rootRowExtra off the pitch
+   ImGui::BeginChild("##OutlinerTree", ImVec2(0.f, treeHeight >= rowPitch ? treeHeight : 0.f), ImGuiChildFlags_None);
+   const float treeTopY = ImGui::GetCursorScreenPos().y;
    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 1.f * editor.m_liveUI.GetDPI())); // Blender's 20 px row pitch: 19 px frame + 1
 
    // Drag & drop of parts and part groups to move them between groups (not supported in inspection
@@ -678,6 +684,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       const bool scenePartsOpened = ChevronTreeNode("Scene Parts", ImGuiTreeNodeFlags_DefaultOpen);
       scenePartsMin = ImGui::GetItemRectMin();
       scenePartsMax = ImGui::GetItemRectMax();
+      m_rootRowExtra = ImGui::GetCursorScreenPos().y - treeTopY - rowPitch; // Read next frame, by the height above
       partDropTarget(nullptr, true); // Dropping on the scene root ungroups part groups
       if (scenePartsOpened)
       {
@@ -1026,6 +1033,19 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::PopID();
    }
    ImGui::PopStyleVar();
+   {
+      // The wheel steps by a few font heights, not whole rows: once the scrolling has stopped, settle it on a row boundary so that no sliver of a row shows at the bottom edge
+      // (the end of the list stays where it is). Stopped means no wheel event for 150 ms: a trackpad sends small events with gaps between them, which must not be pulled back.
+      const float scrollY = ImGui::GetScrollY();
+      if (ImGui::GetIO().MouseWheel != 0.f || ImGui::GetIO().MouseWheelH != 0.f)
+         m_lastWheelTime = ImGui::GetTime();
+      if (ImGui::GetTime() - m_lastWheelTime > 0.15 && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && scrollY > 0.f && scrollY < ImGui::GetScrollMaxY() - 0.5f)
+      {
+         const float snapped = std::round(scrollY / rowPitch) * rowPitch;
+         if (std::fabs(snapped - scrollY) > 0.5f && snapped <= ImGui::GetScrollMaxY())
+            ImGui::SetScrollY(snapped);
+      }
+   }
    ImGui::EndChild();
    if (dropRequested)
    {

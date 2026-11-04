@@ -75,6 +75,8 @@ private:
 
    Selection m_lastSeenSelection; // To detect selection changes made elsewhere
    bool m_revealResource = false; // The selection changed to a table data item: open its category and scroll to it
+   float m_rootRowExtra = 0.f; // The Scene Parts root row's height against the 20 px pitch of the rows below it (the tree child is sized to whole rows)
+   double m_lastWheelTime = -1.0; // When the mouse wheel (or a trackpad) last scrolled: the scroll settles on a row only a moment after the last wheel event
    bool m_dragBlocked = false; // The drop under the mouse is refused (cycle), set while drawing the drop targets
    ImGuiID m_dragHoverGroup = 0; // Collapsed group hovered while dragging parts (opens after a short delay)
    double m_dragHoverSince = 0.0;
