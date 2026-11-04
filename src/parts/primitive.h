@@ -405,6 +405,7 @@ public:
    DragPointCurve m_plasticCurve;
    DragPointCurve m_plasticHoles;
    bool m_plasticEditHoles = false; // Transient: point edit works on the holes instead of the outline
+   uint32_t m_tracedTouched = 0; // Transient, not saved: traced insert fields a slider changed since the last apply to all traced inserts (bits: see PrimitiveUIPart.cpp)
    bool IsPlasticCompanion() const; // Names a host that exists (an orphan, e.g. after a script rename, behaves as a plain primitive)
    int m_plasticCrossingHoles = 0; // Holes reaching over the outline edge at the last rebuild (warning only)
    int m_plasticSkippedHoles = 0; // Holes whose centre is outside the outline (left out of the mesh)

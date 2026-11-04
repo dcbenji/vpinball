@@ -1,5 +1,6 @@
 #include "core/stdafx.h"
 #include "PropertyPane.h"
+#include "PrimitiveUIPart.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 
@@ -106,9 +107,20 @@ bool MaterialEditUndo::Commit(int modifiedField, const string &label)
 
 void PropertyPane::ApplyBulbToAllButton(IEditable* part)
 {
-   if (ImGui::Button("Apply bulb to all traced inserts") && m_pins != nullptr)
+   const vector<string> touched = PrimitiveUIPart::TouchedTracedLabels(static_cast<const Primitive*>(GetEditedPart(part)));
+   const string label = "Apply " + std::to_string(touched.size()) + " changed setting" + (touched.size() == 1 ? ""s : "s"s) + " to all traced inserts###ApplyTraced";
+   ImGui::BeginDisabled(touched.empty());
+   if (ImGui::Button(label.c_str()) && m_pins != nullptr)
       m_pins->RequestApplyBulb(part, IsStartup());
-   ImGui::SetItemTooltip("Copies this insert's bulb values (depth, spot size, brightness, stretch, offset) to every other traced insert of the table, as one undo step");
+   ImGui::EndDisabled();
+   if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+   {
+      string tip = touched.empty() ? "Move a bulb or look slider of this insert first: only the settings you changed are copied"s
+                                   : "Copies to every other traced insert of the table, as one undo step:"s;
+      for (const string& name : touched)
+         tip += "\n- " + name;
+      ImGui::SetTooltip("%s", tip.c_str());
+   }
 }
 
 void PropertyPane::SetShowStartup(bool showStartup)

@@ -41,6 +41,11 @@ public:
 
    void UpdatePropertyPane(PropertyPane& props) override;
 
+   // Traced insert apply button: the fields a slider touched on this primitive (Primitive::m_tracedTouched), and their copy to another traced insert.
+   // A look key is written alone in the target's traced_params, its other keys stay
+   static vector<string> TouchedTracedLabels(const Primitive* primitive);
+   static void CopyTouchedTraced(const Primitive* source, Primitive* target);
+
 private:
    void ImportMesh();
    void ExportMesh();

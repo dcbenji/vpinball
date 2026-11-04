@@ -14,6 +14,7 @@
 #include "ui/live/LiveUI.h"
 
 #include "PropertyPane.h"
+#include "PrimitiveUIPart.h"
 
 #include <nlohmann/json.hpp>
 #include <set>
@@ -234,6 +235,8 @@ void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
       if (source == nullptr)
          return;
    }
+   if (source->m_tracedTouched == 0)
+      return;
    if (targets.empty())
    {
       editor.m_liveUI.PushNotification("No other traced inserts in this table"s, 2500);
@@ -247,19 +250,14 @@ void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
          editor.m_undo.MarkForUndo(target);
    }
    for (Primitive *const target : targets)
-   {
-      target->m_d.m_bulbDepth = source->m_d.m_bulbDepth;
-      target->m_d.m_bulbScale = source->m_d.m_bulbScale;
-      target->m_d.m_bulbBrightness = source->m_d.m_bulbBrightness;
-      target->m_d.m_bulbStretchX = source->m_d.m_bulbStretchX;
-      target->m_d.m_bulbStretchY = source->m_d.m_bulbStretchY;
-      target->m_d.m_bulbOffsetX = source->m_d.m_bulbOffsetX;
-      target->m_d.m_bulbOffsetY = source->m_d.m_bulbOffsetY;
-   }
-   const string label = "Apply bulb to " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s);
+      PrimitiveUIPart::CopyTouchedTraced(source, target);
+   const size_t nSettings = PrimitiveUIPart::TouchedTracedLabels(source).size();
+   source->m_tracedTouched = 0;
+   const string count = std::to_string(nSettings) + " setting" + (nSettings == 1 ? ""s : "s"s) + " to " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s);
+   const string label = "Applied " + count;
    if (!inspect)
    {
-      editor.m_undo.SetLabel("Apply Bulb: " + std::to_string(targets.size()) + " traced insert" + (targets.size() == 1 ? ""s : "s"s));
+      editor.m_undo.SetLabel("Apply " + count);
       editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
       editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
       editor.m_lastUndoId = 0;

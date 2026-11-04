@@ -46,11 +46,71 @@ void SetTracedLook(string& params, const char* key, float v)
    else
       params += (params.empty() ? ""s : " "s) + key + '=' + value;
 }
+
+constexpr TracedLookKey kLookKeys[] = {
+   { "Glint Strength", "glint", 1.5f, 0.f, 6.f, 2, "Strength of the highlights in the facets" },
+   { "Glint Sharpness", "sharp", 76.648f, 5.f, 400.f, 0, "Low = broad sheen, high = tight sparkle" },
+   { "Glint Colour Fringe", "fringe", 1.62f, 0.f, 12.f, 2, "Degrees between the red, green and blue highlights: 0 = white glints, more = a wider colour split" },
+   { "Glint Facet Tilt", "tilt", 50.938f, 10.f, 80.f, 1, "The facet angle the highlights are worked out for (deg)" },
+   { "Glint Count", "keys", 5.f, 1.f, 8.f, 0, "Highlights around the insert" },
+   { "Moulding Waviness", "wavy", 3.f, 0.f, 15.f, 2, "How far the moulding's surface leans (deg), so straight facets do not glint as one" },
+   { "Moulding Wavelength (mm)", "wavelen", 6.f, 0.5f, 30.f, 1, "Size of the moulding's waves" },
+   { "Glint Turn Jitter", "turnjit", 14.641f, 0.f, 90.f, 1, "How differently each insert's highlights are turned (deg)" },
+   { "Facet Blur", "facetblur", 0.f, 0.f, 6.f, 2, "Softens the facet map's edges for the highlights (mips)" },
+   { "Room Glint", "room", 0.3f, 0.f, 3.f, 2, "The room's light glinting in the facets, lamp on or off" },
+   { "Room Glint Tint", "roomtint", 0.f, 0.f, 1.f, 2, "0 = white room glints, 1 = the plastic's colour" },
+   { "Lamp-Off Look", "env", 1.f, 0.f, 3.f, 2, "Strength of the baked lamp-off image" },
+   { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
+   { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
+};
+
+// The traced fields a slider marks as touched in Primitive::m_tracedTouched: one bit per field, the bulb fields then the look keys
+constexpr uint32_t kTouchBulbDepth = 1u << 0, kTouchBulbScale = 1u << 1, kTouchBulbBrightness = 1u << 2, kTouchBulbStretchX = 1u << 3, kTouchBulbStretchY = 1u << 4, kTouchBulbOffsetX = 1u << 5, kTouchBulbOffsetY = 1u << 6;
+constexpr uint32_t LookKeyBit(size_t index) { return 1u << (7 + index); }
+
+struct TracedBulbField
+{
+   const char* label;
+   float PrimitiveData::*field;
+   uint32_t bit;
+};
+
+constexpr TracedBulbField kBulbFields[] = {
+   { "Bulb Depth", &PrimitiveData::m_bulbDepth, kTouchBulbDepth },
+   { "Bulb Spot Size", &PrimitiveData::m_bulbScale, kTouchBulbScale },
+   { "Bulb Brightness", &PrimitiveData::m_bulbBrightness, kTouchBulbBrightness },
+   { "Bulb Stretch X", &PrimitiveData::m_bulbStretchX, kTouchBulbStretchX },
+   { "Bulb Stretch Y", &PrimitiveData::m_bulbStretchY, kTouchBulbStretchY },
+   { "Bulb Offset X", &PrimitiveData::m_bulbOffsetX, kTouchBulbOffsetX },
+   { "Bulb Offset Y", &PrimitiveData::m_bulbOffsetY, kTouchBulbOffsetY },
+};
 }
 
 
 namespace VPX::EditorUI
 {
+
+vector<string> PrimitiveUIPart::TouchedTracedLabels(const Primitive* primitive)
+{
+   vector<string> labels;
+   for (const TracedBulbField& bulb : kBulbFields)
+      if (primitive->m_tracedTouched & bulb.bit)
+         labels.emplace_back(bulb.label);
+   for (size_t i = 0; i < std::size(kLookKeys); i++)
+      if (primitive->m_tracedTouched & LookKeyBit(i))
+         labels.emplace_back(kLookKeys[i].label);
+   return labels;
+}
+
+void PrimitiveUIPart::CopyTouchedTraced(const Primitive* source, Primitive* target)
+{
+   for (const TracedBulbField& bulb : kBulbFields)
+      if (source->m_tracedTouched & bulb.bit)
+         target->m_d.*bulb.field = source->m_d.*bulb.field;
+   for (size_t i = 0; i < std::size(kLookKeys); i++)
+      if (source->m_tracedTouched & LookKeyBit(i))
+         SetTracedLook(target->m_d.m_tracedParams, kLookKeys[i].key, GetTracedLook(source->m_d.m_tracedParams, kLookKeys[i]));
+}
 
 PrimitiveUIPart::PrimitiveUIPart(Primitive* primitive)
    : EditableUIPart(primitive, { &Data::m_visible })
@@ -568,57 +628,50 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.SliderFloat<Primitive>(
          m_part, "Bulb Depth (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbDepth; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbDepth = max(v, 0.f); }, 0.f, 30.f, 1, "A soft hot spot in the lit insert over the bulb, this far below the top, shifting with the view (0 = off)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbDepth = max(v, 0.f); primitive->m_tracedTouched |= kTouchBulbDepth; }, 0.f, 30.f, 1, "A soft hot spot in the lit insert over the bulb, this far below the top, shifting with the view (0 = off)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Spot Size"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbScale; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); }, 0.05f, 0.4f, 2, "Hot spot size (1 = about 19 mm across at half height)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbScale = max(v, 0.05f); primitive->m_tracedTouched |= kTouchBulbScale; }, 0.05f, 0.4f, 2, "Hot spot size (1 = about 19 mm across at half height)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Brightness"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbBrightness; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); }, 0.f, 4.f, 2, "Hot spot brightness (1 = +80 % of the glow's peak at its centre)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbBrightness = max(v, 0.f); primitive->m_tracedTouched |= kTouchBulbBrightness; }, 0.f, 4.f, 2, "Hot spot brightness (1 = +80 % of the glow's peak at its centre)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Stretch X"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbStretchX; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchX = max(v, 0.05f); }, 0.2f, 4.f, 2, "Hot spot stretch along the card's X (1 = round)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchX = max(v, 0.05f); primitive->m_tracedTouched |= kTouchBulbStretchX; }, 0.2f, 4.f, 2, "Hot spot stretch along the card's X (1 = round)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Stretch Y"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbStretchY; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchY = max(v, 0.05f); }, 0.2f, 4.f, 2, "Hot spot stretch along the card's Y (1 = round)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbStretchY = max(v, 0.05f); primitive->m_tracedTouched |= kTouchBulbStretchY; }, 0.2f, 4.f, 2, "Hot spot stretch along the card's Y (1 = round)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Offset X (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbOffsetX; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetX = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's X (the bulb is not under the insert's centre)");
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetX = v; primitive->m_tracedTouched |= kTouchBulbOffsetX; }, -25.f, 25.f, 1, "Moves the hot spot along the card's X (the bulb is not under the insert's centre)");
       props.SliderFloat<Primitive>(
          m_part, "Bulb Offset Y (mm)"s, //
          [](const Primitive* primitive) { return primitive->m_d.m_bulbOffsetY; }, //
-         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetY = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's Y");
-      if (!props.IsSkippingRest() && props.GetEditedPart<Primitive>(m_part)->IsTracedInsert())
-         props.ApplyBulbToAllButton(m_part);
+         [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetY = v; primitive->m_tracedTouched |= kTouchBulbOffsetY; }, -25.f, 25.f, 1, "Moves the hot spot along the card's Y");
 
       // The rest of a traced insert's look lives in its traced_params text: each slider reads and writes one key of it, and the renderer reads the text at draw time
       props.Separator("Traced Insert Look"s);
-      static constexpr TracedLookKey kLookKeys[] = {
-         { "Glint Strength", "glint", 1.5f, 0.f, 6.f, 2, "Strength of the highlights in the facets" },
-         { "Glint Sharpness", "sharp", 76.648f, 5.f, 400.f, 0, "Low = broad sheen, high = tight sparkle" },
-         { "Glint Colour Fringe", "fringe", 1.62f, 0.f, 12.f, 2, "Degrees between the red, green and blue highlights: 0 = white glints, more = a wider colour split" },
-         { "Glint Facet Tilt", "tilt", 50.938f, 10.f, 80.f, 1, "The facet angle the highlights are worked out for (deg)" },
-         { "Glint Count", "keys", 5.f, 1.f, 8.f, 0, "Highlights around the insert" },
-         { "Moulding Waviness", "wavy", 3.f, 0.f, 15.f, 2, "How far the moulding's surface leans (deg), so straight facets do not glint as one" },
-         { "Moulding Wavelength (mm)", "wavelen", 6.f, 0.5f, 30.f, 1, "Size of the moulding's waves" },
-         { "Glint Turn Jitter", "turnjit", 14.641f, 0.f, 90.f, 1, "How differently each insert's highlights are turned (deg)" },
-         { "Facet Blur", "facetblur", 0.f, 0.f, 6.f, 2, "Softens the facet map's edges for the highlights (mips)" },
-         { "Room Glint", "room", 0.3f, 0.f, 3.f, 2, "The room's light glinting in the facets, lamp on or off" },
-         { "Room Glint Tint", "roomtint", 0.f, 0.f, 1.f, 2, "0 = white room glints, 1 = the plastic's colour" },
-         { "Lamp-Off Look", "env", 1.f, 0.f, 3.f, 2, "Strength of the baked lamp-off image" },
-         { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
-         { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
-      };
-      for (const TracedLookKey& key : kLookKeys)
+      for (size_t i = 0; i < std::size(kLookKeys); i++)
+      {
+         const TracedLookKey& key = kLookKeys[i];
+         const uint32_t bit = LookKeyBit(i);
          props.SliderFloat<Primitive>(
             m_part, string(key.label), //
             [key](const Primitive* primitive) { return GetTracedLook(primitive->m_d.m_tracedParams, key); }, //
-            [key](Primitive* primitive, float v) { SetTracedLook(primitive->m_d.m_tracedParams, key.key, v); }, key.vMin, key.vMax, key.decimals, key.tooltip);
+            [key, bit](Primitive* primitive, float v)
+            {
+               SetTracedLook(primitive->m_d.m_tracedParams, key.key, v);
+               primitive->m_tracedTouched |= bit;
+            },
+            key.vMin, key.vMax, key.decimals, key.tooltip);
+      }
+      if (!props.IsSkippingRest() && props.GetEditedPart<Primitive>(m_part)->IsTracedInsert())
+         props.ApplyBulbToAllButton(m_part);
 
       props.Separator("Flasher Dome"s);
       props.SliderFloat<Primitive>(

@@ -108,7 +108,7 @@ public:
    bool CanResetToDefault(const PinKey &key, string *whyNot = nullptr) const;
    bool ResetToDefault(const PinKey &key); // Queues the reset (run by FlushPendingCopy, as one undo step)
    void FlushPendingCopy(); // Runs the queued copy (and bulb apply), as one undo step: to be called outside of any undo record (after the areas are rendered)
-   // "Apply to all traced inserts" button: queues the copy of the traced insert's bulb values to the other traced inserts (run by FlushPendingCopy)
+   // "Apply N changed settings to all traced inserts" button: queues the copy of the settings touched on the traced insert to the other traced inserts (run by FlushPendingCopy)
    void RequestApplyBulb(IEditable *source, bool startup)
    {
       m_bulbSource = source;

@@ -83,7 +83,7 @@ static bool Listed(std::initializer_list<const char *> list, const string &value
    return std::ranges::any_of(list, [&value](const char *item) { return value == item; });
 }
 
-// The "Apply to all traced inserts" button at the end of the Look of a traced insert (the full sheet has it under the bulb fields)
+// The "Apply N changed settings to all traced inserts" button at the end of the Look of a traced insert (the full sheet has it under the look fields)
 static void DrawApplyBulbButton(PropertyPane &props, PinKind kind, void *obj)
 {
    if (kind != PinKind::Part || props.IsMultiEdit() || obj == nullptr)

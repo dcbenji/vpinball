@@ -105,7 +105,7 @@ public:
    void SetHighlight(const vector<string> *terms) { m_highlight = terms; }
    static bool IsFocusPending() { return s_focusPending; }
    static const PinKey &GetFocusKey() { return s_focusKey; }
-   // "Apply to all traced inserts" button: queues the copy of this traced insert's bulb values to the other traced inserts of the table
+   // "Apply N changed settings to all traced inserts" button: queues the copy of the settings touched on this traced insert to the other traced inserts of the table
    // (one undo step, run after the areas are drawn)
    void ApplyBulbToAllButton(IEditable* part);
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
