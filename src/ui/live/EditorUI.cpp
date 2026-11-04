@@ -2421,7 +2421,9 @@ void EditorUI::RenderUI()
       if (isSelectionTransformValid)
       {
          const ImVec2 pos = ctx.Project(transform.GetOrthoNormalPos());
-         overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
+         // Not over the panels beside the viewport (the part may be outside the narrow viewport)
+         if (!m_viewportVisible || (pos.x >= m_viewportRect.x0 && pos.x < m_viewportRect.x1 && pos.y >= m_viewportRect.y0 && pos.y < m_viewportRect.y1))
+            overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
       if (m_modal.active && m_viewportVisible)

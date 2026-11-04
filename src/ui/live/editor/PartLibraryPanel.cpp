@@ -1552,31 +1552,24 @@ void PartLibraryPanel::RenderLightbox()
    {
       ImGui::OpenPopup("###PartLibLightbox");
       m_lbOpening = false;
-      // The render, toolbar and caption (the render ~460x420); the look column (an insert's gear toggle) widens it. Centred over the viewport area
-      const float columnW = m_lbItem.kind == ItemKind::Insert && m_lbShowLook ? 290.f * dpi + ImGui::GetStyle().ItemSpacing.x : 0.f;
-      ImGui::SetNextWindowSize(ImVec2(min(480.f * dpi + columnW, 0.9f * io.DisplaySize.x), min(500.f * dpi, 0.9f * io.DisplaySize.y)), ImGuiCond_Appearing);
+      // Centred over the viewport area (the size comes from the content: the fixed render, the look column when on, the toolbar and the caption)
       const AreaRect &view = m_editor.m_viewportRect;
       const ImVec2 center = m_editor.m_viewportVisible ? ImVec2(0.5f * (view.x0 + view.x1), 0.5f * (view.y0 + view.y1)) : ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
       ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
    }
-   if (m_lbPendingWiden != 0.f)
-   {
-      ImGui::SetNextWindowSize(ImVec2(clamp(m_lbLastSize.x + m_lbPendingWiden, 240.f * dpi, 0.9f * io.DisplaySize.x), m_lbLastSize.y), ImGuiCond_Always);
-      m_lbPendingWiden = 0.f;
-   }
-   ImGui::SetNextWindowSizeConstraints(ImVec2(240.f * dpi, 260.f * dpi), ImVec2(0.9f * io.DisplaySize.x, 0.9f * io.DisplaySize.y));
    bool open = true;
-   if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+   if (!ImGui::BeginPopupModal((m_lbItem.label + "###PartLibLightbox"s).c_str(), &open, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
    {
       CloseLightbox();
       return;
    }
-   // Kept inside the editor window every frame (it may have opened before the window got its size, or be resized smaller since): the size is capped by the
-   // constraints above, the position here
+   // Kept inside the viewport area when it fits there, else inside the editor window (every frame)
    {
-      m_lbLastSize = ImGui::GetWindowSize();
       const ImVec2 pos = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
-      const ImVec2 clamped(clamp(pos.x, 0.f, max(0.f, io.DisplaySize.x - size.x)), clamp(pos.y, 0.f, max(0.f, io.DisplaySize.y - size.y)));
+      const AreaRect &view = m_editor.m_viewportRect;
+      const bool inView = m_editor.m_viewportVisible && size.x <= view.x1 - view.x0 && size.y <= view.y1 - view.y0;
+      const ImVec2 lo = inView ? ImVec2(view.x0, view.y0) : ImVec2(0.f, 0.f), hi = inView ? ImVec2(view.x1, view.y1) : io.DisplaySize;
+      const ImVec2 clamped(clamp(pos.x, lo.x, max(lo.x, hi.x - size.x)), clamp(pos.y, lo.y, max(lo.y, hi.y - size.y)));
       if (clamped.x != pos.x || clamped.y != pos.y)
          ImGui::SetWindowPos(clamped);
    }
@@ -1682,7 +1675,6 @@ void PartLibraryPanel::RenderLightbox()
    // toolbar and a one-line caption
    const bool insert = m_lbItem.kind == ItemKind::Insert;
    const bool column = insert && m_lbHasCard && m_lbShowLook;
-   const float bodyH = max(32.f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetTextLineHeightWithSpacing());
    if (column)
    {
       ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, 0.f), ImGuiChildFlags_AutoResizeY); // As tall as its content
@@ -1745,11 +1737,10 @@ void PartLibraryPanel::RenderLightbox()
    }
 
    // The render, the toolbar and the caption form the cell right of the look column
-   const float cellX = ImGui::GetCursorPosX(), cellW = ImGui::GetContentRegionAvail().x;
+   const float cellX = ImGui::GetCursorPosX(), cellW = 460.f * dpi; // The render has a fixed size
    ImGui::BeginGroup();
    // Image area, orbited like a Sketchfab model: left drag, wheel zoom, double click frames
-   const ImVec2 avail = ImGui::GetContentRegionAvail();
-   const ImVec2 size(max(32.f, avail.x), bodyH);
+   const ImVec2 size(cellW, 420.f * dpi);
    const ImVec2 imgMin = ImGui::GetCursorScreenPos(), imgMax(imgMin.x + size.x, imgMin.y + size.y);
    ImGui::InvisibleButton("##view", size);
    const bool hovered = ImGui::IsItemHovered();
@@ -1906,8 +1897,7 @@ void PartLibraryPanel::RenderLightbox()
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
          if (ImGui::Button(ICON_FK_COG "##LookToggle"))
          {
-            m_lbShowLook = !m_lbShowLook;
-            m_lbPendingWiden = (m_lbShowLook ? 1.f : -1.f) * (290.f * dpi + ImGui::GetStyle().ItemSpacing.x); // The render keeps its size
+            m_lbShowLook = !m_lbShowLook; // The window size follows its content: the render keeps its size
          }
          if (lookOn)
             ImGui::PopStyleColor();
