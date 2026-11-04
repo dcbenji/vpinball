@@ -327,6 +327,8 @@ public:
    unsigned int m_render_mask = DEFAULT; // Active pass render bit mask
    bool IsRenderPass(const RenderMask pass_mask) const { return (m_render_mask & pass_mask) != 0; }
    bool HasEnvRotation() const; // The basic shader has the envRotation uniform (BGFX): the editor views' Light Direction / Elevation / Environment Rotation have an effect
+   bool IsXRayDraw() const { return IsSolidPass() && m_viewShade.xraySolid && (m_render_mask & (UI_FILL | UI_EDGES | SHADOW_MAP | LIGHT_BUFFER | REFLECTION_PASS)) == 0; } // Editor Solid view option X-Ray: the view's own scene draws are see-through (not the cached shadow pages, transmitted light or reflections)
+   float GetXRayOpacity() const { return m_viewShade.xrayAlpha; }
    bool IsBackfaceCullingForced() const { return IsSolidPass() && m_viewShade.backfaceCulling && (m_render_mask & (UI_FILL | UI_EDGES | SHADOW_MAP | LIGHT_BUFFER | REFLECTION_PASS)) == 0; } // Editor Solid view option: faces seen from behind are culled (in the view's own scene draws, not the cached shadow pages, transmitted light or reflections)
    // Whether the view being drawn shows the parts hidden in play (the editor's overlay for them, and their picking), by its shading mode
    bool ShowsHiddenInPlay() const { return IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : IsSolidPass() ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr; }

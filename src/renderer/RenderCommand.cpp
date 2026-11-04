@@ -482,6 +482,37 @@ void RenderCommand::SetCullMode(const RenderState::RenderStateValue mode)
    m_renderState.SetRenderState(RenderState::CULLMODE, mode);
 }
 
+void RenderCommand::SetXRay(const float opacity)
+{
+   if (m_command != RC_DRAW_MESH || m_shaderState == nullptr)
+      return;
+   // A PBR draw goes to its see-through variant (premultiplied output), the others blend straight
+   bool premultiplied = true;
+   switch (m_shaderState->GetTechnique())
+   {
+   case ShaderTechnique::pbr_shadow_bake: return; // The cached shadow tile bake is not a scene draw of the view: left as it is
+   case ShaderTechnique::pbr: case ShaderTechnique::pbr_at: m_shaderState->SetTechnique(ShaderTechnique::pbr_t); break;
+   case ShaderTechnique::pbr_notex: m_shaderState->SetTechnique(ShaderTechnique::pbr_t_notex); break;
+   case ShaderTechnique::pbr_is: case ShaderTechnique::pbr_is_at: m_shaderState->SetTechnique(ShaderTechnique::pbr_ti); break;
+   case ShaderTechnique::pbr_is_notex: m_shaderState->SetTechnique(ShaderTechnique::pbr_ti_notex); break;
+   case ShaderTechnique::pbr_t: case ShaderTechnique::pbr_t_notex: case ShaderTechnique::pbr_ti: case ShaderTechnique::pbr_ti_notex: break;
+   default: premultiplied = false; break;
+   }
+   vec4 color = m_shaderState->GetVector(ShaderUniform::cBase_Alpha);
+   const bool wasBlended = m_renderState.GetRenderState(RenderState::ALPHABLENDENABLE) == RenderState::RS_TRUE;
+   color.w *= opacity;
+   m_shaderState->SetVector(ShaderUniform::cBase_Alpha, &color);
+   if (!wasBlended)
+   {
+      m_renderState.SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
+      m_renderState.SetRenderState(RenderState::SRCBLEND, premultiplied ? RenderState::ONE : RenderState::SRC_ALPHA);
+      m_renderState.SetRenderState(RenderState::DESTBLEND, RenderState::INVSRC_ALPHA);
+      m_renderState.SetRenderState(RenderState::BLENDOP, RenderState::BLENDOP_ADD);
+   }
+   m_renderState.SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+   m_isTransparent = true;
+}
+
 string RenderCommand::ToString(bool detailled) const
 {
    std::stringstream ss;

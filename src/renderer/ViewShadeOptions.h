@@ -15,6 +15,8 @@ struct ViewShadeOptions
    bool bgCustom = false; // Background: custom colour instead of the theme's
    float bg[3] = { 13.f / 255.f, 13.f / 255.f, 13.f / 255.f }; // ... the colour (the theme's: 0x0D0D0D)
    bool backfaceCulling = false; // Faces seen from behind are not drawn, also for double sided parts
+   bool xraySolid = false; // Solid X-Ray: every part see-through
+   float xrayAlpha = 0.5f; // ... by this opacity (0 .. 1, 1 = opaque)
    bool cavity = false; // Ambient occlusion (the renderer's dynamic AO), off in Solid otherwise
    // Wireframe
    bool xray = false; // Secondary views only (the main view's is its NoDepthWireframe shade mode): wireframe seen through the parts
@@ -40,6 +42,8 @@ struct ViewShadeOptions
          && bg[1] == o.bg[1]
          && bg[2] == o.bg[2]
          && backfaceCulling == o.backfaceCulling
+         && xraySolid == o.xraySolid
+         && xrayAlpha == o.xrayAlpha
          && cavity == o.cavity
          && xray == o.xray
          && wireCustom == o.wireCustom

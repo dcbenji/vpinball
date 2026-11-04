@@ -237,6 +237,9 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       {
          checkbox("cull", "Backface Culling", o.backfaceCulling, def.backfaceCulling);
          checkbox("cavity", "Cavity", o.cavity, def.cavity);
+         checkbox("xraySolid", "X-Ray", o.xraySolid, def.xraySolid);
+         if (o.xraySolid)
+            slider("xrayAlpha", o.xrayAlpha, 0.f, 1.f, "Opacity  %.2f", def.xrayAlpha);
          checkbox("hidden", "Hidden in Play", o.hiddenSolid, def.hiddenSolid);
       }
    }
@@ -279,6 +282,8 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          std::copy(def.bg, def.bg + 3, o.bg);
          o.backfaceCulling = def.backfaceCulling;
          o.cavity = def.cavity;
+         o.xraySolid = def.xraySolid;
+         o.xrayAlpha = def.xrayAlpha;
          o.hiddenSolid = def.hiddenSolid;
       }
       else if (mode == 0)

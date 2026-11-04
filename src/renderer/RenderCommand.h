@@ -46,6 +46,7 @@ public:
    void DisableColorWrites();
    void DisableAlphaBlend();
    void SetCullMode(RenderState::RenderStateValue mode); // Overrides the cull mode of the recorded draw
+   void SetXRay(float opacity); // Editor Solid X-Ray: the recorded draw is see-through by this opacity (blended, sorted with the translucent draws, no depth write)
 
    Shader* GetShader() const { return m_shader; }
 
