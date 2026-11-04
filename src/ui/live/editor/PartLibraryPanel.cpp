@@ -423,7 +423,7 @@ void PartLibraryPanel::Update()
          if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
          {
             m_dragActive = false;
-            if (m_previewVisible && !m_dragCancelled)
+            if (m_previewVisible && !m_dragCancelled && m_editor.m_fileOp == nullptr)
                CommitPlacement();
             else
                CancelPlacement(); // Released over the UI
@@ -839,7 +839,7 @@ void PartLibraryPanel::RenderGrid(const float height)
          }
       }
       // Dragging a tile starts the placement: released over the 3D view commits it, over the UI or Esc cancels it
-      if (ImGui::IsItemActive() && !m_dragActive && !m_dragLatch && item.kind != ItemKind::Material && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.f * dpi) && !m_editor.m_table->IsLocked() && !m_editor.IsInspectMode())
+      if (ImGui::IsItemActive() && !m_dragActive && !m_dragLatch && item.kind != ItemKind::Material && m_editor.m_fileOp == nullptr && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 6.f * dpi) && !m_editor.m_table->IsLocked() && !m_editor.IsInspectMode())
       {
          m_pendingOpen = false;
          m_placementPack = item.pack;
@@ -1836,6 +1836,7 @@ void PartLibraryPanel::RenderLightbox()
       const ImVec2 half(0.5f * fit * static_cast<float>(m_lbWidth), 0.5f * fit * static_cast<float>(m_lbHeight)), mid(0.5f * (imgMin.x + imgMax.x), 0.5f * (imgMin.y + imgMax.y));
       drawList->AddImage(rt->GetColorSampler(), ImVec2(mid.x - half.x, mid.y - half.y), ImVec2(mid.x + half.x, mid.y + half.y), ImVec2(0.f, flipV ? 1.f : 0.f), ImVec2(1.f, flipV ? 0.f : 1.f));
       // Vignette: a black radial gradient over the render (clear up to 45% of the half diagonal, 0.6 alpha at the corners), a grid of vertex-coloured quads
+      if (half.x > 0.f && half.y > 0.f)
       {
          constexpr int n = 24;
          const ImVec2 p0(mid.x - half.x, mid.y - half.y);
@@ -2320,11 +2321,11 @@ Vertex2D PartLibraryPanel::DefaultPlacementPos() const
 
 bool PartLibraryPanel::PlaceItem(const LibraryItem &item)
 {
-   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr || m_editor.m_fileOp != nullptr)
-      return false;
    // The default position is read before the placement replaces the selection
    const Vertex2D pos = m_hookPlaceHasPos ? m_hookPlacePos : DefaultPlacementPos();
    m_hookPlaceHasPos = false;
+   if (m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr || m_editor.m_fileOp != nullptr)
+      return false;
    CancelPlacement();
    m_placementPack = item.pack;
    StartPlacement();
