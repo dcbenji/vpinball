@@ -1578,7 +1578,7 @@ void Primitive::Render(const unsigned int renderMask)
             vec4(0.f, 0.f, 0.f, 0.f), // table position to ink mask UV (scale, offset), 0 = no mask
             vec4(0.f, 0.f, 0.f, 0.f), // print map texel at the spill mip (u, v), white leak through the plastic, room glint tint
             vec4(0.f, 0.f, 0.f, 0.f), // print map tint on the glow
-            vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 0.f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness
+            vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 1.f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness; how much the glints turn with the eye
             vec4(m_d.m_bulbStretchX, m_d.m_bulbStretchY, m_d.m_bulbOffsetX, m_d.m_bulbOffsetY) }; // hot spot stretch (u, v), offset (u, v, mm)
          // The lamp-off look atlas, in the Emission Map slot
          Texture *const envMap = m_ptable->GetImage(m_d.m_szEmissionMap);
@@ -1611,7 +1611,13 @@ void Primitive::Render(const unsigned int renderMask)
             if ((p = strstr(tuning, "tilt=")) && sscanf(p + 5, "%f", &v) == 1) params[3].z = v;
             if ((p = strstr(tuning, "fringe=")) && sscanf(p + 7, "%f", &v) == 1) params[3].w = v;
             if ((p = strstr(tuning, "keys=")) && sscanf(p + 5, "%f", &v) == 1) params[4].x = v;
-            if ((p = strstr(tuning, "turn=")) && sscanf(p + 5, "%f", &v) == 1) turn = v;
+            for (p = strstr(tuning, "turn="); p; p = strstr(p + 1, "turn=")) // Not the end of "glintturn="
+               if ((p == tuning || p[-1] == ' ') && sscanf(p + 5, "%f", &v) == 1)
+               {
+                  turn = v;
+                  break;
+               }
+            if ((p = strstr(tuning, "glintturn=")) && sscanf(p + 10, "%f", &v) == 1) params[12].w = saturate(v);
             if ((p = strstr(tuning, "turnjit=")) && sscanf(p + 8, "%f", &v) == 1) turnJitter = v;
             if ((p = strstr(tuning, "wavy=")) && sscanf(p + 5, "%f", &v) == 1) params[4].z = v;
             if ((p = strstr(tuning, "wavelen=")) && sscanf(p + 8, "%f", &v) == 1) params[4].w = v;

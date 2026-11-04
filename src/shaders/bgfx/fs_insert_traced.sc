@@ -29,7 +29,9 @@
 // [11] x print map tint (inktint): an insert under printed art (Police Force's jackpot car and character patches) shows
 //      through the print by its alpha (the print's transmission) tinted by its hue; 0 = alpha only, as a cut-out window
 // [12] parallax hot spot: x the bulb's depth below the insert top in mm (0 = off: the block is skipped, output unchanged),
-//      y spot size (1 = a soft spot ~19 mm across at half height), z brightness (1 = +80 % of the glow's peak at its centre)
+//      y spot size (1 = a soft spot ~19 mm across at half height), z brightness (1 = +80 % of the glow's peak at its centre),
+//      w how much the glints' highlights turn with the eye's bearing (glintturn: 1 = fully, 0 = they hold still relative to the
+//      table and glints only shift by refraction parallax; not read by the hot spot)
 // [13] parallax hot spot: xy stretch along the card's u and v (1 = round), zw the spot's offset from the card's centre in mm
 //      (along u and v: for an unturned card x across, y down the table)
 
@@ -86,7 +88,7 @@ vec4 tracedAngleWeights(float elevation)
 	return w;
 }
 
-// The facets catching a few fixed highlights that turn with the eye's bearing, each colour channel tilted a little apart
+// The facets catching a few fixed highlights that turn with the eye's bearing (turn takes some of that back), each colour channel tilted a little apart
 float tracedGlint(vec3 n, vec3 v, float turn, float sharp, float channel)
 {
 	const int keys = int(clamp(tracedParams[4].x, 1.0, 8.0));
@@ -254,12 +256,14 @@ void main()
 		// the pixel, each reading the facets over a quarter of its footprint
 		const vec2 taps[4] = { vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(0.125, 0.375), vec2(-0.375, 0.125) };
 		const float footprint = 0.5 * exp2(max(tracedParams[7].w, 0.0));
+		// Undoes part of the highlights' turn with the eye's bearing, as the eye's bearing in table space (0 from the player's side, so its seam is behind the backbox)
+		const float glintTurn = -(1.0 - tracedParams[12].w) * degrees(atan2(vt.x, vt.y));
 		for (int i = 0; i < 4; i++)
 		{
 			const vec4 f = texture2DGrad(tex_base_normalmap, floorUv + gx * taps[i].x + gy * taps[i].y, gx * footprint, gy * footprint);
 			const vec2 nxy = vec2(f.r * 2.0 - 1.0, 1.0 - f.g * 2.0);
 			const vec3 wavy = normalize(vec3(nxy + lean, sqrt(saturate(1.0 - dot(nxy, nxy)))));
-			glint += vec3(tracedGlint(wavy, v, 0.0, sharp, 0.0), tracedGlint(wavy, v, 0.0, sharp, 1.0), tracedGlint(wavy, v, 0.0, sharp, 2.0)) * f.a;
+			glint += vec3(tracedGlint(wavy, v, glintTurn, sharp, 0.0), tracedGlint(wavy, v, glintTurn, sharp, 1.0), tracedGlint(wavy, v, glintTurn, sharp, 2.0)) * f.a;
 		}
 		glint *= 0.25 * (1.0 - 0.95 * frost);
 	}

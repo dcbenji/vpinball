@@ -56,6 +56,7 @@ constexpr TracedLookKey kLookKeys[] = {
    { "Moulding Waviness", "wavy", 3.f, 0.f, 15.f, 2, "How far the moulding's surface leans (deg), so straight facets do not glint as one" },
    { "Moulding Wavelength (mm)", "wavelen", 6.f, 0.5f, 30.f, 1, "Size of the moulding's waves" },
    { "Glint Turn Jitter", "turnjit", 14.641f, 0.f, 90.f, 1, "How differently each insert's highlights are turned (deg)" },
+   { "Glint View Turn", "glintturn", 1.f, 0.f, 1.f, 2, "1 = the highlights turn with the camera, 0 = they hold still on the table and the glints only shift with the view through the facets" },
    { "Facet Blur", "facetblur", 0.f, 0.f, 6.f, 2, "Softens the facet map's edges for the highlights (mips)" },
    { "Room Glint", "room", 0.3f, 0.f, 3.f, 2, "The room's light glinting in the facets, lamp on or off" },
    { "Room Glint Tint", "roomtint", 0.f, 0.f, 1.f, 2, "0 = white room glints, 1 = the plastic's colour" },
