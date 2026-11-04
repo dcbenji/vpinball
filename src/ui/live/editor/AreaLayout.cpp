@@ -202,6 +202,8 @@ nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
       j["wire_color"] = { o.wire[0], o.wire[1], o.wire[2] };
    if (o.envStrength != d.envStrength)
       j["env_strength"] = o.envStrength;
+   if (o.envAngle != d.envAngle)
+      j["env_angle"] = o.envAngle;
    if (!o.tableLights)
       j["table_lights"] = false;
    if (o.hiddenWire != d.hiddenWire)
@@ -253,6 +255,7 @@ ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
    flag("xray", o.xray);
    color("wire_color", o.wireCustom, o.wire);
    num("env_strength", o.envStrength, 0.f, 4.f);
+   num("env_angle", o.envAngle, -180.f, 180.f);
    flag("table_lights", o.tableLights);
    flag("hidden_wire", o.hiddenWire);
    flag("hidden_solid", o.hiddenSolid);

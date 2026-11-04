@@ -2507,12 +2507,14 @@ void Renderer::ApplySolidEnv()
    const ViewShadeOptions& opt = m_viewShade;
    if (basic->HasUniform(ShaderUniform::envRotation)) // BGFX shaders only: the GL and DX9 shaders do not have it (nothing is sent there, in play too)
    {
-      // The studio light's direction: the environment turned by the view's rotation about the table's vertical axis (z), then raised by its elevation about the horizontal axis (y).
+      // Solid: the studio light's direction. The environment turned by the view's rotation about the table's vertical axis (z), then raised by its elevation about the horizontal axis (y).
+      // PBR: the table's environment turned by the view's rotation about the vertical axis.
       // The shader looks the environment up with the inverse turn: q = qy(elevation) * qz(-rotation), sent as (x, y, z, w - 1) so that no turn is all zero
       float qx = 0.f, qy = 0.f, qz = 0.f, qw = 1.f;
-      if (solid && !opt.flat && (opt.lightAngle != 0.f || opt.lightElevation != 0.f))
+      const float angle = solid ? (opt.flat ? 0.f : opt.lightAngle) : opt.envAngle, elevation = solid && !opt.flat ? opt.lightElevation : 0.f;
+      if (angle != 0.f || elevation != 0.f)
       {
-         const float hz = -opt.lightAngle * (float)(M_PI / 360.), hy = opt.lightElevation * (float)(M_PI / 360.);
+         const float hz = -angle * (float)(M_PI / 360.), hy = elevation * (float)(M_PI / 360.);
          const float sz = sinf(hz), cz = cosf(hz), sy = sinf(hy), cy = cosf(hy);
          qw = cy * cz;
          qx = sy * sz;

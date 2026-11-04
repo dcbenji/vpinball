@@ -261,6 +261,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       {
          checkbox("lights", "Table Lights", o.tableLights, def.tableLights);
          slider("strength", o.envStrength, 0.f, 4.f, "Environment Strength  %.2f", def.envStrength);
+         slider("rotation", o.envAngle, -180.f, 180.f, "Environment Rotation  %.0f deg", def.envAngle, noEnvRotation);
       }
       if (section("Options"))
          checkbox("hidden", "Hidden in Play", o.hiddenPbr, def.hiddenPbr);
@@ -292,6 +293,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       else
       {
          o.envStrength = def.envStrength;
+         o.envAngle = def.envAngle;
          o.tableLights = def.tableLights;
          o.hiddenPbr = def.hiddenPbr;
       }

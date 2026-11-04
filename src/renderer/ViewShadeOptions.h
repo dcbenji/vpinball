@@ -25,6 +25,7 @@ struct ViewShadeOptions
    bool hiddenSolid = false; // Solid: only what the player renders
    bool hiddenPbr = false; // PBR: as the player renders it
    // PBR
+   float envAngle = 0.f; // Rotation of the table's environment about the table's vertical axis in this view, degrees (-180 .. 180)
    float envStrength = 1.f; // Level of the table's environment light in this view (0 .. 4, 1 = the table's)
    bool tableLights = true; // The table's lights (and their shadows) light this view
 
@@ -46,6 +47,7 @@ struct ViewShadeOptions
          && wire[1] == o.wire[1]
          && wire[2] == o.wire[2]
          && envStrength == o.envStrength
+         && envAngle == o.envAngle
          && tableLights == o.tableLights
          && hiddenWire == o.hiddenWire
          && hiddenSolid == o.hiddenSolid
