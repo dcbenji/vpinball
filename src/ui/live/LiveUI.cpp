@@ -82,6 +82,11 @@ LiveUI::LiveUI(RenderDevice *const rd)
       ImFontConfig mono_config;
       mono_config.SizePixels = overlaySize;
       m_monoFont = io.Fonts->AddFontDefaultVector(&mono_config);
+      // Glyphs the built-in font lacks (curly quotes, dashes, Cyrillic...) come from Droid Sans, loaded on demand like all glyphs (ASCII stays in the mono font)
+      ImFontConfig mono_merge;
+      mono_merge.MergeMode = true;
+      mono_merge.SizePixels = overlaySize;
+      io.Fonts->AddFontFromMemoryCompressedTTF(droidsans_compressed_data, droidsans_compressed_size, overlaySize, &mono_merge);
    }
    m_overlayBoldFont = io.Fonts->AddFontFromMemoryCompressedTTF(droidsansbold_compressed_data, droidsansbold_compressed_size, overlaySize);
    ImFont *H1 = io.Fonts->AddFontFromMemoryCompressedTTF(droidsansbold_compressed_data, droidsansbold_compressed_size, overlaySize * 20.0f / 13.f);
