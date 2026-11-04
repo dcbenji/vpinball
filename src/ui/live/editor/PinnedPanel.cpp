@@ -618,7 +618,8 @@ void PinnedPanel::LoadWorkspaces(const string &json)
                   bool outliner = true, properties = true;
                   float outlinerWidth = 0.f, propertiesWidth = 0.f;
                   int leftEditor = 0, rightEditor = 1;
-                  ws.layout.ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
+                  // Layout's default tree is stacked now (no area left of the viewport): its legacy defaults are the old Outliner-left / Properties-right
+                  (name == "Layout" ? AreaLayout() : ws.layout).ToLegacy(outliner, properties, outlinerWidth, propertiesWidth, leftEditor, rightEditor);
                   outliner = entry.value("outliner", outliner);
                   properties = entry.value("properties", properties);
                   outlinerWidth = entry.value("outliner_width", 0.f); // 0 or missing: the default width
