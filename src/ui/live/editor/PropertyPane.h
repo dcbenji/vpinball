@@ -306,9 +306,24 @@ private:
    // Value copy between two parts of a field: the destination must be of the type the field belongs to
    template <class T, class Getter, class Setter> static PinCopyFn MakeCopy(const Getter &getter, const Setter &setter)
    {
-      return [getter, setter](void *src, void *dst, bool apply) -> bool
+      return [getter, setter](void *src, void *dst, bool apply, PinPasteFn *capture) -> bool
       {
          T *const from = PinCast<T>(src);
+         if (capture != nullptr)
+         {
+            if (from == nullptr)
+               return false;
+            *capture = [value = getter(from), setter](void *to, bool doApply) -> bool
+            {
+               T *const target = PinCast<T>(to);
+               if (target == nullptr)
+                  return false;
+               if (doApply)
+                  setter(target, value);
+               return true;
+            };
+            return true;
+         }
          T *const to = PinCast<T>(dst);
          if (from == nullptr || to == nullptr)
             return false;

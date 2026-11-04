@@ -42,9 +42,12 @@ struct PinKey
 // Draws a pinned field with a property pane on the resolved object (Material*, PinTable* or IEditable*)
 using PinDrawFn = std::function<void(PropertyPane &, void *)>;
 
+// Writes a value captured by a copy function to a part (apply = false: only tells whether the part accepts it)
+using PinPasteFn = std::function<bool(void *dst, bool apply)>;
 // Copies a field value between two parts (IEditable* passed as void*): tells whether the destination has the field (it is of the type the field
-// belongs to) and, when `apply` is set, writes the source value to it. Used by "Copy to Selected" and the Alt apply-to-all
-using PinCopyFn = std::function<bool(void *src, void *dst, bool apply)>;
+// belongs to) and, when `apply` is set, writes the source value to it. Used by "Copy to Selected" and the Alt apply-to-all.
+// With `capture` set, nothing is written: the source's value is read now and kept in *capture, which writes it to any part later with the field's own setter
+using PinCopyFn = std::function<bool(void *src, void *dst, bool apply, PinPasteFn *capture)>;
 
 // Quick Favorites (Blender's Q menu, here favorite fields) and the N-panel sidebar (Item / Favorites / View) that shows them in its
 // Favorites tab. Favorites are added from the Properties editor (right click on a field), and drawn with the same property pane

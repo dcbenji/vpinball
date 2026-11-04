@@ -145,7 +145,7 @@ void PinnedPanel::CollectCopyTargets(IEditable *source, const PinCopyFn &copy, v
    for (const std::shared_ptr<EditorUIPart> &part : m_editor.m_multiSel)
    {
       IEditable *const target = part->GetEditable();
-      if (target != source && copy(static_cast<void *>(source), static_cast<void *>(target), false))
+      if (target != source && copy(static_cast<void *>(source), static_cast<void *>(target), false, nullptr))
          out.push_back(part);
    }
 }
@@ -300,7 +300,7 @@ void PinnedPanel::FlushPendingCopy()
             fresh->SetDefaults(false);
             m_editor.m_undo.BeginUndo();
             m_editor.m_undo.MarkForUndo(part);
-            const bool ok = rdef->copy(static_cast<void *>(fresh), static_cast<void *>(part), true);
+            const bool ok = rdef->copy(static_cast<void *>(fresh), static_cast<void *>(part), true, nullptr);
             // No "already at its default" test: Save does not see every field (render-visibility overrides, Ball / Light flags), so a snapshot
             // comparison can call a real change a no-op. A reset of a value that is already default just leaves a harmless extra step
             m_editor.m_undo.SetFieldLabel("Reset to Default: " + (rdef->label.empty() ? rkey.prop : rdef->label));
@@ -344,7 +344,7 @@ void PinnedPanel::FlushPendingCopy()
    }
    editor.MarkDependentsForUndo(touched); // Rubbers following the edited posts (guided rubbers)
    for (const std::shared_ptr<EditorUIPart> &part : targets)
-      def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
+      def->copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true, nullptr);
    editor.m_undo.SetFieldLabel("Copy to Selected: " + (def->label.empty() ? key.prop : def->label));
    editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
    editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
@@ -368,7 +368,7 @@ void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
    CollectCopyTargets(source, copy, targets);
    for (const std::shared_ptr<EditorUIPart> &part : targets)
    {
-      copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true);
+      copy(static_cast<void *>(source), static_cast<void *>(part->GetEditable()), true, nullptr);
       editor.m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
       editor.m_player->m_physics->Update(part->GetEditable());
       part->SyncVisibilityOverrides();
