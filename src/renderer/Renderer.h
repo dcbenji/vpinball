@@ -329,6 +329,13 @@ public:
    bool IsBackfaceCullingForced() const { return IsSolidPass() && m_viewShade.backfaceCulling && (m_render_mask & (UI_FILL | UI_EDGES | SHADOW_MAP | LIGHT_BUFFER | REFLECTION_PASS)) == 0; } // Editor Solid view option: faces seen from behind are culled (in the view's own scene draws, not the cached shadow pages, transmitted light or reflections)
    // Whether the view being drawn shows the parts hidden in play (the editor's overlay for them, and their picking), by its shading mode
    bool ShowsHiddenInPlay() const { return IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : IsSolidPass() ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr; }
+   // Fill and edge of the overlay of a part hidden in play, as RenderItem draws a wireframe part (the lite wireframe path is not tonemapped: display referred fill; custom wire color)
+   void GetHiddenOverlayColors(vec4 &fill, vec4 &edge) const
+   {
+      const float f = m_editorLitePass ? (float)(96. / 255.) : (float)(32. / 255.);
+      fill = m_shadeMode == ShadeMode::NoDepthWireframe ? vec4(0.f, 0.f, 0.f, (float)(32. / 255.)) : vec4(f, f, f, 1.f);
+      edge = m_viewShade.wireCustom ? vec4(m_viewShade.wire[0], m_viewShade.wire[1], m_viewShade.wire[2], 1.f) : vec4(0.f, 0.f, 0.f, 1.f);
+   }
 
    ToneMapper m_toneMapper = TM_AGX;
    bool m_HDRforceDisableToneMapper = true;
