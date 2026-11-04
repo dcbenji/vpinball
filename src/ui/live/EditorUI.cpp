@@ -2044,9 +2044,10 @@ void EditorUI::RenderHiddenOverlay3D()
       return;
    // As Render3D for the parts which are not selected (the selection's edges follow), with the view's own shading and as an editor camera view
    LiveRenderContext ctx(m_player, nullptr, ViewMode::EditorCam, m_renderer->GetShadeMode(), false);
+   const bool selectionDrawn = m_selectionOverlay && m_navSelectionDisplay != 2; // Else a selected hidden part would draw nothing in this view
    for (const auto &uiPart : m_editables)
    {
-      if (uiPart->GetEditable()->m_desktopBackdrop || IsPartSelected(uiPart))
+      if (uiPart->GetEditable()->m_desktopBackdrop || (selectionDrawn && IsPartSelected(uiPart)))
          continue;
       uiPart->Render(ctx);
    }
