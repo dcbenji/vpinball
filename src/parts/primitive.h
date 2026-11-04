@@ -115,6 +115,17 @@ public:
    int m_wireRails = 1; // 1..3 (addition to VPE)
    float m_wireSpacing = 12.f; // between rails
    int m_wireSides = 12;
+   // Plastic from Atlas generator (editor operator): host = the print primitive (bottom cap, the atlas image), companions = top cap and bevel. Fields only saved when on
+   bool m_plasticGen = false;
+   float m_plasticHeight = 50.f; // underside above the playfield
+   float m_plasticThickness = 5.6f;
+   float m_plasticBevel = 1.9f; // top side only
+   int m_plasticBevelSegs = 2; // 1 = chamfer
+   float m_plasticHoleDia = 12.f; // diameter of the next hole placed
+   float m_plasticDpi = 150.f; // atlas scale: 47.06 VPU per inch
+   float m_plasticUvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to UV: u = a x + b y + c, v = d x + e y + f
+   string m_plasticHost; // companions: name of the host primitive (empty = not a companion)
+   int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -279,7 +290,7 @@ public:
    STDMETHOD(get_RefractionProbe)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_RefractionProbe)(/*[in]*/ BSTR newVal);
 
-   Primitive() : m_wireCurve(this, 2) { }
+   Primitive() : m_wireCurve(this, 2), m_plasticCurve(this, 3), m_plasticHoles(this, 0) { }
    virtual ~Primitive();
 
    BEGIN_COM_MAP(Primitive)
@@ -389,6 +400,18 @@ public:
    void InitWireform(const Vertex2D &pos); // Turns this (new) primitive into a Metal Wire Guide: 3 point arc at pos, VPE defaults
    void UpdateWire(); // RegenerateWire + renderable / collider refresh (after a parameter change)
    void RegenerateWire(); // Rebuilds m_mesh from m_wireCurve and the wire parameters (no-op unless m_d.m_wireGen)
+
+   // Plastic from Atlas generator: outline (x, y, smooth = arc peak) and holes (x, y, z = diameter) in table coordinates, the mesh is built from them (PlasticMesh)
+   DragPointCurve m_plasticCurve;
+   DragPointCurve m_plasticHoles;
+   bool m_plasticEditHoles = false; // Transient: point edit works on the holes instead of the outline
+   bool IsPlasticCompanion() const { return !m_d.m_plasticHost.empty(); }
+   void InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes); // Turns this (new) primitive into a plastic host
+   void RegeneratePlastic(); // Rebuilds the host mesh and the meshes of the companions found in the table (no-op unless m_d.m_plasticGen)
+   void UpdatePlastic(); // RegeneratePlastic + renderable refresh of the host and its companions
+   void PlasticMapTransform(const float (&t)[6]); // After the curve points moved by the affine t (x' = t0 x + t1 y + t2, y' = t3 x + t4 y + t5): the art stays on the part
+   void SetPlasticDpi(float dpi); // Rescales the atlas about the outline's centroid
+   vector<Primitive *> GetPlasticCompanions() const; // Primitives of the table whose host is this one
 
    bool m_lockedByLS = false;
    bool m_inPlayState = false;

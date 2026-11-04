@@ -94,7 +94,7 @@ public:
 
    int GetMinimumPoints() const { return m_minPoints; }
 
-   void SavePoints(IObjectWriter &writer) const;
+   void SavePoints(IObjectWriter &writer, int tag = FID(DPNT)) const;
    void LoadPointToken(IObjectReader &reader);
 
    const Vertex2D &GetCenter() const;

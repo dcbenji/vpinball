@@ -5939,6 +5939,18 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
                      beforeChange(pedit);
                   ref = newName;
                }
+      // Companions of a plastic (Plastic from Atlas) hold the name of their host
+      for (IEditable *const pedit : m_vedit)
+         if (pedit->GetItemType() == eItemPrimitive)
+         {
+            Primitive *const companion = static_cast<Primitive *>(pedit);
+            if (companion->IsPlasticCompanion() && StrCompareNoCase(companion->m_d.m_plasticHost, oldName))
+            {
+               if (beforeChange)
+                  beforeChange(pedit);
+               companion->m_d.m_plasticHost = newName;
+            }
+         }
       return;
    }
    const auto surfaceRef = [](IEditable *const pedit) -> string *

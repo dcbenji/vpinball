@@ -21,6 +21,7 @@
 #include "progmesh.h"
 #include "miniz/miniz.h"
 #include "math/wiresweep.h"
+#include "math/PlasticMesh.h"
 
 
 Primitive::~Primitive()
@@ -34,6 +35,10 @@ Primitive *Primitive::CopyForPlay() const
    dst->m_mesh = m_mesh;
    for (const auto &dpt : m_wireCurve.GetPoints())
       dst->m_wireCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_wireCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+   for (const auto &dpt : m_plasticCurve.GetPoints())
+      dst->m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+   for (const auto &dpt : m_plasticHoles.GetPoints())
+      dst->m_plasticHoles.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticHoles, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
    return dst;
 }
 
@@ -113,7 +118,21 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_wireSpacing = wireDefaults.m_wireSpacing;
    m_d.m_wireSides = wireDefaults.m_wireSides;
    m_d.m_rubberGuideRadius = wireDefaults.m_rubberGuideRadius;
+   m_d.m_plasticGen = wireDefaults.m_plasticGen;
+   m_d.m_plasticHeight = wireDefaults.m_plasticHeight;
+   m_d.m_plasticThickness = wireDefaults.m_plasticThickness;
+   m_d.m_plasticBevel = wireDefaults.m_plasticBevel;
+   m_d.m_plasticBevelSegs = wireDefaults.m_plasticBevelSegs;
+   m_d.m_plasticHoleDia = wireDefaults.m_plasticHoleDia;
+   m_d.m_plasticDpi = wireDefaults.m_plasticDpi;
+   for (int i = 0; i < 6; i++)
+      m_d.m_plasticUvm[i] = wireDefaults.m_plasticUvm[i];
+   m_d.m_plasticHost = wireDefaults.m_plasticHost;
+   m_d.m_plasticRole = wireDefaults.m_plasticRole;
+   m_plasticEditHoles = false;
    m_wireCurve.ClearPoints();
+   m_plasticCurve.ClearPoints();
+   m_plasticHoles.ClearPoints();
    m_inPlayState = m_d.m_visible;
 }
 
@@ -771,6 +790,7 @@ void Primitive::RenderSetup(Renderer *renderer)
    m_renderer = renderer;
 
    RegenerateWire(); // Wireform: every editor point edit reinitializes the renderable, so the mesh follows the points
+   RegeneratePlastic(); // Plastic from Atlas host: same, and the companions' meshes
 
    // Check if we are part of a group, and if so if we are a child or the base
    m_groupdRendering = false;
@@ -1910,6 +1930,16 @@ void Primitive::UpdateAnimation(const float diff_time_msec)
 
 void Primitive::Translate(const Vertex2D &offset)
 {
+   if (IsPlasticCompanion()) // Derived from its host (identity transform, the host carries the curve)
+      return;
+   if (m_d.m_plasticGen)
+   {
+      m_plasticCurve.TranslatePoints(offset);
+      m_plasticHoles.TranslatePoints(offset);
+      PlasticMapTransform({ 1.f, 0.f, offset.x, 0.f, 1.f, offset.y });
+      RegeneratePlastic();
+      return;
+   }
    if (m_d.m_wireGen)
    {
       // Only the mesh is rebuilt here: the callers (gizmo / SetSelectionTransform) reinit the renderable and update the collider themselves
@@ -1924,6 +1954,18 @@ void Primitive::Translate(const Vertex2D &offset)
 
 void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool useElementCenter)
 {
+   if (IsPlasticCompanion())
+      return;
+   if (m_d.m_plasticGen)
+   {
+      const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
+      const float sn = sinf(ANGTORAD(ang)), cs = cosf(ANGTORAD(ang));
+      m_plasticCurve.RotatePoints(ang, c);
+      m_plasticHoles.RotatePoints(ang, c);
+      PlasticMapTransform({ cs, -sn, c.x - cs * c.x + sn * c.y, sn, cs, c.y - sn * c.x - cs * c.y });
+      RegeneratePlastic();
+      return;
+   }
    if (!m_d.m_wireGen)
       return IEditable::Rotate(ang, pvCenter, useElementCenter);
    m_wireCurve.RotatePoints(ang, useElementCenter ? GetCenter() : pvCenter);
@@ -1932,6 +1974,19 @@ void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool use
 
 void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter)
 {
+   if (IsPlasticCompanion())
+      return;
+   if (m_d.m_plasticGen)
+   {
+      const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
+      m_plasticCurve.ScalePoints(scalex, scaley, c);
+      m_plasticHoles.ScalePoints(scalex, scaley, c);
+      for (const auto &h : m_plasticHoles.GetPoints()) // The diameter follows the scale
+         h->SetZ(h->GetZ() * 0.5f * (fabsf(scalex) + fabsf(scaley)));
+      PlasticMapTransform({ scalex, 0.f, c.x * (1.f - scalex), 0.f, scaley, c.y * (1.f - scaley) });
+      RegeneratePlastic();
+      return;
+   }
    if (!m_d.m_wireGen)
       return IEditable::Scale(scalex, scaley, pvCenter, useElementCenter);
    m_wireCurve.ScalePoints(scalex, scaley, useElementCenter ? GetCenter() : pvCenter);
@@ -1940,6 +1995,8 @@ void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pv
 
 Vertex2D Primitive::GetCenter() const
 {
+   if (m_d.m_plasticGen)
+      return m_plasticCurve.GetCenter();
    if (m_d.m_wireGen)
       return m_wireCurve.GetCenter();
    return {m_d.m_vPosition.x, m_d.m_vPosition.y};
@@ -1999,6 +2056,131 @@ void Primitive::InitWireform(const Vertex2D &pos)
    m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x, pos.y + 25.f, 0.f, true));
    m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, pos.x + 50.f, pos.y, 0.f, true));
    RegenerateWire();
+}
+
+//////////////////////////////
+// Plastic from Atlas generator
+//////////////////////////////
+
+vector<Primitive *> Primitive::GetPlasticCompanions() const
+{
+   vector<Primitive *> res;
+   if (m_ptable == nullptr || !m_d.m_plasticGen || GetName().empty())
+      return res;
+   const string name = GetName();
+   for (IEditable *const part : m_ptable->GetParts())
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive)
+      {
+         Primitive *const p = static_cast<Primitive *>(part);
+         if (p->IsPlasticCompanion() && StrCompareNoCase(p->m_d.m_plasticHost, name))
+            res.push_back(p);
+      }
+   return res;
+}
+
+// m_plasticUvm = M, the points moved by T: the art stays on the part when M' = M o T^-1
+void Primitive::PlasticMapTransform(const float (&t)[6])
+{
+   const float det = t[0] * t[4] - t[1] * t[3];
+   if (fabsf(det) < 1e-9f)
+      return;
+   const float i0 = t[4] / det, i1 = -t[1] / det, i3 = -t[3] / det, i4 = t[0] / det;
+   const float i2 = -(i0 * t[2] + i1 * t[5]), i5 = -(i3 * t[2] + i4 * t[5]);
+   float *const m = m_d.m_plasticUvm;
+   const float a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
+   m[0] = a * i0 + b * i3;
+   m[1] = a * i1 + b * i4;
+   m[2] = a * i2 + b * i5 + c;
+   m[3] = d * i0 + e * i3;
+   m[4] = d * i1 + e * i4;
+   m[5] = d * i2 + e * i5 + f;
+}
+
+void Primitive::SetPlasticDpi(const float dpi)
+{
+   const float nd = clamp(dpi, 10.f, 4800.f);
+   const float k = nd / m_d.m_plasticDpi;
+   const Vertex2D c = m_plasticCurve.GetCentroid();
+   float *const m = m_d.m_plasticUvm;
+   const float u0 = m[0] * c.x + m[1] * c.y + m[2], v0 = m[3] * c.x + m[4] * c.y + m[5];
+   m[0] *= k;
+   m[1] *= k;
+   m[3] *= k;
+   m[4] *= k;
+   m[2] = u0 - (m[0] * c.x + m[1] * c.y);
+   m[5] = v0 - (m[3] * c.x + m[4] * c.y);
+   m_d.m_plasticDpi = nd;
+}
+
+void Primitive::RegeneratePlastic()
+{
+   if (!m_d.m_plasticGen || m_plasticCurve.GetPoints().size() < 3)
+      return;
+   const auto setMesh = [](Primitive *const p, const PlasticMesh::Mesh &src)
+      {
+         p->m_mesh.Clear();
+         p->m_mesh.m_vertices.resize(src.verts.size());
+         for (size_t i = 0; i < src.verts.size(); i++)
+         {
+            const PlasticMesh::Vertex &v = src.verts[i];
+            p->m_mesh.m_vertices[i] = Vertex3D_NoTex2 { v.x, v.y, v.z, v.nx, v.ny, v.nz, v.tu, v.tv };
+         }
+         p->m_mesh.m_indices = src.idx;
+         // Table coordinates: identity transform
+         p->m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f);
+         p->m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
+         for (float &v : p->m_d.m_aRotAndTra)
+            v = 0.f;
+         p->m_d.m_use3DMesh = true;
+         p->m_vertexBufferRegenerate = true;
+         p->OnMeshVerticesChanged();
+         p->m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate the collider (the transform itself did not change)
+      };
+   vector<PlasticMesh::CurvePoint> outline;
+   for (const auto &pt : m_plasticCurve.GetPoints())
+      outline.push_back({ pt->GetX(), pt->GetY(), pt->IsSmooth() });
+   vector<PlasticMesh::Hole> holes;
+   for (const auto &pt : m_plasticHoles.GetPoints())
+      holes.push_back({ pt->GetX(), pt->GetY(), pt->GetZ() });
+   PlasticMesh::Params params;
+   params.height = m_d.m_plasticHeight;
+   params.thickness = m_d.m_plasticThickness;
+   params.bevel = m_d.m_plasticBevel;
+   params.bevelSegments = m_d.m_plasticBevelSegs;
+   for (int i = 0; i < 6; i++)
+      params.uvm[i] = m_d.m_plasticUvm[i];
+   PlasticMesh::Result res;
+   if (!PlasticMesh::Build(outline, holes, params, res))
+      return; // Degenerate outline: keep the meshes as they are
+   setMesh(this, res.bottom);
+   for (Primitive *const comp : GetPlasticCompanions())
+   {
+      setMesh(comp, comp->m_d.m_plasticRole == 1 ? res.top : res.bevel);
+      if (comp->m_renderer != nullptr)
+         comp->m_renderer->ReinitRenderable(comp);
+   }
+}
+
+void Primitive::UpdatePlastic()
+{
+   RegeneratePlastic();
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this);
+}
+
+void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes)
+{
+   m_d.m_plasticGen = true;
+   m_d.m_collidable = false;
+   m_d.m_toy = true;
+   m_plasticEditHoles = false;
+   m_plasticCurve.ClearPoints();
+   m_plasticHoles.ClearPoints();
+   for (size_t i = 0; i < outline.size(); i++)
+      m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&m_plasticCurve, outline[i].x, outline[i].y, 0.f, i < smooth.size() && smooth[i]));
+   for (const Vertex3Ds &h : holes)
+      m_plasticHoles.PushPoint(std::make_unique<DragPoint>(&m_plasticHoles, h.x, h.y, h.z, false));
+   RegeneratePlastic();
 }
 
 //////////////////////////////
@@ -2136,6 +2318,25 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteInt(FID(WSEG), m_d.m_wireSides);
       m_wireCurve.SavePoints(writer);
    }
+   if (m_d.m_plasticGen) // Optional fields: only written for plastic hosts and companions, so other primitives save byte-identical
+   {
+      writer.WriteBool(FID(PGEN), true);
+      writer.WriteFloat(FID(PHGT), m_d.m_plasticHeight);
+      writer.WriteFloat(FID(PTHK), m_d.m_plasticThickness);
+      writer.WriteFloat(FID(PBVL), m_d.m_plasticBevel);
+      writer.WriteInt(FID(PBSG), m_d.m_plasticBevelSegs);
+      writer.WriteFloat(FID(PHDI), m_d.m_plasticHoleDia);
+      writer.WriteFloat(FID(PDPI), m_d.m_plasticDpi);
+      writer.WriteVector3(FID(PUVM), vec3(m_d.m_plasticUvm[0], m_d.m_plasticUvm[1], m_d.m_plasticUvm[2]));
+      writer.WriteVector3(FID(PUVV), vec3(m_d.m_plasticUvm[3], m_d.m_plasticUvm[4], m_d.m_plasticUvm[5]));
+      m_plasticCurve.SavePoints(writer);
+      m_plasticHoles.SavePoints(writer, FID(PHLS));
+   }
+   if (!m_d.m_plasticHost.empty())
+   {
+      writer.WriteString(FID(PHST), m_d.m_plasticHost);
+      writer.WriteInt(FID(PHRL), m_d.m_plasticRole);
+   }
    if (m_d.m_rubberGuideRadius > 0.f) // Optional field, other primitives save byte-identical
       writer.WriteFloat(FID(RGRD), m_d.m_rubberGuideRadius);
    writer.WriteFloat(FID(PIDB), m_d.m_depthBias);
@@ -2193,6 +2394,8 @@ void Primitive::Load(IObjectReader& reader)
 {
    SetDefaults(false);
    m_wireCurve.ClearPoints();
+   m_plasticCurve.ClearPoints();
+   m_plasticHoles.ClearPoints();
    m_mesh.m_validBounds = false;
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
@@ -2260,7 +2463,19 @@ void Primitive::Load(IObjectReader& reader)
          case FID(WRLS): m_d.m_wireRails = clamp(reader.AsInt(), 1, 3); break;
          case FID(WSPC): m_d.m_wireSpacing = reader.AsFloat(); break;
          case FID(WSEG): m_d.m_wireSides = clamp(reader.AsInt(), 3, 32); break;
-         case FID(DPNT): m_wireCurve.LoadPointToken(reader); break;
+         case FID(DPNT): m_wireCurve.LoadPointToken(reader); break; // Moved to the plastic outline after the load if this is a plastic host
+         case FID(PGEN): m_d.m_plasticGen = reader.AsBool(); break;
+         case FID(PHGT): m_d.m_plasticHeight = reader.AsFloat(); break;
+         case FID(PTHK): m_d.m_plasticThickness = reader.AsFloat(); break;
+         case FID(PBVL): m_d.m_plasticBevel = reader.AsFloat(); break;
+         case FID(PBSG): m_d.m_plasticBevelSegs = clamp(reader.AsInt(), 1, 16); break;
+         case FID(PHDI): m_d.m_plasticHoleDia = reader.AsFloat(); break;
+         case FID(PDPI): m_d.m_plasticDpi = reader.AsFloat(); break;
+         case FID(PUVM): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[0] = v.x; m_d.m_plasticUvm[1] = v.y; m_d.m_plasticUvm[2] = v.z; break; }
+         case FID(PUVV): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[3] = v.x; m_d.m_plasticUvm[4] = v.y; m_d.m_plasticUvm[5] = v.z; break; }
+         case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break;
+         case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
+         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, 2); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
          case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
          case FID(M3VN):
@@ -2475,6 +2690,14 @@ void Primitive::Load(IObjectReader& reader)
    CalculateBuiltinOriginal();
    if (m_d.m_wireGen) // The mesh is derived from the points: rebuild it (deterministic, also covers undo whose records skip meshes)
       RegenerateWire();
+   if (m_d.m_plasticGen)
+   {
+      // The outline was read as the generic drag points (DPNT, whatever the order of the fields)
+      for (const auto &dpt : m_wireCurve.GetPoints())
+         m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+      m_wireCurve.ClearPoints();
+      RegeneratePlastic(); // Same, and the companions already in the table (an undo); on a file load the saved companion meshes stand
+   }
 }
 
 bool Primitive::LoadMesh(

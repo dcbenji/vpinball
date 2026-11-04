@@ -5474,8 +5474,9 @@ void Renderer::Render3DScene()
 
    // Reinitialize parts that have been modified
    SetupShaders();
-   for (auto renderable : m_renderableToInit)
+   for (size_t i = 0; i < m_renderableToInit.size(); i++) // Index based: a RenderSetup may queue more parts (a plastic host refreshes its companions)
    {
+      IRenderable *const renderable = m_renderableToInit[i];
       renderable->RenderRelease();
       renderable->RenderSetup(this);
    }

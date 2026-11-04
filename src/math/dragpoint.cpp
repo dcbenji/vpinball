@@ -245,11 +245,11 @@ void DragPointCurve::GetTextureCoords(const vector<RenderVertex> &vv, float **pp
    }
 }
 
-void DragPointCurve::SavePoints(IObjectWriter &writer) const
+void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag) const
 {
    for (const auto &pdp : m_dragpoints)
    {
-      writer.BeginObject(FID(DPNT), true, false);
+      writer.BeginObject(tag, true, false);
       writer.WriteVector2(FID(VCEN), Vertex2D(pdp->GetX(), pdp->GetY()));
       writer.WriteFloat(FID(POSZ), pdp->GetZ());
       writer.WriteBool(FID(SMTH), pdp->IsSmooth());

@@ -480,6 +480,18 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(WSPC), "wire_spacing" },
             { FID(WSEG), "wire_sides" },
             { FID(RGRD), "rubber_guide_radius" },
+            { FID(PGEN), "plastic_gen" },
+            { FID(PHGT), "plastic_height" },
+            { FID(PTHK), "plastic_thickness" },
+            { FID(PBVL), "plastic_bevel" },
+            { FID(PBSG), "plastic_bevel_segments" },
+            { FID(PHDI), "plastic_hole_diameter" },
+            { FID(PDPI), "plastic_dpi" },
+            { FID(PUVM), "plastic_uv_u" },
+            { FID(PUVV), "plastic_uv_v" },
+            { FID(PHLS), "plastic_holes" },
+            { FID(PHST), "plastic_host" },
+            { FID(PHRL), "plastic_role" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
@@ -982,7 +994,8 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
 {
    switch (fieldId)
    {
-   case FID(DPNT): return kDragPointNode;
+   case FID(DPNT):
+   case FID(PHLS): return kDragPointNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
    case FID(JPEG): return kPinBinaryNode;
