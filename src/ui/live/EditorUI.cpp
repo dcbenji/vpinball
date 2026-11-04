@@ -2538,7 +2538,7 @@ void EditorUI::RenderUI()
          };
          ImGui::PushStyleColor(ImGuiCol_PlotLines, IM_COL32(255, 0, 0, 255)); // We abuse ImGui colors to pass render colors
          ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(255, 0, 0, 64));
-         // Known limit: these are the gameplay colliders, rebuilt at the drag end only, so a dragged part's outline stays at its start until release
+         // Gameplay colliders: the dragged parts' ones are rebuilt per frame while this overlay is on (see SetSelectionTransform), else at the drag end
          for (auto pho : m_player->m_physics->GetHitObjects())
             if (pho != nullptr && (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && IsEditableSelected(pho->m_editable))))
                pho->DrawUI(project, overlayDrawList, true);
@@ -5290,7 +5290,11 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       {
          // Per frame while dragging: the static shadow pages and the gameplay colliders follow at the drag end (FlushDrag)
          m_drag.shadowDirty = true;
-         m_player->m_physics->UpdateUI(edit);
+         // The collider overlay shows the gameplay colliders: while it is on, the dragged parts' colliders follow per frame (1-2 ms each)
+         if (m_physOverlay != PhysicOverlay::None)
+            m_player->m_physics->Update(edit);
+         else
+            m_player->m_physics->UpdateUI(edit);
          if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
             m_drag.pendingPhysics.push_back(edit);
       }
