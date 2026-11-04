@@ -5946,7 +5946,7 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
          if (pedit->GetItemType() == eItemPrimitive)
          {
             Primitive *const companion = static_cast<Primitive *>(pedit);
-            if (companion->IsPlasticCompanion() && StrCompareNoCase(companion->m_d.m_plasticHost, oldName))
+            if (StrCompareNoCase(companion->m_d.m_plasticHost, oldName)) // Raw name: IsPlasticCompanion() needs the host under that name
             {
                if (beforeChange)
                   beforeChange(pedit);

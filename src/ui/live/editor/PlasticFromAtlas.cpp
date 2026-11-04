@@ -381,7 +381,7 @@ void PlasticFromAtlas::FixPasted(const vector<IEditable *> &pasted, const vector
 {
    for (IEditable *const part : pasted)
    {
-      if (part->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(part)->IsPlasticCompanion())
+      if (part->GetItemType() != eItemPrimitive || static_cast<Primitive *>(part)->m_d.m_plasticHost.empty())
          continue;
       Primitive *const comp = static_cast<Primitive *>(part);
       bool found = false;
