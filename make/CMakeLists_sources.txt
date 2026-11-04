@@ -103,6 +103,8 @@ set(VPX_SOURCES
    src/math/MeshGLTF.cpp
    src/math/MeshUtils.h
    src/math/wiresweep.h
+   src/math/PlasticMesh.h
+   src/math/PlasticMesh.cpp
    src/math/ModelViewProj.h
 
    src/meshes/ballMesh.h
