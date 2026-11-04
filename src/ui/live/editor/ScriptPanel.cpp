@@ -264,7 +264,12 @@ void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       // Code-editor look: a darker well than the other fields
       ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::V(EditorTheme::WorkspaceOff));
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, 6.f));
+      ImFont *const monoFont = m_editor.m_liveUI.GetMonoFont();
+      if (monoFont != nullptr)
+         ImGui::PushFont(monoFont, monoFont->LegacySize);
       const bool scriptEdited = ImGui::InputTextMultiline("##script", &m_editor.m_table->m_script_text, ImVec2(-FLT_MIN, -FLT_MIN), flags);
+      if (monoFont != nullptr)
+         ImGui::PopFont();
       ImGui::PopStyleVar();
       ImGui::PopStyleColor();
       if (scriptEdited)

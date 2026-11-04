@@ -71,6 +71,7 @@ public:
    void SetMarkdownStartId(const unsigned int startId) { markdown_start_id = startId; }
    const ImGui::MarkdownConfig &GetMarkdownConfig() const { return markdown_config; }
    ImFont *GetOverlayFont() const { return m_overlayFont; }
+   ImFont *GetMonoFont() const { return m_monoFont; }
    float GetDPI() const { return m_uiScale; }
    int GetUIOrientation() const { return m_rotate; }
    static ImGuiKey GetImGuiKeyFromSDLScancode(const SDL_Scancode sdlk);
@@ -118,6 +119,7 @@ private:
    ImFont *m_baseFont = nullptr;
    ImFont *m_overlayBoldFont = nullptr;
    ImFont *m_overlayFont = nullptr;
+   ImFont *m_monoFont = nullptr; // monospace (ProggyForever, imgui's built-in vector font), for the script editor
 };
 
 namespace plog

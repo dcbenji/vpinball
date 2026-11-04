@@ -77,6 +77,11 @@ LiveUI::LiveUI(RenderDevice *const rd)
 
    const float overlaySize = 13.0f * m_uiScale;
    m_overlayFont = io.Fonts->AddFontFromMemoryCompressedTTF(droidsans_compressed_data, droidsans_compressed_size, overlaySize);
+   {
+      ImFontConfig mono_config;
+      mono_config.SizePixels = overlaySize;
+      m_monoFont = io.Fonts->AddFontDefaultVector(&mono_config);
+   }
    m_overlayBoldFont = io.Fonts->AddFontFromMemoryCompressedTTF(droidsansbold_compressed_data, droidsansbold_compressed_size, overlaySize);
    ImFont *H1 = io.Fonts->AddFontFromMemoryCompressedTTF(droidsansbold_compressed_data, droidsansbold_compressed_size, overlaySize * 20.0f / 13.f);
    ImFont *H2 = io.Fonts->AddFontFromMemoryCompressedTTF(droidsansbold_compressed_data, droidsansbold_compressed_size, overlaySize * 18.0f / 13.f);
