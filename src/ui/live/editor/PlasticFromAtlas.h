@@ -44,6 +44,9 @@ public:
       Matrix3D prevView; // The camera to come back to when the trace is cancelled
       float prevDistance = 0.f;
       int prevPredefined = 0;
+      int measure = 0; // Sheet DPI from a known distance: 0 off, 1 first point next, 2 second point next, 3 both set
+      float measureUv[4] = { 0.f, 0.f, 0.f, 0.f }; // The two points in atlas UV, so zoom, pan and a rescale of the sheet don't move them
+      float measureIn = 0.f; // The real distance in inches
    };
 
    static bool CanStart(const EditorUI &ed);

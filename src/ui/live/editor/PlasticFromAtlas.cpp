@@ -168,6 +168,19 @@ void PlasticFromAtlas::Click(EditorUI &ed, const ImVec2 &mouse, const bool shift
    Trace &t = ed.m_plasticTrace;
    const Vertex2D p = ed.UnprojectToPlane(mouse, 0.f);
    (void)shift;
+   if (t.measure != 0)
+   {
+      // Measuring takes the click: no corner, no hole
+      if (t.measure <= 2)
+      {
+         const int i = t.measure - 1;
+         t.measureUv[2 * i] = t.uvm[0] * p.x + t.uvm[1] * p.y + t.uvm[2];
+         t.measureUv[2 * i + 1] = t.uvm[3] * p.x + t.uvm[4] * p.y + t.uvm[5];
+         PLOGI << "Plastic from Atlas: measure point " << t.measure << " at table " << p.x << ' ' << p.y << " uv " << t.measureUv[2 * i] << ' ' << t.measureUv[2 * i + 1];
+         t.measure++;
+      }
+      return;
+   }
    PLOGI << "Plastic from Atlas: " << (t.holes ? "hole" : "corner") << " at table " << p.x << ' ' << p.y;
    if (t.holes)
       t.holeList.push_back(Vertex3Ds(p.x, p.y, t.holeDia));
@@ -182,7 +195,7 @@ void PlasticFromAtlas::Keys(EditorUI &ed)
 {
    Trace &t = ed.m_plasticTrace;
    const ImGuiIO &io = ImGui::GetIO();
-   if (io.WantCaptureKeyboard)
+   if (io.WantCaptureKeyboard || t.measure != 0) // Typing in a field, or measuring: the outline keys are not its own
       return;
    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
       Finish(ed);
@@ -662,6 +675,26 @@ void PlasticFromAtlas::DrawTrace(EditorUI &ed, ImDrawList *const draw, const Liv
    };
    for (const Vertex3Ds &h : t.holeList)
       circle(h.x, h.y, h.z, IM_COL32(90, 230, 120, 255), 1.5f * dpi);
+   if (t.measure != 0)
+   {
+      ImVec2 mp[2];
+      for (int i = 0; i < t.measure - 1 && i < 2; i++)
+      {
+         const Vertex2D q = UvToTable(t.uvm, t.measureUv[2 * i], t.measureUv[2 * i + 1]);
+         mp[i] = project(q.x, q.y);
+      }
+      const ImU32 col = IM_COL32(255, 60, 220, 255);
+      if (t.measure == 3 && mp[0].x != FLT_MAX && mp[1].x != FLT_MAX)
+         draw->AddLine(mp[0], mp[1], col, 1.5f * dpi);
+      else if (t.measure == 2 && mp[0].x != FLT_MAX && !ImGui::GetIO().WantCaptureMouse)
+         draw->AddLine(mp[0], ImGui::GetMousePos(), IM_COL32(255, 60, 220, 140), dpi);
+      for (int i = 0; i < t.measure - 1 && i < 2; i++)
+         if (mp[i].x != FLT_MAX)
+         {
+            draw->AddCircle(mp[i], 5.f * dpi, col, 12, 1.5f * dpi);
+            draw->AddCircleFilled(mp[i], 1.5f * dpi, col, 6);
+         }
+   }
    if (t.holes && !ImGui::GetIO().WantCaptureMouse)
    {
       const Vertex2D p = ed.UnprojectToPlane(ImGui::GetMousePos(), 0.f);
@@ -699,6 +732,7 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
             {
                t.image = tex->m_name;
                t.dpi = ParseDpi(t.image);
+               t.measure = 0;
                SetSheet(ed);
             }
          ImGui::EndCombo();
@@ -713,6 +747,10 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
       }
       ImGui::SetItemTooltip("47.06 VPU per inch at this DPI. Traced points stay where they are, the sheet is rescaled about its centre");
       ImGui::SameLine();
+      if (ImGui::Button(t.measure != 0 ? "Measuring" : "Measure"))
+         t.measure = t.measure != 0 ? 0 : 1;
+      ImGui::SetItemTooltip("Click two points on the sheet that are a known distance apart (two drill holes), then type the distance in inches and Apply");
+      ImGui::SameLine();
       ImGui::SetNextItemWidth(70.f * dpi);
       ImGui::DragFloat("Hole", &t.holeDia, 0.1f, 0.5f, 100.f, "%.1f");
       ImGui::SetItemTooltip("Hole diameter");
@@ -725,6 +763,48 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
       ImGui::SameLine();
       if (ImGui::Button("Large 16"))
          t.holeDia = 16.f;
+      if (t.measure != 0)
+      {
+         if (t.measure < 3)
+            ImGui::Text("Measure: click %s point on the sheet (Esc to stop measuring)", t.measure == 1 ? "the first" : "the second");
+         else
+         {
+            const Texture *const tex = ed.m_table->GetImage(t.image);
+            const float w = tex != nullptr && tex->m_width > 0 ? static_cast<float>(tex->m_width) : 1024.f;
+            const float h = tex != nullptr && tex->m_height > 0 ? static_cast<float>(tex->m_height) : 1024.f;
+            const float px = hypotf((t.measureUv[2] - t.measureUv[0]) * w, (t.measureUv[3] - t.measureUv[1]) * h);
+            const float newDpi = t.measureIn > 0.f ? px / t.measureIn : 0.f;
+            const bool ok = px >= 0.5f && newDpi >= 10.f && newDpi <= 2400.f;
+            ImGui::Text("Measure: %.1f px apart", px);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90.f * dpi);
+            ImGui::InputFloat("Distance (in)", &t.measureIn, 0.f, 0.f, "%.3f");
+            ImGui::SetItemTooltip("The real distance between the two points in inches (47.06 VPU per inch)");
+            if (t.measureIn < 0.f)
+               t.measureIn = 0.f;
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!ok);
+            if (ImGui::Button("Apply"))
+            {
+               PLOGI << "Plastic from Atlas: measure apply " << px << " px / " << t.measureIn << " in = " << newDpi << " dpi";
+               t.dpi = newDpi;
+               t.measure = 0;
+               SetSheet(ed);
+               const Vertex2D a = UvToTable(t.uvm, 0.f, 0.f), b = UvToTable(t.uvm, 1.f, 1.f);
+               ed.FrameBounds(FRect3D(a.x, b.x, a.y, b.y, 0.f, 0.f));
+               ed.Report("Plastic from Atlas: Sheet DPI set from the measured distance");
+            }
+            ImGui::EndDisabled();
+            if (ok)
+               ImGui::SetItemTooltip("Sheet DPI becomes %.1f", newDpi);
+            ImGui::SameLine();
+            if (ImGui::Button("Redo"))
+               t.measure = 1;
+            ImGui::SameLine();
+            if (ImGui::Button("Stop"))
+               t.measure = 0;
+         }
+      }
       if (ImGui::RadioButton("Outline", !t.holes))
          t.holes = false;
       ImGui::SameLine();

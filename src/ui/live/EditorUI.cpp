@@ -3057,6 +3057,8 @@ void EditorUI::RenderUI()
       {
          if (m_suppressNextEscape)
             m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
+         else if (m_plasticTrace.active && m_plasticTrace.measure != 0)
+            m_plasticTrace.measure = 0; // Leave measuring only, the add goes on
          else if (m_plasticTrace.active)
             PlasticFromAtlas::Cancel(*this); // Cancel the whole add
          else if (m_gizmoOperation != ImGuizmo::OPERATION(0))
