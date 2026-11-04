@@ -587,15 +587,15 @@ void main()
 	vec2 capPd = vec2_splat(0.0);
 	BRANCH if (capW > 0.0 && !tir && (depthK > 0.0 || frostK > 0.0 || lensK > 0.0))
 	{
-		const vec3 Pd = Pin + d2 * (0.2 / max(-d2.y, 0.3)); // the ribs are moulded on the cap's underside, ~1/8" under the top (Ben 11-03: 4 mm deeper read too far down)
+		const vec3 Pd = Pin + d2 * (1.2 / max(-d2.y, 0.3)); // how far under the cap the ribs read (Ben 11-03: 4 mm way exaggerated, 0.2 flat)
 		capPd = Pd.xz;
 		const float fC = (atan2(Pd.z, Pd.x) - domeParams[3].z) / period + 0.5;
 		const float capEC = fC - floor(fC + 0.5);
-		capL = domeLine(capEC, 0.05, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
+		capL = domeLine(capEC, 0.08, fwF) * smoothstep(0.15 * rootR, 0.45 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
 		// finer lines between the ribs, running in to a small dot at the centre (the moulding's sprue point)
 		const float eC2 = 2.0 * capEC - floor(2.0 * capEC + 0.5);
 		capL += 0.4 * domeLine(eC2, 0.06, 2.0 * fwF) * smoothstep(0.06 * rootR, 0.3 * rootR, length(Pd.xz)) * (1.0 - smoothstep(rootR - 1.0, rootR, length(Pd.xz)));
-		capL += 0.8 * exp(-(length(Pd.xz) / (0.035 * rootR)) * (length(Pd.xz) / (0.035 * rootR)));
+		capL += 0.25 * exp(-(length(Pd.xz) / (0.035 * rootR)) * (length(Pd.xz) / (0.035 * rootR)));
 		// the zigzag ring: the flutes' sawtooth outline where they meet the cap, seen through it
 		capL += 0.2 * domeLine(length(Pin.xz) - rIn, 0.3, fwRad);
 	}
@@ -763,7 +763,15 @@ void main()
 			// clamped: the copy can hold blown-out or invalid pixels where a flash lights the playfield under the dome
 			sum += clamp(texStereoLod(tex_pbr_refr, (gl_FragCoord.xy + toC + dir * (rr * rD)) * w_h_height.xy, lodL).rgb, vec3_splat(0.0), vec3_splat(16.0));
 		}
-		const vec3 bg = sum * (1.0 / 16.0);
+		const vec3 bgAll = sum * (1.0 / 16.0);
+		// Each face also turns its own part of that light to the eye: one tap, blurred about as wide as the dome so nothing can be
+		// made out, in the direction this face mirrors the view (one direction per face). The faces drift apart as the view moves
+		const float thF = (idx + 0.25 * s) * period + domeParams[3].z;
+		const vec3 rF = vec3(cos(thF), 0.0, sin(thF));
+		const vec3 rFace = reflect(-V, normalize(-rF - s * slope * vec3(-rF.z, 0.0, rF.x)));
+		const vec2 offF = mul(mView, vec4(rFace.x * ex + rFace.y * up + rFace.z * ez, 0.0)).xy * (1.6 * R / mmPx);
+		const vec3 faceT = clamp(texStereoLod(tex_pbr_refr, (gl_FragCoord.xy + toC + offF) * w_h_height.xy, clamp(log2(max(R / mmPx, 1.0)), 0.0, domeParams[24].w)).rgb, vec3_splat(0.0), vec3_splat(16.0));
+		const vec3 bg = mix(bgAll, faceT, 0.7);
 		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
 		// the foil: total internal reflection at this face (smooth over the critical angle), each face its own strength
 		const float ciF = saturate(dot(VrIn, nFlank));
@@ -777,7 +785,7 @@ void main()
 		// strongest on the side toward the viewer, where the ray goes down into the dome (Ben's photo on the table)
 		const vec2 Vh = V.xz / max(length(V.xz), 1e-3);
 		const float capNear = 0.12 + 0.88 * smoothstep(-0.3, 0.5, dot(capPd, Vh) / max(length(capPd), 1e-3));
-		lens += lensK * capW * trN * bg * capL * capNear * (1.0 - lvlG) * (1.0 - lvlG);
+		lens += lensK * capW * trN * bg * (0.12 + capL) * capNear * (1.0 - lvlG) * (1.0 - lvlG);
 	}
 
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange
