@@ -44,7 +44,7 @@
 // [16..23] the four strongest table lights at the dome (GI bulbs, inserts, other domes' lamps), two entries each: xyz position
 //      (table space), w source radius (table units); then rgb irradiance at the dome (relative to the room light), w unused
 //      ([17].w: dome_frost's gain; [19].w: dome_lens (0 = off, set only when a refraction probe is bound); [21].w: its slice width
-//      in flutes)
+//      in flutes); [23].w: the feet's lit glow gain)
 // [14] x dome_depth (OFF parallax: the far wall's ridges through the cavity, 0 = off), y dome_cooldown (the white-hot parts
 //      follow the level as a continuous blackbody pulse instead of gating on near full, 0 = off), z dome_orb (the lit bulb
 //      seen through the flutes as a glowing ball, 0 = off), w the orb's gain (nit)
@@ -78,6 +78,7 @@ SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R
 
 #define DOME_PI 3.14159265
 #define FROST_GAIN domeParams[17].w
+#define FOOT_GAIN domeParams[23].w
 
 float domeHash(const float n) { return fract(sin(n) * 43758.5453); }
 
@@ -217,17 +218,6 @@ void main()
 	const float peakK = max(domeParams[13].w, 0.0);
 	const vec3 lampCol = domeParams[12].xyz;
 
-	// Only the outer skin emits (the inner flutes, base and cap underside are hidden behind it or seen through it); the base
-	// flange and the tabs still filter what lies under them (in, and the light that lit it, through the flange)
-	if (!((Ns.y > 0.5 && P.y > capY + 0.2) || (dot(Ns.xz, P.xz) > 0.3 * rxz && rxz > rootR + 0.1)))
-	{
-		if (!transPass)
-			discard;
-		gl_FragColor = vec4(vec3_splat(1.0) - exp(-sigma * 2.5 * wallB) * (1.0 - bodyK), 1.0);
-		return;
-	}
-	const float capW = smoothstep(0.55, 0.9, Ns.y) * smoothstep(capY, capY + 0.5, P.y);
-
 	// Lamp level: emission black below 1 %, mid levels lifted (two-segment map), filament temperature from the level
 	const float level = max(domeParams[3].w, 0.0);
 	const float lvl = saturate(level);
@@ -241,6 +231,38 @@ void main()
 	const vec3 bb = domeBlackbody(T);
 	const float pk = mix(smoothstep(0.9, 1.0, level), pow(lvl, 6.0), coolK); // the 1-2 true peak frames (coolK: the hot end of the pulse)
 	const float heatW = mix(smoothstep(0.85, 1.0, level), pow(lvl, 4.0), coolK);
+
+	// Only the outer skin emits (the inner flutes, base and cap underside are hidden behind it or seen through it); the base
+	// flange and the tabs still filter what lies under them (in, and the light that lit it, through the flange)
+	// Feet (the base flange's tabs outside the wall, top faces and cut edges), with a milky body (dome_body): the same plastic
+	// as the dome, not a different material. A ~2 mm plate: the room and the table's lights scattered in it (as the wall's
+	// interior), and lit, the lamp's light carried in from the dome's root through the plate, fading over ~7 mm, brighter
+	// at the cut edges where it leaves; it lets a little of what lies under it through, in its colour
+	const bool foot = bodyK > 0.0 && P.y < min(4.5, 0.15 * H) && rxz > R + 0.3; // the tab plates are ~3 mm thick
+	if (foot || !((Ns.y > 0.5 && P.y > capY + 0.2) || (dot(Ns.xz, P.xz) > 0.3 * rxz && rxz > rootR + 0.1)))
+	{
+		const vec3 trF = exp(-sigma * 1.6 * 2.0);
+		if (transPass)
+		{
+			gl_FragColor = vec4(vec3_splat(1.0) - (foot ? trF * (1.0 - 0.6 * bodyK) * (1.0 - lvlG) : exp(-sigma * 2.5 * wallB) * (1.0 - bodyK)), 1.0);
+			return;
+		}
+		if (!foot)
+			discard;
+		const vec3 roomF = 0.3 * domeParams[13].y + 0.3 * domeParams[8].yzw * (1.0 / DOME_PI);
+		const float fromRoot = exp(-(rxz - R) / 7.0);
+		const float edgeF = 1.0 + 0.8 * (1.0 - saturate(abs(Ns.y)));
+		const float scatLF = mix(1.35 * lvlG / (0.35 + lvlG), lvlG, coolK);
+		vec3 footC = bodyK * domeParams[10].w * roomF * trF * (1.0 - lvlG)
+			+ max(domeParams[10].y, 0.0) * domeParams[11].w * FOOT_GAIN * scatLF * mix(lampCol, bb, 0.3 * heatW) * trF * fromRoot * edgeF;
+		BRANCH if (domeParams[15].w > 0.0) // dome_frost: the plate is thick, milky
+			footC += domeParams[15].w * FROST_GAIN * 0.6 * vec3(0.7435, 0.6829, 0.6253) * (domeParams[13].y + 3.0 * domeParams[8].yzw * (1.0 / DOME_PI)) * trF * (1.0 - 0.7 * lvlG);
+		if (domeParams[7].y > 10.5) // diagnostics: 11 = the feet in magenta
+			footC = vec3(1.0, 0.0, 1.0);
+		gl_FragColor = vec4(footC, 1.0);
+		return;
+	}
+	const float capW = smoothstep(0.55, 0.9, Ns.y) * smoothstep(capY, capY + 0.5, P.y);
 
 	// The view ray refracted in at the smooth skin, carried through the wall to the inner surface
 	vec3 VrIn = refract(-V, Ns, 1.0 / 1.49);
@@ -566,7 +588,7 @@ void main()
 		// seen through the smooth skin the inner flutes only ripple the glow (a soft cosine per flute, faint ridge lines), with
 		// little flank-to-flank variation: the milky body evens it out
 		const float bandOff = mix(mix(facet, 1.0, 0.8) * (0.88 + 0.12 * cos(2.0 * DOME_PI * eP)) + 0.4 * ridgeLine, 0.6 + 1.0 * edge, capW);
-		const vec3 interior = bodyK * domeParams[10].w * (1.0 - 0.85 * saturate(domeParams[19].w) * (1.0 - capW)) * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
+		const vec3 interior = bodyK * domeParams[10].w * (1.0 - 0.6 * saturate(domeParams[19].w) * (1.0 - capW)) * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
 			+ 0.3 * domeParams[8].yzw * trH * bandOff * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
@@ -707,19 +729,29 @@ void main()
 	// (light turned away there). It replaces most of the milky interior; not on the cap (one moulding, it looks at the bulb)
 	vec3 lens = vec3_splat(0.0);
 	const float lensK = saturate(domeParams[19].w);
-	BRANCH if (lensK > 0.0 && mode > 1.5 && capW < 0.99)
+	BRANCH if (lensK > 0.0 && mode > 1.5 && capW < 0.99 && lvlG < 0.999)
 	{
 		const vec2 gN = gF / max(dot(gF, gF), 1e-6); // pixels per flute period, across the flutes
 		const vec2 offPix = -eP * domeParams[21].w * gN;
-		// each flute shows one smooth slice: three taps across it (the plastic's surface blur), not a sharp mirrored copy
+		// what comes through is light, not a picture (Ben 11-03: a real dome's inside is indiscernible): the thick wall, the
+		// inner flutes and the outer cylinder scramble it, so the slice is blurred both ways over ~3 flutes (8-tap disc),
+		// keeping only its soft light and colour and how it shifts flute by flute
 		const vec2 uvL = (gl_FragCoord.xy + offPix) * w_h_height.xy;
-		const vec2 dL = 0.2 * domeParams[21].w * gN * w_h_height.xy;
-		const vec3 bg = (texStereoLod(tex_refraction, uvL - dL, 0.0).rgb + texStereoLod(tex_refraction, uvL, 0.0).rgb + texStereoLod(tex_refraction, uvL + dL, 0.0).rgb) * (1.0 / 3.0);
+		const float rB = 3.0 / max(length(gF), 1e-3); // pixels
+		vec3 bg = vec3_splat(0.0);
+		UNROLL for (int k = 0; k < 8; k++)
+		{
+			const float a = float(k) * 2.39996 + 0.5;
+			const float rr = sqrt((float(k) + 0.5) / 8.0);
+			// clamped: the copy can hold blown-out or invalid pixels where a flash lights the playfield under the dome
+			bg += clamp(texStereoLod(tex_refraction, uvL + vec2(cos(a), sin(a)) * (rr * rB) * w_h_height.xy, 0.0).rgb, vec3_splat(0.0), vec3_splat(16.0));
+		}
+		bg *= 1.0 / 8.0;
 		// filtered, not added: through both walls and the scattering plastic (deep red; the long path at the flute edges darker)
 		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
 		const float edgeL = max(fwA > 0.0 ? domeLine(eRoot, 0.035, fwA) : exp(-(eRoot / 0.035) * (eRoot / 0.035)),
 			fwA > 0.0 ? domeLine(eTip, 0.035, fwA) : exp(-(eTip / 0.035) * (eTip / 0.035)));
-		lens = lensK * (1.0 - capW) * trL * bg * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv); // fades at the silhouette
+		lens = lensK * 0.7 * (1.0 - capW) * trL * bg * (1.0 - 0.6 * edgeL) * (1.0 - lvlG) * (1.0 - lvlG) * smoothstep(0.1, 0.4, nv); // fades at the silhouette
 	}
 
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange

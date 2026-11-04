@@ -1385,6 +1385,7 @@ void Primitive::Render(const unsigned int renderMask)
          params[17 + 2 * i] = m_d.m_domeGlintLights > 0.f ? vec4(E.x * lightGain, E.y * lightGain, E.z * lightGain, 0.f) : vec4(0.f, 0.f, 0.f, 0.f);
       }
       params[17].w = FlasherDomeTune("frost=", 1.f); // dome_frost's gain
+      params[23].w = FlasherDomeTune("foot=", 1.f); // the feet's lit glow gain (dome_body)
    };
 
    // Traced insert prototype: an additive card whose image is a multi-view traced bake ('TRACED_' image name prefix). It is
