@@ -87,12 +87,11 @@ static void PushRowColors(const bool selected, const bool inactive)
 
 // Tree node with a line chevron instead of ImGui's filled triangle: the node is submitted with an invisible text (same ID, click, keyboard and
 // open state behaviour), then the chevron and the label are drawn over it
-static bool ChevronTreeNode(const char *label, const ImGuiTreeNodeFlags flags = 0)
+static bool ChevronTreeNode(const char *label, const ImGuiTreeNodeFlags flags = 0, const ImU32 textColor = EditorTheme::Rgb(195, 195, 195) /* Blender's outliner name grey */)
 {
    const ImGuiStyle &style = ImGui::GetStyle();
    const ImVec2 pos = ImGui::GetCursorScreenPos();
    const float textOffsetY = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
-   const ImU32 textColor = EditorTheme::Rgb(195, 195, 195); // Blender's outliner name grey
    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
    const bool opened = ImGui::TreeNodeEx(label, flags);
    ImGui::PopStyleColor();
@@ -368,6 +367,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    // reserved, so that they do not shift when the scrollbar appears
    const float columnWidth = ImGui::GetContentRegionAvail().x - style.ScrollbarSize;
 
+   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(EditorTheme::Rgb(51, 51, 55))); // The header sits on 40: the editor buttons stay at the old, subtler fill
    // Header, first row: editor type (Blender's editor type switcher), sync button and display mode (Blender's display mode combo)
    {
       editor.RenderAreaTypeButton(EditorUI::AreaEditor::Outliner);
@@ -387,7 +387,11 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       ImGui::SameLine();
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       static constexpr const char *modeNames[] = { "View Layer", "Table Data" };
+      // Same dark dropdown as the Properties ones (the Outliner header sits on 40, the default fill is 84 here)
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::V(EditorTheme::Rgb(40, 40, 40)));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, EditorTheme::V(EditorTheme::Rgb(57, 57, 57)));
       const bool modeOpen = ImGui::BeginCombo("##OutlinerMode", modeNames[m_displayMode], ImGuiComboFlags_NoArrowButton);
+      ImGui::PopStyleColor(2);
       {
          // Line chevron instead of ImGui's filled arrow
          const ImVec2 comboMin = ImGui::GetItemRectMin(), comboMax = ImGui::GetItemRectMax();
@@ -460,6 +464,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          ImGui::EndPopup();
       }
    }
+   ImGui::PopStyleColor();
    ImGui::Separator();
    ParseFilter();
    RefreshFilterCache();
@@ -577,12 +582,6 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(),
          editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.f, rowHeight));
       ImGui::PopStyleColor(3);
-      if (edit == editor.m_selection.GetPart() && editor.IsPartSelected(edit))
-      {
-         // Outline of the active row
-         const ImGuiWindow *const rowWindow = ImGui::GetCurrentWindow();
-         rowWindow->DrawList->AddRect(ImVec2(rowWindow->WorkRect.Min.x, ImGui::GetItemRectMin().y), ImVec2(rowWindow->WorkRect.Max.x, ImGui::GetItemRectMax().y + rowStyle.ItemSpacing.y - 1.f), EditorTheme::Rgb(91, 117, 168));
-      }
       {
          // The highlight spans the whole row: the part left of the selectable (the tree indentation) gets the same color
          const bool rowSelected = editor.IsPartSelected(edit);
@@ -597,6 +596,12 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             if (itemMin.x > rowMinX)
                ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(rowMinX, itemMin.y), ImVec2(itemMin.x, ImGui::GetItemRectMax().y), ImGui::GetColorU32(color));
          }
+      }
+      if (edit == editor.m_selection.GetPart() && editor.IsPartSelected(edit))
+      {
+         // Outline of the active row, over the highlight fill of the indentation
+         const ImGuiWindow *const rowWindow = ImGui::GetCurrentWindow();
+         rowWindow->DrawList->AddRect(ImVec2(rowWindow->WorkRect.Min.x, ImGui::GetItemRectMin().y), ImVec2(rowWindow->WorkRect.Max.x, ImGui::GetItemRectMax().y + rowStyle.ItemSpacing.y - 1.f), EditorTheme::Rgb(91, 117, 168));
       }
       {
          // Type icon (dim) and name (normal text, faint when the part is hidden) drawn over the selectable, indented under the parent group's name
@@ -642,6 +647,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       if (editor.m_table->m_liveBaseTable == nullptr)
       {
          ImGui::SameLine(eyeX);
+         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + rowStyle.FramePadding.y); // In line with the name, which is shifted down by the frame padding
          ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(editable->IsUIVisible(false) ? EditorTheme::TextDim : EditorTheme::TextFaint));
          ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
          if (ImGui::SmallButton(((editable->IsUIVisible(false) ? ICON_LC_EYE : ICON_LC_EYE_OFF) + "##Eye__"s + editable->GetName()).c_str()))
@@ -747,9 +753,10 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             // In desktop backdrop mode, only display backdrop parts, and conversely in the other view modes
             if (!isGroup && (edit->GetEditable()->m_desktopBackdrop != backdropView))
                continue;
-            ImGui::AlignTextToFramePadding();
             if (isGroup)
             {
+               ImGui::AlignTextToFramePadding(); // Not for part rows: a Selectable would draw its frame that much lower than its slot, and the group rows would sit off the 20 px pitch
+
                PartGroup *group = static_cast<PartGroup *>(edit->GetEditable());
                bool opened = false;
                if (stack.empty() || stack.back().opened)
@@ -757,6 +764,14 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   if ((revealPart && revealPart->GetEditable()->IsChild(group)) || (openMatches && m_visibleGroups.contains(group)))
                      ImGui::SetNextItemOpen(true);
                   const bool isNewPartTarget = (group == newPartTarget);
+                  const ImVec2 groupRowStart = ImGui::GetCursorScreenPos();
+                  if ((outlinerItem++ & 1) != 0)
+                  {
+                     // Alternating rows cover the group rows too (same counter and fill as the part rows)
+                     const ImGuiWindow *const rowWindow = ImGui::GetCurrentWindow();
+                     rowWindow->DrawList->AddRectFilled(ImVec2(rowWindow->WorkRect.Min.x, groupRowStart.y),
+                        ImVec2(rowWindow->WorkRect.Max.x, groupRowStart.y + ImGui::GetFrameHeight() + style.ItemSpacing.y), IM_COL32(255, 255, 255, 4));
+                  }
                   const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
                   PushRowColors(editor.IsPartSelected(edit), inactiveSel);
                   // Folder icon and count are outside the ID (after ###) so that the node keeps its open state when they change
@@ -774,7 +789,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   const bool groupHidden = !group->IsUIVisible(false);
                   if (groupHidden)
                      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextFaint));
-                  opened = ChevronTreeNode(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
+                  opened = ChevronTreeNode(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0), groupHidden ? EditorTheme::TextFaint : EditorTheme::Rgb(195, 195, 195));
                   if (groupHidden)
                      ImGui::PopStyleColor();
                   ImGui::PopStyleColor(3);
@@ -801,10 +816,12 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                   }
                   if (ImGui::BeginPopupContextItem())
                   {
+                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 7.f * editor.m_liveUI.GetDPI())); // The tree's 1 px spacing is not for menus
                      if (ImGui::MenuItem("Select"))
                         editor.SetSelection(Selection(edit));
                      if (ImGui::MenuItem("Select Contents"))
                         editor.SelectPartsInGroup(group);
+                     ImGui::PopStyleVar();
                      ImGui::EndPopup();
                   }
                   {
@@ -831,6 +848,13 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      }
                      ImGui::PopStyleColor(2);
                   }
+                  // Same pitch as the part rows when the eye button's line is taller than the frame
+                  const float groupNextY = groupRowStart.y + ImGui::GetFrameHeight() + style.ItemSpacing.y;
+                  if (ImGui::GetCursorScreenPos().y > groupNextY + 0.5f)
+                  {
+                     ImGui::SetCursorScreenPos(ImVec2(groupRowStart.x, groupNextY - style.ItemSpacing.y));
+                     ImGui::Dummy(ImVec2(0.f, 0.f));
+                  }
                   if (edit == revealPart && !ImGui::IsItemVisible())
                      ImGui::SetScrollHereY();
                }
@@ -843,6 +867,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                {
                   if (revealPart && revealPart->GetEditable()->GetPartGroup() == nullptr)
                      ImGui::SetNextItemOpen(true);
+                  ImGui::AlignTextToFramePadding();
                   stack.push_back({ nullptr, ChevronTreeNode("[Live Objects]", ImGuiTreeNodeFlags_AllowOverlap) });
                   partDropTarget(nullptr, false);
                }
@@ -951,6 +976,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       const bool collectionsOpened = ChevronTreeNode(categoryLabel("Collections", editor.m_table->GetCollections().size()));
       if (ImGui::BeginPopupContextItem())
       {
+         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 7.f * editor.m_liveUI.GetDPI()));
          ImGui::BeginDisabled(!canEditCollections);
          if (ImGui::MenuItem("New Collection"))
             editor.CreateCollection(false);
@@ -961,6 +987,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             editor.CreateCollection(true);
          ImGui::EndDisabled();
          ImGui::EndDisabled();
+         ImGui::PopStyleVar();
          ImGui::EndPopup();
       }
       if (collectionsOpened)
