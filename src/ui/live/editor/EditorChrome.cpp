@@ -39,8 +39,8 @@ float s_toolDpi = 1.f;
 bool ToolButton(const char *icon, bool active = false)
 {
    ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Fill : 0u));
-   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(active ? EditorTheme::Rgb(85, 130, 190) : EditorTheme::Hover)); // An active tool stays blue under the mouse
+   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(active ? EditorTheme::Rgb(85, 130, 190) : EditorTheme::Hover));
    ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? IM_COL32_WHITE : EditorTheme::Text));
    const bool pressed = ImGui::Button(icon, ImVec2(ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
    ImGui::PopStyleColor(4);
@@ -566,7 +566,8 @@ void EditorChrome::RenderToolbar()
       = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f * s_toolDpi, 2.f * s_toolDpi));
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
+   // Blender's second row is an area header on 48 (the content grey), so the active workspace tab above connects to it; revert to Bar for the old black band
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Rgb(48, 48, 48)));
    ImGui::Begin("TOOLBAR", nullptr, window_flags);
    ImGui::PopStyleColor();
    ImGui::PopStyleVar(2);

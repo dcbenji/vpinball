@@ -1449,12 +1449,11 @@ void EditorUI::RenderAreaCorners()
             dl->AddTriangleFilled(
                origin, ImVec2(origin.x + sx * side, origin.y), ImVec2(origin.x, origin.y + sy * side), (EditorTheme::Accent & ~IM_COL32_A_MASK) | (70u << IM_COL32_A_SHIFT));
          }
-         if (!m_areaDrag.active)
+         if (hot && !m_areaDrag.active)
          {
-            // Permanent hatch (two diagonal strokes), brighter while hovered
-            const ImU32 hatch = hot ? EditorTheme::Text : ((EditorTheme::TextDim & ~IM_COL32_A_MASK) | (90u << IM_COL32_A_SHIFT));
+            // Hatch (two diagonal strokes) only while the corner is hovered, as in Blender
             for (const float f : { 0.85f, 0.45f })
-               dl->AddLine(ImVec2(origin.x + sx * side * f, origin.y), ImVec2(origin.x, origin.y + sy * side * f), hatch, hot ? 1.5f : 1.f);
+               dl->AddLine(ImVec2(origin.x + sx * side * f, origin.y), ImVec2(origin.x, origin.y + sy * side * f), EditorTheme::Text, 1.5f);
          }
          ImGui::End();
          ImGui::PopStyleVar(2);

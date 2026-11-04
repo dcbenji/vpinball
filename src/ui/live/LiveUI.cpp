@@ -750,14 +750,14 @@ void LiveUI::SetupImGuiStyle(const bool isEditor) const
    style.Colors[ImGuiCol_CheckMark] = isEditor ? ImColor(0xFFFFFFFF) : ImColor(0.0f, 0.467f, 0.784f, 1.0f);
    style.Colors[ImGuiCol_SliderGrab] = isEditor ? ImColor(EditorTheme::Fill) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_SliderGrabActive] = isEditor ? ImColor(EditorTheme::FillActive) : ImColor(0.0f, 0.467f, 0.784f, 1.0f);
-   style.Colors[ImGuiCol_Button] = ImVec4(0.2f, 0.2f, 0.216f, 1.0f);
-   style.Colors[ImGuiCol_ButtonHovered] = isEditor ? ImColor(EditorTheme::Hover) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
+   style.Colors[ImGuiCol_Button] = isEditor ? ImColor(84, 84, 84) : ImColor(0.2f, 0.2f, 0.216f, 1.0f); // Editor: Blender's button grey (the Outliner header keeps the subtler 51)
+   style.Colors[ImGuiCol_ButtonHovered] = isEditor ? ImColor(101, 101, 101) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_ButtonActive] = isEditor ? ImColor(EditorTheme::Raised) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_Header] = isEditor ? ImColor(60, 60, 60) : ImColor(0.2f, 0.2f, 0.216f, 1.0f);
    // Editor: neutral grey section headers / selected rows (the accent is a thin rule drawn by the property sections)
    style.Colors[ImGuiCol_HeaderHovered] = isEditor ? ImColor(75, 75, 75) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_HeaderActive] = isEditor ? ImColor(90, 90, 90) : ImColor(0.0f, 0.467f, 0.784f, 1.0f);
-   style.Colors[ImGuiCol_Separator] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
+   style.Colors[ImGuiCol_Separator] = isEditor ? ImVec4(ImColor(48, 48, 48)) : ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_SeparatorActive] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_ResizeGrip] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
