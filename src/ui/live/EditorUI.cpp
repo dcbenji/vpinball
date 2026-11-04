@@ -3545,6 +3545,11 @@ void EditorUI::DuplicateSelection()
    // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
    if (!CanDuplicate())
       return;
+   if (m_navBlenderTransform && !CanStartModalIn(TransformViewSlot())) // The grab could not start: no copy then
+   {
+      Report("Duplicate needs the 3D Viewport or a view that can be edited under the mouse");
+      return;
+   }
    const size_t count = m_multiSel.size();
    Matrix3D origin;
    const bool hasOrigin = GetSelectionTransform(origin);
@@ -4855,18 +4860,23 @@ int EditorUI::TransformViewSlot() const
 {
    if (m_secondaryViewHovered)
       return m_secondaryViewSlot >= 0 && m_viewInfo[m_secondaryViewSlot].valid ? m_secondaryViewSlot : -2;
-   if (ImGui::GetIO().WantCaptureMouse && m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid)
+   if (ImGui::GetIO().WantCaptureMouse && m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop)
       return m_gizmoSlot;
    return -1;
+}
+
+bool EditorUI::CanStartModalIn(const int viewSlot) const
+{
+   if (viewSlot == -2 || (viewSlot < 0 && !m_viewportVisible))
+      return false;
+   return viewSlot < 0 || (m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop); // Those edits are 2D in the 3D Viewport's plane (as for the gizmo)
 }
 
 void EditorUI::BeginModalTransform(ModalOp op)
 {
    // G / R / S act on the 3D view under the mouse: a secondary view (its camera and image rect are used until the transform ends), else the 3D Viewport
    const int viewSlot = TransformViewSlot();
-   if (viewSlot == -2 || (viewSlot < 0 && !m_viewportVisible))
-      return;
-   if (viewSlot >= 0 && (m_pointEditPart != nullptr || m_camMode == ViewMode::DesktopBackdrop)) // Those edits are 2D in the 3D Viewport's plane (as for the gizmo)
+   if (!CanStartModalIn(viewSlot))
       return;
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))

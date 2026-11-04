@@ -237,7 +237,7 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
    // No selection while the game is inspected, a part is being added, drag points edited, a modal runs, or Alt + left orbits this view.
    const ImGuiIO &io = ImGui::GetIO();
    EditorUI &e = m_editor;
-   const bool blocked = GameOwnsInput() || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr || e.m_modal.active || e.m_fileOp != nullptr;
+   const bool blocked = GameOwnsInput() || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr || e.m_camMode == ViewMode::DesktopBackdrop || e.m_modal.active || e.m_fileOp != nullptr;
    if (m_navDragging || blocked)
       m_clickPending = false;
    else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver()) // Not a press on the gizmo
