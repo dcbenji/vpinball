@@ -337,13 +337,22 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 
       nextItem(comboWidth("Wireframe"));
       ImGui::SetNextItemWidth(comboWidth("Wireframe"));
-      if (ImGui::BeginCombo("##ViewShading", m_settings.wireframe ? "Wireframe" : "Shaded"))
+      if (ImGui::BeginCombo("##ViewShading", m_settings.wireframe ? "Wireframe" : m_settings.solid ? "Solid" : "Shaded"))
       {
-         if (ImGui::Selectable("Shaded", !m_settings.wireframe))
-            m_settings.wireframe = false;
+         if (ImGui::Selectable("Shaded", !m_settings.wireframe && !m_settings.solid))
+            m_settings.wireframe = m_settings.solid = false;
          ImGui::SetItemTooltip("Full shading, as the player renders it (at most 2 shaded views)");
+         if (ImGui::Selectable("Solid", m_settings.solid))
+         {
+            m_settings.wireframe = false;
+            m_settings.solid = true;
+         }
+         ImGui::SetItemTooltip("Shaded with the table lights, refraction, AO and bloom off (counts as a shaded view)");
          if (ImGui::Selectable("Wireframe", m_settings.wireframe))
+         {
             m_settings.wireframe = true;
+            m_settings.solid = false;
+         }
          ImGui::SetItemTooltip("The editor's hidden line wireframe, without post processing (cheap)");
          ImGui::EndCombo();
       }
@@ -457,6 +466,8 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             req.playerCamera = !m_settings.freeOrbit;
             req.viewSetup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : BG_INVALID;
             req.wireframe = m_settings.wireframe;
+            req.solid = m_settings.solid;
+            req.solid = m_settings.solid;
             if (m_settings.freeOrbit)
                ComputeOrbit(static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
             if (renderer->RequestEditorView(m_slot, req))

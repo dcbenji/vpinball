@@ -2094,7 +2094,9 @@ void Renderer::SetSpaceReference(PartGroupData::SpaceReference spaceReference, b
 void Renderer::RenderItem(IEditable* const editable, bool isNoBackdrop)
 {
    // Wireframe modes only apply to the main scene render, not to sub passes (UI wireframe fill/edges, light buffer, reflection probes)
-   const bool isWireframe = m_shadeMode != ShadeMode::Default && (m_render_mask & (UI_FILL | UI_EDGES | LIGHT_BUFFER | REFLECTION_PASS)) == 0;
+   const bool isWireframe = IsWireframeShade(m_shadeMode) && (m_render_mask & (UI_FILL | UI_EDGES | LIGHT_BUFFER | REFLECTION_PASS)) == 0;
+   if (IsSolidPass() && editable->GetItemType() == eItemLight)
+      return; // Solid shading: no table lights (parts, nor the bulb light buffer which draws them)
    if (editable->GetIRenderable() == nullptr // Not renderable
       || (editable->m_desktopBackdrop && isNoBackdrop) // Don't render backdrop items in reflections or VR & cabinet modes
       || (editable->GetPartGroup() != nullptr && ((editable->GetPartGroup()->GetPlayerModeVisibilityMask() & m_visibilityMask) == 0))) // Apply player mode visibility mask
@@ -2429,7 +2431,7 @@ void Renderer::UpdateAmbientOcclusion(RenderTarget* renderedRT, unsigned int jit
 
 bool Renderer::IsBloomEnabled() const
 {
-   return !m_bloomOff && (m_table->m_bloom_strength > 0.0f) && (g_pplayer->GetInfoMode() <= IF_DYNAMIC_ONLY);
+   return !m_bloomOff && !IsSolidPass() && (m_table->m_bloom_strength > 0.0f) && (g_pplayer->GetInfoMode() <= IF_DYNAMIC_ONLY);
 }
 
 void Renderer::UpdateBloom(RenderTarget* renderedRT)
@@ -3982,6 +3984,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewPass = true;
    m_editorPreviewPlayerCam = req.playerCamera;
    m_editorLitePass = lite;
+   m_editorSolidPass = !lite && req.solid;
 
    // The table's view setup (the player view), as the Preview Camera computes it (Renderer::InitLayout). m_initialMVP is set too, as
    // the passes which change the camera (shadow map pages) restore it from there
@@ -4062,6 +4065,7 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewPass = false;
    m_editorPreviewPlayerCam = false;
    m_editorLitePass = false;
+   m_editorSolidPass = false;
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
    m_render_mask = mainRenderMask;
@@ -4665,7 +4669,7 @@ RenderProbe::ReflectionMode Renderer::GetMaxReflectionMode() const
 int Renderer::GetAOMode() const // 0=Off, 1=Static, 2=Dynamic
 {
    // We must evaluate this dynamically since AO scale and enabled/disable can be changed from script
-   if (m_disableAO || !m_table->m_enableAO || !m_renderDevice->DepthBufferReadBackAvailable() || m_table->m_AOScale == 0.f)
+   if (m_disableAO || IsSolidPass() || !m_table->m_enableAO || !m_renderDevice->DepthBufferReadBackAvailable() || m_table->m_AOScale == 0.f)
       return 0;
    // The existing implementation suffers from high temporal artefacts that make it unsuitable for dynamic camera situations
    if (m_stereo3D == STEREO_VR)

@@ -2949,7 +2949,7 @@ void RenderDevice::DrawMesh(Shader* shader, const bool isTranparentPass, const V
    if (g_pplayer->m_renderer == nullptr)
       // This happens during startup for offscreen rendering (somewhat hacky)
       depth = 0.f;
-   else if (g_pplayer->m_renderer->GetShadeMode() != Renderer::ShadeMode::Default)
+   else if (g_pplayer->m_renderer->IsWireframeShade(g_pplayer->m_renderer->GetShadeMode()))
       // Used by the new wireframe renderer: sort along the left eye view vector
       //depth = isTranparentPass ? g_pplayer->m_renderer->GetMVP().GetModelView().MultiplyVectorNoPerspective(center).z : -g_pplayer->m_renderer->GetMVP().GetModelView().MultiplyVectorNoPerspective(center).z;
       // back to front

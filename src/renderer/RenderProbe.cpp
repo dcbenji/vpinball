@@ -160,6 +160,8 @@ RenderTarget* RenderProbe::Render(const unsigned int renderMask)
       return RenderReflectionProbe(renderMask);
       
    case SCREEN_SPACE_TRANSPARENCY:
+      if (m_renderer->IsSolidPass())
+         return nullptr; // Solid shading: no refraction
       RenderScreenSpaceTransparency();
       return m_dynamicRT;
       
