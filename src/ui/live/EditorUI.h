@@ -552,6 +552,7 @@ private:
    ViewMode m_camMode = ViewMode::PreviewCam;
    bool m_perspectiveCam = true;
    Renderer::ShadeMode m_shadeMode = Renderer::ShadeMode::Default;
+   ViewShadeOptions m_viewShade; // The 3D Viewport's view-only shading options (Viewport Shading popover), not saved
    enum class PredefinedView
    {
       None, Front, Back, Right, Left, Top, Bottom

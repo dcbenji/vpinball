@@ -177,6 +177,77 @@ namespace
 {
 constexpr const char* kPreviewViewNames[3] = { "desktop", "cabinet", "fss" }; // Indexed by ViewSetupID
 
+nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
+{
+   // Only what differs from the default: a layout stays small, and an option added later keeps its default in layouts saved before
+   const ViewShadeOptions d;
+   nlohmann::json j = nlohmann::json::object();
+   if (o.brightness != d.brightness)
+      j["brightness"] = o.brightness;
+   if (o.lightAngle != d.lightAngle)
+      j["light_angle"] = o.lightAngle;
+   if (o.flat)
+      j["flat"] = true;
+   if (o.bgCustom)
+      j["background"] = { o.bg[0], o.bg[1], o.bg[2] };
+   if (o.backfaceCulling)
+      j["backface_culling"] = true;
+   if (o.cavity)
+      j["cavity"] = true;
+   if (o.xray)
+      j["xray"] = true;
+   if (o.wireCustom)
+      j["wire_color"] = { o.wire[0], o.wire[1], o.wire[2] };
+   if (o.envStrength != d.envStrength)
+      j["env_strength"] = o.envStrength;
+   if (!o.tableLights)
+      j["table_lights"] = false;
+   return j;
+}
+
+// Malformed or out of range values mean the default
+ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
+{
+   ViewShadeOptions o;
+   if (!j.is_object())
+      return o;
+   const auto num = [&](const char* key, float& out, const float lo, const float hi) {
+      const auto it = j.find(key);
+      if (it != j.end() && it->is_number() && std::isfinite(it->get<double>()))
+         out = std::clamp(static_cast<float>(it->get<double>()), lo, hi);
+   };
+   const auto flag = [&](const char* key, bool& out) {
+      const auto it = j.find(key);
+      if (it != j.end() && it->is_boolean())
+         out = it->get<bool>();
+   };
+   const auto color = [&](const char* key, bool& custom, float (&rgb)[3]) {
+      const auto it = j.find(key);
+      if (it == j.end() || !it->is_array() || it->size() != 3)
+         return;
+      float c[3];
+      for (int i = 0; i < 3; i++)
+      {
+         if (!(*it)[i].is_number() || !std::isfinite((*it)[i].get<double>()))
+            return;
+         c[i] = std::clamp(static_cast<float>((*it)[i].get<double>()), 0.f, 1.f);
+      }
+      custom = true;
+      std::copy(c, c + 3, rgb);
+   };
+   num("brightness", o.brightness, 0.f, 4.f);
+   num("light_angle", o.lightAngle, -180.f, 180.f);
+   flag("flat", o.flat);
+   color("background", o.bgCustom, o.bg);
+   flag("backface_culling", o.backfaceCulling);
+   flag("cavity", o.cavity);
+   flag("xray", o.xray);
+   color("wire_color", o.wireCustom, o.wire);
+   num("env_strength", o.envStrength, 0.f, 4.f);
+   flag("table_lights", o.tableLights);
+   return o;
+}
+
 nlohmann::json NodeToJson(const std::vector<AreaNode>& nodes, const int idx)
 {
    const AreaNode& n = nodes[idx];
@@ -206,6 +277,8 @@ nlohmann::json NodeToJson(const std::vector<AreaNode>& nodes, const int idx)
             j["view_shading"] = "solid";
          if (!v.live)
             j["live"] = false;
+         if (v.shade != ViewShadeOptions {})
+            j["view_shade"] = ShadeOptionsToJson(v.shade);
          if (v.orbitValid)
             j["orbit"] = { { "yaw", v.yaw }, { "pitch", v.pitch }, { "distance", v.distance }, { "target", { v.target[0], v.target[1], v.target[2] } }, { "ortho", v.ortho } };
       }
@@ -299,6 +372,8 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
             v.wireframe = shading == "wireframe";
             v.solid = shading == "solid";
             v.live = !(n.contains("live") && n["live"].is_boolean() && !n["live"].get<bool>());
+            if (const auto so = n.find("view_shade"); so != n.end())
+               v.shade = ShadeOptionsFromJson(*so);
             if (const auto o = n.find("orbit"); o != n.end() && o->is_object())
             {
                const auto num = [&](const char* key, float& out) {
@@ -319,7 +394,7 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
                v.orbitValid = ok;
                v.ortho = ok && o->contains("ortho") && (*o)["ortho"].is_boolean() && (*o)["ortho"].get<bool>();
                if (!ok)
-                  v = AreaViewSettings { v.freeOrbit, v.wireframe, v.solid, v.live };
+                  v = AreaViewSettings { v.freeOrbit, v.wireframe, v.solid, v.live, v.shade };
             }
          }
       }

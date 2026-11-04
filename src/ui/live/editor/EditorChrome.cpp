@@ -6,6 +6,7 @@
 #include "RubberBetweenPosts.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
+#include "PropertyPane.h"
 
 #include "core/FileLocator.h"
 #include "core/VPApp.h"
@@ -86,9 +87,204 @@ void EditorChrome::DrawChevron(ImDrawList *drawList, const ImVec2 &c, const Chev
    }
 }
 
-float EditorChrome::ShadeIconRowWidth() { return 3.f * ImGui::GetFrameHeight() * 1.1f + 2.f * std::max(1.f, ImGui::GetFrameHeight() / 22.f); }
+static float ShadeCaretWidth() { return 0.62f * ImGui::GetFrameHeight(); }
 
-bool EditorChrome::ShadeIconRow(const char *id, int &mode)
+float EditorChrome::ShadeIconRowWidth(const bool withCaret)
+{
+   const float seam = std::max(1.f, ImGui::GetFrameHeight() / 22.f);
+   return 3.f * ImGui::GetFrameHeight() * 1.1f + 2.f * seam + (withCaret ? seam + ShadeCaretWidth() : 0.f);
+}
+
+// The Viewport Shading popover: the view-only options of the shading mode (0 Wireframe, 1 Solid, 2 PBR). True if anything changed
+static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShadeOptions &o, bool &xray)
+{
+   static const ViewShadeOptions def;
+   bool changed = false;
+   const float fs = ImGui::GetFontSize();
+   const ImVec4 dim = EditorTheme::V(EditorTheme::TextDim);
+   const auto heading = [&](const char *text) {
+      ImGui::PushStyleColor(ImGuiCol_Text, dim);
+      ImGui::TextUnformatted(text);
+      ImGui::PopStyleColor();
+   };
+   // Right click: Reset to Default for the last item
+   const auto resetMenu = [&](auto reset) {
+      if (ImGui::BeginPopupContextItem("##reset"))
+      {
+         if (ImGui::MenuItem("Reset to Default"))
+         {
+            reset();
+            changed = true;
+         }
+         ImGui::EndPopup();
+      }
+   };
+   // Joined segmented buttons (Blender's expanded enum), the active one blue
+   const auto segmented = [&](const char *id, const char *const *labels, const int count, int &sel) {
+      bool pressedAny = false;
+      const float seam = std::max(1.f, fs / 14.f), w = (ImGui::GetContentRegionAvail().x - seam * (count - 1)) / count, h = ImGui::GetFrameHeight(), round = 0.22f * h;
+      ImDrawList *const dl = ImGui::GetWindowDrawList();
+      ImGui::PushID(id);
+      for (int i = 0; i < count; i++)
+      {
+         if (i > 0)
+            ImGui::SameLine(0.f, seam);
+         ImGui::PushID(i);
+         const bool pressed = ImGui::InvisibleButton("##seg", ImVec2(w, h));
+         ImGui::PopID();
+         const bool active = sel == i, hovered = ImGui::IsItemHovered();
+         const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+         dl->AddRectFilled(a, b, active ? (hovered ? EditorTheme::FillActive : EditorTheme::Fill) : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round,
+            count == 1 ? ImDrawFlags_RoundCornersAll : i == 0 ? ImDrawFlags_RoundCornersLeft : i == count - 1 ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersNone);
+         const ImVec2 ts = ImGui::CalcTextSize(labels[i]);
+         dl->AddText(ImVec2(0.5f * (a.x + b.x - ts.x), 0.5f * (a.y + b.y - ts.y)), ImGui::GetColorU32(ImGuiCol_Text), labels[i]);
+         if (pressed && !active)
+         {
+            sel = i;
+            pressedAny = true;
+         }
+      }
+      ImGui::PopID();
+      return pressedAny;
+   };
+   const auto checkbox = [&](const char *id, const char *label, bool &value, const bool def) {
+      ImGui::PushID(id);
+      bool toggled = PropertyPane::FlatCheckbox("##cb", &value);
+      ImGui::SameLine();
+      ImGui::TextUnformatted(label);
+      if (ImGui::IsItemClicked())
+      {
+         value = !value;
+         toggled = true;
+      }
+      resetMenu([&]() { value = def; });
+      ImGui::PopID();
+      changed |= toggled;
+   };
+   const auto slider = [&](const char *id, float &value, const float lo, const float hi, const char *format, const float def) {
+      ImGui::PushID(id);
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      changed |= PropertyPane::FillSlider("##sl", &value, lo, hi, format);
+      value = std::clamp(value, lo, hi);
+      resetMenu([&]() { value = def; });
+      ImGui::PopID();
+   };
+   // Theme / Custom colour: the swatch opens the picker, picking a colour makes it Custom
+   const auto themeOrCustom = [&](const char *id, bool &custom, float (&rgb)[3]) {
+      static const char *const labels[2] = { "Theme", "Custom" };
+      int sel = custom ? 1 : 0;
+      if (segmented(id, labels, 2, sel))
+      {
+         custom = sel == 1;
+         changed = true;
+      }
+      if (custom)
+      {
+         ImGui::PushID(id);
+         if (ImGui::ColorButton("##swatch", ImVec4(rgb[0], rgb[1], rgb[2], 1.f), ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoBorder, ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight())))
+            ImGui::OpenPopup("##picker");
+         if (ImGui::BeginPopup("##picker"))
+         {
+            changed |= ImGui::ColorPicker3("##rgb", rgb, ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_Float);
+            ImGui::EndPopup();
+         }
+         ImGui::PopID();
+      }
+   };
+
+   // Blender's order and names: Lighting, Color (Wireframe colour, Background), Options. Sections collapse
+   const auto section = [&](const char *label) {
+      ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+      ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1, 1, 1, 0.06f));
+      ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1, 1, 1, 0.1f));
+      ImGui::PushStyleColor(ImGuiCol_Text, dim);
+      const bool open = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+      ImGui::PopStyleColor(4);
+      return open;
+   };
+   ImGui::PushStyleColor(ImGuiCol_Text, dim);
+   ImGui::TextUnformatted("Viewport Shading");
+   ImGui::PopStyleColor();
+   if (mode == 1)
+   {
+      if (section("Lighting"))
+      {
+         static const char *const lighting[2] = { "Studio", "Flat" };
+         int sel = o.flat ? 1 : 0;
+         if (segmented("lighting", lighting, 2, sel))
+         {
+            o.flat = sel == 1;
+            changed = true;
+         }
+         slider("brightness", o.brightness, 0.f, 4.f, "Brightness  %.2f", def.brightness);
+         ImGui::BeginDisabled(o.flat); // Flat has no direction
+         slider("direction", o.lightAngle, -180.f, 180.f, "Light Direction  %.0f deg", def.lightAngle);
+         ImGui::EndDisabled();
+      }
+      if (section("Color"))
+      {
+         heading("Background");
+         themeOrCustom("background", o.bgCustom, o.bg);
+      }
+      if (section("Options"))
+      {
+         checkbox("cull", "Backface Culling", o.backfaceCulling, def.backfaceCulling);
+         checkbox("cavity", "Cavity", o.cavity, def.cavity);
+      }
+   }
+   else if (mode == 0)
+   {
+      if (section("Color"))
+      {
+         heading("Wireframe");
+         themeOrCustom("wire", o.wireCustom, o.wire);
+         heading("Background");
+         themeOrCustom("background", o.bgCustom, o.bg);
+      }
+      if (section("Options"))
+         checkbox("xray", "X-Ray", xray, false);
+   }
+   else
+   {
+      if (section("Lighting"))
+      {
+         checkbox("lights", "Table Lights", o.tableLights, def.tableLights);
+         slider("strength", o.envStrength, 0.f, 4.f, "Environment Strength  %.2f", def.envStrength);
+      }
+   }
+   ImGui::Spacing();
+   if (ImGui::Button("Reset", ImVec2(-FLT_MIN, 0.f)))
+   {
+      if (mode == 1)
+      {
+         o.brightness = def.brightness;
+         o.lightAngle = def.lightAngle;
+         o.flat = def.flat;
+         o.bgCustom = def.bgCustom;
+         std::copy(def.bg, def.bg + 3, o.bg);
+         o.backfaceCulling = def.backfaceCulling;
+         o.cavity = def.cavity;
+      }
+      else if (mode == 0)
+      {
+         xray = false;
+         o.bgCustom = def.bgCustom;
+         std::copy(def.bg, def.bg + 3, o.bg);
+         o.wireCustom = def.wireCustom;
+         std::copy(def.wire, def.wire + 3, o.wire);
+      }
+      else
+      {
+         o.envStrength = def.envStrength;
+         o.tableLights = def.tableLights;
+      }
+      changed = true;
+   }
+   ImGui::SetItemTooltip("Reset this mode's options to their defaults");
+   return changed;
+}
+
+bool EditorChrome::ShadeIconRow(const char *id, int &mode, ViewShadeOptions *const options, EditorUI *const editor, bool *const xray)
 {
    // Blender header look: 1.1 x 1 segments joined by a seam, rounded at the row ends only, idle Raised, active Fill; the spheres share one outer size
    static constexpr const char *names[3] = { "Wireframe", "Solid", "PBR" };
@@ -107,7 +303,7 @@ bool EditorChrome::ShadeIconRow(const char *id, int &mode)
       const bool active = mode == i, hovered = ImGui::IsItemHovered();
       const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
       dl->AddRectFilled(a, b, active ? (hovered ? EditorTheme::FillActive : EditorTheme::Fill) : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round,
-         i == 0 ? ImDrawFlags_RoundCornersLeft : i == 2 ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersNone);
+         i == 0 ? ImDrawFlags_RoundCornersLeft : (i == 2 && options == nullptr) ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersNone);
       const ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text);
       const auto tint = [&](const float k, const float alpha) { return ImGui::GetColorU32(ImVec4(tc.x * k, tc.y * k, tc.z * k, tc.w * alpha)); };
       const ImU32 col = active ? tint(1.f, 1.f) : tint(0.85f, 0.8f);
@@ -134,21 +330,15 @@ bool EditorChrome::ShadeIconRow(const char *id, int &mode)
             dl->AddCircleFilled(ImVec2(c.x - 0.28f * r, c.y - 0.28f * r), r * (0.62f - 0.17f * s), tint(1.f, 0.35f));
       }
       else
-      { // Ball: dark disc, lit convex lens on the upper left (half disc plus a half ellipse = the terminator), highlight, thin rim
-         dl->AddCircleFilled(c, r, tint(0.3f, 1.f));
-         static constexpr int n = 14;
-         ImVec2 pts[2 * n + 2];
-         const float fx = 0.7071f, fy = 0.7071f; // Shadow axis (lower right) and its perpendicular (-fy, fx)
-         const float R = r * 0.98f;
-         for (int s = 0; s <= n; s++)
+      { // Ball: a smooth shade from the lit upper left to the dark lower right (stacked anti-aliased discs, each tangent to the rim at the upper left), small highlight, thin rim
+         static constexpr int steps = 12;
+         dl->AddCircleFilled(c, r, tint(0.32f, 1.f), 0);
+         for (int s = 1; s <= steps; s++)
          {
-            const float t = -0.5f * IM_PI + IM_PI * s / n, u = -R * cosf(t), v = R * sinf(t); // Outer arc, lit side
-            pts[s] = ImVec2(c.x + u * fx - v * fy, c.y + u * fy + v * fx);
-            const float tt = 0.5f * IM_PI - IM_PI * s / n, uu = -0.05f * R * cosf(tt), vv = R * sinf(tt); // Back along the terminator
-            pts[n + 1 + s] = ImVec2(c.x + uu * fx - vv * fy, c.y + uu * fy + vv * fx);
+            const float t = static_cast<float>(s) / steps, rad = r * (1.f - 0.78f * t), off = (r - rad) * 0.7071f;
+            dl->AddCircleFilled(ImVec2(c.x - off, c.y - off), rad, tint(0.32f + 0.62f * t, 1.f), 0);
          }
-         dl->AddConvexPolyFilled(pts, 2 * n + 2, tint(1.f, 1.f));
-         dl->AddCircleFilled(ImVec2(c.x - 0.36f * r, c.y - 0.38f * r), 0.12f * r + 0.3f, IM_COL32(255, 255, 255, 210));
+         dl->AddCircleFilled(ImVec2(c.x - 0.36f * r, c.y - 0.38f * r), 0.12f * r + 0.3f, IM_COL32(255, 255, 255, 230));
          dl->AddCircle(c, r, col, 0, th * 0.8f);
       }
       Tip(names[i], "Z", descs[i]);
@@ -156,6 +346,45 @@ bool EditorChrome::ShadeIconRow(const char *id, int &mode)
       {
          mode = i;
          changed = true;
+      }
+   }
+   if (options != nullptr)
+   {
+      // Blender's caret: a small joined button after the icons, opening the popover of the mode
+      ImGui::SameLine(0.f, seam);
+      const bool open = ImGui::IsPopupOpen("##ShadeOptions");
+      const bool pressed = ImGui::InvisibleButton("##caret", ImVec2(ShadeCaretWidth(), h));
+      const bool hovered = ImGui::IsItemHovered();
+      const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      dl->AddRectFilled(a, b, open ? EditorTheme::Fill : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round, ImDrawFlags_RoundCornersRight);
+      const ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+      DrawChevron(dl, ImVec2(0.5f * (a.x + b.x), 0.5f * (a.y + b.y)), ChevronDir::Down, 0.14f * h, ImGui::GetColorU32(ImVec4(tc.x, tc.y, tc.z, open ? 1.f : 0.8f)));
+      Tip("Viewport Shading", nullptr, "Options of the shading mode");
+      if (pressed)
+      {
+         if (open)
+            ImGui::CloseCurrentPopup();
+         else
+            ImGui::OpenPopup("##ShadeOptions");
+      }
+      ImGui::SetNextWindowPos(ImVec2(b.x, b.y + 2.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
+      ImGui::SetNextWindowSizeConstraints(ImVec2(15.f * ImGui::GetFontSize(), 0.f), ImVec2(15.f * ImGui::GetFontSize(), FLT_MAX));
+      if (ImGui::BeginPopup("##ShadeOptions"))
+      {
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+         {
+            ImGui::CloseCurrentPopup();
+            if (editor != nullptr)
+               editor->m_areaEscPending = true; // The Esc that closed the popover is not an editor Esc (it would deselect)
+         }
+         bool localXray = options->xray;
+         bool &x = xray != nullptr ? *xray : localXray;
+         if (ShadeOptionsPopover(editor, mode, *options, x))
+         {
+            if (xray == nullptr)
+               options->xray = localXray;
+         }
+         ImGui::EndPopup();
       }
    }
    ImGui::PopID();
@@ -1151,13 +1380,18 @@ void EditorChrome::RenderStatusOverlay()
    if (vc.Width() > 560.f * dpi)
    {
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-      ImGui::SetNextWindowPos(ImVec2(vc.x1 - 16.f * dpi - ShadeIconRowWidth(), overlayPos.y), 0, ImVec2(0.f, 0.f));
+      const bool shadeOptions = editor.m_camMode == ViewMode::EditorCam; // The options are the editor view's: none for the Preview Camera and the Desktop Backdrop
+      ImGui::SetNextWindowPos(ImVec2(vc.x1 - 16.f * dpi - ShadeIconRowWidth(shadeOptions), overlayPos.y), 0, ImVec2(0.f, 0.f));
       ImGui::Begin("shading row", nullptr,
          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
             | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav);
       int mode = Renderer::IsWireframeShade(editor.m_shadeMode) ? 0 : editor.m_shadeMode == Renderer::ShadeMode::Solid ? 1 : 2;
-      if (ShadeIconRow("##MainShading", mode))
-         editor.m_shadeMode = mode == 0 ? Renderer::ShadeMode::Wireframe : mode == 1 ? Renderer::ShadeMode::Solid : Renderer::ShadeMode::Default;
+      bool xray = editor.m_shadeMode == Renderer::ShadeMode::NoDepthWireframe; // The main view's X-Ray is its NoDepthWireframe shade mode (the Z cycle's third step)
+      const bool xrayBefore = xray;
+      if (ShadeIconRow("##MainShading", mode, shadeOptions ? &editor.m_viewShade : nullptr, &editor, &xray))
+         editor.m_shadeMode = mode == 0 ? (xray ? Renderer::ShadeMode::NoDepthWireframe : Renderer::ShadeMode::Wireframe) : mode == 1 ? Renderer::ShadeMode::Solid : Renderer::ShadeMode::Default;
+      else if (xray != xrayBefore && Renderer::IsWireframeShade(editor.m_shadeMode))
+         editor.m_shadeMode = xray ? Renderer::ShadeMode::NoDepthWireframe : Renderer::ShadeMode::Wireframe;
       ImGui::End();
       ImGui::PopStyleVar();
    }

@@ -257,6 +257,7 @@ void EditorUI::Close()
    m_partLibrary.OnEditorClosed(); // The library's lightbox and thumbnails do not survive the editor closing (view slot, scratch tables)
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
+   m_renderer->SetViewShade(ViewShadeOptions {});
 }
 
 void EditorUI::SetTable(PinTable *const table)
@@ -2552,6 +2553,7 @@ void EditorUI::RenderUI()
    }
 
    m_renderer->SetShadeMode(m_shadeMode);
+   m_renderer->SetViewShade(m_camMode == ViewMode::EditorCam && !IsInspectMode() ? m_viewShade : ViewShadeOptions {}); // The options are the editor view's only
 
    // Selection and physic colliders overlay (suspended while a save is running: the part renders
    // would write into the parts' data being serialized on the worker thread, see Render3D)

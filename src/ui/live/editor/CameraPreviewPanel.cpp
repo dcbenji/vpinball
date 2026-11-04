@@ -379,9 +379,9 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          m_refresh = true;
       }
 
-      nextItem(EditorChrome::ShadeIconRowWidth());
+      nextItem(EditorChrome::ShadeIconRowWidth(true));
       int shadeMode = m_settings.wireframe ? 0 : m_settings.solid ? 1 : 2;
-      if (EditorChrome::ShadeIconRow("##ViewShading", shadeMode))
+      if (EditorChrome::ShadeIconRow("##ViewShading", shadeMode, &m_settings.shade, &m_editor))
       {
          m_settings.wireframe = shadeMode == 0;
          m_settings.solid = shadeMode == 1;
@@ -511,6 +511,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             req.viewSetup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : BG_INVALID;
             req.wireframe = m_settings.wireframe;
             req.solid = m_settings.solid;
+            req.shade = m_settings.shade;
             if (m_settings.freeOrbit)
                ComputeOrbit(m_settings, m_editor.m_navFovY, static_cast<float>(m_width) / static_cast<float>(max(1, m_height)), req.view, req.proj);
             if (renderer->RequestEditorView(m_slot, req))

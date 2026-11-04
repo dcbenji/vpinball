@@ -5,6 +5,7 @@
 #include "AreaLayout.h"
 #include "core/ieditable.h"
 #include "imgui/imgui.h"
+#include "renderer/ViewShadeOptions.h"
 
 #include <memory>
 #include <vector>
@@ -37,8 +38,10 @@ public:
    // Blender style tooltip for the last item (also when it is disabled): Title Case name, dim shortcut chip, optional dim sentence case description
    static void Tip(const char *title, const char *shortcut = nullptr, const char *description = nullptr);
    // Blender's shading switch: joined row of 3 sphere icon buttons (mode 0 Wireframe, 1 Solid, 2 PBR, the active one blue), true if the mode was changed. Width: ShadeIconRowWidth
-   static bool ShadeIconRow(const char *id, int &mode);
-   static float ShadeIconRowWidth(); // Width of the row, for placing it
+   // With `options` the row ends in Blender's caret button, which opens the Viewport Shading popover of the mode: its view-only options (the main view passes
+   // xray = its wireframe X-Ray, kept in its shade mode; a secondary view leaves it null: options->xray). The popover changes `options` (and *xray) in place
+   static bool ShadeIconRow(const char *id, int &mode, ViewShadeOptions *options = nullptr, EditorUI *editor = nullptr, bool *xray = nullptr);
+   static float ShadeIconRowWidth(bool withCaret = false); // Width of the row, for placing it
 
    void Render(bool showFullUI);
    float GetTopBarHeight() const { return m_menuBarHeight + m_toolBarHeight; }
