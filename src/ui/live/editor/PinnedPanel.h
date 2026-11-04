@@ -103,6 +103,10 @@ public:
    // field of a compatible part type), as one undo step. Not available in inspection sessions
    bool CanCopyToSelected(const PinKey &key) const;
    bool CopyToSelected(const PinKey &key); // Queues the copy (the menu is drawn inside the panels' undo records)
+   // Reset to Default (Blender's field menu): the field of a part goes back to the value of a freshly created part of the same type after
+   // SetDefaults(false) (the factory defaults, not the user's saved default properties). Only the part fields that have a copy function
+   bool CanResetToDefault(const PinKey &key, string *whyNot = nullptr) const;
+   bool ResetToDefault(const PinKey &key); // Queues the reset (run by FlushPendingCopy, as one undo step)
    void FlushPendingCopy(); // Runs the queued copy (and bulb apply), as one undo step: to be called outside of any undo record (after the areas are rendered)
    // "Apply to all traced inserts" button: queues the copy of the traced insert's bulb values to the other traced inserts (run by FlushPendingCopy)
    void RequestApplyBulb(IEditable *source, bool startup)
@@ -181,6 +185,8 @@ private:
    bool m_escPending = false;
    PinKey m_pendingCopy;
    bool m_hasPendingCopy = false;
+   PinKey m_pendingReset;
+   bool m_hasPendingReset = false;
    void ApplyBulbToAllTraced(Primitive *source, bool startup);
    bool m_bulbStartup = false; // The pane showed the startup table (inspection Startup tab): the values go to the startup inserts
    IEditable *m_bulbSource = nullptr; // Traced insert whose bulb values are to be applied to all the others

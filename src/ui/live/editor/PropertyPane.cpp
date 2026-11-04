@@ -775,6 +775,10 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
    }
    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && rowHovered)
       ImGui::OpenPopup("##PinMenu");
+   // Blender: Backspace over a field resets it (not while typing in a text field or dragging a field)
+   if (rowHovered && part != nullptr && ImGui::IsKeyPressed(ImGuiKey_Backspace, false) && !ImGui::GetIO().WantTextInput && ImGui::GetActiveID() == 0
+      && !ImGui::IsPopupOpen("##PinMenu"))
+      m_pins->ResetToDefault(key);
    if (!ImGui::BeginPopup("##PinMenu"))
       return;
    if (m_pins->IsPinned(key))
@@ -807,6 +811,15 @@ void PropertyPane::PinContext(const PinKey& key, const IEditable* part, const Ma
          m_pins->PinMaterialSeeThrough(material->m_name);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Add the See-Through Surface fields of this material");
+   }
+   if (part != nullptr)
+   {
+      string whyNot;
+      const bool canReset = m_pins->CanResetToDefault(key, &whyNot);
+      if (ImGui::MenuItem(ICON_LC_UNDO_2 " Reset to Default", "Backspace", false, canReset))
+         m_pins->ResetToDefault(key);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("%s", canReset ? "Set this field back to the default of a new part of this type" : whyNot.c_str());
    }
    if (part != nullptr)
    {

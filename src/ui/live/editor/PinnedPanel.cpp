@@ -5,6 +5,7 @@
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 
+#include "core/editablereg.h"
 #include "core/player.h"
 #include "parts/Material.h"
 #include "parts/primitive.h"
@@ -172,6 +173,35 @@ bool PinnedPanel::CopyToSelected(const PinKey &key)
    return true;
 }
 
+bool PinnedPanel::CanResetToDefault(const PinKey &key, string *whyNot) const
+{
+   const auto fail = [whyNot](const char *msg)
+   {
+      if (whyNot != nullptr)
+         *whyNot = msg;
+      return false;
+   };
+   if (m_editor.IsInspectMode())
+      return fail("Not available in an inspection session");
+   if (key.kind != PinKind::Part)
+      return fail("No default is known for this field (only part fields have one)");
+   const Def *const def = FindDef(key);
+   const void *owner = nullptr;
+   IEditable *const source = static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner));
+   if (def == nullptr || !def->copy || source == nullptr)
+      return fail("No default is known for this field");
+   return true;
+}
+
+bool PinnedPanel::ResetToDefault(const PinKey &key)
+{
+   if (!CanResetToDefault(key))
+      return false;
+   m_pendingReset = key;
+   m_hasPendingReset = true;
+   return true;
+}
+
 void PinnedPanel::ApplyBulbToAllTraced(Primitive *source, bool startup)
 {
    EditorUI &editor = m_editor;
@@ -239,6 +269,40 @@ void PinnedPanel::FlushPendingCopy()
       IEditable *const source = m_bulbSource;
       m_bulbSource = nullptr;
       ApplyBulbToAllTraced(static_cast<Primitive *>(source), m_bulbStartup);
+   }
+   if (m_hasPendingReset)
+   {
+      m_hasPendingReset = false;
+      const PinKey rkey = m_pendingReset;
+      const Def *const rdef = FindDef(rkey);
+      const void *rowner = nullptr;
+      IEditable *const part = rdef != nullptr && rkey.kind == PinKind::Part ? static_cast<IEditable *>(Resolve(PinKind::Part, rkey.name, &rowner)) : nullptr;
+      if (part != nullptr && rdef->copy)
+      {
+         // The default is read from a fresh part of the same type; the field is written back to the part as one undo step
+         IEditable *const fresh = EditableRegistry::Create(part->GetItemType());
+         if (fresh != nullptr)
+         {
+            fresh->SetDefaults(false);
+            m_editor.m_undo.BeginUndo();
+            m_editor.m_undo.MarkForUndo(part);
+            const bool ok = rdef->copy(static_cast<void *>(fresh), static_cast<void *>(part), true);
+            m_editor.m_undo.SetFieldLabel("Reset to Default: " + (rdef->label.empty() ? rkey.prop : rdef->label));
+            m_editor.m_undo.EndUndo(); // Outside of any record: this one is kept and marks the table dirty
+            fresh->Release();
+            m_editor.m_lastUndoPart = nullptr; // The next field edit is a step of its own
+            m_editor.m_lastUndoId = 0;
+            if (ok)
+            {
+               m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
+               m_editor.m_player->m_physics->Update(part);
+               for (const std::shared_ptr<EditorUIPart> &sel : m_editor.m_multiSel)
+                  if (sel->GetEditable() == part)
+                     sel->SyncVisibilityOverrides();
+               m_editor.m_liveUI.PushNotification("Reset '"s + (rdef->label.empty() ? rkey.prop : rdef->label) + "' to its default", 2500);
+            }
+         }
+      }
    }
    if (!m_hasPendingCopy)
       return;
