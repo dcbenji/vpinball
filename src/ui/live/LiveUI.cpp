@@ -14,6 +14,7 @@
 #include "fonts/ForkAwesome.h"
 #include "math/matrix.h"
 #include "plugins/VPXPlugin.h"
+#include "renderer/RenderCommand.h"
 #include "renderer/Renderer.h"
 #include "renderer/VRDevice.h"
 
@@ -536,7 +537,7 @@ void LiveUI::RenderUI()
       m_rd->m_uiShader->SetTechnique(ShaderTechnique::LiveUI);
    if (static_cast<int>(m_meshBuffers.size()) < draw_data->CmdListsCount)
       m_meshBuffers.resize(draw_data->CmdListsCount);
-   int depthSort = -10000;
+   int depthSort = -10000000; // Below any other command of the pass (editor wireframes sort by view depth): ImGui is always drawn last, exact in a float
    bool hasContent = false;
    for (int n = 0; n < draw_data->CmdListsCount; n++)
    {
@@ -588,6 +589,7 @@ void LiveUI::RenderUI()
             m_rd->m_uiShader->SetVector(ShaderUniform::staticColor_Alpha, &uiParams);
             #endif
             m_rd->DrawMesh(m_rd->m_uiShader, true, Vertex3Ds(0.f, 0.f, 0.f), static_cast<float>(depthSort), m_meshBuffers[n], RenderDevice::TRIANGLELIST, cmd->IdxOffset, cmd->ElemCount);
+            m_rd->GetCurrentPass()->m_commands.back()->SetDepth(static_cast<float>(depthSort)); // DrawMesh sorts by depth bias minus z (view z in wireframe shading): force the order
             depthSort--;
          }
       }
@@ -757,7 +759,7 @@ void LiveUI::SetupImGuiStyle(const bool isEditor) const
    // Editor: neutral grey section headers / selected rows (the accent is a thin rule drawn by the property sections)
    style.Colors[ImGuiCol_HeaderHovered] = isEditor ? ImColor(75, 75, 75) : ImColor(0.114f, 0.592f, 0.925f, 1.0f);
    style.Colors[ImGuiCol_HeaderActive] = isEditor ? ImColor(90, 90, 90) : ImColor(0.0f, 0.467f, 0.784f, 1.0f);
-   style.Colors[ImGuiCol_Separator] = isEditor ? ImVec4(ImColor(48, 48, 48)) : ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
+   style.Colors[ImGuiCol_Separator] = isEditor ? ImVec4(ImColor(64, 64, 64)) : ImVec4(0.306f, 0.306f, 0.306f, 1.0f); // Editor: 64 shows on both the 24 popups and the 48 panels (48 vanished on panel surfaces)
    style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_SeparatorActive] = ImVec4(0.306f, 0.306f, 0.306f, 1.0f);
    style.Colors[ImGuiCol_ResizeGrip] = ImVec4(0.145f, 0.145f, 0.149f, 1.0f);
