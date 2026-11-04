@@ -78,6 +78,10 @@ private:
    float m_toolBarHeight = 0.0f;
    float m_statusBarHeight = 0.0f;
    bool m_showStatusBar = true; // View > Status Bar
+   // Scene statistics of the status bar, recomputed when the undo history or the part count changes
+   uint64_t m_statsUndoId = ~0ull;
+   size_t m_statsParts = ~size_t(0), m_statsVerts = 0, m_statsFaces = 0;
+   string m_statsCollection;
    bool m_toolShelfDrawn = false; // The shelf was drawn last frame: the top toolbar then omits the tools it hosts
    bool m_showToolShelf = true; // View > Tool Shelf (global, not per workspace)
    bool m_undoHistoryOpen = false;

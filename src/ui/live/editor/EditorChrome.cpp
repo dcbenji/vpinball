@@ -14,6 +14,8 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 #include "parts/light.h"
+#include "parts/primitive.h"
+#include "parts/Collection.h"
 #include "imgui/imgui_internal.h" // FindWindowByName (placement of the tool shelf relative to the Adjust Last Operation panel)
 
 namespace VPX::EditorUI
@@ -1294,10 +1296,33 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    const float textH = ImGui::GetFontSize();
    const float textY = barMin.y + 0.5f * (height - textH);
    float rightLimit = barMax.x - pad;
+   {
+      // Scene statistics at the right end: the collection, the vertices and faces of the meshes, the parts. Recomputed when the table changed
+      const PinTable *const table = editor.m_table;
+      const uint64_t undoId = editor.m_undo.TopRecordId();
+      if (undoId != m_statsUndoId || table->GetParts().size() != m_statsParts)
+      {
+         m_statsUndoId = undoId;
+         m_statsParts = table->GetParts().size();
+         m_statsVerts = m_statsFaces = 0;
+         for (const IEditable *const part : table->GetParts())
+            if (part->GetItemType() == eItemPrimitive)
+            {
+               const Primitive *const prim = static_cast<const Primitive *>(part);
+               m_statsVerts += prim->m_mesh.NumVertices();
+               m_statsFaces += prim->m_mesh.NumIndices() / 3;
+            }
+      }
+      const Collection *const collection = editor.m_selection.GetType() == Selection::S_COLLECTION ? editor.m_selection.GetCollection() : nullptr;
+      const string stats = std::format("{} | Verts: {} | Faces: {} | Objects: {}", collection != nullptr ? collection->m_name : "Scene Collection"s, m_statsVerts, m_statsFaces, m_statsParts);
+      const float x = barMax.x - pad - ImGui::CalcTextSize(stats.c_str()).x;
+      draw->AddText(ImVec2(x, textY), EditorTheme::TextDim, stats.c_str());
+      rightLimit = x - 2.f * pad;
+   }
    if (hasReport)
    {
       const ImVec2 size = ImGui::CalcTextSize(editor.m_report.c_str());
-      const float x = barMax.x - pad - size.x;
+      const float x = rightLimit - size.x;
       const auto fade = [reportAlpha](ImU32 color) { return (color & 0x00FFFFFFu) | (static_cast<ImU32>(static_cast<float>((color >> 24) & 0xFFu) * reportAlpha) << 24); };
       draw->AddText(ImVec2(x, textY), fade(EditorTheme::Text), editor.m_report.c_str());
       rightLimit = x - 2.f * pad;
