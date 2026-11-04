@@ -636,11 +636,11 @@ void main()
 		// The top edge: a rounded rim between the wall and the cap, catching the room (a bright ring on the OFF dome) and, lit,
 		// piping the lamp's light out through its thin edge
 		const float dEdge = length(vec2(rxz - domeParams[13].x, P.y - H));
-		const float rimW = exp(-(dEdge / 0.7) * (dEdge / 0.7));
+		const float rimW = exp(-(dEdge / 0.45) * (dEdge / 0.45));
 		const vec3 nB = normalize(radial + vec3(0.0, 1.0, 0.0));
 		const vec3 rV = reflect(-V, normalize(mix(Ns, nB, 0.6)));
 		const float FrB = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
-		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeEnv(rV.x * ex + rV.y * up + rV.z * ez, v_tablePos, 1.0), vec3_splat(6.0))) * mix(vec3_splat(1.0), trH, 0.3)
+		const vec3 capRim = capK * domeParams[12].w * rimW * (24.0 * domeParams[13].y * max(FrB, 0.2) * (0.3 + min(domeEnv(rV.x * ex + rV.y * up + rV.z * ez, v_tablePos, 1.0), vec3_splat(6.0))) * mix(vec3_splat(1.0), trH, 0.7)
 			+ 4.0 * lvlG * mix(lampCol, bb, domeParams[8].x * pk) * exp(-sigma * 0.5 * wallB) * (1.0 + 0.35 * (flash - 1.0)));
 		// White-hot peak (dome_peak): the scattered body rolls to the filament's white and brightens, hottest near the bulb;
 		// from above, the cap's middle (right over the bulb) glows as a soft hot spot through the milky plastic
@@ -675,8 +675,8 @@ void main()
 			const vec3 lit = domeParams[13].y * vec3_splat(1.0) + 3.0 * domeParams[8].yzw * giSide * (1.0 / DOME_PI);
 			// the zigzag where the flutes end under the cap, seen through the wall just below the top edge: a sawtooth line on the
 			// outer wall a little below the cap's underside, its teeth pointing down at the ridge tips
-			const float topZ = domeLine(P.y - (capY - 0.4 - 1.2 * (1.0 - 2.0 * eTip)), 0.2, fwTop) * (1.0 - capW);
-			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (2.5 * farL * trH * trN + tirL * trN + 1.5 * topZ * trH) + capW * 3.0 * capL * trH);
+			const float topZ = domeLine(P.y - (capY - 0.2 - 1.4 * (1.0 - 2.0 * eTip)), 0.3, fwTop) * (1.0 - capW);
+			depthL = depthK * (1.0 - lvlG) * lit * ((1.0 - capW) * (2.5 * farL * trH * trN + tirL * trN + 1.6 * topZ * trH) + capW * 3.0 * capL * trH);
 		}
 		// Frost (dome_frost; clear plastic, Ben's VPE Clear preset): a clear dome is neither see-through nor grey. Where the light's
 		// path through the wall is long (the ridge tips, the cap, the base band, the rim) the plastic scatters the room to a
