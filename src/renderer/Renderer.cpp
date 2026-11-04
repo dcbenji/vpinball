@@ -3843,7 +3843,11 @@ void Renderer::UpdatePBRShadowCache()
          // Same view as the playfield draw (its vertex normal goes through the view transforms to the world, as in the live path)
          const PartGroupData::SpaceReference prevSpaceRef = m_mvpSpaceReference;
          SetSpaceReference(receiver->GetPartGroup() ? receiver->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD, false);
+         // The bake is not a view's own scene draw: the view's Backface Culling must not cull its receiver (the option is switched off for the draw only)
+         const bool viewBackfaceCulling = m_viewShade.backfaceCulling;
+         m_viewShade.backfaceCulling = false;
          const bool drawn = receiver->DrawShadowCacheMesh();
+         m_viewShade.backfaceCulling = viewBackfaceCulling;
          SetSpaceReference(prevSpaceRef, false);
          if (drawn)
          {
