@@ -420,6 +420,10 @@ private:
    Matrix3D m_physicMatrix;
    bool m_skipRendering = false;
    bool m_groupdRendering = false;
+public:
+   // The mesh is uploaded in local space and drawn under m_fullMatrix (see Render): a transform edit needs no renderable rebuild
+   bool IsTransformedByMatrix() const { return m_renderer != nullptr && !m_groupdRendering && !m_skipRendering && !m_refrCurvatureEncoded; }
+private:
    int m_numGroupVertices = 0;
    int m_numGroupIndices = 0;
    float m_currentFrame = -1.f;

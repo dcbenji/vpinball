@@ -231,6 +231,7 @@ void EditorUI::Close()
    m_deferredStop = -1;
    m_gizmoDragActive = false;
    FlushRubberDrag();
+   FlushDrag();
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
    RestorePartsVisibility();
@@ -2390,6 +2391,7 @@ void EditorUI::RenderUI()
    {
       m_gizmoDragActive = false;
       FlushRubberDrag();
+      FlushDrag();
       m_gizmoDragSelection.clear();
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
@@ -3237,6 +3239,18 @@ bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragAc
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
 bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !IsDragInProgress() && m_fileOp == nullptr; }
+
+// Gameplay colliders and static shadow pages of the parts moved during a drag (modal or gizmo), once at the drag end
+void EditorUI::FlushDrag()
+{
+   const auto &parts = m_table->GetParts();
+   for (IEditable *const part : m_drag.pendingPhysics)
+      if (std::ranges::find(parts, part) != parts.end()) // Still in the table (a canceled drag restored it)
+         m_player->m_physics->Update(part);
+   if (m_drag.shadowDirty)
+      m_renderer->InvalidateShadowContent();
+   m_drag = Drag();
+}
 
 void EditorUI::RestoreUndoState(const std::any &state)
 {
@@ -4586,6 +4600,7 @@ void EditorUI::EndModalTransform(const bool confirm)
    }
    m_modal.active = false;
    FlushRubberDrag(); // After the restore of a canceled drag
+   FlushDrag(); // After the restore of a canceled drag
    m_gizmoOperation = m_modal.savedGizmo; // The gizmo comes back after the transform
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
@@ -5143,9 +5158,22 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       if (clearRot)
          rot.Set(0.f, 0.f, 0.f);
       part->SetTransform(pos, scale, rot);
-      m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
-      m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
-      m_player->m_physics->Update(part->GetEditable());
+      IEditable *const edit = part->GetEditable();
+      if (edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->IsTransformedByMatrix()) // A primitive is drawn under its matrix
+         m_renderer->ReinitRenderable(edit->GetIRenderable());
+      if (m_modal.active || m_gizmoDragActive)
+      {
+         // Per frame while dragging: the static shadow pages and the gameplay colliders follow at the drag end (FlushDrag)
+         m_drag.shadowDirty = true;
+         m_player->m_physics->UpdateUI(edit);
+         if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
+            m_drag.pendingPhysics.push_back(edit);
+      }
+      else
+      {
+         m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
+         m_player->m_physics->Update(edit);
+      }
    };
 
    if (clearPosition || clearScale || clearRotation)

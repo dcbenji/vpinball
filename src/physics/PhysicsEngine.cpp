@@ -130,6 +130,20 @@ void PhysicsEngine::Update(IEditable *editable)
    }
 }
 
+void PhysicsEngine::UpdateUI(IEditable *editable)
+{
+   if (editable->GetIHitable() == nullptr)
+      return;
+   if (editable->GetItemType() == eItemBall)
+   {
+      Update(editable);
+      return;
+   }
+   if (g_pplayer)
+      g_pplayer->SetPlayState(false);
+   GetUIQuadTree()->Update(editable);
+}
+
 void PhysicsEngine::Add(IEditable *editable)
 {
    assert(editable->GetIHitable() != nullptr);
