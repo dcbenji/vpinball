@@ -5,6 +5,7 @@
 
 #include "IconsLucide.h"
 #include "EditorTheme.h"
+#include "EditorChrome.h"
 #include "math/bbox.h"
 #include "math/matrix.h"
 #include "renderer/Renderer.h"
@@ -378,28 +379,13 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          m_refresh = true;
       }
 
-      nextItem(comboWidth("Wireframe"));
-      ImGui::SetNextItemWidth(comboWidth("Wireframe"));
-      if (ImGui::BeginCombo("##ViewShading", m_settings.wireframe ? "Wireframe" : m_settings.solid ? "Solid" : "PBR"))
+      nextItem(EditorChrome::ShadeIconRowWidth());
+      int shadeMode = m_settings.wireframe ? 0 : m_settings.solid ? 1 : 2;
+      if (EditorChrome::ShadeIconRow("##ViewShading", shadeMode))
       {
-         if (ImGui::Selectable("PBR", !m_settings.wireframe && !m_settings.solid))
-            m_settings.wireframe = m_settings.solid = false;
-         ImGui::SetItemTooltip("Full shading, as the player renders it (at most 2 PBR views)");
-         if (ImGui::Selectable("Solid", m_settings.solid))
-         {
-            m_settings.wireframe = false;
-            m_settings.solid = true;
-         }
-         ImGui::SetItemTooltip("PBR with the table lights, shadows, refraction, AO and bloom off (counts as a PBR view)");
-         if (ImGui::Selectable("Wireframe", m_settings.wireframe))
-         {
-            m_settings.wireframe = true;
-            m_settings.solid = false;
-         }
-         ImGui::SetItemTooltip("The editor's hidden line wireframe, without post processing (cheap)");
-         ImGui::EndCombo();
+         m_settings.wireframe = shadeMode == 0;
+         m_settings.solid = shadeMode == 1;
       }
-      ImGui::SetItemTooltip("Shading");
       nextItem(ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize("Live").x);
       ImGui::Checkbox("Live", &m_settings.live);
       ImGui::SetItemTooltip("Render continuously (every 2nd frame, every 4th for Wireframe). Off: only after a change (click Refresh).");

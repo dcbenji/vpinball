@@ -86,6 +86,82 @@ void EditorChrome::DrawChevron(ImDrawList *drawList, const ImVec2 &c, const Chev
    }
 }
 
+float EditorChrome::ShadeIconRowWidth() { return 3.f * ImGui::GetFrameHeight() * 1.1f + 2.f * std::max(1.f, ImGui::GetFrameHeight() / 22.f); }
+
+bool EditorChrome::ShadeIconRow(const char *id, int &mode)
+{
+   // Blender header look: 1.1 x 1 segments joined by a seam, rounded at the row ends only, idle Raised, active Fill; the spheres share one outer size
+   static constexpr const char *names[3] = { "Wireframe", "Solid", "PBR" };
+   static constexpr const char *descs[3] = { "The editor's hidden line wireframe", "PBR with the table lights, shadows, refraction, AO and bloom off", "Full shading, as the player renders it" };
+   const float h = ImGui::GetFrameHeight(), w = h * 1.1f, seam = std::max(1.f, h / 22.f), round = 0.22f * h, th = std::max(1.f, h / 18.f), r = 0.34f * h;
+   ImDrawList *const dl = ImGui::GetWindowDrawList();
+   bool changed = false;
+   ImGui::PushID(id);
+   for (int i = 0; i < 3; i++)
+   {
+      if (i > 0)
+         ImGui::SameLine(0.f, seam);
+      ImGui::PushID(i);
+      const bool pressed = ImGui::InvisibleButton("##shade", ImVec2(w, h));
+      ImGui::PopID();
+      const bool active = mode == i, hovered = ImGui::IsItemHovered();
+      const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      dl->AddRectFilled(a, b, active ? (hovered ? EditorTheme::FillActive : EditorTheme::Fill) : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round,
+         i == 0 ? ImDrawFlags_RoundCornersLeft : i == 2 ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersNone);
+      const ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+      const auto tint = [&](const float k, const float alpha) { return ImGui::GetColorU32(ImVec4(tc.x * k, tc.y * k, tc.z * k, tc.w * alpha)); };
+      const ImU32 col = active ? tint(1.f, 1.f) : tint(0.85f, 0.8f);
+      const ImVec2 c(0.5f * (a.x + b.x), 0.5f * (a.y + b.y));
+      if (i == 0)
+      { // Circle, a meridian ellipse and the front halves of three parallels
+         dl->AddCircle(c, r, col, 0, th);
+         dl->AddEllipse(c, ImVec2(0.45f * r, r), col, 0.f, 0, th * 0.8f);
+         for (int k = -1; k <= 1; k++)
+         {
+            const float y = 0.55f * r * k, half = sqrtf(r * r - y * y);
+            for (int s = 0; s <= 12; s++)
+            {
+               const float t = IM_PI * s / 12.f;
+               dl->PathLineTo(ImVec2(c.x + half * cosf(t), c.y + y + 0.25f * r * sinf(t)));
+            }
+            dl->PathStroke(col, 0, th * 0.8f);
+         }
+      }
+      else if (i == 1)
+      { // Flat disc, lighter toward the upper left in a few soft steps
+         dl->AddCircleFilled(c, r, tint(0.8f, 1.f));
+         for (int s = 0; s < 3; s++)
+            dl->AddCircleFilled(ImVec2(c.x - 0.28f * r, c.y - 0.28f * r), r * (0.62f - 0.17f * s), tint(1.f, 0.35f));
+      }
+      else
+      { // Ball: dark disc, lit convex lens on the upper left (half disc plus a half ellipse = the terminator), highlight, thin rim
+         dl->AddCircleFilled(c, r, tint(0.3f, 1.f));
+         static constexpr int n = 14;
+         ImVec2 pts[2 * n + 2];
+         const float fx = 0.7071f, fy = 0.7071f; // Shadow axis (lower right) and its perpendicular (-fy, fx)
+         const float R = r * 0.98f;
+         for (int s = 0; s <= n; s++)
+         {
+            const float t = -0.5f * IM_PI + IM_PI * s / n, u = -R * cosf(t), v = R * sinf(t); // Outer arc, lit side
+            pts[s] = ImVec2(c.x + u * fx - v * fy, c.y + u * fy + v * fx);
+            const float tt = 0.5f * IM_PI - IM_PI * s / n, uu = -0.05f * R * cosf(tt), vv = R * sinf(tt); // Back along the terminator
+            pts[n + 1 + s] = ImVec2(c.x + uu * fx - vv * fy, c.y + uu * fy + vv * fx);
+         }
+         dl->AddConvexPolyFilled(pts, 2 * n + 2, tint(1.f, 1.f));
+         dl->AddCircleFilled(ImVec2(c.x - 0.36f * r, c.y - 0.38f * r), 0.12f * r + 0.3f, IM_COL32(255, 255, 255, 210));
+         dl->AddCircle(c, r, col, 0, th * 0.8f);
+      }
+      Tip(names[i], "Z", descs[i]);
+      if (pressed && !active)
+      {
+         mode = i;
+         changed = true;
+      }
+   }
+   ImGui::PopID();
+   return changed;
+}
+
 void EditorChrome::Tip(const char *title, const char *shortcut, const char *description)
 {
    // Own hover delay: ImGui's delay timers do not run on disabled items, which made their tooltips appear much later than the enabled ones
@@ -1070,6 +1146,21 @@ void EditorChrome::RenderStatusOverlay()
    Tip("Lock Camera Orbit", "Numpad /");
    const float lockToggleWidth = ImGui::GetItemRectSize().x;
    ImGui::End();
+
+   // Shading switch at the right end of the viewport's top row (hidden when too narrow for it beside the texts)
+   if (vc.Width() > 560.f * dpi)
+   {
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+      ImGui::SetNextWindowPos(ImVec2(vc.x1 - 16.f * dpi - ShadeIconRowWidth(), overlayPos.y), 0, ImVec2(0.f, 0.f));
+      ImGui::Begin("shading row", nullptr,
+         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+            | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav);
+      int mode = Renderer::IsWireframeShade(editor.m_shadeMode) ? 0 : editor.m_shadeMode == Renderer::ShadeMode::Solid ? 1 : 2;
+      if (ShadeIconRow("##MainShading", mode))
+         editor.m_shadeMode = mode == 0 ? Renderer::ShadeMode::Wireframe : mode == 1 ? Renderer::ShadeMode::Solid : Renderer::ShadeMode::Default;
+      ImGui::End();
+      ImGui::PopStyleVar();
+   }
 
    ImGui::SetNextWindowSize(ImVec2(max(1.f, vc.Width()), max(1.f, vc.Height() - 5.f * dpi)));
    ImGui::SetNextWindowPos(overlayPos);

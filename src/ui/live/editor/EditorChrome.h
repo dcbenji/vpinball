@@ -36,6 +36,9 @@ public:
    static void DrawChevron(ImDrawList *drawList, const ImVec2 &center, ChevronDir dir, float size, ImU32 color);
    // Blender style tooltip for the last item (also when it is disabled): Title Case name, dim shortcut chip, optional dim sentence case description
    static void Tip(const char *title, const char *shortcut = nullptr, const char *description = nullptr);
+   // Blender's shading switch: joined row of 3 sphere icon buttons (mode 0 Wireframe, 1 Solid, 2 PBR, the active one blue), true if the mode was changed. Width: ShadeIconRowWidth
+   static bool ShadeIconRow(const char *id, int &mode);
+   static float ShadeIconRowWidth(); // Width of the row, for placing it
 
    void Render(bool showFullUI);
    float GetTopBarHeight() const { return m_menuBarHeight + m_toolBarHeight; }

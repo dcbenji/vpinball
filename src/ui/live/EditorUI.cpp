@@ -4669,7 +4669,7 @@ void EditorUI::RenderNavCube()
    ImGuiIO &io = ImGui::GetIO();
    const float dpi = m_liveUI.GetDPI();
    const float size = 128.f * dpi;
-   const ImVec2 pos(m_viewportContentRect.x1 - size - 16.f * dpi, m_viewportContentRect.y0 + 8.f * dpi);
+   const ImVec2 pos(m_viewportContentRect.x1 - size - 16.f * dpi, m_viewportContentRect.y0 + 32.f * dpi); // Below the shading row
 
    // The cube is computed in a right handed, Y up world, while the editor world is X right, Y down the table, Z down (height is -Z):
    // R (row vector convention) maps editor Z (down) to -Y and editor Y to Z, a pure rotation about X. viewG = R^-1 * viewV, viewV = R * viewG
