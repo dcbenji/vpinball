@@ -306,6 +306,12 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
 {
    ImGui::Dummy(ImVec2(0.f, 4.f));
    m_modifyFieldId++;
+   // Same left and right limits as the fields inside a section card
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   const float savedWorkMaxX = window->WorkRect.Max.x, savedContentMaxX = window->ContentRegionRect.Max.x;
+   const float cardIndent = 17.f * m_cardScale; // Margin + inset
+   ImGui::Indent(cardIndent);
+   window->WorkRect.Max.x = window->ContentRegionRect.Max.x = window->Pos.x + window->Size.x - (window->DC.CursorPos.x - window->InnerRect.Min.x);
    // Do not edit name of live objects as it would break the script, nor of multi selections (no bulk renaming)
    ImGui::BeginDisabled(m_table->m_liveBaseTable || IsMultiEdit());
    // One header row: the type (dim caption in the label column, instead of a separate centred line) and the name field
@@ -322,6 +328,9 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
          m_modified = m_modifyFieldId; // Makes the rename undoable and marks the table as modified
    }
    ImGui::EndDisabled();
+   window->WorkRect.Max.x = savedWorkMaxX;
+   window->ContentRegionRect.Max.x = savedContentMaxX;
+   ImGui::Unindent(cardIndent);
    ImGui::Dummy(ImVec2(0.f, 4.f));
    if (m_afterHeader)
       m_afterHeader(*this);
@@ -362,13 +371,18 @@ bool PropertyPane::SectionHeader(const char* labelAndId, ImGuiTreeNodeFlags flag
    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f * style.GrabMinSize / 10.f);
    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.f, 0.f, 0.f, 0.f));
    ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Rgb(61, 61, 61))); // Same as the card
-   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Rgb(68, 68, 68))); // Blender has no hover step; a faint one keeps the click target visible
+   // Hover is drawn below (Blender has no hover step; a faint one keeps the click target visible): ImGui would round all four corners,
+   // which leaves notches against the body of an open card
+   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, EditorTheme::V(EditorTheme::Rgb(61, 61, 61)));
+   ImGui::PushStyleColor(ImGuiCol_HeaderActive, EditorTheme::V(EditorTheme::Rgb(61, 61, 61)));
    const bool opened = ImGui::CollapsingHeader(labelAndId, flags);
-   ImGui::PopStyleColor(3);
+   ImGui::PopStyleColor(4);
 
    const ImVec2 headerMin = ImGui::GetItemRectMin();
    const ImVec2 headerMax = ImGui::GetItemRectMax();
    ImDrawList* drawList = ImGui::GetWindowDrawList();
+   if (ImGui::IsItemHovered())
+      drawList->AddRectFilled(headerMin, headerMax, EditorTheme::Rgb(68, 68, 68), 4.f * style.GrabMinSize / 10.f, opened ? ImDrawFlags_RoundCornersTop : ImDrawFlags_RoundCornersAll);
    const float fontSize = ImGui::GetFontSize();
    const float chevronSize = fontSize * 0.3f;
    DrawChevron(drawList, ImVec2(headerMin.x + style.FramePadding.x + fontSize * 0.5f, (headerMin.y + headerMax.y) * 0.5f), opened, chevronSize, EditorTheme::TextDim);
@@ -390,11 +404,16 @@ bool PropertyPane::BeginSection(const string& name)
       else
          ImGui::SetNextItemOpen(true);
    }
-   // Card: 8 px margin from the pane edges; the header and the fields go on channel 1, the rounded fill is added behind them on channel 0
+   // Card: 8 px margin from the pane edges (the same on both sides: the right edge mirrors the left one inside the window's inner rect);
+   // the header and the fields go on channel 1, the rounded fill is added behind them on channel 0
    ImGuiWindow* const window = ImGui::GetCurrentWindow();
    const float margin = 8.f * m_cardScale;
+   const float extend = IM_TRUNC(window->WindowPadding.x * 0.5f); // A framed header extends this far past the work rect on each side
    ImGui::Indent(margin);
-   window->WorkRect.Max.x -= margin;
+   m_savedWorkMaxX = window->WorkRect.Max.x;
+   m_savedContentMaxX = window->ContentRegionRect.Max.x;
+   m_cardMaxX = window->Pos.x + window->Size.x - (window->DC.CursorPos.x - extend - window->InnerRect.Min.x);
+   window->WorkRect.Max.x = m_cardMaxX - extend;
    ImDrawList* const drawList = ImGui::GetWindowDrawList();
    m_cardSplit.Split(drawList, 2);
    m_cardSplit.SetCurrentChannel(drawList, 1);
@@ -405,17 +424,16 @@ bool PropertyPane::BeginSection(const string& name)
    if (!opened)
    {
       // Collapsed: the card is just the header
-      m_cardSplit.SetCurrentChannel(drawList, 0);
       DrawCard(ImGui::GetItemRectMax().y);
       m_cardSplit.Merge(drawList);
-      window->WorkRect.Max.x += margin;
+      window->WorkRect.Max.x = m_savedWorkMaxX;
       ImGui::Unindent(margin);
       return false;
    }
 
    const float inset = 9.f * m_cardScale; // Content inset inside the card
    ImGui::Indent(inset);
-   window->WorkRect.Max.x -= inset;
+   window->WorkRect.Max.x = window->ContentRegionRect.Max.x = m_cardMaxX - extend - inset; // Fields end as far from the card edge as they start from it
    ImGui::Dummy(ImVec2(0.f, 4.f));
    m_inSection = true;
    m_pinGroup = name;
@@ -436,21 +454,48 @@ void PropertyPane::EndSection()
    const float margin = 8.f * m_cardScale, inset = 9.f * m_cardScale;
    ImGui::Dummy(ImVec2(0.f, 4.f));
    const float bottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
-   window->WorkRect.Max.x += inset;
+   window->WorkRect.Max.x = m_savedWorkMaxX;
+   window->ContentRegionRect.Max.x = m_savedContentMaxX;
    ImGui::Unindent(inset);
-   m_cardSplit.SetCurrentChannel(drawList, 0);
    DrawCard(bottom);
    m_cardSplit.Merge(drawList);
-   window->WorkRect.Max.x += margin;
    ImGui::Unindent(margin);
+}
+
+// Fill behind the header and fields (channel 0), outline above them (channel 1) so that the header's own fill does not cover it
+static void DrawCardRect(ImDrawList* drawList, ImDrawListSplitter& split, const ImVec2 min, const ImVec2 max, const float scale)
+{
+   split.SetCurrentChannel(drawList, 0);
+   drawList->AddRectFilled(min, max, EditorTheme::Rgb(61, 61, 61), 4.f * scale);
+   split.SetCurrentChannel(drawList, 1);
+   drawList->AddRect(min, max, EditorTheme::Rgb(74, 74, 74), 4.f * scale);
 }
 
 void PropertyPane::DrawCard(const float bottom)
 {
+   DrawCardRect(ImGui::GetWindowDrawList(), m_cardSplit, m_cardMin, ImVec2(m_cardMaxX, bottom), m_cardScale);
+}
+
+bool PropertyPane::CardHeader(const char* labelAndId, const ImGuiTreeNodeFlags flags)
+{
+   ImGuiWindow* const window = ImGui::GetCurrentWindow();
+   const float scale = ImGui::GetStyle().GrabMinSize / 10.f;
+   const float margin = 8.f * scale;
+   const float extend = IM_TRUNC(window->WindowPadding.x * 0.5f);
+   ImGui::Indent(margin);
+   const float savedWorkMaxX = window->WorkRect.Max.x;
+   const float maxX = window->Pos.x + window->Size.x - (window->DC.CursorPos.x - extend - window->InnerRect.Min.x);
+   window->WorkRect.Max.x = maxX - extend;
    ImDrawList* const drawList = ImGui::GetWindowDrawList();
-   const ImVec2 max(m_cardMaxX, bottom);
-   drawList->AddRectFilled(m_cardMin, max, EditorTheme::Rgb(61, 61, 61), 4.f * m_cardScale);
-   drawList->AddRect(m_cardMin, max, EditorTheme::Rgb(74, 74, 74), 4.f * m_cardScale);
+   ImDrawListSplitter split;
+   split.Split(drawList, 2);
+   split.SetCurrentChannel(drawList, 1);
+   const bool opened = SectionHeader(labelAndId, flags);
+   DrawCardRect(drawList, split, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), scale);
+   split.Merge(drawList);
+   window->WorkRect.Max.x = savedWorkMaxX;
+   ImGui::Unindent(margin);
+   return opened;
 }
 
 namespace

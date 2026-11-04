@@ -65,6 +65,8 @@ public:
    bool BeginSection(const string& name);
    // Collapsing header in the section style (accent rule, TextDim chevron); label may carry a ###id
    static bool SectionHeader(const char* labelAndId, ImGuiTreeNodeFlags flags = 0);
+   // A section header drawn as a card of its own (same margin, fill and outline as a collapsed section), for headers outside BeginSection
+   static bool CardHeader(const char* labelAndId, ImGuiTreeNodeFlags flags = 0);
    void EndSection();
    template <class T> T* GetEditedPart(T* obj) const;
    void TimerSection(IEditable* obj);
@@ -406,6 +408,7 @@ private:
    ImDrawListSplitter m_cardSplit;
    ImVec2 m_cardMin; // Top left of the open section's card (its header)
    float m_cardMaxX = 0.f; // Right edge of the card
+   float m_savedWorkMaxX = 0.f, m_savedContentMaxX = 0.f; // The window's right limits before the card narrowed them
    float m_cardScale = ImGui::GetStyle().GrabMinSize / 10.f; // UI scale, read from the style when the pane is created (GrabMinSize is 10 px at 100%)
    void DrawCard(float bottom);
 };

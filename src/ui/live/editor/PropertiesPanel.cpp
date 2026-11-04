@@ -446,25 +446,15 @@ void PropertiesPanel::DrawCuration(PropertyPane &props, Curation &cur)
    // Search palette focus on a field of this object: still pending here means it is not curated, so open the full sheet
    if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == cur.kind && PropertyPane::GetFocusKey().name == cur.name)
       ImGui::SetNextItemOpen(true);
-   const bool open = PropertyPane::SectionHeader(cur.advancedLabel.c_str());
+   const bool open = PropertyPane::CardHeader(cur.advancedLabel.c_str());
    ImGui::SetItemTooltip("Every field of this object, in the full sheet layout");
    props.SkipRest(!open);
-   if (open)
-   {
-      ImGui::Indent();
-      cur.advancedIndent = true;
-   }
 }
 
 void PropertiesPanel::EndCuration(PropertyPane &props, Curation &cur)
 {
    props.FlushRow();
    props.SkipRest(false);
-   if (cur.advancedIndent)
-   {
-      ImGui::Unindent();
-      cur.advancedIndent = false;
-   }
    if (props.GetModifiedField() > 0)
       cur.reharvest = true;
 }
@@ -513,7 +503,7 @@ void PropertiesPanel::PartMaterialPane(bool showStartup, bool isLive)
 
    ImGui::PushID("##PartMaterialPane"); // Same fields as the material's own pane: keep the IDs apart from the part's
    ImGui::Spacing();
-   const bool open = PropertyPane::SectionHeader(("Material  " + name + "###PartMaterial").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+   const bool open = PropertyPane::CardHeader(("Material  " + name + "###PartMaterial").c_str(), ImGuiTreeNodeFlags_DefaultOpen);
    ImGui::SetItemTooltip("The material of this part, edited in place");
    if (open)
    {

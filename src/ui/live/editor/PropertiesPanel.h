@@ -104,7 +104,6 @@ private:
       int advancedCount = 0; // Fields of the full sheet not in the curated sections
       bool active = false;
       bool reharvest = false; // An edit may have changed the fields the pane shows (e.g. material type): harvest again once idle
-      bool advancedIndent = false;
       double harvestTime = 0.0;
       string advancedLabel;
       vector<const PinnedPanel::Def *> tabs[static_cast<int>(Tab::Count)]; // Tabbed curation (the selection)
