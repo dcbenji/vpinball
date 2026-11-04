@@ -79,6 +79,7 @@ SAMPLER2D(tex_traced_env, 7); // dome_glow_map (when domeParams[15].x is set): R
 
 #define DOME_PI 3.14159265
 #define FROST_GAIN domeParams[17].w
+#define DOME_ABSORB 0.12 // 1/mm, every wavelength: the unlit body only (the interior and dome_lens)
 #define FOOT_GAIN domeParams[23].w
 
 float domeHash(const float n) { return fract(sin(n) * 43758.5453); }
@@ -610,7 +611,7 @@ void main()
 		// seen through the smooth skin the inner flutes only ripple the glow (a soft cosine per flute, faint ridge lines), with
 		// little flank-to-flank variation: the milky body evens it out
 		const float bandOff = mix(mix(facet, 1.0, 0.8) * (0.88 + 0.12 * cos(2.0 * DOME_PI * eP)) + 0.4 * ridgeLine, 0.6 + 1.0 * edge, capW);
-		const vec3 interior = bodyK * domeParams[10].w * (1.0 - 0.6 * saturate(domeParams[19].w) * (1.0 - capW)) * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
+		const vec3 interior = exp(-DOME_ABSORB * thH) * bodyK * domeParams[10].w * (1.0 - 0.6 * saturate(domeParams[19].w) * (1.0 - capW)) * (0.3 * domeParams[13].y * trH * bandOff * (1.1 - 0.25 * saturate(P.y / max(H, 1.0)))
 			+ 0.3 * domeParams[8].yzw * trH * bandOff * giSide * (1.0 / DOME_PI)) * (1.0 - lvlG);
 		// The lamp's light diffused through the milky body: broad (the scattering spreads it, a gentler falloff than the glow),
 		// in the lamp's colour through the plastic, hot toward white at the peak (the leak)
@@ -772,7 +773,8 @@ void main()
 		const vec2 offF = mul(mView, vec4(rFace.x * ex + rFace.y * up + rFace.z * ez, 0.0)).xy * (1.6 * R / mmPx);
 		const vec3 faceT = clamp(texStereoLod(tex_pbr_refr, (gl_FragCoord.xy + toC + offF) * w_h_height.xy, clamp(log2(max(R / mmPx, 1.0)), 0.0, domeParams[24].w)).rgb, vec3_splat(0.0), vec3_splat(16.0));
 		const vec3 bg = mix(bgAll, faceT, 0.7);
-		const vec3 trL = exp(-sigma * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
+		// the plastic also swallows light at every wavelength, red included: longer paths (ridges, grazing views) go darker, a cherry red (Ben 11-03)
+		const vec3 trL = exp(-(sigma + vec3_splat(DOME_ABSORB)) * 1.6 * (thN / max(dot(-VrIn, Ns), 0.3) + 1.2 * wallB));
 		// the foil: total internal reflection at this face (smooth over the critical angle), each face its own strength
 		const float ciF = saturate(dot(VrIn, nFlank));
 		const float st2F = 1.49 * 1.49 * (1.0 - ciF * ciF);
@@ -785,7 +787,7 @@ void main()
 		// strongest on the side toward the viewer, where the ray goes down into the dome (Ben's photo on the table)
 		const vec2 Vh = V.xz / max(length(V.xz), 1e-3);
 		const float capNear = 0.12 + 0.88 * smoothstep(-0.3, 0.5, dot(capPd, Vh) / max(length(capPd), 1e-3));
-		lens += lensK * capW * trN * bg * (0.12 + capL) * capNear * (1.0 - lvlG) * (1.0 - lvlG);
+		lens += lensK * capW * trN * exp(-DOME_ABSORB * 1.6 * thN) * bg * (0.12 + capL) * capNear * (1.0 - lvlG) * (1.0 - lvlG);
 	}
 
 	// With the orb the hot light comes from the bulb's image: the white wash over the whole shell steps back (a red-orange
