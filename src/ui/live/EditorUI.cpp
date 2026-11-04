@@ -2683,7 +2683,7 @@ void EditorUI::RenderUI()
                m_pointDragZ = m_pointEditPart->GetDragPointZ(hitPoint);
                m_pointDragPos = UnprojectToPlane(m_boxSelectStart, m_pointDragZ);
             }
-            else
+            else if (m_pointEditPart == nullptr || !PlasticFromAtlas::BowPress(*this, m_boxSelectStart, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
                m_boxSelectActive = true;
          }
       }
@@ -2766,6 +2766,8 @@ void EditorUI::RenderUI()
             }
          }
       }
+
+      PlasticFromAtlas::BowDrag(*this);
 
       // Drag the selected drag points in the table XY plane
       if (m_pointEditPart && (m_pointDragPending || m_pointDragActive))

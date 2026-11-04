@@ -2132,7 +2132,7 @@ void Primitive::RegeneratePlastic()
          for (float &v : p->m_d.m_aRotAndTra)
             v = 0.f;
          p->m_d.m_use3DMesh = true;
-         p->m_vertexBufferRegenerate = true;
+         // No m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit (RenderSetup) rebuilds it
          p->OnMeshVerticesChanged();
          p->m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate the collider (the transform itself did not change)
       };
@@ -2163,9 +2163,10 @@ void Primitive::RegeneratePlastic()
 
 void Primitive::UpdatePlastic()
 {
-   RegeneratePlastic();
    if (m_renderer)
-      m_renderer->ReinitRenderable(this);
+      m_renderer->ReinitRenderable(this); // RenderSetup regenerates the meshes (the live buffers are not touched before)
+   else
+      RegeneratePlastic();
 }
 
 void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes)
@@ -2696,7 +2697,11 @@ void Primitive::Load(IObjectReader& reader)
       for (const auto &dpt : m_wireCurve.GetPoints())
          m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
       m_wireCurve.ClearPoints();
-      RegeneratePlastic(); // Same, and the companions already in the table (an undo); on a file load the saved companion meshes stand
+      // Live (an undo): the reinit rebuilds the meshes of the host and its companions; a file load has no renderer, the saved companion meshes stand
+      if (m_renderer)
+         m_renderer->ReinitRenderable(this);
+      else
+         RegeneratePlastic();
    }
 }
 

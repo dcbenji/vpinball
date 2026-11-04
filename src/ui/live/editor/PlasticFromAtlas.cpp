@@ -144,7 +144,7 @@ void PlasticFromAtlas::Start(EditorUI &ed)
    ed.m_perspectiveCam = false;
    ed.SetView(EditorUI::PredefinedView::Top);
    ed.FrameBounds(FRect3D(a.x, b.x, a.y, b.y, 0.f, 0.f));
-   ed.Report("Plastic from Atlas: LMB corner, Shift+LMB arc peak, Backspace removes the last, H holes, Enter closes, Esc cancels");
+   ed.Report("Plastic from Atlas: LMB a corner where the line changes direction, Backspace removes the last, H holes, Enter closes, Esc cancels");
 }
 
 void PlasticFromAtlas::Cancel(EditorUI &ed)
@@ -160,13 +160,14 @@ void PlasticFromAtlas::Click(EditorUI &ed, const ImVec2 &mouse, const bool shift
 {
    Trace &t = ed.m_plasticTrace;
    const Vertex2D p = ed.UnprojectToPlane(mouse, 0.f);
-   PLOGI << "Plastic from Atlas: " << (t.holes ? "hole" : shift ? "arc peak" : "corner") << " at table " << p.x << ' ' << p.y;
+   (void)shift;
+   PLOGI << "Plastic from Atlas: " << (t.holes ? "hole" : "corner") << " at table " << p.x << ' ' << p.y;
    if (t.holes)
       t.holeList.push_back(Vertex3Ds(p.x, p.y, t.holeDia));
    else
    {
       t.pts.push_back(Vertex3Ds(p.x, p.y, 0.f));
-      t.smooth.push_back(shift);
+      t.smooth.push_back(false);
    }
 }
 
@@ -373,6 +374,147 @@ void PlasticFromAtlas::FixPasted(const vector<IEditable *> &pasted, const vector
          comp->SetUILock(false);
       }
    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Bowing a line into an arc (point edit of the outline): drag a line between two points = an arc through the cursor, either side (the smooth peak
+// point between the two corners is inserted or moved); double-click a curve = straight again
+
+namespace
+{
+struct Span
+{
+   int a, peak, b; // corner, smooth peak (-1 = a straight line), corner
+};
+
+vector<Span> Spans(const DragPointCurve &curve)
+{
+   vector<Span> spans;
+   const auto &pts = curve.GetPoints();
+   const int n = static_cast<int>(pts.size());
+   for (int i = 0; i < n; i++)
+   {
+      if (pts[i]->IsSmooth())
+         continue;
+      const int j = (i + 1) % n, k = (i + 2) % n;
+      if (pts[j]->IsSmooth() && !pts[k]->IsSmooth() && n >= 3)
+         spans.push_back({ i, j, k });
+      else if (!pts[j]->IsSmooth())
+         spans.push_back({ i, -1, j });
+   }
+   return spans;
+}
+
+// Distance from p to the span as drawn (the arc is flattened by PlasticMesh)
+float SpanDistance(const DragPointCurve &curve, const Span &sp, const Vertex2D &p)
+{
+   const auto &pts = curve.GetPoints();
+   vector<PlasticMesh::CurvePoint> poly;
+   if (sp.peak < 0)
+      poly = { { pts[sp.a]->GetX(), pts[sp.a]->GetY(), false }, { pts[sp.b]->GetX(), pts[sp.b]->GetY(), false } };
+   else
+   {
+      const vector<PlasticMesh::CurvePoint> tri { { pts[sp.a]->GetX(), pts[sp.a]->GetY(), false }, { pts[sp.peak]->GetX(), pts[sp.peak]->GetY(), true }, { pts[sp.b]->GetX(), pts[sp.b]->GetY(), false } };
+      poly = PlasticMesh::FlattenOutline(tri, 0.25f); // A, the arc, B (the closing edge B to A is not part of it)
+   }
+   float best = FLT_MAX;
+   for (size_t i = 0; i + 1 < poly.size(); i++)
+   {
+      const float dx = poly[i + 1].x - poly[i].x, dy = poly[i + 1].y - poly[i].y, l2 = dx * dx + dy * dy;
+      const float t = l2 > 0.f ? clamp(((p.x - poly[i].x) * dx + (p.y - poly[i].y) * dy) / l2, 0.f, 1.f) : 0.f;
+      best = min(best, hypotf(p.x - (poly[i].x + t * dx), p.y - (poly[i].y + t * dy)));
+   }
+   return best;
+}
+}
+
+bool PlasticFromAtlas::BowPress(EditorUI &ed, const ImVec2 &mouse, const bool doubleClick)
+{
+   ed.m_plasticBow = Bow();
+   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsHost(ed.m_pointEditPart->GetEditable()))
+      return false;
+   Primitive *const host = static_cast<Primitive *>(ed.m_pointEditPart->GetEditable());
+   if (host->m_plasticEditHoles || ed.m_table->IsLocked())
+      return false;
+   const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   const Vertex2D p = ed.UnprojectToPlane(mouse, z), q = ed.UnprojectToPlane(ImVec2(mouse.x + 8.f * ed.m_liveUI.GetDPI(), mouse.y), z);
+   const float tol = hypotf(q.x - p.x, q.y - p.y);
+   const vector<Span> spans = Spans(host->m_plasticCurve);
+   int best = -1;
+   float bestDist = tol;
+   for (size_t i = 0; i < spans.size(); i++)
+      if (const float d = SpanDistance(host->m_plasticCurve, spans[i], p); d < bestDist)
+      {
+         bestDist = d;
+         best = static_cast<int>(i);
+      }
+   if (best < 0)
+      return false;
+   const Span &sp = spans[best];
+   if (doubleClick)
+   {
+      if (sp.peak >= 0)
+      {
+         ed.m_undo.BeginUndo();
+         ed.m_undo.MarkForUndo(host);
+         ed.m_undo.SetFieldLabel("Straighten Line");
+         ed.m_undo.EndUndo();
+         host->m_plasticCurve.DeletePoint(host->m_plasticCurve.GetPoints()[sp.peak].get());
+         ed.m_pointSel.clear();
+         ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+         ed.m_renderer->InvalidateShadowContent();
+      }
+      return true;
+   }
+   ed.m_plasticBow.pending = true;
+   ed.m_plasticBow.start = mouse;
+   ed.m_plasticBow.corner = host->m_plasticCurve.GetPoints()[sp.a].get();
+   ed.m_plasticBow.peak = sp.peak >= 0 ? host->m_plasticCurve.GetPoints()[sp.peak].get() : nullptr;
+   ed.m_plasticBow.endCorner = host->m_plasticCurve.GetPoints()[sp.b].get();
+   return true;
+}
+
+void PlasticFromAtlas::BowDrag(EditorUI &ed)
+{
+   Bow &bow = ed.m_plasticBow;
+   if (!bow.pending && !bow.active)
+      return;
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || ed.m_pointEditPart == nullptr || !IsHost(ed.m_pointEditPart->GetEditable()))
+   {
+      bow = Bow();
+      return;
+   }
+   Primitive *const host = static_cast<Primitive *>(ed.m_pointEditPart->GetEditable());
+   DragPointCurve &curve = host->m_plasticCurve;
+   const ImVec2 mouse = ImGui::GetMousePos();
+   if (bow.pending)
+   {
+      if (fabsf(mouse.x - bow.start.x) < 3.f && fabsf(mouse.y - bow.start.y) < 3.f)
+         return;
+      bow.pending = false;
+      bow.active = true;
+      ed.m_undo.BeginUndo();
+      ed.m_undo.MarkForUndo(host);
+      ed.m_undo.SetFieldLabel("Bow Curve");
+      ed.m_undo.EndUndo();
+      if (bow.peak == nullptr)
+      {
+         const int n = static_cast<int>(curve.GetPoints().size());
+         int at = 0;
+         for (int i = 0; i < n; i++)
+            if (curve.GetPoints()[i].get() == bow.corner)
+               at = i + 1;
+         curve.InsertPoint(at, std::make_unique<DragPoint>(&curve, bow.corner->GetX(), bow.corner->GetY(), 0.f, true));
+         bow.peak = curve.GetPoints()[at].get();
+      }
+   }
+   const Vertex2D p = ed.UnprojectToPlane(mouse, host->m_d.m_plasticHeight + host->m_d.m_plasticThickness);
+   bow.peak->SetX(p.x);
+   bow.peak->SetY(p.y);
+   curve.OnPointsModified();
+   ed.m_pointSel.clear();
+   ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+   ed.m_renderer->InvalidateShadowContent();
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

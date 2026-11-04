@@ -6,6 +6,7 @@
 #include "math/vector.h"
 
 class IEditable;
+class DragPoint;
 class Primitive;
 class PinTable;
 class Material;
@@ -19,7 +20,7 @@ class LiveRenderContext;
 // Plastic from Atlas: a plastic is traced on top of a print atlas image (a closed outline of straight runs and arcs, plus circular holes) and becomes
 // three primitives built by PlasticMesh: the host (print: bottom cap with the atlas image, holds the curve and all parameters) and two companions,
 // <host>_Clear (top cap) and <host>_Bevel (walls and bevel), whose meshes are always derived from the host (see Primitive::RegeneratePlastic).
-// Add Plastic from Atlas starts a trace state (top view, the atlas drawn as a backdrop under the points): LMB corner, Shift+LMB arc peak, Backspace
+// Add Plastic from Atlas starts a trace state (top view, the atlas drawn as a backdrop under the points): LMB corner, Backspace
 // removes the last point, H switches between the outline and the holes, Enter closes the loop and creates the plastic, Esc cancels.
 class PlasticFromAtlas final
 {
@@ -48,6 +49,15 @@ public:
    // Called from the viewport input of the editor while tracing
    static void Click(EditorUI &ed, const ImVec2 &mouse, bool shift);
    static void Keys(EditorUI &ed);
+   // Point edit of an outline: press on a line (not on a point) = start bowing it, drag = arc through the cursor, double-click = straight. True if the press was taken
+   struct Bow
+   {
+      bool pending = false, active = false;
+      ImVec2 start {};
+      DragPoint *corner = nullptr, *peak = nullptr, *endCorner = nullptr;
+   };
+   static bool BowPress(EditorUI &ed, const ImVec2 &mouse, bool doubleClick);
+   static void BowDrag(EditorUI &ed);
    static void RenderPanel(EditorUI &ed); // The floating panel of the trace state
 
    // The atlas drawn as a backdrop on the playfield plane (trace state, and Tab on a placed plastic) and the traced points over it
