@@ -418,6 +418,7 @@ Renderer::~Renderer()
    ReleaseAORenderTargets();
    m_ballEnvSampler = nullptr;
    m_envSampler = nullptr;
+   m_solidEnvSampler = m_solidIrradianceSampler = m_tableDiffuseEnv = nullptr;
    m_aoDitherSampler = nullptr;
    delete m_renderDevice;
 }
@@ -2144,8 +2145,46 @@ bool Renderer::IsTemporalAccumulationInProgress() const
    return false;
 }
 
+void Renderer::ApplySolidEnv()
+{
+   Shader* const basic = m_renderDevice->m_basicShader;
+   if (basic->m_state->GetTexture(ShaderUniform::tex_env).get() == m_envSampler.get()) // The table's environment is bound: remember it
+   {
+      m_tableDiffuseEnv = basic->m_state->GetTexture(ShaderUniform::tex_diffuse_env);
+      m_tableEnvScale = basic->GetVector(ShaderUniform::fenvEmissionScale_TexWidth);
+   }
+   const bool solid = IsSolidPass();
+   if (solid && !m_solidEnvTried)
+   {
+      // The library preview's neutral studio environment, when this build ships it (else the table's), loaded once
+      m_solidEnvTried = true;
+      const std::filesystem::path envPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "library" / "_preview" / "env.hdr";
+      std::error_code ec;
+      std::shared_ptr<BaseTexture> env(std::filesystem::exists(envPath, ec) ? BaseTexture::CreateFromFile(envPath) : nullptr); // CreateFromFile reports a missing file to the user
+      if (env != nullptr)
+      {
+         const unsigned int irrHeight = min(env->height(), 256u) / 8;
+         m_solidIrradianceSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Irradiance"s, EnvmapPrecalc(env, irrHeight * 2, irrHeight), false);
+         m_solidEnvSampler = std::make_shared<Sampler>(m_renderDevice, "Solid Env"s, env, false);
+      }
+   }
+   if (solid && m_solidEnvSampler != nullptr)
+   {
+      basic->SetTexture(ShaderUniform::tex_env, m_solidEnvSampler);
+      basic->SetTexture(ShaderUniform::tex_diffuse_env, m_solidIrradianceSampler);
+      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, 1.f, static_cast<float>(m_solidEnvSampler->GetHeight()), 0.f, 0.f);
+   }
+   else if (m_tableDiffuseEnv != nullptr)
+   {
+      basic->SetTexture(ShaderUniform::tex_env, m_envSampler);
+      basic->SetTexture(ShaderUniform::tex_diffuse_env, m_tableDiffuseEnv);
+      basic->SetVector(ShaderUniform::fenvEmissionScale_TexWidth, m_tableEnvScale.x, m_tableEnvScale.y, m_tableEnvScale.z, m_tableEnvScale.w);
+   }
+}
+
 void Renderer::RenderStatics()
 {
+   ApplySolidEnv();
    // Static parts may have changed while the prepass was not used (e.g. edited in the editor, which disables it): refresh it when it is used again
    const bool useStaticPrepass = IsUsingStaticPrepass();
    m_isStaticPrepassDirty |= useStaticPrepass && !m_wasUsingStaticPrepass;
