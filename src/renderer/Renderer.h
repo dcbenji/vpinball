@@ -519,6 +519,10 @@ private:
    bool m_editorPreviewPass = false; // True while recording an editor secondary view (not the main editor view)
    bool m_editorPreviewPlayerCam = false; // ... with a table view setup (the player view): drawn as the player sees it, not as the editor view
    bool m_editorSolidPass = false; // ... in Solid shading
+   void ApplySolidEnv(); // Binds the studio environment (assets/library/_preview/env.hdr) in a Solid pass, the table's otherwise
+   std::shared_ptr<const Sampler> m_solidEnvSampler, m_solidIrradianceSampler, m_tableDiffuseEnv;
+   vec4 m_tableEnvScale = vec4(1.f, 1.f, 0.f, 0.f);
+   bool m_solidEnvTried = false;
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
    bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)
