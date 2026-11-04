@@ -1147,6 +1147,7 @@ void EditorUI::ComputeAreaRects() const
    const bool inspection = m_inspectionModal.IsVisible();
    const bool areasShown = !locked && !m_flyMode && !inspection;
    const bool sidebarShown = m_showSidebar && !locked && !inspection;
+   m_areaRootH = tree.y1 - tree.y0;
    m_areas.Compute(tree, dpi, (sidebarShown && areasShown) ? m_sidebarWidth : 0.f, m_leafRects, m_splitterRects, m_maximizedLeafId);
 
    // The viewport area is the window onto the full window 3D render; when no area is drawn (locked table, fly mode, inspection) it is the whole tree
@@ -1262,6 +1263,8 @@ bool EditorUI::PlanAreaSplit(const int leafId, const SplitAxis axis, const bool 
    }
    plan.line = roundf(clamp(plan.line, newOnSecondSide ? lo + keepMin : lo + newMin, newOnSecondSide ? hi - newMin : hi - keepMin));
    plan.size = (newOnSecondSide ? hi - plan.line : plan.line - lo) / dpi;
+   if (!vertical) // A stacked split displays its fixed child at size * ratio of the layout height (see AreaLayout::StackedShrink)
+      plan.size /= AreaLayout::StackedShrink(m_areaRootH, dpi);
    plan.newRect = leaf->rect;
    if (vertical)
    {
@@ -3325,6 +3328,15 @@ void EditorUI::RenderUI()
          m_player->m_physics->SetDynamic(edit);
       if (FindIndexOf(m_dynamicParts, edit) == -1)
          m_dynamicParts.push_back(edit);
+   }
+
+   // Undo marks (and undo / redo) leave the authored visibility in the parts' m_d: put the display state back before the next frame renders them
+   if (!IsSaveInProgress() && !((m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying())) // (a script may have written m_d of a playing live table)
+   {
+      const ankerl::unordered_dense::set<const IEditable *> liveParts(m_table->GetParts().begin(), m_table->GetParts().end());
+      for (const auto &uiPart : m_editables)
+         if (liveParts.contains(uiPart->GetEditable()))
+            uiPart->ApplyDisplayVisibility();
    }
 }
 

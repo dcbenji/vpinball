@@ -617,6 +617,7 @@ private:
    // The 3D view is the full window, the viewport leaf is a window onto it.
    mutable std::vector<LeafRect> m_leafRects;
    mutable std::vector<SplitterRect> m_splitterRects;
+   mutable float m_areaRootH = 1080.f; // Height of the area tree bounds of the last layout
    mutable AreaRect m_viewportRect, m_viewportContentRect;
    mutable bool m_areaRectsValid = false;
    mutable bool m_viewportVisible = true; // False while a panel is maximized: the viewport rects are then empty and no viewport overlay is drawn

@@ -105,6 +105,10 @@ public:
    // to the part (e.g. a multi-edit change applied to the other selected parts)
    virtual void SyncVisibilityOverrides() { }
 
+   // Writes the editor display state (outliner hide, forced render visibility) back into the part's m_d fields, as the tail of Render does. Needed after
+   // the authored values were put in m_d for an undo mark, so that the next frame does not draw a part the user hid.
+   virtual void ApplyDisplayVisibility() { }
+
    // Returns the editable drag point curve of this part, nullptr if it does not have one
    virtual DragPointCurve* GetDragPointCurve() const { return nullptr; }
 
@@ -218,7 +222,13 @@ public:
          RenderOverlay(ctx);
       }
 
+      ApplyDisplayVisibility();
+   }
+
+   void ApplyDisplayVisibility() override
+   {
       // Enable the main renderer rendering
+      const bool isUIVisible = m_part->IsUIVisible(true);
       const bool extraHidden = IsExtraHidden();
       for (size_t i = 0; i < m_visibilityFields.size(); i++)
          m_part->m_d.*(m_visibilityFields[i].field) = (isUIVisible || !UIHideAffectsRender()) && m_visibilityFields[i].visible && !extraHidden;
