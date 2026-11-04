@@ -445,6 +445,7 @@ bool PropertyPane::BeginSection(const string& name)
       m_cardSplit.Merge(drawList);
       window->WorkRect.Max.x = m_savedWorkMaxX;
       ImGui::Unindent(margin);
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2.f * m_cardScale); // Blender's 2 px gap between cards (the item spacing is 4)
       return false;
    }
 
@@ -477,6 +478,7 @@ void PropertyPane::EndSection()
    DrawCard(bottom);
    m_cardSplit.Merge(drawList);
    ImGui::Unindent(margin);
+   ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2.f * m_cardScale); // Blender's 2 px gap between cards (the item spacing is 4)
 }
 
 // Fill behind the header and fields (channel 0), outline above them (channel 1) so that the header's own fill does not cover it
