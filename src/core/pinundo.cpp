@@ -494,6 +494,8 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
    for (size_t i = 0; i < record.m_vieCreate.size(); i++)
    {
       IEditable *const pie = record.m_vieCreate[i];
+      if (m_partStateSync)
+         m_partStateSync(pie, false); // The part leaves the table with its authored visibility, not the editor display state
       if (inverse)
       {
          // Reverting this creation undo is a delete: the inverse keeps the part alive, to put it back in the table (Undelete) when applied
