@@ -1675,9 +1675,17 @@ void PartLibraryPanel::RenderLightbox()
    // toolbar and a one-line caption
    const bool insert = m_lbItem.kind == ItemKind::Insert;
    const bool column = insert && m_lbHasCard && m_lbShowLook;
+   // The sizes follow the viewport area (the render and the look column never fill it): the column is at most 40% of its width, the render a side of at most
+   // 80% of what is left, within 240..460 dpi px
+   const AreaRect &viewRect = m_editor.m_viewportRect;
+   const float viewW = m_editor.m_viewportVisible ? viewRect.x1 - viewRect.x0 : io.DisplaySize.x, viewH = m_editor.m_viewportVisible ? viewRect.y1 - viewRect.y0 : io.DisplaySize.y;
+   const float pad = ImGui::GetStyle().WindowPadding.x, spacing = ImGui::GetStyle().ItemSpacing.x;
+   const float colW = min(290.f * dpi, 0.4f * viewW);
+   const float toolbarH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetTextLineHeightWithSpacing() + 2.f * ImGui::GetStyle().WindowPadding.y;
+   const float side = clamp(0.8f * min(viewW - (column ? colW + spacing : 0.f) - 2.f * pad, viewH - toolbarH), 240.f * dpi, 460.f * dpi);
    if (column)
    {
-      ImGui::BeginChild("##lookcol", ImVec2(290.f * dpi, 0.f), ImGuiChildFlags_AutoResizeY); // As tall as its content
+      ImGui::BeginChild("##lookcol", ImVec2(colW, 0.f), ImGuiChildFlags_AutoResizeY); // As tall as its content
       ImGui::PushItemWidth(-135.f * dpi);
    // The card's look, live in the preview and carried into the placed part (kept per pack for the session; the pack is never written)
    if (m_lbHasCard && m_lbScratch != nullptr)
@@ -1737,10 +1745,10 @@ void PartLibraryPanel::RenderLightbox()
    }
 
    // The render, the toolbar and the caption form the cell right of the look column
-   const float cellX = ImGui::GetCursorPosX(), cellW = 460.f * dpi; // The render has a fixed size
+   const float cellW = side; // The render's size does not follow the window
    ImGui::BeginGroup();
    // Image area, orbited like a Sketchfab model: left drag, wheel zoom, double click frames
-   const ImVec2 size(cellW, 420.f * dpi);
+   const ImVec2 size(cellW, floorf(side * (420.f / 460.f)));
    const ImVec2 imgMin = ImGui::GetCursorScreenPos(), imgMax(imgMin.x + size.x, imgMin.y + size.y);
    ImGui::InvisibleButton("##view", size);
    const bool hovered = ImGui::IsItemHovered();
@@ -1904,15 +1912,20 @@ void PartLibraryPanel::RenderLightbox()
          ImGui::SetItemTooltip("Look controls");
       }
    }
+   ImVec2 placeMin(0.f, 0.f), placeMax(0.f, 0.f);
    {
       const bool material = m_lbItem.kind == ItemKind::Material;
       const char *const placeLabel = material ? ICON_FK_DOWNLOAD "  Apply" : ICON_FK_DOWNLOAD "  Place";
       const float placeW = ImGui::CalcTextSize(placeLabel).x + 2.f * ImGui::GetStyle().FramePadding.x;
-      ImGui::SameLine(max(ImGui::GetCursorPosX(), cellX + cellW - placeW)); // The end of the render's width
+      // Right after the last toolbar item, a spacer up to the end of the render's width (never more)
+      const float used = ImGui::GetItemRectMax().x - imgMin.x;
+      ImGui::SameLine(0.f, spacing + max(0.f, cellW - used - spacing - placeW));
       ImGui::BeginDisabled(m_editor.m_table->IsLocked() || m_editor.IsInspectMode() || m_editor.m_pointEditPart != nullptr);
       const bool place = ImGui::Button(placeLabel);
       ImGui::EndDisabled();
       ImGui::SetItemTooltip(material ? "Import the material and apply it to the selected parts" : "Place it at the selection centre, or the table centre");
+      placeMin = ImGui::GetItemRectMin();
+      placeMax = ImGui::GetItemRectMax();
       if (place)
       {
          // Placed by the double click rule; the lightbox closes
@@ -1932,6 +1945,18 @@ void PartLibraryPanel::RenderLightbox()
    ImGui::TextDisabled("%s: %s%s%s", kKinds[static_cast<int>(m_lbItem.kind)], m_lbItem.label.c_str(), insert ? ", Traced" : "",
       insert && m_lbHasCard && !(m_lbLook == m_lbPackLook) ? ", modified, applies on place" : "");
    ImGui::EndGroup();
+   if (!m_hookPreviewLog.empty())
+   {
+      // Test hook: the layout numbers, once per change
+      const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+      const string layout = std::format("win={:.0f},{:.0f},{:.0f},{:.0f} render={:.0f},{:.0f} place={:.0f},{:.0f},{:.0f},{:.0f} viewport={:.0f},{:.0f},{:.0f},{:.0f}", wp.x, wp.y, ws.x, ws.y, size.x, size.y,
+         placeMin.x, placeMin.y, placeMax.x - placeMin.x, placeMax.y - placeMin.y, viewRect.x0, viewRect.y0, viewW, viewH);
+      if (layout != m_lbLayoutLog)
+      {
+         m_lbLayoutLog = layout;
+         PLOGI << "LIBLAYOUT " << layout;
+      }
+   }
    ImGui::EndPopup();
 }
 

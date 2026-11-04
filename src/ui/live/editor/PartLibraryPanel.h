@@ -242,6 +242,7 @@ private:
    double m_lbAnimUntil = 0.0; // Lit / Unlit: animate until the fade settled or this time
    InsertLook m_lbLook, m_lbPackLook; // Edited look, and the pack's own
    bool m_lbHasCard = false; // The scratch table has a Traced card
+   string m_lbLayoutLog; // The last LIBLAYOUT line
    bool m_lbShowLook = false; // The look column shown by the gear toggle (a narrow panel)
    bool m_lbReal = false; // 'Table brightness': the normalization is off
    vector<InsertLook> m_lbOrig; // Each Traced card's own values
