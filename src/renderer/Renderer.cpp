@@ -1307,6 +1307,10 @@ void Renderer::DrawBackground()
       if ((IsSolidPass() || IsWireframeShade(m_shadeMode)) && m_viewShade.bgCustom) // Solid and Wireframe: the view's own background colour
          background = (static_cast<unsigned int>(clamp(m_viewShade.bg[0], 0.f, 1.f) * 255.f + 0.5f) << 16) | (static_cast<unsigned int>(clamp(m_viewShade.bg[1], 0.f, 1.f) * 255.f + 0.5f) << 8)
             | static_cast<unsigned int>(clamp(m_viewShade.bg[2], 0.f, 1.f) * 255.f + 0.5f);
+#if defined(ENABLE_BGFX)
+      if (m_viewShade.bgCustom && (IsSolidPass() || IsWireframeShade(m_shadeMode))) // The BGFX clear reads the low byte as red (OpenGL and DX9: blue)
+         background = ((background & 0xFF) << 16) | (background & 0xFF00) | ((background >> 16) & 0xFF);
+#endif
       m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, background);
       if (!g_pplayer->m_liveUI->IsEditorBackdropViewMode())
          return;
@@ -6297,6 +6301,8 @@ void Renderer::RenderEditorView(const int slot)
          probe->MarkDirty();
       m_renderDevice->m_noMovingBalls = true;
       RenderDynamics();
+      if (ShowsHiddenInPlay()) // The view's Hidden in Play option: the parts hidden in play drawn as in the 3D Viewport, so what a click can pick is what is drawn
+         g_pplayer->m_liveUI->RenderHiddenOverlay3D();
    }
 
    // Resolve MSAA buffer to a normal one (noop if not using MSAA), allowing sampling it for postprocessing

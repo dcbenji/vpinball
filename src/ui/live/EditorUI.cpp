@@ -2032,6 +2032,20 @@ void EditorUI::Render3D()
    m_partLibrary.Render3D();
 }
 
+void EditorUI::RenderHiddenOverlay3D()
+{
+   if (IsSaveInProgress())
+      return;
+   // As Render3D for the parts which are not selected (the selection's edges follow), with the view's own shading and as an editor camera view
+   LiveRenderContext ctx(m_player, nullptr, ViewMode::EditorCam, m_renderer->GetShadeMode(), false);
+   for (const auto &uiPart : m_editables)
+   {
+      if (uiPart->GetEditable()->m_desktopBackdrop || IsPartSelected(uiPart))
+         continue;
+      uiPart->Render(ctx);
+   }
+}
+
 void EditorUI::RenderSelection3D()
 {
    if (m_multiSel.empty() || !m_selectionOverlay || IsSaveInProgress())
@@ -3014,6 +3028,9 @@ void EditorUI::RenderUI()
       if (!modalWasActive)
          RequestClose(Player::CS_STOP_PLAY);
    }
+   // Esc in a plain text field (part name, string properties, filters, search boxes) deactivates it on the press: the release must not clear the selection
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && io.WantTextInput && ImGui::GetCurrentContext()->ActiveIdPreviousFrame != 0)
+      m_paneEscPending = true;
    const bool paletteEsc = m_palette.ConsumedEscape() | m_pinned.ConsumedEscape() | ConsumedAreaEscape() | ConsumedPaneEscape(); // The Esc that closed a popup is not an editor Esc
    // Trace state of Plastic from Atlas: Enter, Backspace and H are its own, and Esc is the only other editor key
    const bool tracing = m_plasticTrace.active;
@@ -3965,6 +3982,20 @@ void EditorUI::PickRay(const ImVec2 &mousePos, const PickView *view, Vertex3Ds &
    rayFar = invMVP * Vertex3Ds { xcoord, ycoord, 1.f };
 }
 
+bool EditorUI::IsHiddenInPlayPickable(const PickView *view) const
+{
+   // The Hidden in Play option of the view clicked (the 3D Viewport's only applies to its editor camera, as its options do)
+   if (view != nullptr)
+      return view->hiddenInPlay;
+   return (m_camMode != ViewMode::EditorCam || IsInspectMode())
+      || (Renderer::IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : m_shadeMode == Renderer::ShadeMode::Solid ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr);
+}
+
+bool EditorUI::IsPartPickableInView(const std::shared_ptr<EditorUIPart> &uiPart, bool hiddenInPlayPickable) const
+{
+   return hiddenInPlayPickable || !uiPart->IsHiddenInPlay();
+}
+
 void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit, const PickView *view) const
 {
    Vertex3Ds v3d, v3d2;
@@ -3976,9 +4007,7 @@ void EditorUI::RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHi
    // We would need a dedicated quadtree for UI with all parts, and filter after picking by visibility
    vector<HitTestResult> vhoUnfilteredHit;
    m_player->m_physics->RayCast(v3d, v3d2, true, vhoUnfilteredHit);
-   // The Hidden in Play option of the view clicked (the 3D Viewport's only applies to its editor camera, as its options do)
-   const bool hiddenInPlayPickable = view != nullptr ? view->hiddenInPlay
-      : (m_camMode != ViewMode::EditorCam || IsInspectMode()) || (Renderer::IsWireframeShade(m_shadeMode) ? m_viewShade.hiddenWire : m_shadeMode == Renderer::ShadeMode::Solid ? m_viewShade.hiddenSolid : m_viewShade.hiddenPbr);
+   const bool hiddenInPlayPickable = IsHiddenInPlayPickable(view);
 
    // Filter out the colliders that should not be picked
    for (const auto &hr : vhoUnfilteredHit)
@@ -4055,10 +4084,11 @@ void EditorUI::BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool
    const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
    const ImVec2 boxMin(std::min(cornerA.x, cornerB.x), std::min(cornerA.y, cornerB.y));
    const ImVec2 boxMax(std::max(cornerA.x, cornerB.x), std::max(cornerA.y, cornerB.y));
+   const bool hiddenInPlayPickable = IsHiddenInPlayPickable(nullptr); // Box select is the 3D Viewport's only
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !IsEditablePickable(editable))
+      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !IsEditablePickable(editable) || !IsPartPickableInView(uiPart, hiddenInPlayPickable))
          continue;
       Matrix3D transform;
       if (uiPart->GetTransform(transform) == EditorUIPart::TM_None)

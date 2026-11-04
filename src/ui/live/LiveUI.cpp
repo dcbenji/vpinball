@@ -405,6 +405,12 @@ void LiveUI::Render3D()
       m_editorUI.Render3D();
 }
 
+void LiveUI::RenderHiddenOverlay3D()
+{
+   if (m_editorUI.IsOpened())
+      m_editorUI.RenderHiddenOverlay3D();
+}
+
 void LiveUI::RenderSelection3D()
 {
    if (m_editorUI.IsOpened())

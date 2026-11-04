@@ -78,6 +78,7 @@ public:
    void Open();
    bool IsOpened() const { return m_isOpened; }
    void Render3D();
+   void RenderHiddenOverlay3D(); // The parts hidden in play, as the 3D Viewport draws them, in a secondary view's 3D pass (the view's Hidden in Play option is checked by the caller)
    void RenderSelection3D(); // The selection's edges in the 3D pass being recorded (the secondary views; the 3D Viewport draws them in RenderUI)
    void RenderUI();
    void Close();
@@ -180,6 +181,8 @@ private:
    void DrawSelectionLines(ImDrawList *drawList, const PickView &view); // The 2D part of the selection overlay (lines, colliders) in a secondary view's image
    void SelectAtPoint(const ImVec2 &mousePos, const PickView *view); // A click (no drag) at the mouse position: shift toggles, ctrl lists, else selects / cycles / clears, as in the 3D Viewport
    bool IsEditablePickable(const IEditable *editable, unsigned int visibilityMask = 0) const; // Mask 0: the 3D Viewport's player mode visibility
+   bool IsHiddenInPlayPickable(const PickView *view) const; // Whether the view clicked (null: the 3D Viewport) lets the parts hidden in play be picked
+   bool IsPartPickableInView(const std::shared_ptr<EditorUIPart> &uiPart, bool hiddenInPlayPickable) const;
    void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
 

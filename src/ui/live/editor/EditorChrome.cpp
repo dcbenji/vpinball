@@ -350,7 +350,7 @@ bool EditorChrome::ShadeIconRow(const char *id, int &mode, ViewShadeOptions *con
          dl->AddCircleFilled(ImVec2(c.x - 0.36f * r, c.y - 0.38f * r), 0.12f * r + 0.3f, IM_COL32(255, 255, 255, 230));
          dl->AddCircle(c, r, col, 0, th * 0.8f);
       }
-      Tip(names[i], "Z", descs[i]);
+      Tip(names[i], xray != nullptr ? "Z" : nullptr, descs[i]); // Z cycles the 3D Viewport only
       if (pressed && !active)
       {
          mode = i;
@@ -1389,7 +1389,7 @@ void EditorChrome::RenderStatusOverlay()
    if (vc.Width() > 560.f * dpi)
    {
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-      const bool shadeOptions = editor.m_camMode == ViewMode::EditorCam; // The options are the editor view's: none for the Preview Camera and the Desktop Backdrop
+      const bool shadeOptions = editor.m_camMode == ViewMode::EditorCam && !editor.IsInspectMode(); // (none in inspect mode either, it draws with the defaults) The options are the editor view's: none for the Preview Camera and the Desktop Backdrop
       ImGui::SetNextWindowPos(ImVec2(vc.x1 - 16.f * dpi - ShadeIconRowWidth(shadeOptions), overlayPos.y), 0, ImVec2(0.f, 0.f));
       ImGui::Begin("shading row", nullptr,
          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
