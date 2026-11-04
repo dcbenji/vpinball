@@ -49,7 +49,7 @@ struct CurationRules
 
 static const CurationRules *GetCurationRules(PinKind kind, int itemType)
 {
-   static const CurationRules primitive { { "Refractions", "Traced Insert Bulb", "Flasher Dome" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
+   static const CurationRules primitive { { "Refractions", "Traced Insert Bulb", "Traced Insert Look", "Flasher Dome" }, { "Visible", "Material", "Image", "Reflection Strength", "Modulate Opacity", "Modulate Color" },
       { "Position", "Orientation", "Scale" }, { "Refractions" } }; // A traced insert has no refraction: its block is all zeros
    // The light pane marks its Light Settings section Common (PropertyPane::SetTier)
    static const CurationRules light { {}, { "Type", "State", "Show Bulb", "Transmit", "Modulate" }, { "Center", "Position", "Height", "Surface" } };
@@ -362,7 +362,7 @@ void PropertiesPanel::PrepareCurationFor(PinKind kind, const string &name, int i
    const auto offLook = [prim, rules](const PinnedPanel::Def *def)
    {
       return prim != nullptr
-         && ((def->group == "Traced Insert Bulb" && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome())
+         && (((def->group == "Traced Insert Bulb" || def->group == "Traced Insert Look") && !prim->IsTracedInsert()) || (def->group == "Flasher Dome" && !prim->IsFlasherDome())
             || (rules != nullptr && prim->IsTracedInsert() && Listed(rules->tracedInsertHiddenGroups, def->group)));
    };
    // Types without curation rules: the visual sections make their Look tab

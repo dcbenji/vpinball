@@ -6,6 +6,48 @@
 #include "math/matrix.h"
 #include "utils/color.h"
 
+namespace
+{
+struct TracedLookKey
+{
+   const char* label;
+   const char* key;
+   float def, vMin, vMax;
+   int decimals;
+   const char* tooltip;
+};
+
+// Position of the value of key in "a=1 b=2" text, npos when the key is not there
+size_t FindTracedLookValue(const string& params, const char* key)
+{
+   const string token = string(key) + '=';
+   for (size_t pos = params.find(token); pos != string::npos; pos = params.find(token, pos + 1))
+      if (pos == 0 || params[pos - 1] == ' ')
+         return pos + token.size();
+   return string::npos;
+}
+
+float GetTracedLook(const string& params, const TracedLookKey& key)
+{
+   const size_t pos = FindTracedLookValue(params, key.key);
+   return pos == string::npos ? key.def : static_cast<float>(atof(params.c_str() + pos));
+}
+
+void SetTracedLook(string& params, const char* key, float v)
+{
+   char value[32];
+   snprintf(value, sizeof(value), "%.4g", v);
+   const size_t pos = FindTracedLookValue(params, key);
+   if (pos != string::npos)
+   {
+      const size_t end = params.find(' ', pos);
+      params.replace(pos, end == string::npos ? string::npos : end - pos, value);
+   }
+   else
+      params += (params.empty() ? ""s : " "s) + key + '=' + value;
+}
+}
+
 
 namespace VPX::EditorUI
 {
@@ -553,6 +595,30 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](Primitive* primitive, float v) { primitive->m_d.m_bulbOffsetY = v; }, -25.f, 25.f, 1, "Moves the hot spot along the card's Y");
       if (!props.IsSkippingRest() && props.GetEditedPart<Primitive>(m_part)->IsTracedInsert())
          props.ApplyBulbToAllButton(m_part);
+
+      // The rest of a traced insert's look lives in its traced_params text: each slider reads and writes one key of it, and the renderer reads the text at draw time
+      props.Separator("Traced Insert Look"s);
+      static constexpr TracedLookKey kLookKeys[] = {
+         { "Glint Strength", "glint", 1.5f, 0.f, 6.f, 2, "Strength of the highlights in the facets" },
+         { "Glint Sharpness", "sharp", 76.648f, 5.f, 400.f, 0, "Low = broad sheen, high = tight sparkle" },
+         { "Glint Colour Fringe", "fringe", 1.62f, 0.f, 12.f, 2, "Degrees between the red, green and blue highlights: 0 = white glints, more = a wider colour split" },
+         { "Glint Facet Tilt", "tilt", 50.938f, 10.f, 80.f, 1, "The facet angle the highlights are worked out for (deg)" },
+         { "Glint Count", "keys", 5.f, 1.f, 8.f, 0, "Highlights around the insert" },
+         { "Moulding Waviness", "wavy", 3.f, 0.f, 15.f, 2, "How far the moulding's surface leans (deg), so straight facets do not glint as one" },
+         { "Moulding Wavelength (mm)", "wavelen", 6.f, 0.5f, 30.f, 1, "Size of the moulding's waves" },
+         { "Glint Turn Jitter", "turnjit", 14.641f, 0.f, 90.f, 1, "How differently each insert's highlights are turned (deg)" },
+         { "Facet Blur", "facetblur", 0.f, 0.f, 6.f, 2, "Softens the facet map's edges for the highlights (mips)" },
+         { "Room Glint", "room", 0.3f, 0.f, 3.f, 2, "The room's light glinting in the facets, lamp on or off" },
+         { "Room Glint Tint", "roomtint", 0.f, 0.f, 1.f, 2, "0 = white room glints, 1 = the plastic's colour" },
+         { "Lamp-Off Look", "env", 1.f, 0.f, 3.f, 2, "Strength of the baked lamp-off image" },
+         { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
+         { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
+      };
+      for (const TracedLookKey& key : kLookKeys)
+         props.SliderFloat<Primitive>(
+            m_part, string(key.label), //
+            [key](const Primitive* primitive) { return GetTracedLook(primitive->m_d.m_tracedParams, key); }, //
+            [key](Primitive* primitive, float v) { SetTracedLook(primitive->m_d.m_tracedParams, key.key, v); }, key.vMin, key.vMax, key.decimals, key.tooltip);
 
       props.Separator("Flasher Dome"s);
       props.SliderFloat<Primitive>(
