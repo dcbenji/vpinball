@@ -113,7 +113,7 @@ void AreaLayout::ToLegacy(bool& outliner, bool& properties, float& outlinerW, fl
    AreaLayout ref = *this; // hidden leaves laid out as visible
    std::vector<LeafRect> leaves;
    std::vector<SplitterRect> splitters;
-   ref.Layout(ref.m_root, { 0.f, 0.f, 1920.f, 1080.f }, 1.f, 0.f, true, leaves, &splitters);
+   ref.Layout(ref.m_root, { 0.f, 0.f, 1920.f, 1080.f }, 1.f, 0.f, 1080.f, true, leaves, &splitters);
 
    float vcx = 960.f;
    for (const LeafRect& lr : leaves)
@@ -600,7 +600,7 @@ void AreaLayout::MinSize(const int idx, const float dpi, const float sidebarPx, 
    }
 }
 
-void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const float sidebarPx, const bool ignoreHidden,
+void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const float sidebarPx, const float rootH, const bool ignoreHidden,
    std::vector<LeafRect>& leaves, std::vector<SplitterRect>* splitters) const
 {
    const AreaNode& n = m_nodes[idx];
@@ -614,8 +614,8 @@ void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const 
    if (!v0 || !v1)
    {
       // One child (or none) takes everything; the other takes no space and draws no splitter
-      Layout(n.child[0], v0 ? r : Empty(r), dpi, sidebarPx, ignoreHidden, leaves, splitters);
-      Layout(n.child[1], v1 ? r : Empty(r), dpi, sidebarPx, ignoreHidden, leaves, splitters);
+      Layout(n.child[0], v0 ? r : Empty(r), dpi, sidebarPx, rootH, ignoreHidden, leaves, splitters);
+      Layout(n.child[1], v1 ? r : Empty(r), dpi, sidebarPx, rootH, ignoreHidden, leaves, splitters);
       return;
    }
 
@@ -630,7 +630,7 @@ void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const 
    MinSize(n.child[o], dpi, sidebarPx, ignoreHidden, w, h);
    const float minO = vertical ? w : h;
 
-   const float shrink = vertical ? 1.f : std::min(1.f, total / (kStackedRefH * dpi));
+   const float shrink = vertical ? 1.f : StackedShrink(rootH, dpi);
    float fixedPx = n.size * dpi * shrink;
    const bool squeezed = total <= minF + minO;
    if (squeezed) // smaller than the minimums: shrink proportionally
@@ -676,8 +676,8 @@ void AreaLayout::Layout(const int idx, const AreaRect r, const float dpi, const 
       splitters->push_back(s);
    }
 
-   Layout(n.child[0], c0, dpi, sidebarPx, ignoreHidden, leaves, splitters);
-   Layout(n.child[1], c1, dpi, sidebarPx, ignoreHidden, leaves, splitters);
+   Layout(n.child[0], c0, dpi, sidebarPx, rootH, ignoreHidden, leaves, splitters);
+   Layout(n.child[1], c1, dpi, sidebarPx, rootH, ignoreHidden, leaves, splitters);
 }
 
 void AreaLayout::Compute(const AreaRect bounds, const float dpi, const float sidebarPx, std::vector<LeafRect>& leaves,
@@ -701,7 +701,7 @@ void AreaLayout::Compute(const AreaRect bounds, const float dpi, const float sid
       }
       return;
    }
-   Layout(m_root, bounds, dpi > 0.f ? dpi : 1.f, sidebarPx, false, leaves, &splitters);
+   Layout(m_root, bounds, dpi > 0.f ? dpi : 1.f, sidebarPx, std::max(0.f, bounds.y1 - bounds.y0), false, leaves, &splitters);
 }
 
 int AreaLayout::LeafAt(const std::vector<LeafRect>& leaves, const float x, const float y)

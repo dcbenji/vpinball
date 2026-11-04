@@ -11,6 +11,7 @@
 // Ids are unique within a session (drawn from a process wide counter, never reused), so an id kept by a
 // drag or a menu can safely be re-resolved every frame: if Find(id) is null, the node is gone.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -123,6 +124,8 @@ public:
    // A stacked split (horizontal) shows its fixed child at its stored size down to this height (logical px) and shrinks it in proportion below:
    // a 1080p right column is about 998 px, so the default 360 px Outliner is whole there and Properties keeps its rows on a 720p window
    static constexpr float kStackedRefH = 990.f;
+   // Stored to displayed size ratio of a stacked split's fixed child: from the height of the whole layout, so it is the same for every split of the tree
+   static float StackedShrink(const float rootH, const float dpi) { return std::min(1.f, rootH / (kStackedRefH * (dpi > 0.f ? dpi : 1.f))); }
    static constexpr float kViewportMinW = 240.f, kViewportMinH = 180.f;
    static constexpr float kGrabWidth = 6.f; // splitter grab strip
 
@@ -223,7 +226,7 @@ private:
    void CollectLeaves(int idx, std::vector<int>& out) const;
    int Depth(int idx) const;
    bool ValidateImpl(std::string& why) const;
-   void Layout(int idx, AreaRect r, float dpi, float sidebarPx, bool ignoreHidden, std::vector<LeafRect>& leaves,
+   void Layout(int idx, AreaRect r, float dpi, float sidebarPx, float rootH, bool ignoreHidden, std::vector<LeafRect>& leaves,
       std::vector<SplitterRect>* splitters) const;
    void MinSize(int idx, float dpi, float sidebarPx, bool ignoreHidden, float& w, float& h) const;
    bool Contains(int idx, AreaType type) const;
