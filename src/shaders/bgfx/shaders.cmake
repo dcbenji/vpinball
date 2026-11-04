@@ -69,6 +69,7 @@ function(process_shader group source name type)
    string(REGEX REPLACE "_$" "" short "${name}")
    set(defines "${ARGN}")
    string(REPLACE ";" " " defines_str "${defines}")
+   file(APPEND "${_tmp}.manifest" "   \"${short}|${source}|${type}|${defines}\",\n") # For ShaderHotReload
    file(APPEND "${_tmp}"
       "\n//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////\n// Build of ${type} shader from ${source} to ${short} with options: ${defines_str}\n")
    message(STATUS "> ${type} shader from ${source} to ${short} with ${defines_str}")
@@ -130,9 +131,13 @@ endfunction()
 macro(begin_group group title)
    set(_tmp "${WORK_DIR}/bgfx_${group}.h.tmp")
    file(WRITE "${_tmp}" "// ${title}\n")
+   file(WRITE "${_tmp}.manifest" "")
 endmacro()
 
 macro(end_group group)
+   # Variant name, source, type and defines, for ShaderHotReload (development only)
+   file(READ "${_tmp}.manifest" _manifest)
+   file(APPEND "${_tmp}" "\nstatic const char* const bgfx_manifest_${group}[] = {\n${_manifest}   nullptr };\n")
    execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different
       "${WORK_DIR}/bgfx_${group}.h.tmp" "${OUT_DIR}/bgfx_${group}.h")
 endmacro()

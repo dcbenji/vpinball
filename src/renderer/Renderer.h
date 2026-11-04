@@ -230,6 +230,7 @@ public:
    bool IsTranslucentShadowCaster(const Material* mat) const; // Shared per-material caster classification of the SHADOW_MAP branches
    void BindTranslucentShadowCaster(const Material* mat, Texture* image, float partAlpha) const; // pbr_shadow_trans technique + tint bindings
 
+   void MarkStaticPrepassDirty() { m_isStaticPrepassDirty = true; }
    void InvalidateShadowContent() { m_vsmContentSerial++; } // Static shadow pages are cached: call after moving or editing a shadow caster
    void ReinitRenderable(IRenderable* part) { if (part) m_renderableToInit.push_back(part); }
    void SetupRenderable(IRenderable* part) { if (part) m_renderableToSetup.push_back(part); }

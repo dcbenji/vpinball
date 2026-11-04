@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "Shader.h"
+#include "ShaderHotReload.h"
 
 #include "core/VPApp.h"
 #include "core/vpversion.h"
@@ -659,6 +660,10 @@ Shader::Shader(RenderDevice* renderDevice, const ShaderId id, const bool isStere
 Shader::~Shader()
 {
    delete m_state;
+   #ifdef VPX_DEV_TOOLS
+   if (ShaderHotReload* const hotReload = ShaderHotReload::Get())
+      hotReload->UnregisterShader(this);
+   #endif
 
    #if defined(ENABLE_BGFX)
       for (unsigned int j = 0; j < static_cast<unsigned int>(ShaderTechnique::COUNT); ++j)
@@ -1493,8 +1498,14 @@ void Shader::loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTech
 {
    assert(!bgfx::isValid(isClipVariant ? m_clipPlaneTechniques[static_cast<unsigned int>(technique)] : m_techniques[static_cast<unsigned int>(technique)]));
    const bgfx::RendererType::Enum type = bgfx::getRendererType();
+   #ifdef VPX_DEV_TOOLS
+   ShaderHotReload* const hotReload = ShaderHotReload::Get();
+   const bgfx::ShaderHandle vsh = hotReload ? hotReload->CreateShader(embeddedShaders, vsName) : bgfx::createEmbeddedShader(embeddedShaders, type, vsName);
+   const bgfx::ShaderHandle fsh = hotReload ? hotReload->CreateShader(embeddedShaders, fsName) : bgfx::createEmbeddedShader(embeddedShaders, type, fsName);
+   #else
    const bgfx::ShaderHandle vsh = bgfx::createEmbeddedShader(embeddedShaders, type, vsName);
    const bgfx::ShaderHandle fsh = bgfx::createEmbeddedShader(embeddedShaders, type, fsName);
+   #endif
    if (!bgfx::isValid(vsh) || !bgfx::isValid(fsh))
    {
       PLOGE << "Failed to setup shader from " << vsName << " / " << fsName;
@@ -1511,7 +1522,15 @@ void Shader::loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTech
       return;
    }
    (isClipVariant ? m_clipPlaneTechniques[static_cast<unsigned int>(technique)] : m_techniques[static_cast<unsigned int>(technique)]) = ph;
+   #ifdef VPX_DEV_TOOLS
+   if (hotReload)
+      hotReload->RegisterProgram(this, technique, isClipVariant, vsName, fsName, embeddedShaders);
+   #endif
+   UpdateTechniqueUniforms(technique, vsh, fsh, vsName, fsName);
+}
 
+void Shader::UpdateTechniqueUniforms(ShaderTechnique technique, bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh, const char* vsName, const char* fsName)
+{
    // Derive the technique uniform list from bgfx shader reflection: union of the live
    // uniforms reported for the vertex and fragment shader, accumulated across all program
    // variants (clip planes included). coreUniforms still provides the metadata bgfx does
@@ -1584,6 +1603,46 @@ void Shader::loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTech
          return aIsSampler && !bIsSampler;
       });
 }
+
+#ifdef VPX_DEV_TOOLS
+// A uniform this shader object did not use at startup has no slot in its state blocks (see m_stateOffsets): returns its name, empty if there is none
+string Shader::HotReloadCheckUniforms(bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh) const
+{
+   for (const bgfx::ShaderHandle sh : { vsh, fsh })
+   {
+      bgfx::UniformHandle uniforms[static_cast<unsigned int>(ShaderUniform::COUNT)];
+      const uint16_t n = bgfx::getShaderUniforms(sh, uniforms, static_cast<unsigned int>(ShaderUniform::COUNT));
+      for (int i = 0; i < n; i++)
+      {
+         bgfx::UniformInfo info;
+         bgfx::getUniformInfo(uniforms[i], info);
+         const ShaderUniform uniform = getUniformByName(info.name);
+         if (uniform == ShaderUniform::COUNT || m_stateOffsets[static_cast<unsigned int>(uniform)] == -1)
+         {
+            if (string(info.name) != "Point" && string(info.name) != "Linear") // See UpdateTechniqueUniforms
+               return info.name;
+         }
+         else if (info.num != ShaderUniformDef::coreUniforms[static_cast<unsigned int>(uniform)].count)
+            return info.name + " with another array size"s;
+      }
+   }
+   return string();
+}
+
+// Render thread, end of frame. Programs start with empty constants: the state applied to the replaced one is forgotten so that Begin sets all of them
+void Shader::HotReloadSwapProgram(ShaderTechnique technique, bool isClipVariant, bgfx::ProgramHandle program, bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh, const char* vsName, const char* fsName)
+{
+   const unsigned int t = static_cast<unsigned int>(technique);
+   bgfx::ProgramHandle& slot = isClipVariant ? m_clipPlaneTechniques[t] : m_techniques[t];
+   bgfx::destroy(slot);
+   slot = program;
+   UpdateTechniqueUniforms(technique, vsh, fsh, vsName, fsName);
+   m_boundState[t]->Clear();
+   for (const ShaderUniform uniform : m_uniforms[t])
+      if (ShaderUniformDef::coreUniforms[static_cast<unsigned int>(uniform)].type == ShaderUniformType::Sampler)
+         m_boundState[t]->SetTexture(uniform, m_renderDevice->m_nullTexture);
+}
+#endif
 
 // Embedded shaders
 #include "shaders/bgfx_imgui.h"
@@ -1676,6 +1735,18 @@ void Shader::Load()
       //
       BGFX_EMBEDDED_SHADER_END()
    };
+   #ifdef VPX_DEV_TOOLS
+   if (ShaderHotReload* const hotReload = ShaderHotReload::Get())
+   {
+      static std::once_flag manifestAdded;
+      std::call_once(manifestAdded, [hotReload]()
+         {
+            for (const char* const* const manifest : { bgfx_manifest_imgui, bgfx_manifest_ball, bgfx_manifest_basic, bgfx_manifest_pbr, bgfx_manifest_dmd, bgfx_manifest_flasher, bgfx_manifest_light,
+                    bgfx_manifest_postprocess, bgfx_manifest_motionblur, bgfx_manifest_antialiasing, bgfx_manifest_tonemap, bgfx_manifest_blur, bgfx_manifest_stereo })
+               hotReload->AddManifest(manifest);
+         });
+   }
+   #endif
 #undef BGFX_EMBEDDED_SHADER_ST
 #define STEREO(n) m_isStereo ? n##_st.name : #n
    switch (m_shaderId)

@@ -317,6 +317,7 @@ private:
 #if defined(ENABLE_BGFX)
 public:
    void NextView();
+   uint32_t GetFrameIndex() const { return m_frameIndex; }
    void ResetActiveView();
 
    bgfx::ProgramHandle m_program = BGFX_INVALID_HANDLE; // Bound program for next draw submission

@@ -646,8 +646,13 @@ private:
    bgfx::UniformHandle m_uniformHandles[static_cast<unsigned int>(ShaderTechnique::COUNT)];
 
    void loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTechnique tech, const char* vsName, const char* fsName, const bool isClipVariant = false);
+   void UpdateTechniqueUniforms(ShaderTechnique technique, bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh, const char* vsName, const char* fsName);
 
 public:
+   // Development only, see ShaderHotReload
+   string HotReloadCheckUniforms(bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh) const;
+   void HotReloadSwapProgram(ShaderTechnique technique, bool isClipVariant, bgfx::ProgramHandle program, bgfx::ShaderHandle vsh, bgfx::ShaderHandle fsh, const char* vsName, const char* fsName);
+   RenderDevice* GetRenderDevice() const { return m_renderDevice; }
    bgfx::ProgramHandle GetCore() const;
    bgfx::UniformHandle GetUniformHandle(ShaderUniform uniformName) const {return m_uniformHandles[static_cast<unsigned int>(uniformName)]; }
    bgfx::ProgramHandle GetProgramHandle(ShaderTechnique techniqueName) const {return m_techniques[static_cast<unsigned int>(techniqueName)]; }

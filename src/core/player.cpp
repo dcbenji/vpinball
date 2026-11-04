@@ -16,6 +16,7 @@
 #include "core/editablereg.h"
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
+#include "renderer/ShaderHotReload.h"
 #include "parts/ball.h"
 #include "parts/flasher.h"
 #include "parts/light.h"
@@ -2637,6 +2638,12 @@ void Player::PrepareFrame()
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
    m_startFrameTick = usec();
+
+   // Development tools: between two frames, with the render frame mutex held, once per frame
+   #ifdef VPX_DEV_TOOLS
+   if (ShaderHotReload* const hotReload = ShaderHotReload::Get(); hotReload && m_closing == CS_PLAYING)
+      hotReload->Update(this);
+   #endif
 
    m_pluginAPI.BroadcastVPXMsg(m_onPrepareFrameMsgId, nullptr);
 
