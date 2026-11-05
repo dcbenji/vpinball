@@ -228,6 +228,7 @@ private:
       std::shared_ptr<EditorUIPart> pointEditPart; // Part in drag point edit mode, nullptr when not in that mode
       vector<int> pointSel; // Indices of the selected points in the edited part's curve
       bool pointEditCenter = false; // Whether the part's center point is being edited instead of its drag point curve
+      bool plasticEditHoles = false; // A plastic in point edit: its holes are edited (a transient state of the part, lost when it is reloaded)
    };
    UndoSelectionState CaptureUndoSelection() const;
    void RestoreUndoSelection(const UndoSelectionState &state);
@@ -409,6 +410,7 @@ private:
       float spacing = 12.f;
       int ends = 0;
       float railDiameter = 6.5f; // Wire Rail (rails, wireHeight = height of the route's first point)
+      int plDetail = 1; // Curve Detail
       float plHeight = 50.f; // Plastic from Atlas: the created plastic (host) is the selection, adjusting rebuilds it in place
       float plThickness = 5.6f;
       float plBevel = 1.9f;
@@ -463,6 +465,13 @@ private:
    PlasticFromAtlas::Bow m_plasticBow;
    ReferenceImage m_refImage; // View > Reference Image: a scan under or over the playfield in the 3D views (view-only, kept in the table's settings file)
    int SecondaryViewOrdinal(int slot) const; // The secondary view of a panel slot among the view areas of the layout (0 = the first), for per view options
+   PlasticFromAtlas::Pill m_plasticPill;
+   bool m_plasticShowSheet = true; // Editing the shape of a plastic: the atlas drawn over the view (on again at each Tab, not saved)
+   vector<std::pair<DragPoint *, float>> m_plasticHoleScaleInit; // S on holes: the diameters when the modal began
+   bool m_plasticRmbDown = false; // Right button pressed in the viewport (the edit menu opens on a release without a drag)
+   ImVec2 m_plasticRmbStart {};
+   int m_plasticMenu = -1; // Edit menu to open: 0 = Edit Shape on a selected plastic, 1 = the menu while editing
+   ImVec2 m_plasticMenuPos {};
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    MeasureTool m_measure; // The Measure tool (Blender's Ruler): view-only rulers kept for the session
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)

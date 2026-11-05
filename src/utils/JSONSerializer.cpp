@@ -498,6 +498,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PTHK), "plastic_thickness" },
             { FID(PBVL), "plastic_bevel" },
             { FID(PBSG), "plastic_bevel_segments" },
+            { FID(PDTL), "plastic_detail" },
             { FID(PHDI), "plastic_hole_diameter" },
             { FID(PDPI), "plastic_dpi" },
             { FID(PUVM), "plastic_uv_u" },

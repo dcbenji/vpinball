@@ -370,18 +370,20 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       ed.m_lastOp.plThickness = host->m_d.m_plasticThickness;
       ed.m_lastOp.plBevel = host->m_d.m_plasticBevel;
       ed.m_lastOp.plSegs = host->m_d.m_plasticBevelSegs;
+      ed.m_lastOp.plDetail = host->m_d.m_plasticDetail;
       ed.m_lastOp.plHoleDia = host->m_d.m_plasticHoleDia;
       ed.m_lastOp.plDpi = host->m_d.m_plasticDpi;
       ed.FrameSelection();
    }
 }
 
-void PlasticFromAtlas::Adjust(Primitive *const host, const float height, const float thickness, const float bevel, const int segs, const float holeDia, const float dpi)
+void PlasticFromAtlas::Adjust(Primitive *const host, const float height, const float thickness, const float bevel, const int segs, const float holeDia, const float dpi, const int detail)
 {
    host->m_d.m_plasticHeight = clamp(height, -1000.f, 2000.f);
    host->m_d.m_plasticThickness = clamp(thickness, 0.1f, 100.f);
    host->m_d.m_plasticBevel = clamp(bevel, 0.f, host->m_d.m_plasticThickness);
    host->m_d.m_plasticBevelSegs = clamp(segs, 1, 16);
+   host->m_d.m_plasticDetail = clamp(detail, 1, 5);
    host->m_d.m_plasticHoleDia = clamp(holeDia, 0.5f, 100.f);
    if (fabsf(dpi - host->m_d.m_plasticDpi) > 1e-3f)
       host->SetPlasticDpi(dpi);
@@ -592,6 +594,397 @@ void PlasticFromAtlas::BowDrag(EditorUI &ed)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+// Editing the shape: pill holes, S on holes, the panel and the right-click menu
+
+Primitive *PlasticFromAtlas::EditedHost(const EditorUI &ed)
+{
+   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter)
+      return nullptr;
+   IEditable *const e = ed.m_pointEditPart->GetEditable();
+   return IsPointEditHost(e) ? static_cast<Primitive *>(e) : nullptr; // the plastic generator only: a Wire Rail keeps its own point editing
+}
+
+bool PlasticFromAtlas::IsEditing(const EditorUI &ed) { return EditedHost(ed) != nullptr; }
+
+bool PlasticFromAtlas::IsHostSelected(const EditorUI &ed) { return ed.m_selection.GetType() == Selection::S_EDITABLE && ed.m_selection.GetPart() != nullptr && IsPointEditHost(ed.m_selection.GetPart()->GetEditable()); }
+
+bool PlasticFromAtlas::ZLocked(const EditorUI &ed) { return IsEditing(ed) || (ed.m_pointEditPart == nullptr && ed.m_multiSel.size() == 1 && IsHostSelected(ed)); }
+
+bool PlasticFromAtlas::TopPlaneZ(const EditorUI &ed, float &z)
+{
+   if (!ZLocked(ed))
+      return false;
+   const Primitive *host = EditedHost(ed);
+   if (host == nullptr && ed.m_selection.GetPart() != nullptr)
+      host = static_cast<const Primitive *>(ed.m_selection.GetPart()->GetEditable());
+   if (host == nullptr)
+      return false;
+   z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   return true;
+}
+
+bool PlasticFromAtlas::IsEditingHoles(const EditorUI &ed)
+{
+   const Primitive *const host = EditedHost(ed);
+   return host != nullptr && host->m_plasticEditHoles;
+}
+
+namespace
+{
+float SegDist(const Vertex2D &p, const DragPoint *a, const DragPoint *b)
+{
+   const float dx = b->GetX() - a->GetX(), dy = b->GetY() - a->GetY(), l2 = dx * dx + dy * dy;
+   const float t = l2 > 1e-12f ? clamp(((p.x - a->GetX()) * dx + (p.y - a->GetY()) * dy) / l2, 0.f, 1.f) : 0.f;
+   return hypotf(p.x - (a->GetX() + t * dx), p.y - (a->GetY() + t * dy));
+}
+}
+
+bool PlasticFromAtlas::HolePress(EditorUI &ed, const ImVec2 &mouse, const bool doubleClick)
+{
+   ed.m_plasticPill = Pill();
+   Primitive *const host = EditedHost(ed);
+   if (host == nullptr || !host->m_plasticEditHoles || ed.m_table->IsLocked())
+      return false;
+   const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   const Vertex2D p = ed.UnprojectToPlane(mouse, z), q = ed.UnprojectToPlane(ImVec2(mouse.x + 8.f * ed.m_liveUI.GetDPI(), mouse.y), z);
+   const float tol = hypotf(q.x - p.x, q.y - p.y);
+   DragPointCurve &curve = host->m_plasticHoles;
+   const auto &pts = curve.GetPoints();
+   const vector<int> partner = Primitive::PlasticPillPartners(curve);
+   int ring = -1, middle = -1;
+   float ringErr = tol;
+   for (int i = 0; i < static_cast<int>(pts.size()); i++)
+   {
+      if (partner[i] >= 0 && partner[i] < i)
+         continue; // The second end stands for its pill
+      const DragPoint *const b = partner[i] > i ? pts[partner[i]].get() : pts[i].get();
+      const float r = 0.5f * pts[i]->GetZ(), d = SegDist(p, pts[i].get(), b);
+      if (fabsf(d - r) < ringErr)
+      {
+         ringErr = fabsf(d - r);
+         ring = i;
+      }
+      else if (partner[i] > i && d < r - tol && middle < 0)
+         middle = i;
+   }
+   const int hit = ring >= 0 ? ring : middle;
+   if (hit < 0)
+      return false;
+   if (partner[hit] >= 0) // A pill
+   {
+      if (ring >= 0 && doubleClick)
+      {
+         // Round again, keeping the first end
+         ed.m_undo.BeginUndo();
+         ed.m_undo.MarkForUndo(host);
+         ed.m_undo.SetFieldLabel("Round Hole");
+         ed.m_undo.EndUndo();
+         DragPoint *const first = pts[hit].get(), *const second = pts[partner[hit]].get();
+         first->SetSmooth(false);
+         curve.DeletePoint(second);
+         ed.m_pointSel.clear();
+         ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+         ed.m_renderer->InvalidateShadowContent();
+         return true;
+      }
+      // The ring or the middle of a pill: both ends are selected and a drag moves the whole hole
+      DragPoint *const a = pts[hit].get(), *const b = pts[partner[hit]].get();
+      if (ed.m_pointSel.size() != 2 || !ed.IsPointSelected(a) || !ed.IsPointSelected(b))
+         ed.m_pointSel = { a, b };
+      ed.m_pointDragPending = !a->m_uiLocked;
+      ed.m_pointDragZ = z;
+      ed.m_pointDragPos = ed.UnprojectToPlane(mouse, z);
+      return true;
+   }
+   if (ring < 0 || doubleClick)
+      return ring >= 0; // The inside of a round hole is nothing; a double-click on a round hole's ring has nothing to make round
+   ed.m_plasticPill.pending = true;
+   ed.m_plasticPill.start = mouse;
+   ed.m_plasticPill.a = pts[hit].get();
+   return true;
+}
+
+void PlasticFromAtlas::PillEnd(EditorUI &ed)
+{
+   Pill &pill = ed.m_plasticPill;
+   if (pill.active && pill.a != nullptr && pill.b != nullptr)
+      if (Primitive *const host = EditedHost(ed))
+         if (hypotf(pill.b->GetX() - pill.a->GetX(), pill.b->GetY() - pill.a->GetY()) < 0.05f) // Dragged back onto the first end: round again
+         {
+            pill.a->SetSmooth(false);
+            host->m_plasticHoles.DeletePoint(pill.b);
+            ed.m_pointSel.clear();
+            ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+            ed.m_renderer->InvalidateShadowContent();
+            pill = Pill();
+            return;
+         }
+   if (pill.active && pill.a != nullptr && pill.b != nullptr)
+      ed.m_pointSel = { pill.a, pill.b }; // Both ends selected (not during the drag: the gizmo would be under the cursor)
+   pill = Pill();
+}
+
+void PlasticFromAtlas::AbortDrags(EditorUI &ed)
+{
+   ed.m_plasticPill = Pill();
+   ed.m_plasticBow = Bow();
+}
+
+void PlasticFromAtlas::PillDrag(EditorUI &ed)
+{
+   Pill &pill = ed.m_plasticPill;
+   if (!pill.pending && !pill.active)
+      return;
+   Primitive *const host = EditedHost(ed);
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || host == nullptr || !host->m_plasticEditHoles)
+   {
+      PillEnd(ed);
+      return;
+   }
+   DragPointCurve &curve = host->m_plasticHoles;
+   const ImVec2 mouse = ImGui::GetMousePos();
+   if (pill.pending)
+   {
+      if (fabsf(mouse.x - pill.start.x) < 3.f && fabsf(mouse.y - pill.start.y) < 3.f)
+         return; // A click and release changes nothing
+      pill.pending = false;
+      pill.active = true;
+      ed.m_undo.BeginUndo();
+      ed.m_undo.MarkForUndo(host);
+      ed.m_undo.SetFieldLabel("Make Pill");
+      ed.m_undo.EndUndo();
+      const int n = static_cast<int>(curve.GetPoints().size());
+      int at = n;
+      for (int i = 0; i < n; i++)
+         if (curve.GetPoints()[i].get() == pill.a)
+            at = i + 1;
+      ed.m_pointSel.clear();
+      pill.a->SetSmooth(true); // Joined to the next point, which is the second end, with the same diameter
+      curve.InsertPoint(at, std::make_unique<DragPoint>(&curve, pill.a->GetX(), pill.a->GetY(), pill.a->GetZ(), false));
+      pill.b = curve.GetPoints()[at].get();
+   }
+   if (mouse.x == pill.last.x && mouse.y == pill.last.y)
+      return; // Nothing moved: no rebuild
+   pill.last = mouse;
+   // The far end of the ring stays under the cursor
+   const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   const Vertex2D p = ed.UnprojectToPlane(mouse, z);
+   const float r = 0.5f * pill.a->GetZ(), dx = p.x - pill.a->GetX(), dy = p.y - pill.a->GetY(), len = hypotf(dx, dy);
+   if (len <= r + 0.05f)
+   {
+      pill.b->SetX(pill.a->GetX());
+      pill.b->SetY(pill.a->GetY());
+   }
+   else
+   {
+      pill.b->SetX(p.x - dx / len * r);
+      pill.b->SetY(p.y - dy / len * r);
+   }
+   curve.OnPointsModified();
+   ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+   ed.m_renderer->InvalidateShadowContent();
+}
+
+bool PlasticFromAtlas::ScaleHoles(EditorUI &ed)
+{
+   Primitive *const host = EditedHost(ed);
+   if (host == nullptr || !host->m_plasticEditHoles || !ed.m_modal.active || ed.m_modal.op != EditorUI::ModalOp::Scale)
+      return false;
+   const auto &pts = host->m_plasticHoles.GetPoints();
+   if (ed.m_plasticHoleScaleInit.empty()) // The first evaluation: the diameters as they were
+   {
+      const vector<int> partner = Primitive::PlasticPillPartners(host->m_plasticHoles);
+      for (int i = 0; i < static_cast<int>(pts.size()); i++)
+         if (ed.IsPointSelected(pts[i].get()) || (partner[i] >= 0 && ed.IsPointSelected(pts[partner[i]].get())))
+            ed.m_plasticHoleScaleInit.emplace_back(pts[i].get(), pts[i]->GetZ());
+   }
+   const float k = fabsf(ed.m_modal.lastFactor);
+   for (const auto &[point, dia] : ed.m_plasticHoleScaleInit)
+      point->SetZ(clamp(dia * k, 0.5f, 100.f));
+   host->m_plasticHoles.OnPointsModified();
+   return true;
+}
+
+void PlasticFromAtlas::BeforeDeletePoints(EditorUI &ed, const vector<DragPoint *> &points)
+{
+   Primitive *const host = EditedHost(ed);
+   if (host == nullptr || !host->m_plasticEditHoles)
+      return;
+   const auto &pts = host->m_plasticHoles.GetPoints();
+   const vector<int> partner = Primitive::PlasticPillPartners(host->m_plasticHoles);
+   vector<DragPoint *> others;
+   for (int i = 0; i < static_cast<int>(pts.size()); i++)
+      if (partner[i] >= 0 && std::ranges::find(points, pts[i].get()) != points.end())
+         others.push_back(pts[partner[i]].get());
+   for (DragPoint *const o : others) // The pill loses an end: the end that stays is a round hole, whatever follows it in the list
+      o->SetSmooth(false);
+}
+
+void PlasticFromAtlas::SetHoleDiameter(EditorUI &ed, const float dia)
+{
+   Primitive *const host = EditedHost(ed);
+   if (host == nullptr)
+      return;
+   host->m_d.m_plasticHoleDia = clamp(dia, 0.5f, 100.f); // Always the next hole
+   if (host->m_plasticEditHoles)
+      for (const DragPoint *const p : ed.m_pointSel) // And the selected holes (both ends of a pill)
+         host->SetPlasticHoleDiameter(p, dia);
+   host->m_plasticHoles.OnPointsModified();
+   ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+   ed.m_renderer->InvalidateShadowContent();
+}
+
+void PlasticFromAtlas::RenderEditPanel(EditorUI &ed)
+{
+   Primitive *const host = EditedHost(ed);
+   if (host == nullptr || !ed.m_viewportVisible || ed.m_plasticTrace.active)
+      return;
+   const float dpi = ed.m_liveUI.GetDPI();
+   ImGui::SetNextWindowPos(ImVec2(ed.m_viewportContentRect.x0 + 8.f * dpi, ed.m_viewportContentRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
+   if (ImGui::Begin("Plastic from Atlas##Edit", nullptr,
+          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+             | ImGuiWindowFlags_NoMove))
+   {
+      ImGui::Text("Plastic from Atlas: edit shape (%s)", host->m_plasticEditHoles ? "holes" : "outline");
+      ImGui::SameLine();
+      if (ImGui::RadioButton("Outline", !host->m_plasticEditHoles) && host->m_plasticEditHoles)
+      {
+         host->m_plasticEditHoles = false;
+         ed.m_pointSel.clear();
+      }
+      ImGui::SameLine();
+      if (ImGui::RadioButton("Holes (H)", host->m_plasticEditHoles) && !host->m_plasticEditHoles)
+      {
+         host->m_plasticEditHoles = true;
+         ed.m_pointSel.clear();
+      }
+      ImGui::SameLine();
+      ImGui::Checkbox("Show Sheet", &ed.m_plasticShowSheet);
+      ImGui::SetItemTooltip("The atlas drawn over the view. Off: the table and the plastic as they are");
+      // Hole Diameter: the selected holes if holes are selected, and always the next hole
+      float dia = host->m_d.m_plasticHoleDia;
+      if (host->m_plasticEditHoles && !ed.m_pointSel.empty())
+         dia = ed.m_pointSel.front()->GetZ();
+      ImGui::SetNextItemWidth(70.f * dpi);
+      const bool changed = ImGui::DragFloat("Hole Diameter", &dia, 0.1f, 0.5f, 100.f, "%.1f");
+      if (ImGui::IsItemActivated())
+      {
+         ed.m_undo.BeginUndo();
+         ed.m_undo.MarkForUndo(host);
+         ed.m_undo.SetFieldLabel("Hole Diameter");
+         ed.m_undo.EndUndo();
+      }
+      if (changed)
+         SetHoleDiameter(ed, dia);
+      ImGui::SetItemTooltip("Diameter of the selected holes (both ends of a pill), and of the next hole placed");
+      int detail = host->m_d.m_plasticDetail;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(110.f * dpi);
+      const bool detailChanged = ImGui::SliderInt("Curve Detail", &detail, 1, 5);
+      if (ImGui::IsItemActivated())
+      {
+         ed.m_undo.BeginUndo();
+         ed.m_undo.MarkForUndo(host);
+         ed.m_undo.SetFieldLabel("Curve Detail");
+         ed.m_undo.EndUndo();
+      }
+      if (detailChanged)
+      {
+         host->m_d.m_plasticDetail = clamp(detail, 1, 5);
+         ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+         ed.m_renderer->InvalidateShadowContent();
+      }
+      ImGui::SetItemTooltip("How smooth arcs and hole circles are (1 = default, at most 96 segments on any one arc)");
+   }
+   ImGui::End();
+   ImGui::PopStyleColor(2);
+   ImGui::PopStyleVar(2);
+}
+
+void PlasticFromAtlas::ViewportRightClick(EditorUI &ed)
+{
+   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+   {
+      ed.m_plasticRmbDown = true;
+      ed.m_plasticRmbStart = ImGui::GetMousePos();
+   }
+   if (!ed.m_plasticRmbDown)
+      return;
+   if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
+      return;
+   ed.m_plasticRmbDown = false;
+   const ImVec2 mouse = ImGui::GetMousePos();
+   if (fabsf(mouse.x - ed.m_plasticRmbStart.x) > 4.f || fabsf(mouse.y - ed.m_plasticRmbStart.y) > 4.f) // A drag is not a click
+      return;
+   if (ed.m_plasticTrace.active || ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_addPartType != eItemInvalid || ed.m_partLibrary.IsPlacementArmed() || ed.IsDragInProgress()
+      || ed.m_boxSelectActive)
+      return;
+   if (ed.m_pointEditPart != nullptr)
+   {
+      if (EditedHost(ed) == nullptr)
+         return;
+      ed.m_plasticMenu = 1;
+   }
+   else
+   {
+      // On the selected plastic (any part under the cursor that stands for it)
+      if (ed.m_multiSel.size() != 1 || !IsHostSelected(ed))
+         return;
+      IEditable *const host = ed.m_selection.GetPart()->GetEditable();
+      vector<HitTestResult> hits;
+      ed.RayCastParts(ed.m_plasticRmbStart, hits, nullptr);
+      bool onIt = false;
+      for (const auto &hit : hits)
+         onIt |= ed.HitEditable(hit) == host;
+      if (!onIt)
+         return;
+      ed.m_plasticMenu = 0;
+   }
+   ed.m_plasticMenuPos = mouse;
+}
+
+void PlasticFromAtlas::RenderMenu(EditorUI &ed)
+{
+   if (ed.m_plasticMenu >= 0 && ed.m_plasticMenuPos.x >= 0.f)
+   {
+      ImGui::SetNextWindowPos(ed.m_plasticMenuPos);
+      ImGui::OpenPopup("##PlasticEditMenu");
+      ed.m_plasticMenuPos = ImVec2(-1.f, -1.f); // Opened
+   }
+   if (!ImGui::BeginPopup("##PlasticEditMenu"))
+      return;
+   if (ed.m_plasticMenu == 0)
+   {
+      if (ImGui::MenuItem("Edit Shape", "Tab", false, ed.CanEnterPointEdit()))
+         ed.EnterPointEditMode();
+   }
+   else if (Primitive *const host = EditedHost(ed))
+   {
+      if (ImGui::MenuItem("Outline", "H", !host->m_plasticEditHoles) && host->m_plasticEditHoles)
+      {
+         host->m_plasticEditHoles = false;
+         ed.m_pointSel.clear();
+      }
+      if (ImGui::MenuItem("Holes", "H", host->m_plasticEditHoles) && !host->m_plasticEditHoles)
+      {
+         host->m_plasticEditHoles = true;
+         ed.m_pointSel.clear();
+      }
+      ImGui::Separator();
+      if (ImGui::MenuItem("Show Sheet", nullptr, ed.m_plasticShowSheet))
+         ed.m_plasticShowSheet = !ed.m_plasticShowSheet;
+      ImGui::Separator();
+      if (ImGui::MenuItem("Done Editing", "Tab"))
+         ed.ExitPointEditMode(true);
+   }
+   ImGui::EndPopup();
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
 // Drawing
 
 void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
@@ -604,9 +997,8 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
       uvm = ed.m_plasticTrace.uvm;
       image = ed.m_plasticTrace.image;
    }
-   else if (ed.m_pointEditPart != nullptr && IsPointEditHost(ed.m_pointEditPart->GetEditable()))
+   else if (const Primitive *const host = EditedHost(ed); host != nullptr && ed.m_plasticShowSheet)
    {
-      const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
       uvm = host->m_d.m_plasticUvm;
       image = host->m_d.m_szImage;
       z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
@@ -619,44 +1011,82 @@ void PlasticFromAtlas::DrawBackdrop(EditorUI &ed, ImDrawList *const draw, const 
    float m[6];
    for (int i = 0; i < 6; i++)
       m[i] = uvm[i];
-   const float us[4] = { 0.f, 1.f, 1.f, 0.f }, vs[4] = { 0.f, 0.f, 1.f, 1.f };
-   ImVec2 p[4];
-   for (int i = 0; i < 4; i++)
+   const auto project = [&](const float u, const float v)
    {
-      const Vertex2D t = UvToTable(m, us[i], vs[i]);
-      p[i] = ctx.Project(Vertex3Ds(t.x, t.y, z));
-      if (p[i].x == FLT_MAX)
-         return;
-   }
-   // A dark sheet under the atlas (its alpha shows the cut-outs against it)
-   draw->AddQuadFilled(p[0], p[1], p[2], p[3], IM_COL32(18, 18, 22, 235));
+      const Vertex2D t = UvToTable(m, u, v);
+      return ctx.Project(Vertex3Ds(t.x, t.y, z));
+   };
+   // Orthographic like the gizmo's test: the desktop backdrop, or the editor camera with perspective off (the preview camera is always perspective)
+   const bool ortho = ed.m_camMode == ViewMode::DesktopBackdrop || (ed.m_camMode == ViewMode::EditorCam && !ed.m_perspectiveCam);
    const auto sampler = ed.m_renderer->m_renderDevice->m_texMan.LoadTexture(texture, false);
-   if (sampler)
-      draw->AddImageQuad(sampler, p[0], p[1], p[2], p[3], ImVec2(0.f, 0.f), ImVec2(1.f, 0.f), ImVec2(1.f, 1.f), ImVec2(0.f, 1.f));
+   if (ortho)
+   {
+      const float us[4] = { 0.f, 1.f, 1.f, 0.f }, vs[4] = { 0.f, 0.f, 1.f, 1.f };
+      ImVec2 p[4];
+      for (int i = 0; i < 4; i++)
+      {
+         p[i] = project(us[i], vs[i]);
+         if (p[i].x == FLT_MAX)
+            return;
+      }
+      // A dark sheet under the atlas (its alpha shows the cut-outs against it)
+      draw->AddQuadFilled(p[0], p[1], p[2], p[3], IM_COL32(18, 18, 22, 235));
+      if (sampler)
+         draw->AddImageQuad(sampler, p[0], p[1], p[2], p[3], ImVec2(0.f, 0.f), ImVec2(1.f, 0.f), ImVec2(1.f, 1.f), ImVec2(0.f, 1.f));
+      return;
+   }
+   // Perspective: a quad is only affine, so the sheet is a grid of projected cells and stays on the points. A cell with a corner behind the camera is
+   // skipped, the others are drawn (the dark sheet too)
+   constexpr int N = 16;
+   ImVec2 g[(N + 1) * (N + 1)];
+   for (int j = 0; j <= N; j++)
+      for (int i = 0; i <= N; i++)
+         g[j * (N + 1) + i] = project(static_cast<float>(i) / N, static_cast<float>(j) / N);
+   for (int j = 0; j < N; j++)
+      for (int i = 0; i < N; i++)
+      {
+         const ImVec2 &a = g[j * (N + 1) + i], &b = g[j * (N + 1) + i + 1], &c = g[(j + 1) * (N + 1) + i + 1], &d = g[(j + 1) * (N + 1) + i];
+         if (a.x == FLT_MAX || b.x == FLT_MAX || c.x == FLT_MAX || d.x == FLT_MAX)
+            continue;
+         draw->AddQuadFilled(a, b, c, d, IM_COL32(18, 18, 22, 235));
+      }
+   if (!sampler)
+      return;
+   for (int j = 0; j < N; j++)
+      for (int i = 0; i < N; i++)
+      {
+         const ImVec2 &a = g[j * (N + 1) + i], &b = g[j * (N + 1) + i + 1], &c = g[(j + 1) * (N + 1) + i + 1], &d = g[(j + 1) * (N + 1) + i];
+         if (a.x == FLT_MAX || b.x == FLT_MAX || c.x == FLT_MAX || d.x == FLT_MAX)
+            continue;
+         const float u0 = static_cast<float>(i) / N, u1 = static_cast<float>(i + 1) / N, v0 = static_cast<float>(j) / N, v1 = static_cast<float>(j + 1) / N;
+         draw->AddImageQuad(sampler, a, b, c, d, ImVec2(u0, v0), ImVec2(u1, v0), ImVec2(u1, v1), ImVec2(u0, v1));
+      }
 }
 
 static constexpr ImU32 kOutlineColor = IM_COL32(255, 60, 220, 255);
+static constexpr ImU32 kSelectedColor = IM_COL32(255, 128, 0, 255);
 
 // A line that stays readable over any art: the colour on a dark edge
-static void DrawOutlineSegment(ImDrawList *const draw, const ImVec2 &a, const ImVec2 &b, const float dpi)
+static void DrawOutlineSegment(ImDrawList *const draw, const ImVec2 &a, const ImVec2 &b, const float dpi, const ImU32 color = kOutlineColor)
 {
    draw->AddLine(a, b, IM_COL32(0, 0, 0, 200), 3.5f * dpi);
-   draw->AddLine(a, b, kOutlineColor, 1.5f * dpi);
+   draw->AddLine(a, b, color, 1.5f * dpi);
 }
 
 void PlasticFromAtlas::DrawPointEdit(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
 {
-   if (ed.m_pointEditPart == nullptr || ed.m_pointEditCenter || !IsPointEditHost(ed.m_pointEditPart->GetEditable()))
+   const Primitive *const host = EditedHost(ed);
+   if (host == nullptr)
       return;
-   const Primitive *const host = static_cast<const Primitive *>(ed.m_pointEditPart->GetEditable());
    const float dpi = ed.m_liveUI.GetDPI();
    const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+   const float tol = PlasticMesh::FlattenTolerance(host->m_d.m_plasticDetail); // The flatten of the mesh
    vector<PlasticMesh::CurvePoint> pts;
    for (const auto &point : host->m_plasticCurve.GetPoints())
       pts.push_back({ point->GetX(), point->GetY(), point->IsSmooth() });
    if (pts.size() >= 3)
    {
-      const vector<PlasticMesh::CurvePoint> flat = PlasticMesh::FlattenOutline(pts, 0.25f);
+      const vector<PlasticMesh::CurvePoint> flat = PlasticMesh::FlattenOutline(pts, tol);
       for (size_t i = 0; i < flat.size(); i++)
       {
          const PlasticMesh::CurvePoint &n = flat[(i + 1) % flat.size()];
@@ -665,15 +1095,44 @@ void PlasticFromAtlas::DrawPointEdit(EditorUI &ed, ImDrawList *const draw, const
             DrawOutlineSegment(draw, a, b, dpi);
       }
    }
-   for (const auto &hole : host->m_plasticHoles.GetPoints())
+   // Holes: the loop the mesh is built from (a circle, or a capsule for a pill), a light dark fill so it reads as a hole over the art, orange when selected
+   const auto &hp = host->m_plasticHoles.GetPoints();
+   const vector<int> partner = Primitive::PlasticPillPartners(host->m_plasticHoles);
+   for (int i = 0; i < static_cast<int>(hp.size()); i++)
    {
-      const ImVec2 c = ctx.Project(Vertex3Ds(hole->GetX(), hole->GetY(), z)), e = ctx.Project(Vertex3Ds(hole->GetX() + 0.5f * hole->GetZ(), hole->GetY(), z));
-      if (c.x != FLT_MAX && e.x != FLT_MAX)
+      if (partner[i] >= 0 && partner[i] < i)
+         continue;
+      PlasticMesh::Hole h { hp[i]->GetX(), hp[i]->GetY(), hp[i]->GetZ() };
+      bool selected = ed.IsPointSelected(hp[i].get());
+      if (partner[i] > i)
       {
-         const float r = hypotf(e.x - c.x, e.y - c.y);
-         draw->AddCircle(c, r, IM_COL32(0, 0, 0, 200), 32, 3.5f * dpi);
-         draw->AddCircle(c, r, kOutlineColor, 32, 1.5f * dpi);
+         h.x2 = hp[partner[i]]->GetX();
+         h.y2 = hp[partner[i]]->GetY();
+         h.pill = true;
+         selected |= ed.IsPointSelected(hp[partner[i]].get());
       }
+      const vector<PlasticMesh::CurvePoint> loop = PlasticMesh::HoleOutline(h, tol);
+      vector<ImVec2> sp;
+      for (const PlasticMesh::CurvePoint &v : loop)
+      {
+         const ImVec2 s = ctx.Project(Vertex3Ds(v.x, v.y, z));
+         if (s.x == FLT_MAX)
+         {
+            sp.clear();
+            break;
+         }
+         sp.push_back(s);
+      }
+      if (sp.size() < 3)
+         continue;
+      float area = 0.f; // Same winding for the fill's edge
+      for (size_t k = 0; k < sp.size(); k++)
+         area += sp[k].x * sp[(k + 1) % sp.size()].y - sp[(k + 1) % sp.size()].x * sp[k].y;
+      if (area < 0.f)
+         std::reverse(sp.begin(), sp.end());
+      draw->AddConvexPolyFilled(sp.data(), static_cast<int>(sp.size()), IM_COL32(8, 8, 12, 90));
+      for (size_t k = 0; k < sp.size(); k++)
+         DrawOutlineSegment(draw, sp[k], sp[(k + 1) % sp.size()], dpi, selected ? kSelectedColor : kOutlineColor);
    }
 }
 

@@ -134,6 +134,7 @@ public:
    float m_plasticThickness = 5.6f;
    float m_plasticBevel = 1.9f; // top side only
    int m_plasticBevelSegs = 2; // 1 = chamfer
+   int m_plasticDetail = 1; // Curve Detail 1..5: flatten tolerance 0.25 / n^2 VPU on arcs and hole circles (saved only above 1)
    float m_plasticHoleDia = 12.f; // diameter of the next hole placed
    float m_plasticDpi = 150.f; // atlas scale: 47.06 VPU per inch
    float m_plasticUvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to UV: u = a x + b y + c, v = d x + e y + f
@@ -443,6 +444,10 @@ public:
    void PlasticMapTransform(const float (&t)[6]); // After the curve points moved by the affine t (x' = t0 x + t1 y + t2, y' = t3 x + t4 y + t5): the art stays on the part
    void SetPlasticDpi(float dpi); // Rescales the atlas about the outline's centroid
    vector<Primitive *> GetPlasticCompanions() const; // Primitives of the table whose host is this one
+   // Pill holes: a hole point that is smooth and followed by a hole point of the same diameter is the first end of a pill (the next point is its second end). Per hole
+   // point: the index of the other end of its pill, or -1 for a round hole. A smooth last point, or a smooth point not followed by an equal diameter, is round.
+   static vector<int> PlasticPillPartners(const DragPointCurve &holes);
+   void SetPlasticHoleDiameter(const DragPoint *hole, float dia); // The hole and the other end of its pill, clamped to the field's 0.5 to 100
 
    // Editor drag of a generated part (wire, plastic): see OnGenPointsMoved
    bool m_genDragDefer = false; // Set by the editor around the transform of a drag frame

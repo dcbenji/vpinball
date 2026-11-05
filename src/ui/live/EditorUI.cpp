@@ -2551,6 +2551,8 @@ void EditorUI::RenderUI()
       RenderAdjustPanel();
       PlasticFromAtlas::RenderPanel(*this);
       m_refImage.RenderPanel(*this);
+      PlasticFromAtlas::RenderEditPanel(*this);
+      PlasticFromAtlas::RenderMenu(*this);
    }
    else
       m_refImage.UiHidden();
@@ -2747,7 +2749,7 @@ void EditorUI::RenderUI()
       // A Wire Rail's route is 3D: its points keep the Z handle (the predefined views still restrict to their plane, below)
       const bool railPoints = m_pointEditPart && !m_pointEditCenter && gizmoOperation == ImGuizmo::TRANSLATE && m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive
          && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
-      if ((m_pointEditPart && !railPoints) || m_camMode == ViewMode::DesktopBackdrop)
+      if ((m_pointEditPart && !railPoints) || m_camMode == ViewMode::DesktopBackdrop || PlasticFromAtlas::ZLocked(*this))
       {
          // Drag point curves are 2D in the table XY plane, and backdrop parts are 2D in the backdrop XY plane: restrict gizmo operations to this plane
          if (gizmoOperation == ImGuizmo::TRANSLATE)
@@ -2805,6 +2807,8 @@ void EditorUI::RenderUI()
       }
       // Snapping: ImGuizmo takes the increment of the kind of operation (3 values for a translation, 1 for a rotation or a scale)
       float snapValues[3];
+      if (PlasticFromAtlas::IsEditingHoles(*this) && (static_cast<int>(gizmoOperation) & (ImGuizmo::SCALE | ImGuizmo::SCALEU)) != 0)
+         gizmoOperation = ImGuizmo::OPERATION(0); // S on holes is a diameter (the key S); the gizmo's scale would move the centres apart
       const float *snapPtr = nullptr;
       if ((static_cast<int>(gizmoOperation) & ImGuizmo::ROTATE) != 0)
       {
@@ -3306,7 +3310,9 @@ void EditorUI::RenderUI()
                m_pointDragZ = m_pointEditPart->GetDragPointZ(hitPoint);
                m_pointDragPos = UnprojectToPlane(m_boxSelectStart, m_pointDragZ);
             }
-            else if (m_pointEditPart == nullptr || !PlasticFromAtlas::BowPress(*this, m_boxSelectStart, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
+            else if (m_pointEditPart == nullptr
+               || !(PlasticFromAtlas::HolePress(*this, m_boxSelectStart, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                  || PlasticFromAtlas::BowPress(*this, m_boxSelectStart, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))))
                m_boxSelectActive = true;
          }
       }
@@ -3345,6 +3351,8 @@ void EditorUI::RenderUI()
       }
 
       PlasticFromAtlas::BowDrag(*this);
+      PlasticFromAtlas::PillDrag(*this);
+      PlasticFromAtlas::ViewportRightClick(*this);
 
       // Drag the selected drag points in the table XY plane
       if (m_pointEditPart && (m_pointDragPending || m_pointDragActive))
@@ -3403,6 +3411,7 @@ void EditorUI::RenderUI()
       m_boxSelectActive = false; // Canceled: button released outside of the playfield
       m_pointDragPending = false; // Same for a point drag (it would keep undo / redo off until the mouse comes back to the viewport)
       m_pointDragActive = false;
+      PlasticFromAtlas::PillEnd(*this); // Same for a pill drag
       m_plasticBow = PlasticFromAtlas::Bow(); // Same for a bow: it is only driven inside the gate, a stale one would jump to the cursor on the next press
    }
    m_measure.UpdateMain(*this, overlayDrawList, measureCanStart); // The rulers, and the tool's mouse
@@ -3710,6 +3719,7 @@ void EditorUI::RenderUI()
       {
          // Editing the points of a plastic: H switches between its outline and its holes
          Primitive *const plastic = static_cast<Primitive *>(m_pointEditPart->GetEditable());
+         PlasticFromAtlas::AbortDrags(*this);
          plastic->m_plasticEditHoles = !plastic->m_plasticEditHoles;
          m_pointSel.clear();
          Report(plastic->m_plasticEditHoles ? "Editing the holes of " + plastic->GetName() + " (H: outline)" : "Editing the outline of " + plastic->GetName() + " (H: holes)");
@@ -3990,7 +4000,7 @@ string EditorUI::CountLabel(const char *verb, const size_t count, const string &
 }
 
 // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
-bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending || m_plasticBow.pending || m_plasticBow.active; }
+bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending || m_plasticBow.pending || m_plasticBow.active || m_plasticPill.pending || m_plasticPill.active; }
 
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
@@ -4346,6 +4356,7 @@ void EditorUI::SelectAllAction()
          m_centerSelected = true;
       else
       {
+         PlasticFromAtlas::AbortDrags(*this);
          m_pointSel.clear();
          for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
             m_pointSel.push_back(point.get());
@@ -4433,6 +4444,8 @@ void EditorUI::ClearSelection()
 EditorUI::UndoSelectionState EditorUI::CaptureUndoSelection() const
 {
    UndoSelectionState state { m_selection, m_multiSel, m_outlinerAnchor, m_pointEditPart, {}, m_pointEditCenter };
+   if (const Primitive *const plastic = PlasticFromAtlas::EditedHostOf(*this))
+      state.plasticEditHoles = plastic->m_plasticEditHoles;
    // Drag points are deleted and recreated when their part is reloaded (undo, ...): store their index in the curve
    if (DragPointCurve *const curve = m_pointEditPart ? m_pointEditPart->GetDragPointCurve() : nullptr)
    {
@@ -4468,6 +4481,8 @@ void EditorUI::RestoreUndoSelection(const UndoSelectionState &state)
    }
    m_pointEditCenter = state.pointEditCenter && m_pointEditPart && m_pointEditPart->HasEditCenter();
    m_centerSelected = m_pointEditCenter;
+   if (Primitive *const plastic = PlasticFromAtlas::EditedHostOf(*this))
+      plastic->m_plasticEditHoles = state.plasticEditHoles; // The part was reloaded: its holes / outline state is put back (the indices below are in that curve)
    m_pointSel.clear();
    if (DragPointCurve *const curve = m_pointEditPart ? m_pointEditPart->GetDragPointCurve() : nullptr)
    {
@@ -5066,7 +5081,8 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
          BeginPointEdit();
          m_pointSel.front()->SetX(pointPos.x);
          m_pointSel.front()->SetY(pointPos.y);
-         m_pointSel.front()->SetZ(pointPos.z);
+         if (!PlasticFromAtlas::IsEditing(*this)) // On a plastic Z is a hole's diameter or the outline's zero: X and Y only
+            m_pointSel.front()->SetZ(pointPos.z);
          EndPointEdit();
       }
       return;
@@ -5856,12 +5872,14 @@ void EditorUI::BeginModalTransform(ModalOp op)
    Matrix3D initial;
    if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
       return;
+   PlasticFromAtlas::AbortDrags(*this); // A pill or bow press holds points that a cancelled transform (an undo reload) would free
    if (viewSlot < 0 && m_camMode == ViewMode::PreviewCam)
       m_camMode = ViewMode::EditorCam;
    m_measure.SetActive(*this, false);
    const ImGuizmo::OPERATION savedGizmo = m_gizmoOperation;
    m_gizmoOperation = ImGuizmo::OPERATION(0);
    m_modal = ModalTransform();
+   m_plasticHoleScaleInit.clear();
    m_modal.viewSlot = viewSlot;
    m_lastOp.type = LastOperation::Type::None;
    m_modal.savedGizmo = savedGizmo;
@@ -5887,7 +5905,8 @@ void EditorUI::BeginModalTransform(ModalOp op)
       bool anyTilt = false;
       for (const SelectionXform::Part &part : m_modal.xform.parts)
          anyTilt |= (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
-      if (m_pointEditPart != nullptr || (!anyTilt && ((m_modal.xform.parts.size() < 2 && m_transformPivot != TransformPivot::Cursor) || m_modal.xform.individual)))
+      // A plastic turns about the table Z only, also about the 3D cursor (it would orbit out of its plane)
+      if (m_pointEditPart != nullptr || PlasticFromAtlas::ZLocked(*this) || (!anyTilt && ((m_modal.xform.parts.size() < 2 && m_transformPivot != TransformPivot::Cursor) || m_modal.xform.individual)))
       {
          m_modal.axis = 2;
          m_modal.zOnly = true;
@@ -6017,9 +6036,10 @@ void EditorUI::UpdateModalTransform()
       }
       // Axis constraint (pressing the same axis again removes it), Shift constrains to the plane instead. Not with Ctrl / Alt / Cmd held (Ctrl+Z is not Z)
       const bool chord = io.KeyCtrl || io.KeyAlt || io.KeySuper;
+      const bool zLocked = PlasticFromAtlas::ZLocked(*this); // A plastic is edited in X and Y only
       const std::pair<ImGuiKey, int> axisKeys[] = { { ImGuiKey_X, 0 }, { ImGuiKey_Y, 1 }, { ImGuiKey_Z, 2 } };
       for (const auto &[key, axis] : axisKeys)
-         if (!chord && !m_modal.zOnly && ImGui::IsKeyPressed(key, false))
+         if (!chord && !m_modal.zOnly && !(axis == 2 && zLocked) && ImGui::IsKeyPressed(key, false))
          {
             // Blender's cycle: the first press uses the scene's orientation, the second the other one of Global / Local (none when they are the same axes here,
             // as in point edit), the third removes the constraint
@@ -6157,6 +6177,11 @@ void EditorUI::UpdateModalTransform()
          const float depth = max((eye - pivot).Dot(dir), 1e-3f);
          const float unitsPerPixel = 2.f * (perspective ? depth * tanHalfFov : orthoHalfH) / viewSize.y;
          move = right * (dx * unitsPerPixel) - up * (dy * unitsPerPixel);
+         if (float planeZ; PlasticFromAtlas::TopPlaneZ(*this, planeZ)) // A plastic follows the cursor on the plane of its top, as a drag does
+         {
+            const Vertex2D now = UnprojectToPlane(mouse, planeZ), start = UnprojectToPlane(m_modal.startMouse, planeZ);
+            move = vec3(now.x - start.x, now.y - start.y, 0.f);
+         }
       }
       else
       {
@@ -6176,6 +6201,8 @@ void EditorUI::UpdateModalTransform()
          move = m_modal.plane ? move - a * move.Dot(a) : a * move.Dot(a);
       }
       vec3 delta = FlipZ(move);
+      if (PlasticFromAtlas::ZLocked(*this))
+         delta.z = 0.f; // Z never changes on a plastic
       if (!hasValue && IsSnapActive(SnapKind::Move))
       {
          bool snappedToPoint = false;
@@ -6234,6 +6261,8 @@ void EditorUI::UpdateModalTransform()
             delta.z = roundf(delta.z / m_snapMove) * m_snapMove;
          }
          snapText = "  [snap]";
+         if (PlasticFromAtlas::ZLocked(*this))
+            delta.z = 0.f; // Increments along tilted (View) axes can bring Z back
       }
       if (ownAxes)
       {
@@ -6295,7 +6324,7 @@ void EditorUI::UpdateModalTransform()
       }
       xformOp = OrientedXform(XformKind::Scale, m_modal.axisOrientation, m_modal.viewFrame, m_modal.axis, m_modal.plane, factor, vec3(0.f, 0.f, 0.f), m_modal.xform.parts.size());
       m_modal.lastFactor = factor;
-      snprintf(text, sizeof(text), "Scale%s  %.3f%s%s", axisText.c_str(), factor, snapText, hasValue ? "   [typed]" : "");
+      snprintf(text, sizeof(text), "%s%s  %.3f%s%s", PlasticFromAtlas::IsEditingHoles(*this) ? "Scale diameter" : "Scale", axisText.c_str(), factor, snapText, hasValue ? "   [typed]" : "");
       if (fabsf(factor - 1.f) > 1e-5f)
       {
          // The scaled axes: all (a uniform scale also reaches the parts that only scale as a whole), the given one, or the two others (plane)
@@ -6847,7 +6876,8 @@ bool EditorUI::UsesGroupGizmo() const
    if (m_pointEditPart != nullptr)
       return true;
    // View: the gizmo lines up with the screen, which one part's own matrix can not do
-   const int needed = m_transformOrientation == TransformOrientation::View && m_camMode != ViewMode::DesktopBackdrop ? 1 : 2;
+   // (not on a plastic, which moves and turns in the table's X / Y only: its gizmo stays its own, as with Global)
+   const int needed = m_transformOrientation == TransformOrientation::View && m_camMode != ViewMode::DesktopBackdrop && !PlasticFromAtlas::ZLocked(*this) ? 1 : 2;
    int count = 0;
    for (const auto &part : m_multiSel)
    {
@@ -6972,7 +7002,7 @@ Matrix3D EditorUI::GetGroupGizmoMatrix(const int viewSlot) const
 {
    Matrix3D result = Matrix3D::MatrixIdentity();
    // Drag points stay on the table's axes (their edits are in its plane), as does View in the desktop backdrop (a 2D view of its own)
-   if (m_transformOrientation == TransformOrientation::View && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop)
+   if (m_transformOrientation == TransformOrientation::View && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop && !PlasticFromAtlas::ZLocked(*this))
    {
       result = GetViewOrientationFrame(viewSlot);
       result._31 = -result._31; // A proper matrix for ImGuizmo: Z into the screen (a drag is read back relative to it, the handle's sense changes nothing)
@@ -7044,14 +7074,18 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
       }
       else
       {
-         for (const SelectionXform::Point &point : xform.points)
+         // S on the holes of a plastic changes their diameters, not their places (each hole about its own centre, both ends of a pill)
+         if (op.kind != XformKind::Scale || !PlasticFromAtlas::ScaleHoles(*this))
          {
-            const float dz = xform.rail ? point.viewZ - xform.pivot.z : 0.f;
-            const Vertex3Ds v = op.linear.MultiplyVectorNoTranslate(Vertex3Ds(point.x - xform.pivot.x, point.y - xform.pivot.y, dz));
-            point.point->SetX(xform.pivot.x + v.x + op.move.x);
-            point.point->SetY(xform.pivot.y + v.y + op.move.y);
-            if (xform.rail)
-               point.point->SetZ(point.z + v.z - dz + op.move.z);
+            for (const SelectionXform::Point &point : xform.points)
+            {
+               const float dz = xform.rail ? point.viewZ - xform.pivot.z : 0.f;
+               const Vertex3Ds v = op.linear.MultiplyVectorNoTranslate(Vertex3Ds(point.x - xform.pivot.x, point.y - xform.pivot.y, dz));
+               point.point->SetX(xform.pivot.x + v.x + op.move.x);
+               point.point->SetY(xform.pivot.y + v.y + op.move.y);
+               if (xform.rail)
+                  point.point->SetZ(point.z + v.z - dz + op.move.z);
+            }
          }
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
          DetachRubberRefs(m_pointEditPart->GetEditable());
@@ -7062,6 +7096,7 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
       return;
    }
    const bool turns = memcmp(op.linear.m, Matrix3D::MatrixIdentity().m, sizeof(op.linear.m)) != 0;
+   const bool zLocked = PlasticFromAtlas::ZLocked(*this);
    for (size_t index = 0; index < xform.parts.size(); index++)
    {
       const SelectionXform::Part &part = xform.parts[index];
@@ -7077,7 +7112,9 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
          move = part.axes.MultiplyVectorNoTranslate(op.move);
       }
       const vec3 c = xform.individual ? part.pos : xform.pivot;
-      const vec3 pos = c + vec3(l.MultiplyVectorNoTranslate(part.pos - c)) + move;
+      vec3 pos = c + vec3(l.MultiplyVectorNoTranslate(part.pos - c)) + move;
+      if (zLocked)
+         pos.z = part.pos.z; // A plastic moves in X and Y only, whatever the orientation's axes (View) or the pivot
       vec3 scale = part.scale, rot = part.rot;
       if (op.kind == XformKind::Rotate)
       {
@@ -7179,7 +7216,13 @@ void EditorUI::ApplyPartTransform(const std::shared_ptr<EditorUIPart> &part, con
    vec3 pos, scale, rot;
    ReadPartTransform(*part, partTransform, pos, scale, rot);
    if (clearPos)
+   {
+      const float z = pos.z;
       pos.Set(0.f, 0.f, 0.f);
+      const IEditable *const edit = part->GetEditable();
+      if (m_multiSel.size() == 1 && edit != nullptr && edit->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edit)->m_d.m_plasticGen)
+         pos.z = z; // A single plastic keeps its height (it would sink by its thickness)
+   }
    if (clearScale)
       scale.Set(1.f, 1.f, 1.f);
    if (clearRot)
@@ -7296,6 +7339,7 @@ void EditorUI::EnterPointEditMode()
    m_savedMultiSel = m_multiSel;
    m_savedOutlinerAnchor = m_outlinerAnchor;
    m_pointEditPart = m_selection.GetPart();
+   m_plasticShowSheet = true; // Editing the shape of a plastic starts with the sheet shown
    m_pointEditPart->SetPointEditContext(this);
    // Parts without outline points but with an editable center (light sequencer, lights of circle shape) edit it directly
    const DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
@@ -7307,6 +7351,7 @@ void EditorUI::EnterPointEditMode()
 void EditorUI::ExitPointEditMode(bool restoreSelection)
 {
    m_plasticBow = PlasticFromAtlas::Bow();
+   m_plasticPill = PlasticFromAtlas::Pill();
    if (m_pointEditPart)
    {
       m_pointEditPart->SetPointEditContext(nullptr);
@@ -7476,6 +7521,7 @@ DragPoint *EditorUI::HitTestDragPoint(const ImVec2 &mousePos) const
    // On a plastic outline a handle's pick radius is capped by a third of the shorter neighbouring span, so a short line can still be bowed
    const IEditable *const edited = m_pointEditPart->GetEditable();
    const bool plasticOutline = edited->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edited)->m_d.m_plasticGen && !static_cast<const Primitive *>(edited)->m_plasticEditHoles;
+   const bool plasticHoles = edited->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edited)->m_d.m_plasticGen && static_cast<const Primitive *>(edited)->m_plasticEditHoles;
    const int n = static_cast<int>(points.size());
    vector<ImVec2> proj;
    if (plasticOutline)
@@ -7502,6 +7548,14 @@ DragPoint *EditorUI::HitTestDragPoint(const ImVec2 &mousePos) const
                shorter = min(shorter, hypotf(proj[j].x - pos.x, proj[j].y - pos.y));
          // Floor: the drawn handle can always be grabbed (4 px, coincident neighbours must not give 0); a line of 8 px or more can still be bowed from its middle
          radius = min(maxDist, max(shorter * (1.f / 3.f), 4.f * m_liveUI.GetDPI()));
+      }
+      if (plasticHoles)
+      {
+         // The ring beats the handle: the handle's pick radius is a third of the hole's radius on screen (floor 4 px), so the ring of a small hole can be pressed
+         const float z = m_pointEditPart->GetDragPointZ(point.get());
+         const ImVec2 edge = ctx.Project(Vertex3Ds(point->GetX() + 0.5f * point->GetZ(), point->GetY(), z));
+         if (edge.x != FLT_MAX)
+            radius = min(maxDist, max(hypotf(edge.x - pos.x, edge.y - pos.y) * (1.f / 3.f), 4.f * m_liveUI.GetDPI()));
       }
       if (dist < bestDist && dist < radius)
       {
@@ -7556,6 +7610,7 @@ void EditorUI::DeleteSelectedPoints()
 {
    if (m_pointEditPart == nullptr || m_pointSel.empty() || m_table->IsLocked() || IsInspectMode())
       return;
+   PlasticFromAtlas::AbortDrags(*this); // A pill or bow drag in progress holds points that are about to go
    DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
    vector<DragPoint *> deletable;
    for (DragPoint *point : m_pointSel)
@@ -7565,6 +7620,7 @@ void EditorUI::DeleteSelectedPoints()
       return;
    BeginPointEdit();
    m_undo.SetFieldLabel("Delete Points");
+   PlasticFromAtlas::BeforeDeletePoints(*this, deletable);
    for (DragPoint *point : deletable)
    {
       m_pointSel.erase(std::ranges::find(m_pointSel, point));
@@ -7833,7 +7889,7 @@ void EditorUI::ApplyLastOperation()
       if (m_lastOp.selection.empty() || m_lastOp.selection.front()->GetEditable()->GetItemType() != eItemPrimitive)
          return;
       PlasticFromAtlas::Adjust(static_cast<Primitive *>(m_lastOp.selection.front()->GetEditable()), m_lastOp.plHeight, m_lastOp.plThickness, m_lastOp.plBevel, m_lastOp.plSegs, m_lastOp.plHoleDia,
-         m_lastOp.plDpi);
+         m_lastOp.plDpi, m_lastOp.plDetail);
       return;
    case LastOperation::Type::None: return;
    }
@@ -7956,6 +8012,8 @@ bool EditorUI::RenderAdjustParameters()
       changed |= ImGui::DragFloat("##PlBvl", &m_lastOp.plBevel, 0.05f, 0.f, 100.f, "%.2f");
       row("Bevel Segments");
       changed |= ImGui::SliderInt("##PlSeg", &m_lastOp.plSegs, 1, 8);
+      row("Curve Detail");
+      changed |= ImGui::SliderInt("##PlDtl", &m_lastOp.plDetail, 1, 5);
       row("Hole Diameter");
       changed |= ImGui::DragFloat("##PlHole", &m_lastOp.plHoleDia, 0.1f, 0.5f, 100.f, "%.1f");
       row("Sheet DPI");
@@ -8275,8 +8333,8 @@ void EditorUI::RunCursorOp(const CursorOp op, const int viewSlot)
          target.x = pos.x;
       if ((mask & EditorUIPart::TM_TransY) == 0)
          target.y = pos.y;
-      if ((mask & EditorUIPart::TM_TransZ) == 0)
-         target.z = pos.z;
+      if ((mask & EditorUIPart::TM_TransZ) == 0 || (part->GetEditable()->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part->GetEditable())->m_d.m_plasticGen))
+         target.z = pos.z; // (a plastic keeps its Height: it moves in X and Y only)
       if (fabsf(target.x - pos.x) < 1e-4f && fabsf(target.y - pos.y) < 1e-4f && fabsf(target.z - pos.z) < 1e-4f)
          continue;
       transform._41 = target.x;

@@ -66,6 +66,33 @@ public:
    };
    static bool BowPress(EditorUI &ed, const ImVec2 &mouse, bool doubleClick);
    static void BowDrag(EditorUI &ed);
+
+   // Pill holes (editing holes): drag a round hole's ring outward and a second end follows so the ring end stays under the cursor
+   struct Pill
+   {
+      bool pending = false, active = false;
+      ImVec2 start {};
+      ImVec2 last { -1.f, -1.f }; // The mouse at the last rebuild
+      DragPoint *a = nullptr, *b = nullptr; // The first end, the second end (made when the drag starts)
+   };
+   static bool HolePress(EditorUI &ed, const ImVec2 &mouse, bool doubleClick); // Ring of a hole: start a pill (round) / round again on a double-click (pill); middle of a pill: select both ends. True if taken
+   static void PillDrag(EditorUI &ed);
+   static void AbortDrags(EditorUI &ed); // Delete, select all or H while a pill or bow drag holds points: the drag ends without touching them
+   static void PillEnd(EditorUI &ed); // The button is up (or the mode ended): a pill dragged back to a point is round again
+   static bool ScaleHoles(EditorUI &ed); // S on the selected holes: their diameters (each about its own centre). False when the modal is not a scale of holes
+   static void BeforeDeletePoints(EditorUI &ed, const vector<DragPoint *> &points); // Hole points about to be deleted: the pill they leave reads as round
+   static void SetHoleDiameter(EditorUI &ed, float dia); // The Hole Diameter of the panel: the next hole, and the selected holes
+
+   // Editing the shape (Tab on a plastic)
+   static Primitive *EditedHostOf(const EditorUI &ed) { return EditedHost(ed); }
+   static bool IsEditing(const EditorUI &ed); // Point edit of a plastic host (its outline or its holes)
+   static bool ZLocked(const EditorUI &ed); // Moves, turns and scales of a plastic stay in X and Y: no Z axis on its gizmo, Z constraints ignored
+   static bool IsEditingHoles(const EditorUI &ed);
+   static bool TopPlaneZ(const EditorUI &ed, float &z); // The edited (or the single selected) plastic: the height of its top, the plane its moves follow the cursor on
+   static bool IsHostSelected(const EditorUI &ed); // A single plastic host is the selection
+   static void RenderEditPanel(EditorUI &ed); // The floating panel while editing: Outline / Holes, Show Sheet, Hole Diameter, Curve Detail
+   static void ViewportRightClick(EditorUI &ed); // RMB press and release without a drag: Edit Shape on a selected plastic, the edit menu while editing
+   static void RenderMenu(EditorUI &ed);
    static void RenderPanel(EditorUI &ed); // The floating panel of the trace state
 
    // The atlas drawn as a backdrop on the playfield plane (trace state, and Tab on a placed plastic) and the traced points over it
@@ -82,9 +109,10 @@ public:
    static void FixPasted(const vector<IEditable *> &pasted, const vector<string> &originalNames); // Pasted companions follow the pasted host copies, else become plain primitives
 
    // Re-apply from F9 (the host is the selection)
-   static void Adjust(Primitive *host, float height, float thickness, float bevel, int segs, float holeDia, float dpi);
+   static void Adjust(Primitive *host, float height, float thickness, float bevel, int segs, float holeDia, float dpi, int detail);
 
 private:
+   static Primitive *EditedHost(const EditorUI &ed); // The plastic host whose points are being edited, else null
    static Primitive *NewPrimitive(EditorUI &ed, const string &name, float x, float y);
    static string UniqueName(EditorUI &ed, const string &name);
    static Material *EnsureMaterial(PinTable *table, int which);

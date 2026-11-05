@@ -20,10 +20,12 @@ struct CurvePoint
    bool smooth;
 };
 
-// A drill hole: circle centre and diameter (VPU).
+// A drill hole: circle centre and diameter (VPU). A pill (slot) is the capsule of that diameter between (x, y) and (x2, y2).
 struct Hole
 {
    float x, y, diameter;
+   float x2 = 0.f, y2 = 0.f;
+   bool pill = false;
 };
 
 struct Params
@@ -33,8 +35,17 @@ struct Params
    float bevel = 1.9f; // top side only, offset inward so the part does not grow (and into the holes, away from the material)
    int bevelSegments = 2; // 1 = chamfer, more = rounded
    float uvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // u = a x + b y + c, v = d x + e y + f (table XY to UV)
-   float flatten = 0.25f; // max chord error of flattened arcs and holes, VPU
+   float flatten = 0.25f; // max chord error of flattened arcs and holes, VPU (FlattenTolerance of the Curve Detail)
 };
+
+constexpr int kMaxArcSegments = 96; // Hard cap on the segments of any one arc or hole circle (a pill loop is 96 points at most)
+
+// Flatten tolerance of the Curve Detail 1..5 (1 = 0.25 VPU, the default)
+inline float FlattenTolerance(int detail)
+{
+   detail = detail < 1 ? 1 : detail > 5 ? 5 : detail;
+   return 0.25f / (float)(detail * detail);
+}
 
 struct Vertex
 {
@@ -58,6 +69,9 @@ struct Result
 
 // The closed outline flattened to a polyline (no repeated first point). Arcs deviate from the true circle by at most `tol`.
 std::vector<CurvePoint> FlattenOutline(const std::vector<CurvePoint>& outline, float tol);
+
+// The polygon a hole is built as (a circle, or a capsule for a pill), clockwise, no repeated first point; flattened to the chord error `tol`.
+std::vector<CurvePoint> HoleOutline(const Hole& hole, float tol);
 
 // False (result untouched) with fewer than 3 outline points or a degenerate outline.
 bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& holes, const Params& params, Result& out);

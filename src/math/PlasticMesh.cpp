@@ -81,7 +81,7 @@ void AppendArc(std::vector<P2>& out, P2 a, P2 p, P2 b, double tol)
       sweep = -sweep;
    }
    const double step = 2.0 * std::acos(std::max(-1.0, 1.0 - tol / r)); // sagitta = r (1 - cos(step / 2)) <= tol
-   const int n = std::max(2, (int)std::ceil(std::fabs(sweep) / std::max(step, 1e-3)));
+   const int n = std::min(kMaxArcSegments, std::max(2, (int)std::ceil(std::fabs(sweep) / std::max(step, 1e-3))));
    for (int i = 1; i < n; i++)
    {
       const double t = aa + sweep * ((double)i / n);
@@ -116,6 +116,54 @@ std::vector<P2> Flatten(const std::vector<CurvePoint>& pts, double tol)
    while (q.size() > 1 && Len(q.front() - q.back()) <= 1e-4)
       q.pop_back();
    return q;
+}
+
+double PointSegDist(P2 p, P2 a, P2 b)
+{
+   const P2 e = b - a;
+   const double l2 = Dot(e, e);
+   const double t = l2 > 0.0 ? std::max(0.0, std::min(1.0, Dot(p - a, e) / l2)) : 0.0;
+   return Len(p - (a + e * t));
+}
+
+double SegSegDist(P2 a, P2 b, P2 c, P2 d)
+{
+   const double d1 = Cross(b - a, c - a), d2 = Cross(b - a, d - a), d3 = Cross(d - c, a - c), d4 = Cross(d - c, b - c);
+   if (((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0)) && d1 != 0.0 && d2 != 0.0 && d3 != 0.0 && d4 != 0.0)
+      return 0.0;
+   return std::min(std::min(PointSegDist(a, c, d), PointSegDist(b, c, d)), std::min(PointSegDist(c, a, b), PointSegDist(d, a, b)));
+}
+
+// A hole as a polygon, clockwise (the material is on the left). A round hole: the circle; a pill: the capsule round both centres
+std::vector<P2> HoleLoop(const Hole& h, double tol)
+{
+   const double r = 0.5 * h.diameter;
+   const P2 a { h.x, h.y }, b { h.x2, h.y2 };
+   std::vector<P2> c;
+   const double step = std::max(2.0 * std::acos(std::max(-1.0, 1.0 - tol / r)), 1e-3);
+   if (h.pill && Len(b - a) > 1e-3)
+   {
+      const int half = std::min(kMaxArcSegments / 2 - 1, std::max(6, (int)std::ceil(kPi / step)));
+      const double t0 = std::atan2(b.y - a.y, b.x - a.x);
+      for (int k = 0; k <= half; k++) // round b, from its left side over its far end to its right side
+      {
+         const double t = t0 + 0.5 * kPi - kPi * k / half;
+         c.push_back({ b.x + r * std::cos(t), b.y + r * std::sin(t) });
+      }
+      for (int k = 0; k <= half; k++) // round a, back
+      {
+         const double t = t0 - 0.5 * kPi - kPi * k / half;
+         c.push_back({ a.x + r * std::cos(t), a.y + r * std::sin(t) });
+      }
+      return c;
+   }
+   const int n = std::min(kMaxArcSegments, std::max(12, (int)std::ceil(2.0 * kPi / step)));
+   for (int i = 0; i < n; i++)
+   {
+      const double t = -2.0 * kPi * i / n;
+      c.push_back({ h.x + r * std::cos(t), h.y + r * std::sin(t) });
+   }
+   return c;
 }
 
 bool PointInPolygon(const std::vector<P2>& p, P2 v)
@@ -448,6 +496,16 @@ std::vector<CurvePoint> FlattenOutline(const std::vector<CurvePoint>& outline, f
    return res;
 }
 
+std::vector<CurvePoint> HoleOutline(const Hole& hole, float tol)
+{
+   std::vector<CurvePoint> res;
+   if (hole.diameter <= 2e-4f)
+      return res;
+   for (const P2& v : HoleLoop(hole, std::max(0.01, (double)tol)))
+      res.push_back({ (float)v.x, (float)v.y, false });
+   return res;
+}
+
 bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& holes, const Params& params, Result& out)
 {
    if (outline.size() < 3)
@@ -468,30 +526,21 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
       const double r = 0.5 * h.diameter;
       if (r <= 1e-4)
          continue;
-      if (!PointInPolygon(ol, { h.x, h.y }))
+      const P2 ha { h.x, h.y }, hb { h.x2, h.y2 };
+      const bool pill = h.pill && Len(hb - ha) > 1e-3;
+      if (!PointInPolygon(ol, ha) && !(pill && (PointInPolygon(ol, hb) || PointInPolygon(ol, (ha + hb) * 0.5))))
       {
          res.skippedHoles++;
          continue;
       }
-      double edgeDist = 1e300; // centre to the outline edge
+      double edgeDist = 1e300; // centre (a pill: the segment between its centres) to the outline edge
       for (size_t i = 0, k = ol.size() - 1; i < ol.size(); k = i++)
-      {
-         const P2 e = ol[i] - ol[k];
-         const double l2 = Dot(e, e);
-         const double t = l2 > 0.0 ? std::max(0.0, std::min(1.0, Dot(P2 { h.x, h.y } - ol[k], e) / l2)) : 0.0;
-         edgeDist = std::min(edgeDist, Len(P2 { h.x, h.y } - (ol[k] + e * t)));
-      }
+         edgeDist = std::min(edgeDist, pill ? SegSegDist(ha, hb, ol[k], ol[i]) : PointSegDist(ha, ol[k], ol[i]));
       if (edgeDist < r + 2.0 * warnBevel) // inside the band where the top rings (outline inset, hole grown by the bevel) overlap: warning only
          res.crossingHoles++;
       // A hole near the edge: its top ring grows only as far as it stays clear of the outline's inset top ring (it would fold the top cap)
       topGrow.push_back(std::max(0.0, std::min(warnBevel, edgeDist - warnBevel - r - 0.1)));
-      const int n = std::max(12, (int)std::ceil(2.0 * kPi / std::max(2.0 * std::acos(std::max(-1.0, 1.0 - tol / r)), 1e-3)));
-      std::vector<P2> c;
-      for (int i = 0; i < n; i++) // clockwise: the material is on the left
-      {
-         const double t = -2.0 * kPi * i / n;
-         c.push_back({ h.x + r * std::cos(t), h.y + r * std::sin(t) });
-      }
+      const std::vector<P2> c = HoleLoop(h, tol);
       contours.push_back(c);
    }
 

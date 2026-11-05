@@ -984,6 +984,8 @@ void EditorChrome::RenderMenuBar()
             editor.CreateCollection(true);
          if (ImGui::MenuItem("Edit Points", "Tab", false, editor.CanEnterPointEdit()))
             editor.EnterPointEditMode();
+         if (PlasticFromAtlas::IsHostSelected(editor) && ImGui::MenuItem("Edit Shape", "Tab", false, editor.CanEnterPointEdit()))
+            editor.EnterPointEditMode();
          ImGui::Separator();
          if (ImGui::BeginMenu("Set Origin"))
          {
@@ -2122,7 +2124,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    else if (editor.m_addPartType != eItemInvalid)
       hints = { { "LMB", editor.m_addWireRail ? "Place Wire Rail" : editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_plasticGen)
-      hints = { { "LMB", "Select Point" }, { "Drag Line", "Bow" }, { "Dbl-click", "Straight" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "H", static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_plasticEditHoles ? "Outline" : "Holes" },
+      hints = { { "LMB", "Select Point" }, { "Drag Line", "Bow" }, { "Dbl-click", "Straight" }, { "Drag Ring", "Pill" }, { "G", "Move" }, { "S", "Hole Size" }, { "RMB", "Menu" }, { "Shift+A", "Add Point" }, { "H", static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_plasticEditHoles ? "Outline" : "Holes" },
          { "Del", "Delete" }, { "Tab", "Exit" }, { "F9", "Profile" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_wireRail)
       hints = { { "LMB", "Select Point" }, { "Dbl-click", "Insert or Delete" }, { "G", "Move" }, { "Gizmo Z", "Height" }, { "Del", "Delete" }, { "Tab", "Exit" }, { "Properties", "Grade, Roll" } };

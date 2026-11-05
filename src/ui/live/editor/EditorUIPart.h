@@ -156,6 +156,7 @@ protected:
    // Whether points added to the curve are smooth by default
    virtual bool IsNewPointSmooth() const { return false; }
    // Whether the curve points can be flagged as slingshot segments (surfaces only)
+   virtual bool HasPointSmooth() const { return true; } // Smooth / Sharp buttons (not for the holes of a plastic: a smooth flag there means a pill)
    virtual bool HasSlingshotSegments() const { return false; }
    // Whether the curve points support the auto texture coordinate flag
    virtual bool HasPointAutoTexture() const { return false; }

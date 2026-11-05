@@ -34,6 +34,7 @@ public:
 
 protected:
    void InsertPointOnCurve(const Vertex2D& pos) override;
+   bool HasPointSmooth() const override { return !(m_part->m_d.m_plasticGen && m_part->m_plasticEditHoles); }
    bool IsNewPointSmooth() const override { return !m_part->m_d.m_plasticGen; }
    void UpdatePointZField(PropertyPane& props, DragPoint* point) override;
 

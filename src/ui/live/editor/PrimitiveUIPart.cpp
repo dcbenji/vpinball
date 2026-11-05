@@ -265,7 +265,7 @@ void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
          props.InputFloat<DragPoint>(
             point, "Diameter"s, //
             [](const DragPoint* p) { return p->GetZ(); }, //
-            [](DragPoint* p, float v) { p->SetZ(max(v, 0.5f)); }, PropertyPane::Unit::VPLength, 2, "Diameter of this hole");
+            [](DragPoint* p, float v) { static_cast<Primitive*>(p->GetIEditable())->SetPlasticHoleDiameter(p, v); }, PropertyPane::Unit::VPLength, 2, "Diameter of this hole (both ends of a pill)");
       return;
    }
    if (m_part->m_d.m_wireRail)
@@ -355,6 +355,10 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Bevel Segments"s, //
          [](const Primitive* p) { return p->m_d.m_plasticBevelSegs; }, //
          [](Primitive* p, int v) { p->m_d.m_plasticBevelSegs = clamp(v, 1, 16); p->UpdatePlastic(); }, "1 = chamfer, more = rounded");
+      props.InputInt<Primitive>(
+         m_part, "Curve Detail"s, //
+         [](const Primitive* p) { return p->m_d.m_plasticDetail; }, //
+         [](Primitive* p, int v) { p->m_d.m_plasticDetail = clamp(v, 1, 5); p->UpdatePlastic(); }, "How smooth arcs and hole circles are (1 to 5, 1 = default; at most 96 segments on any one arc)");
       props.InputFloat<Primitive>(
          m_part, "Hole Diameter"s, //
          [](const Primitive* p) { return p->m_d.m_plasticHoleDia; }, //

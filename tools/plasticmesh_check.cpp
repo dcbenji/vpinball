@@ -5,6 +5,8 @@
 #include <map>
 #include <tuple>
 #include <algorithm>
+#include <cstring>
+#include <ctime>
 using namespace PlasticMesh;
 static int fails=0;
 #define CHECK(c,...) do{ if(!(c)){ fails++; printf("FAIL %s: ",#c); printf(__VA_ARGS__); printf("\n"); } }while(0)
@@ -103,6 +105,38 @@ int main(){ setbuf(stdout,0);
   // holes crossing the outline edge, overlapping each other, bigger than the part, straddling a corner: counted, built, terminates
   { std::vector<Hole> hc={{20,20,12},{3,20,10},{100,50,300},{0.5f,0.5f,8},{30,20,12},{30,20,12}}; Result s; auto t0=clock(); bool ok=Build(ol,hc,P,s); printf("crossing holes: build %d crossing %d skipped %d, %.0f ms\n",ok,s.crossingHoles,s.skippedHoles,1000.0*(clock()-t0)/CLOCKS_PER_SEC); CHECK(s.crossingHoles>=2,"crossing counted"); CHECK(clock()-t0<5*CLOCKS_PER_SEC,"hang");
     Result n; CHECK(Build(ol,holes,P,n)&&n.crossingHoles==0,"no false crossing"); }
+  // Pills: a capsule hole through all three meshes, manifold, no inverted caps; capsule loop clockwise and as long as it should be
+  { Params q=P; std::vector<Hole> hp; Hole pl{40,35,6.4f}; pl.x2=70; pl.y2=45; pl.pill=true; hp.push_back(pl); Hole rd{20,20,12}; hp.push_back(rd);
+    Result s; CHECK(Build(ol,hp,q,s),"pill build"); manifold("pill",{&s.bottom,&s.top,&s.bevel},true); windingVsNormals("pill bevel",s.bevel);
+    int iv; double aB2=capArea(s.bottom,iv); CHECK(iv==0,"pill inverted bottom"); double aT2=capArea(s.top,iv); CHECK(iv==0,"pill inverted top");
+    auto loop=HoleOutline(pl,0.25f); double la=0; for(size_t i=0;i<loop.size();i++){auto&a=loop[i],&b=loop[(i+1)%loop.size()]; la+=a.x*b.y-b.x*a.y;} la*=0.5;
+    double L=hypot(30.0,10.0),r=3.2; printf("pill loop %zu pts, signed area %.3f (capsule %.3f)\n",loop.size(),la,L*2*r+M_PI*r*r);
+    CHECK(la<0,"capsule loop is clockwise"); CHECK(fabs(-la-(L*2*r+M_PI*r*r))<1.6,"capsule area (a coarse polygon at tolerance 0.25)");
+    // the hole is open: bottom area = outline - capsule polygon - round hole polygon
+    auto rl=HoleOutline(rd,0.25f); double ra=0; for(size_t i=0;i<rl.size();i++){auto&a=rl[i],&b=rl[(i+1)%rl.size()]; ra+=a.x*b.y-b.x*a.y;} ra=-0.5*ra;
+    printf("pill bottom %.3f vs outline - holes %.3f\n",aB2,polyArea(flat)+la-ra); CHECK(fabs(aB2-(polyArea(flat)+la-ra))<0.01,"pill bottom area");
+    // zero-length or no pill flag: a round hole, identical to the round build
+    Hole z=pl; z.x2=z.x; z.y2=z.y; Hole nf=pl; nf.pill=false; Result r1,r2,r3; Build(ol,{Hole{40,35,6.4f}},P,r1); Build(ol,{z},P,r2); Build(ol,{nf},P,r3);
+    CHECK(r1.bottom.verts.size()==r2.bottom.verts.size()&&r1.bottom.verts.size()==r3.bottom.verts.size(),"degenerate / unflagged pill reads as round");
+    // outside test: one end outside, middle inside is kept; both ends and the middle outside is skipped; the edge warning uses the segment
+    Hole half=pl; half.x=-30; half.y=40; half.x2=30; half.y2=40; Result s2; Build(ol,{half},P,s2); CHECK(s2.skippedHoles==0,"pill with one end outside kept");
+    Hole away=pl; away.x=300; away.x2=330; Result s3; Build(ol,{away},P,s3); CHECK(s3.skippedHoles==1,"pill outside skipped");
+    Hole near=pl; near.x=10; near.y=2; near.x2=90; near.y2=2; Result s4; Build(ol,{near},P,s4); printf("pill along the edge: crossing %d\n",s4.crossingHoles); CHECK(s4.crossingHoles==1,"segment-distance edge warning");
+  }
+  // Curve Detail: tolerance 0.25 / n^2, detail 1 identical to the default, more detail = more triangles, never above 96 segments on one arc or hole circle
+  { printf("tolerances: "); for(int d=1;d<=5;d++) printf("%d:%.4f ",d,FlattenTolerance(d)); printf("\n"); CHECK(FlattenTolerance(1)==0.25f&&fabsf(FlattenTolerance(5)-0.01f)<1e-6f,"tolerances");
+    size_t prev=0; for(int d=1;d<=5;d++){ Params q=P; q.flatten=FlattenTolerance(d); Result s; CHECK(Build(ol,holes,q,s),"detail build"); size_t tc=(s.bottom.idx.size()+s.top.idx.size()+s.bevel.idx.size())/3;
+      printf("detail %d: %zu triangles (bottom %zu top %zu bevel %zu)\n",d,tc,s.bottom.idx.size()/3,s.top.idx.size()/3,s.bevel.idx.size()/3); CHECK(tc>prev,"more detail, more triangles"); prev=tc; manifold("detail",{&s.bottom,&s.top,&s.bevel},true);
+      auto fl=FlattenOutline(ol,q.flatten); (void)fl; }
+    Result d1; Build(ol,holes,P,d1); Params q1=P; q1.flatten=FlattenTolerance(1); Result d1b; Build(ol,holes,q1,d1b);
+    CHECK(d1.bottom.verts.size()==d1b.bottom.verts.size()&&memcmp(d1.bottom.verts.data(),d1b.bottom.verts.data(),d1.bottom.verts.size()*sizeof(Vertex))==0&&d1.bevel.idx==d1b.bevel.idx,"detail 1 == default");
+    // the cap: a huge arc and a huge hole at the finest detail
+    std::vector<CurvePoint> big={{0,0,false},{1000,0,false},{1500,500,true},{1000,1000,false},{0,1000,false}}; Hole bh{200,500,600}; Hole bp{600,500,300}; bp.x2=900; bp.y2=500; bp.pill=true;
+    for(int d:{1,5}){ float t=FlattenTolerance(d); auto fl=FlattenOutline(big,t); size_t arcPts=0; for(auto&p:fl) if(p.x>1000.5f) arcPts++; auto hl=HoleOutline(bh,t); auto pl2=HoleOutline(bp,t);
+      printf("detail %d huge: arc points beyond the corners %zu, hole circle %zu pts, pill %zu pts\n",d,arcPts,hl.size(),pl2.size()); CHECK(arcPts<=96,"arc cap"); CHECK(hl.size()<=96,"hole cap"); CHECK(pl2.size()<=96,"pill cap"); }
+    // a small hole at detail 5 is not capped
+    auto sh=HoleOutline(Hole{0,0,12},FlattenTolerance(5)); printf("12 VPU hole at detail 5: %zu pts\n",sh.size()); CHECK(sh.size()>40&&sh.size()<=96,"small hole fine detail");
+  }
   // degenerate
   { Result s; CHECK(!Build({{0,0,false},{1,1,false}},{},P,s),"2 pts"); }
   dump("main.txt",r,flat);

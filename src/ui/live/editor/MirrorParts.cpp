@@ -105,7 +105,7 @@ void MirrorPrimitive(Primitive &prim, const Axis axis, const float coord)
    if (d.m_plasticGen)
    {
       MirrorCurve(prim.m_plasticCurve, axis, coord, true);
-      MirrorCurve(prim.m_plasticHoles, axis, coord, true);
+      MirrorCurve(prim.m_plasticHoles, axis, coord, false); // Holes keep their order: a pill is two consecutive points, the first one smooth
       // The art stays on the part, mirrored with it (the atlas image is laid over the outline by the table to image map)
       if (axis == Axis::X)
          prim.PlasticMapTransform({ -1.f, 0.f, 2.f * coord, 0.f, 1.f, 0.f });

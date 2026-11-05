@@ -137,6 +137,7 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_plasticThickness = wireDefaults.m_plasticThickness;
    m_d.m_plasticBevel = wireDefaults.m_plasticBevel;
    m_d.m_plasticBevelSegs = wireDefaults.m_plasticBevelSegs;
+   m_d.m_plasticDetail = wireDefaults.m_plasticDetail;
    m_d.m_plasticHoleDia = wireDefaults.m_plasticHoleDia;
    m_d.m_plasticDpi = wireDefaults.m_plasticDpi;
    for (int i = 0; i < 6; i++)
@@ -2409,9 +2410,25 @@ void Primitive::RegeneratePlastic()
    for (const auto &pt : m_plasticCurve.GetPoints())
       outline.push_back({ pt->GetX(), pt->GetY(), pt->IsSmooth() });
    vector<PlasticMesh::Hole> holes;
-   for (const auto &pt : m_plasticHoles.GetPoints())
-      holes.push_back({ pt->GetX(), pt->GetY(), pt->GetZ() });
+   {
+      const auto &hp = m_plasticHoles.GetPoints();
+      const vector<int> partner = PlasticPillPartners(m_plasticHoles);
+      for (int i = 0; i < static_cast<int>(hp.size()); i++)
+      {
+         if (partner[i] >= 0 && partner[i] < i) // The second end of a pill
+            continue;
+         PlasticMesh::Hole h { hp[i]->GetX(), hp[i]->GetY(), hp[i]->GetZ() };
+         if (partner[i] > i)
+         {
+            h.x2 = hp[partner[i]]->GetX();
+            h.y2 = hp[partner[i]]->GetY();
+            h.pill = true;
+         }
+         holes.push_back(h);
+      }
+   }
    PlasticMesh::Params params;
+   params.flatten = PlasticMesh::FlattenTolerance(m_d.m_plasticDetail);
    params.height = m_d.m_plasticHeight;
    params.thickness = m_d.m_plasticThickness;
    params.bevel = m_d.m_plasticBevel;
@@ -2431,6 +2448,34 @@ void Primitive::RegeneratePlastic()
       if (comp->m_renderer != nullptr)
          comp->m_renderer->ReinitRenderable(comp);
    }
+}
+
+vector<int> Primitive::PlasticPillPartners(const DragPointCurve &holes)
+{
+   const auto &pts = holes.GetPoints();
+   vector<int> res(pts.size(), -1);
+   for (int i = 0; i + 1 < static_cast<int>(pts.size()); i++)
+      if (res[i] < 0 && pts[i]->IsSmooth() && fabsf(pts[i]->GetZ() - pts[i + 1]->GetZ()) < 1e-4f)
+      {
+         res[i] = i + 1;
+         res[i + 1] = i;
+         i++; // The second end is not the first end of another pill
+      }
+   return res;
+}
+
+void Primitive::SetPlasticHoleDiameter(const DragPoint *const hole, const float dia)
+{
+   const auto &pts = m_plasticHoles.GetPoints();
+   const vector<int> partner = PlasticPillPartners(m_plasticHoles);
+   const float d = clamp(dia, 0.5f, 100.f);
+   for (int i = 0; i < static_cast<int>(pts.size()); i++)
+      if (pts[i].get() == hole)
+      {
+         pts[i]->SetZ(d);
+         if (partner[i] >= 0)
+            pts[partner[i]]->SetZ(d);
+      }
 }
 
 void Primitive::UpdatePlastic()
@@ -2627,6 +2672,8 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteFloat(FID(PTHK), m_d.m_plasticThickness);
       writer.WriteFloat(FID(PBVL), m_d.m_plasticBevel);
       writer.WriteInt(FID(PBSG), m_d.m_plasticBevelSegs);
+      if (m_d.m_plasticDetail > 1) // Only when above the default: plastics without it save as before
+         writer.WriteInt(FID(PDTL), m_d.m_plasticDetail);
       writer.WriteFloat(FID(PHDI), m_d.m_plasticHoleDia);
       writer.WriteFloat(FID(PDPI), m_d.m_plasticDpi);
       writer.WriteVector3(FID(PUVM), vec3(m_d.m_plasticUvm[0], m_d.m_plasticUvm[1], m_d.m_plasticUvm[2]));
@@ -2785,6 +2832,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PTHK): m_d.m_plasticThickness = reader.AsFloat(); break;
          case FID(PBVL): m_d.m_plasticBevel = reader.AsFloat(); break;
          case FID(PBSG): m_d.m_plasticBevelSegs = clamp(reader.AsInt(), 1, 16); break;
+         case FID(PDTL): m_d.m_plasticDetail = clamp(reader.AsInt(), 1, 5); break;
          case FID(PHDI): m_d.m_plasticHoleDia = reader.AsFloat(); break;
          case FID(PDPI): m_d.m_plasticDpi = clamp(reader.AsFloat(), 10.f, 4800.f); break;
          case FID(PUVM): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[0] = v.x; m_d.m_plasticUvm[1] = v.y; m_d.m_plasticUvm[2] = v.z; break; }

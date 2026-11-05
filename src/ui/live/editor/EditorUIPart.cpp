@@ -74,12 +74,15 @@ void EditorUIPart::UpdateCurveSection(PropertyPane& props)
 
    ImGui::Text("%d of %d point(s) selected", (int)sel.size(), (int)curve->GetPoints().size());
    ImGui::BeginDisabled(sel.empty());
-   if (ImGui::Button("Smooth"))
-      SetSelectedPointsSmooth(true);
-   ImGui::SameLine();
-   if (ImGui::Button("Sharp"))
-      SetSelectedPointsSmooth(false);
-   ImGui::SameLine();
+   if (HasPointSmooth())
+   {
+      if (ImGui::Button("Smooth"))
+         SetSelectedPointsSmooth(true);
+      ImGui::SameLine();
+      if (ImGui::Button("Sharp"))
+         SetSelectedPointsSmooth(false);
+      ImGui::SameLine();
+   }
    if (ImGui::Button("Flip X"))
       FlipSelectedPoints(true);
    ImGui::SameLine();
