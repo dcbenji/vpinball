@@ -351,6 +351,7 @@ extern std::atomic<int> g_frameLitLights;
 extern std::atomic<float> g_frameFlash;
 extern std::atomic<int> g_frameCellOverflow;
 extern std::atomic<int> g_frameCellMax;
+bool g_frameLogSplitViews = false; // VPX_FRAME_LOG_SPLIT=1 (with VPX_FRAME_LOG): give every render pass its own bgfx view so its GPU time is not merged into the next pass on the same target (adds view switches: diagnostic only)
 bool g_frameLogViewNames = false; // VPX_FRAME_LOG: name the bgfx views by render pass so the per-view GPU timings can be grouped
 
 #ifdef __EMSCRIPTEN__
@@ -1171,13 +1172,32 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
                FILE* const f = fopen(path, "w");
                if (f)
                {
-                  bgfx::setDebug(BGFX_DEBUG_PROFILER);
+                  // Per-view GPU timings need bgfx's profiler. On Metal they are not usable (each view is sampled from vertex start to
+                  // fragment end and the tile GPU overlaps passes, so the spans overlap), and the profiler makes bgfx start a new render
+                  // pass at every view (a full tile store + load of every attachment), which inflates the frame time it should measure.
+                  // VPX_FRAME_LOG_VIEWS=0/1 overrides; default on, off on Apple.
+                  const char* const viewsEnv = getenv("VPX_FRAME_LOG_VIEWS");
+                  #ifdef __APPLE__
+                  const bool views = viewsEnv != nullptr && atoi(viewsEnv) != 0;
+                  #else
+                  const bool views = viewsEnv == nullptr || atoi(viewsEnv) != 0;
+                  #endif
+                  if (views)
+                     bgfx::setDebug(BGFX_DEBUG_PROFILER);
                   g_frameLogViewNames = true;
-                  fprintf(f, "frame,t_ms,interval_ms,gpu_ms,submit_ms,wait_ms,prepare_ms,script_ms,physics_ms,draws,vsm_pages,lit,flash,cell_over,cell_max,views\n");
+                  g_frameLogSplitViews = getenv("VPX_FRAME_LOG_SPLIT") != nullptr && atoi(getenv("VPX_FRAME_LOG_SPLIT")) != 0;
+                  fprintf(f, "frame,t_ms,interval_ms,gpu_ms,submit_ms,wait_ms,prepare_ms,script_ms,physics_ms,draws,vsm_pages,lit,flash,cell_over,cell_max,ablate,views\n");
                }
                return f;
             }();
             static uint64_t frameLogLast = 0;
+            // VPX_LOG_FRAME=<n>: write the pass list of one frame (the first after GPU frame n) to the main log, as the Live UI's 'Log frame' does
+            static int logFrameAt = getenv("VPX_LOG_FRAME") ? atoi(getenv("VPX_LOG_FRAME")) : -1;
+            if (logFrameAt >= 0 && lastGpuFrameNum >= (uint32_t)logFrameAt)
+            {
+               LogNextFrame();
+               logFrameAt = -1;
+            }
             if (frameLog)
             {
                std::map<string, double> groups;
@@ -1190,14 +1210,14 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
                }
                string views;
                for (const auto& [name, ms] : groups)
-                  if (ms >= 0.05)
+                  if (ms >= 0.01)
                      views += std::format("{}={:.2f};", name, ms);
                const FrameProfiler& lp = g_pplayer->m_logicProfiler;
                const FrameProfiler& rp = *g_pplayer->m_renderProfiler;
-               fprintf(frameLog, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%d,%d,%.3f,%d,%d,%s\n", lastGpuFrameNum, lastSyncTimestamp / 1000.0,
+               fprintf(frameLog, "%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%d,%d,%.3f,%d,%d,%s,%s\n", lastGpuFrameNum, lastSyncTimestamp / 1000.0,
                   frameLogLast ? (lastSyncTimestamp - frameLogLast) / 1000.0 : 0.0, m_lastGPUFrameLength / 1000.0, rp.GetPrev(FrameProfiler::PROFILE_RENDER_SUBMIT) / 1000.0,
                   rp.GetPrev(FrameProfiler::PROFILE_RENDER_WAIT) / 1000.0, lp.GetPrev(FrameProfiler::PROFILE_PREPARE_FRAME) / 1000.0, lp.GetPrev(FrameProfiler::PROFILE_SCRIPT) / 1000.0,
-                  lp.GetPrev(FrameProfiler::PROFILE_PHYSICS) / 1000.0, stats->numDraw, g_frameVsmPages.exchange(0), g_frameLitLights.load(), g_frameFlash.load(), g_frameCellOverflow.load(), g_frameCellMax.load(), views.c_str());
+                  lp.GetPrev(FrameProfiler::PROFILE_PHYSICS) / 1000.0, stats->numDraw, g_frameVsmPages.exchange(0), g_frameLitLights.load(), g_frameFlash.load(), g_frameCellOverflow.load(), g_frameCellMax.load(), PerfAblateStepName(g_perfAblateStep.load()), views.c_str());
                frameLogLast = lastSyncTimestamp;
             }
          }

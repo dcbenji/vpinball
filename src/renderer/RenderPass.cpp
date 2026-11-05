@@ -256,6 +256,13 @@ bool RenderPass::Execute(const bool log)
       PLOGI << ss.str();
    }
 
+   #if defined(ENABLE_BGFX)
+   {
+      extern bool g_frameLogSplitViews;
+      if (g_frameLogSplitViews)
+         RenderTarget::OnFrameFlushed(); // VPX_FRAME_LOG_SPLIT: a new bgfx view for this pass even when it renders to the same target as the previous one
+   }
+   #endif
    if (m_rt->m_nLayers == 1 || (m_singleLayerRendering < 0 && m_rt->GetRenderDevice()->SupportLayeredRendering()))
    {
       m_rt->Activate();

@@ -4157,6 +4157,13 @@ void Renderer::BuildPBRLightList(const int altSlot)
       m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDomeSpillCol, spillCol, 8);
    }
 
+   // VPX_PERF_ABLATE: no PBR lights at all / no shadow lookups (shadow mode bits 0-3 cleared)
+   if (g_perfAblateMask.load() & PerfAblate::LIGHTS)
+      lightCount = 0;
+   if (g_perfAblateMask.load() & PerfAblate::SHADOW)
+      for (int i = 0; i < lightCount; i++)
+         entries[i].radiance.w = (float)(static_cast<int>(entries[i].radiance.w) & ~15);
+
    // Bucket into all cells overlapped by the light range (cell count caps at maxPerCell lights)
    for (int i = 0; i < lightCount; i++)
    {
@@ -4604,6 +4611,8 @@ RenderTarget* Renderer::ApplyPBRSpecularResolve(RenderTarget* renderedRT)
    if (!m_renderDevice->m_pbrActive || !IsUsingDepthPrepass())
       return renderedRT;
    if (renderedRT->GetPBRSidebandSampler(1) == nullptr)
+      return renderedRT;
+   if (g_perfAblateMask.load() & PerfAblate::SPEC) // VPX_PERF_ABLATE
       return renderedRT;
 
    m_renderDevice->ResetRenderState();
@@ -5710,9 +5719,53 @@ void Renderer::RestoreLampTest()
    m_lampTestLights.clear();
 }
 
+// VPX_PERF_ABLATE=<seconds per step> (diagnostic): cycles through steps that each turn one render feature off, so a single
+// run measures what each one costs on the GPU (the frame log's 'ablate' column names the step of each frame). Unset = no change.
+std::atomic<int> g_perfAblateMask { 0 };
+std::atomic<int> g_perfAblateStep { -1 };
+const char* PerfAblateStepName(const int step)
+{
+   static const char* const names[] = { "base", "nobloom", "noaa", "norefl", "norefr", "noshadow", "nolights", "noui", "nospec", "nomblur", "floor", "base2" };
+   return (step >= 0 && step < (int)std::size(names)) ? names[step] : "";
+}
+void UpdatePerfAblation(Renderer* r)
+{
+   static const float stepSec = []() { const char* const e = std::getenv("VPX_PERF_ABLATE"); return e ? (float)atof(e) : 0.f; }();
+   if (stepSec <= 0.f)
+      return;
+   static const uint64_t start = usec();
+   static bool saved = false;
+   static bool bloomOff, mblurOff;
+   static int fxaa;
+   static RenderProbe::ReflectionMode refl;
+   static PerfUI::PerfMode perfMode;
+   if (!saved)
+   {
+      bloomOff = r->m_bloomOff; mblurOff = r->m_motionBlurOff; fxaa = r->m_FXAA; refl = r->m_maxReflectionMode;
+      perfMode = g_pplayer->m_liveUI->m_perfUI.GetPerfMode();
+      saved = true;
+   }
+   constexpr int nSteps = 12;
+   const int step = static_cast<int>((usec() - start) / (uint64_t)(stepSec * 1e6f)) % nSteps;
+   if (step == g_perfAblateStep.load())
+      return;
+   using namespace PerfAblate;
+   static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0 };
+   const int m = masks[step];
+   r->m_bloomOff = bloomOff || (m & BLOOM);
+   r->m_FXAA = (m & AA) ? 0 : fxaa;
+   r->m_maxReflectionMode = (m & REFL) ? RenderProbe::REFL_NONE : refl;
+   r->m_motionBlurOff = mblurOff || (m & MBLUR);
+   g_pplayer->m_liveUI->m_perfUI.SetPerfMode((m & UI) ? PerfUI::PerfMode::PM_DISABLED : perfMode);
+   g_perfAblateMask = m;
+   g_perfAblateStep = step;
+   PLOGI << "VPX_PERF_ABLATE step " << step << " " << PerfAblateStepName(step);
+}
+
 void Renderer::Render3DScene()
 {
    ResizeRenderTargets();
+   UpdatePerfAblation(this);
 
    // Lamp Test of the main view, for the whole recording of the scene (every way out of this function puts the lamps back)
    struct LampTestRestorer

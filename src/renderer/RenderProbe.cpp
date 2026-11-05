@@ -165,6 +165,8 @@ RenderTarget* RenderProbe::Render(const unsigned int renderMask)
    case SCREEN_SPACE_TRANSPARENCY:
       if (m_renderer->IsSolidPass())
          return nullptr; // Solid shading: no refraction
+      if (g_perfAblateMask.load() & PerfAblate::REFR)
+         return nullptr; // VPX_PERF_ABLATE: no refraction probe
       RenderScreenSpaceTransparency();
       return m_dynamicRT;
       

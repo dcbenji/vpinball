@@ -81,8 +81,15 @@ struct RenderMeshDesc
 // The parts a view of the live editor is limited to (its Local View), by address: never dereferenced
 using LocalViewSet = ankerl::unordered_dense::set<const IEditable *>;
 
+// VPX_PERF_ABLATE (diagnostic, see Renderer.cpp): render features turned off by the current ablation step
+namespace PerfAblate { enum : int { BLOOM = 1, AA = 2, REFL = 4, REFR = 8, SHADOW = 16, LIGHTS = 32, UI = 64, SPEC = 128, MBLUR = 256 }; }
+extern std::atomic<int> g_perfAblateMask;
+extern std::atomic<int> g_perfAblateStep;
+const char* PerfAblateStepName(const int step);
+
 class Renderer final
 {
+   friend void UpdatePerfAblation(Renderer* r); // VPX_PERF_ABLATE
 public:
    Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D);
    ~Renderer();
