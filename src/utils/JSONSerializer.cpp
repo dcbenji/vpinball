@@ -404,6 +404,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(DMDP), "dome_depth" },
             { FID(DMBO), "dome_boost" },
             { FID(DMBR), "dome_base_ramp" },
+            { FID(DMSP), "dome_spill" },
             { FID(DMCD), "dome_cooldown" },
             { FID(DMOR), "dome_orb" },
             { FID(DMGM), "dome_glow_map" },

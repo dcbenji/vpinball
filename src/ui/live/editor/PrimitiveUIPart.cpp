@@ -843,6 +843,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          [](const Primitive* primitive) { return primitive->m_d.m_domeFrost; }, //
          [](Primitive* primitive, float v) { primitive->m_d.m_domeFrost = clamp(v, 0.f, 3.f); }, 0.f, 3.f, 2,
          "Clear and pale domes: the thick parts of the plastic (ridges, top, base, rim) scatter the room's light to a milky white so the dome reads frosted, not grey (0 = off)");
+      props.SliderFloat<Primitive>(
+         m_part, "Dome Spill"s, //
+         [](const Primitive* primitive) { return primitive->m_d.m_domeSpill; }, //
+         [](Primitive* primitive, float v) { primitive->m_d.m_domeSpill = clamp(v, 0.f, 4.f); }, 0.f, 4.f, 2,
+         "A faint tint of the dome's colour on the clear plastic it stands on, round the base: the table's light coming through the plastic (0 = off)");
       props.InputRGB<Primitive>(
          m_part, "Dome Tint"s, //
          [](const Primitive* primitive) { return convertColor(primitive->m_d.m_domeTint); }, //

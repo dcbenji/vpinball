@@ -1258,6 +1258,24 @@ bool Primitive::GetFlasherDomeCookie(vec3 &cookie)
    return true;
 }
 
+bool Primitive::GetFlasherDomeSpill(vec4 &base, vec3 &tint)
+{
+   if (m_d.m_domeSpill <= 0.f)
+      return false;
+   const FlasherDomeShape &d = MeasureFlasherDome();
+   if (!d.valid)
+      return false;
+   const Matrix3D &m = RecalculateMatrices();
+   const Vertex3Ds c = m * Vertex3Ds(d.cx, d.cy, d.baseZ);
+   base = vec4(c.x, c.y, c.z, d.radius * m.MultiplyVectorNoTranslate(Vertex3Ds(1.f, 0.f, 0.f)).Length());
+   // The plastic's colour through a 2 mm wall: the built-in red acrylic preset (as the dome layer's sigma) or dome_tint
+   if (m_d.m_domeTint != 0)
+      tint = convertColor(m_d.m_domeTint);
+   else
+      tint = vec3(expf(-0.2f), expf(-2.8f), expf(-3.f));
+   return true;
+}
+
 bool Primitive::IsTracedInsert() const { return m_d.m_addBlend && lowerCase(m_d.m_szImage).rfind("traced_", 0) == 0; }
 
 #if defined(ENABLE_BGFX)
@@ -2858,6 +2876,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DMOR), m_d.m_domeOrb);
    writer.WriteFloat(FID(DMBO), m_d.m_domeBoost);
    writer.WriteFloat(FID(DMBR), m_d.m_domeBaseRamp);
+   writer.WriteFloat(FID(DMSP), m_d.m_domeSpill);
 
    SaveSharedEditableFields(writer);
 
@@ -3166,6 +3185,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMOR): m_d.m_domeOrb = reader.AsFloat(); break;
          case FID(DMBO): m_d.m_domeBoost = reader.AsFloat(); break;
          case FID(DMBR): m_d.m_domeBaseRamp = reader.AsFloat(); break;
+         case FID(DMSP): m_d.m_domeSpill = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 

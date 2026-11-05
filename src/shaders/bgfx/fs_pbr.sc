@@ -33,6 +33,7 @@ $input v_worldPos, v_tablePos, v_normal, v_texcoord0, v_refrCurv
 #include "common.sh"
 
 #define NUM_BALL_LIGHTS 0 // just to avoid having too much constant mem allocated
+#define DOME_SPILL_SHEET 0.1 // flasher dome spill: share a clear sheet glows with (of the irradiance it gets)
 
 #ifdef TEX
 SAMPLER2D      (tex_base_color, 0); // base color
@@ -113,6 +114,10 @@ uniform vec4 pbrCoat; // x: clear coat strength (0 = off), y: clear coat percept
 #define pbrScatter    (pbrCoat.z) // material scatter 0..1: the see-through surface itself, lit (0 = off)
 #define coatRoughness (pbrCoat.y)
 #define pbrScatterEdge0 (pbrCoat.w) // look-through starts where (1-|N.V|)/|N.V| exceeds this (3.8 = ~78 deg)
+
+uniform vec4 pbrDomeSpill[8];    // flasher dome spill (dome_spill): xyz base centre (table space), w outer radius
+uniform vec4 pbrDomeSpillCol[8]; // rgb: spill irradiance at the wall (the table's light at the dome through its colour), w: reach (outer radii)
+uniform vec4 pbrDomeSpillN;      // x: dome spill count (0 = none), y: height window (outer radii)
 
 uniform vec4 pbrLightGrid;  // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
 uniform vec4 pbrLightGrid2; // x: cell count y, y: light count, z: specular AA strength (VPX_SPEC_AA, 1 = default, 0 = off)
@@ -1094,6 +1099,31 @@ vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN, const float loc)
 }
 #endif
 
+// Flasher dome spill (dome_spill) on the surface a dome stands on: the table's light comes through the dome's coloured
+// plastic, so the clear plastic round the base takes a faint tint of it, strongest at the wall and fading out over the reach
+// (exp, in outer radii). Only surfaces outside the wall (not the dome body or what it hides), near the base's height (the
+// height window) and facing up or down get it: not the playfield under a raised dome, not posts or walls beside it. Returns the
+// irradiance.
+vec3 pbr_dome_spill(const vec3 wPos, const vec3 wNg)
+{
+   vec3 E = vec3_splat(0.0);
+   UNROLL for (int i = 0; i < 8; i++)
+   {
+      if (float(i) >= pbrDomeSpillN.x)
+         break;
+      const vec4 g = pbrDomeSpill[i];
+      const vec4 c = pbrDomeSpillCol[i];
+      const float r = length(wPos.xy - g.xy);
+      const float s = (r - g.w) / (g.w * c.w); // distance out from the wall, in reaches
+      const float win = pbrDomeSpillN.y * g.w;
+      const float h = abs(wPos.z - g.z);
+      if (r < 1.02 * g.w || s > 6.0 || h > win)
+         continue;
+      E += c.rgb * (exp(-s) * (1.0 - smoothstep(0.5 * win, win, h)));
+   }
+   return E * abs(wNg.z);
+}
+
 #if !defined(AT) && !defined(CLIP)
 EARLY_DEPTH_STENCIL
 #endif
@@ -1290,6 +1320,16 @@ void main() {
          // Per-pixel rotation of the VSM Poisson kernel (gl_FragCoord is only in scope in main(), hence passed in)
          const float vsmPhase = hash22(gl_FragCoord.xy).x * (2.0 * PI);
          color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a, pbrTransmission * orm.w, vec2(cos(vsmPhase), sin(vsmPhase)), directSpec);
+      }
+      // Flasher dome spill: lights the surface's diffuse; a see-through sheet also glows with it (the light trapped in the
+      // clear plastic), unmodulated by its coverage. Off with the table's lights (editor views without them)
+      BRANCH if (pbrDomeSpillN.x > 0.0 && pbrLightGrid2.y > 0.0)
+      {
+         const vec3 Es = pbr_dome_spill(v_tablePos, mul(vec4(Ng, 0.0), mView).xyz);
+         color += diffuse * Es * (1.0 / PI);
+         #ifdef TRANSPARENT
+            spec += Es * DOME_SPILL_SHEET;
+         #endif
       }
    }
 

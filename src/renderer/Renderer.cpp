@@ -4119,6 +4119,44 @@ void Renderer::BuildPBRLightList(const int altSlot)
       prim->m_domeGIDir = dirLen > 0.f ? vec4(dir.x / dirLen, dir.y / dirLen, dir.z / dirLen, sum > 0.f ? min(dirLen / sum, 1.f) : 0.f) : vec4(0.f, 0.f, 1.f, 0.f);
    }
 
+   // Flasher dome spill (dome_spill): the table's light arriving at the dome (GI bulbs, inserts, room keys; not the dome
+   // lamps, as the dome layer's GI glow) comes through its plastic and faintly tints the surface it stands on round its base
+   // (fs_pbr, pbr_dome_spill). VPX_T9_TUNE spillw= (reach, outer radii, default 0.5) and spillh= (height window, outer radii,
+   // default 0.4: the plastic top sits a few mm above the dome mesh's lowest point, the playfield under a raised dome far below)
+   {
+      static const auto tune = [](const char *key, const float def)
+      {
+         const char *const t = std::getenv("VPX_T9_TUNE"), *p;
+         float v;
+         return (t && (p = strstr(t, key)) && sscanf(p + strlen(key), "%f", &v) == 1) ? v : def;
+      };
+      static const float reach = max(tune("spillw=", 0.5f), 0.01f), window = max(tune("spillh=", 0.4f), 0.01f);
+      vec4 spill[8], spillCol[8];
+      for (int i = 0; i < 8; i++)
+         spill[i] = spillCol[i] = vec4(0.f, 0.f, 0.f, 0.f);
+      int spillCount = 0;
+      for (IEditable* const part : m_table->GetParts())
+      {
+         if (spillCount >= 8)
+            break;
+         if (part->GetItemType() != eItemPrimitive)
+            continue;
+         Primitive* const prim = static_cast<Primitive*>(part);
+         vec4 base;
+         vec3 tint;
+         if (!prim->m_d.m_visible || !prim->IsFlasherDome() || !prim->GetFlasherDomeSpill(base, tint) || base.w <= 0.f)
+            continue;
+         const float k = 2.5f * prim->m_d.m_domeSpill; // 1 = a faint tint on a clear plastic
+         const vec3 &gi = prim->m_domeGI;
+         spill[spillCount] = base;
+         spillCol[spillCount] = vec4(tint.x * gi.x * k, tint.y * gi.y * k, tint.z * gi.z * k, reach);
+         spillCount++;
+      }
+      m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDomeSpillN, (float)spillCount, window, 0.f, 0.f);
+      m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDomeSpill, spill, 8);
+      m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDomeSpillCol, spillCol, 8);
+   }
+
    // Bucket into all cells overlapped by the light range (cell count caps at maxPerCell lights)
    for (int i = 0; i < lightCount; i++)
    {
@@ -6412,7 +6450,7 @@ void Renderer::RenderEditorView(const int slot)
    PinTable* const mainTable = m_table;
    Shader* const basicShader = m_renderDevice->m_basicShader;
    std::shared_ptr<const Sampler> mainEnv, mainDiffuseEnv;
-   vec4 mainEnvScale, mainEnvRotation, mainLightGrid, mainLightGrid2;
+   vec4 mainEnvScale, mainEnvRotation, mainLightGrid, mainLightGrid2, mainDomeSpillN;
 #if defined(ENABLE_BGFX)
    const bool mainShadowCacheOn = m_shadowCacheOn;
 #endif
@@ -6467,7 +6505,9 @@ void Renderer::RenderEditorView(const int slot)
       {
          mainLightGrid = basicShader->GetVector(ShaderUniform::pbrLightGrid);
          mainLightGrid2 = basicShader->GetVector(ShaderUniform::pbrLightGrid2);
+         mainDomeSpillN = basicShader->GetVector(ShaderUniform::pbrDomeSpillN);
          basicShader->SetVector(ShaderUniform::pbrLightGrid, 0.f, 0.f, 0.f, 1.f);
+         basicShader->SetVector(ShaderUniform::pbrDomeSpillN, 0.f, 0.f, 0.f, 0.f); // no table dome spill in the lookdev scene
          basicShader->SetVector(ShaderUniform::pbrLightGrid2, 1.f, static_cast<float>(m_lookdevLightCount), mainLightGrid2.z, mainLightGrid2.w);
          basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_lookdevLightList);
       }
@@ -6516,6 +6556,7 @@ void Renderer::RenderEditorView(const int slot)
       {
          basicShader->SetVector(ShaderUniform::pbrLightGrid, &mainLightGrid);
          basicShader->SetVector(ShaderUniform::pbrLightGrid2, &mainLightGrid2);
+         basicShader->SetVector(ShaderUniform::pbrDomeSpillN, &mainDomeSpillN);
          basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
       }
       m_shadowCacheOn = mainShadowCacheOn;

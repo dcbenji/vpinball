@@ -403,6 +403,9 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: unused
    SHADER_UNIFORM(ShaderUniformType::Float4v, pbrShadowCache, 32), // per shadowed light: static shadow cache uv = table xy * x + (y, z), w: cache layer + 1 (0 = not cached)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowCacheDraw, 1), // x: 1 = this draw (the playfield) reads the static shadow cache
+   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrDomeSpill, 8), // flasher dome spill (dome_spill): xyz base centre (table space), w outer radius
+   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrDomeSpillCol, 8), // rgb: spill irradiance at the wall, w: reach (outer radii)
+   SHADER_UNIFORM(ShaderUniformType::Float4, pbrDomeSpillN, 1), // x: dome spill count (0 = none), y: height window (outer radii)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeLight, 1), // shadow cache bake: light position, range
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeParams, 1), // shadow cache bake: x: light sphere radius, y: penumbra radius
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeMap, 1), // shadow cache bake: table xy -> layer uv (xy * x + (y, z))
