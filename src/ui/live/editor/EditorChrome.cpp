@@ -870,7 +870,7 @@ void EditorChrome::RenderMenuBar()
             editor.RedoSteps(1);
          if (ImGui::MenuItem("Undo History...", nullptr, false, editor.m_table->m_liveBaseTable == nullptr && (editor.m_undo.HasUndo() || editor.m_undo.HasRedo())))
             OpenUndoHistory();
-         if (ImGui::MenuItem("Adjust Last Operation...", "F9", false, editor.m_lastOp.type != EditorUI::LastOperation::Type::None))
+         if (ImGui::MenuItem("Adjust Last Operation...", "F9", false, editor.m_lastOp.type != EditorUI::LastOperation::Type::None && !editor.m_measure.IsActive()))
          {
             editor.m_adjustPopupOpen = true;
             editor.m_adjustPopupJustOpened = true;
@@ -1116,6 +1116,13 @@ void EditorChrome::RenderMenuBar()
             editor.FrameAll();
          if (ImGui::MenuItem("Local View", "Numpad /  (US: / \\)", editor.IsLocalView())) // Blender's numpad /: the selection alone in the 3D Viewport (over a secondary view the key is its own)
             editor.ToggleLocalView();
+         const char *const measureRefusal = editor.m_measure.IsActive() ? nullptr : MeasureTool::Refusal(editor);
+         if (ImGui::MenuItem("Measure", nullptr, editor.m_measure.IsActive(), measureRefusal == nullptr)) // Blender's Ruler: view-only
+            editor.m_measure.SetActive(editor, !editor.m_measure.IsActive());
+         if (measureRefusal != nullptr)
+            ImGui::SetItemTooltip("%s", measureRefusal);
+         if (ImGui::MenuItem("Clear Rulers", nullptr, false, editor.m_measure.HasRulers()))
+            editor.m_measure.Clear(editor);
          ImGui::Separator();
          static constexpr const char *workspaceKeys[PinnedPanel::WorkspaceCount] = { "Ctrl+1", "Ctrl+2", "Ctrl+3" };
          for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
@@ -1343,13 +1350,15 @@ void EditorChrome::RenderToolbar()
       {
          for (const auto &mode : editModes)
          {
-            const bool active = (editor.m_gizmoOperation == mode.operation);
+            const bool active = (editor.m_gizmoOperation == mode.operation) && !editor.m_measure.IsActive();
             if (ToolButton(mode.icon, active))
                editor.SetGizmoOperation(mode.operation);
             Tip(mode.title, mode.shortcut);
             if (&mode != std::end(editModes) - 1)
                ImGui::SameLine(0.f, toolGap);
          }
+         ImGui::SameLine(0.f, toolGap);
+         MeasureToolButton();
       }
 
       // Snapping: magnet toggle (Shift+Tab) and a small chevron button opening the snapping popover
@@ -1511,15 +1520,15 @@ void EditorChrome::RenderToolbar()
       ImGui::BeginDisabled(!editor.CanPaste());
       if (ToolButton(ICON_LC_CLIPBOARD_PASTE))
          editor.PasteSelection(editor.GetViewportContentCenter());
-      Tip("Paste", "Ctrl+V", editor.CanPaste() ? nullptr : editor.m_table->IsLocked() ? "The table is locked" : editor.IsInspectMode() ? "Not available while inspecting" : "The clipboard is empty");
+      Tip("Paste", "Ctrl+V", editor.CanPaste() ? nullptr : editor.m_measure.IsActive() ? "Measure tool active" : editor.m_table->IsLocked() ? "The table is locked" : editor.IsInspectMode() ? "Not available while inspecting" : "The clipboard is empty");
       ImGui::EndDisabled();
 
       // Delete selection button, always visible but only enabled when there are selected parts
       ImGui::SameLine(0.f, toolGap);
-      ImGui::BeginDisabled(editor.m_selection.GetType() != Selection::S_EDITABLE || editor.m_table->IsLocked());
+      ImGui::BeginDisabled(editor.m_selection.GetType() != Selection::S_EDITABLE || editor.m_table->IsLocked() || editor.m_measure.IsActive());
       if (ToolButton(ICON_LC_TRASH_2))
          editor.DeleteSelection();
-      Tip("Delete Selection", "Delete", editor.m_table->IsLocked() ? "The table is locked" : editor.m_selection.GetType() != Selection::S_EDITABLE ? "Nothing selected" : nullptr);
+      Tip("Delete Selection", "Delete", editor.m_measure.IsActive() ? "Measure tool active" : editor.m_table->IsLocked() ? "The table is locked" : editor.m_selection.GetType() != Selection::S_EDITABLE ? "Nothing selected" : nullptr);
       ImGui::EndDisabled();
 
       // Part library import/export buttons
@@ -1659,6 +1668,18 @@ bool EditorChrome::ToolShelfVisible() const
       && editor.m_camMode != ViewMode::DesktopBackdrop;
 }
 
+void EditorChrome::MeasureToolButton()
+{
+   EditorUI &editor = m_editor;
+   const char *const refusal = editor.m_measure.IsActive() ? nullptr : MeasureTool::Refusal(editor);
+   const bool blocked = refusal != nullptr;
+   ImGui::BeginDisabled(blocked);
+   if (ToolButton(ICON_LC_RULER, editor.m_measure.IsActive()))
+      editor.m_measure.SetActive(editor, !editor.m_measure.IsActive());
+   Tip("Measure", nullptr, blocked ? refusal : "Drag to measure (inches, mm and VP units). Ctrl snaps to points, drag a midpoint for an angle. View only: nothing is saved.");
+   ImGui::EndDisabled();
+}
+
 void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
 {
    m_toolShelfDrawn = false; // Set once the shelf is really drawn: the toolbar keeps the tools whenever the shelf is hidden (too small, overlap, no viewport)
@@ -1682,7 +1703,7 @@ void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
    const float button = ToolButtonSize * dpi;
    const float sepHeight = ToolGroupGap * dpi;
    const float estWidth = button + 2.f * pad;
-   const float estHeight = 6.f * button + 4.f * gap + 2.f * sepHeight + 2.f * pad;
+   const float estHeight = 7.f * button + 5.f * gap + 2.f * sepHeight + 2.f * pad;
    // Do not overlap the nav cube / N-panel side (too narrow viewport) nor the F9 Adjust Last panel at the bottom left (last frame rect, if shown)
    if (viewportContent.Width() < estWidth + 220.f * dpi || pos.y + estHeight > viewportContent.y1 - 8.f * dpi)
       return;
@@ -1707,11 +1728,12 @@ void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
       // Edit modes
       for (const auto &mode : editModes)
       {
-         const bool active = (editor.m_gizmoOperation == mode.operation);
+         const bool active = (editor.m_gizmoOperation == mode.operation) && !editor.m_measure.IsActive();
          if (ToolButton(mode.icon, active))
             editor.SetGizmoOperation(mode.operation);
          Tip(mode.title, mode.shortcut);
       }
+      MeasureToolButton(); // Blender's Measure (ruler) tool
 
       // Separator
       {
@@ -1852,7 +1874,12 @@ void EditorChrome::RenderStatusOverlay()
    ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + ImGui::GetStyle().FramePadding.x, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
    const char *gizmoIcon = nullptr;
    const char *gizmoLabel = nullptr;
-   if (editor.m_gizmoOperation == ImGuizmo::OPERATION(0))
+   if (editor.m_measure.IsActive())
+   {
+      gizmoIcon = ICON_LC_RULER;
+      gizmoLabel = "Measure";
+   }
+   else if (editor.m_gizmoOperation == ImGuizmo::OPERATION(0))
    {
       gizmoIcon = ICON_LC_MOUSE_POINTER_2;
       gizmoLabel = "Select";
@@ -2087,6 +2114,8 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    else if (editor.m_plasticTrace.active)
       hints = { { "LMB", editor.m_plasticTrace.holes ? "Place Hole" : "Corner" }, { "Backspace", "Remove Last" }, { "H", editor.m_plasticTrace.holes ? "Outline" : "Holes" },
          { "Enter", "Close Loop" }, { "Esc", "Cancel" } };
+   else if (editor.m_measure.IsActive())
+      hints = { { "Drag", "Ruler" }, { "Ctrl", "Snap to Points" }, { "Drag Midpoint", "Add Angle" }, { "Shift+Drag", "New Ruler" }, { "Del", "Delete Ruler" }, { "Esc", "Leave" } };
    else if (editor.m_addPartType != eItemInvalid)
       hints = { { "LMB", editor.m_addWireRail ? "Place Wire Rail" : editor.m_addWireform ? "Place Metal Wire Guide" : "Place Part" }, { "Esc", "Cancel" } };
    else if (editor.m_pointEditPart && editor.m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editor.m_pointEditPart->GetEditable())->m_d.m_plasticGen)

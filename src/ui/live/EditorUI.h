@@ -12,6 +12,7 @@
 #include "editor/EditorUIPart.h"
 #include "editor/Selection.h"
 #include "editor/EditorChrome.h"
+#include "editor/Measure.h"
 #include "editor/OutlinerPanel.h"
 #include "editor/PartLibraryPanel.h"
 #include "editor/PinnedPanel.h"
@@ -76,6 +77,7 @@ class EditorUI final
    friend class RubberBetweenPosts;
    friend class PlasticFromAtlas;
    friend class ReferenceImage;
+   friend class MeasureTool;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -459,6 +461,7 @@ private:
    ReferenceImage m_refImage; // View > Reference Image: a scan under or over the playfield in the 3D views (view-only, kept in the table's settings file)
    int SecondaryViewOrdinal(int slot) const; // The secondary view of a panel slot among the view areas of the layout (0 = the first), for per view options
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
+   MeasureTool m_measure; // The Measure tool (Blender's Ruler): view-only rulers kept for the session
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
    bool m_addWireRail = false; // Same: a Wire Rail
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false, bool wireRail = false, const float *z = nullptr); // z: height of the part when its type has one

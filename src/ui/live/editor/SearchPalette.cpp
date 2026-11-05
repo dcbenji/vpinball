@@ -152,6 +152,8 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + (ed.IsLocalView() ? "Local View (on)" : "Local View"), "Numpad /  (US: / \\)", nullptr, [&ed]() { ed.ToggleLocalView(); });
    add("View" + sep + "Reference Image", "", nullptr, [&ed]() { ed.m_refImage.TogglePanel(); });
+   add("View" + sep + "Measure", "", [&ed]() { return ed.m_measure.IsActive() || MeasureTool::Refusal(ed) == nullptr; }, [&ed]() { ed.m_measure.SetActive(ed, !ed.m_measure.IsActive()); });
+   add("View" + sep + "Clear Rulers", "", [&ed]() { return ed.m_measure.HasRulers(); }, [&ed]() { ed.m_measure.Clear(ed); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Favorites", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Favorites); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });
@@ -182,7 +184,7 @@ void SearchPalette::BuildOperators()
    add("Edit" + sep + "Invert Selection", "Ctrl+I", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.InvertSelection(); });
    add("Edit" + sep + "Select Similar...", "Shift+G", [&ed]() { return ed.m_selectRename.CanSelectSimilar(); }, [&ed]() { ed.m_selectRename.OpenSimilar(); });
    add("Edit" + sep + "Batch Rename...", "Ctrl+F2", [&ed]() { return ed.m_selectRename.CanRename(); }, [&ed]() { ed.m_selectRename.OpenRename(); });
-   add("Edit" + sep + "Adjust Last Operation...", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None; },
+   add("Edit" + sep + "Adjust Last Operation...", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None && !ed.m_measure.IsActive(); },
       [&ed]()
       {
          ed.m_adjustPopupOpen = true;

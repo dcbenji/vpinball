@@ -83,6 +83,7 @@ private:
    void RenderToolbar();
    bool ToolShelfVisible() const; // Shelf enabled and allowed in the current state (it may still not fit, see m_toolShelfDrawn)
    void RenderStatusOverlay();
+   void MeasureToolButton(); // The Measure tool's button (tool shelf, or top toolbar when the shelf is not drawn)
    void RenderUndoHistory();
 
    EditorUI &m_editor;

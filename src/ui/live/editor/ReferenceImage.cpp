@@ -558,12 +558,14 @@ void ReferenceImage::RenderPanel(EditorUI &ed)
       ImGui::TextDisabled("%.2f x %.2f in", static_cast<float>(m_texW) / m_p.dpi, static_cast<float>(m_texH) / m_p.dpi);
       if (m_pick == 0)
       {
+         ImGui::BeginDisabled(ed.m_measure.IsActive()); // Both take the clicks of the 3D views: one at a time
          if (ImGui::Button("Scale from 2 Points..."))
          {
             m_pick = 1;
             m_realDistance = 0.f;
          }
-         ImGui::SetItemTooltip("Click two points on the image in the 3D Viewport, then type their real distance");
+         ImGui::EndDisabled();
+         ImGui::SetItemTooltip("%s", ed.m_measure.IsActive() ? "Not available while the Measure tool is on" : "Click two points on the image in the 3D Viewport, then type their real distance");
       }
       else if (m_pick < 3)
       {

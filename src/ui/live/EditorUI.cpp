@@ -281,6 +281,7 @@ void EditorUI::Close()
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
    m_renderer->SetViewShade(ViewShadeOptions {});
    EndLocalViews(); // A play session (or the editor closing) ends the Local Views
+   m_measure.SetActive(*this, false); // The rulers stay
 }
 
 void EditorUI::SetTable(PinTable *const table)
@@ -314,6 +315,8 @@ void EditorUI::SetTable(PinTable *const table)
    m_partLibrary.CancelPlacement();
    m_boxSelectActive = false;
    m_selectRename.Close();
+   m_measure.SetActive(*this, false);
+   m_measure.SetTable(*this, table->m_liveBaseTable != nullptr ? table->m_liveBaseTable : table); // Rulers are positions in one table (they stay over a play test of it)
    EndLocalViews(); // They belong to the previous table's parts
 }
 
@@ -2616,7 +2619,7 @@ void EditorUI::RenderUI()
    }
    Matrix3D transform;
    const bool isSelectionTransformValid = GetSelectionTransform(transform);
-   if (isSelectionTransformValid && !m_hadSelectionTransform && m_gizmoOperation == ImGuizmo::OPERATION(0) && !m_modal.active)
+   if (isSelectionTransformValid && !m_hadSelectionTransform && m_gizmoOperation == ImGuizmo::OPERATION(0) && !m_modal.active && !m_measure.IsActive())
       m_gizmoOperation = ImGuizmo::TRANSLATE; // A new selection shows the move gizmo (Esc hides it)
    m_hadSelectionTransform = isSelectionTransformValid;
    // A gizmo drag whose selection changed under the mouse (outliner click, undo,...) is over: the new selection must not follow it without an undo record
@@ -3063,6 +3066,7 @@ void EditorUI::RenderUI()
    const bool modalWasActive = m_modal.active;
    if (modalWasActive && m_fileOp == nullptr)
       UpdateModalTransform();
+   bool measureCanStart = false; // The Measure tool takes the press (the 3D Viewport's clicks are its own then)
    if (!io.WantCaptureMouse && m_viewportVisible && m_fileOp == nullptr && !modalWasActive) // Viewport mouse input: not with a panel maximized over it
    {
       // Trackpad: two finger scroll pans the view (Ctrl / Cmd + scroll zooms)
@@ -3181,7 +3185,8 @@ void EditorUI::RenderUI()
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
       // In drag point edit mode, click selects a drag point of the edited curve (shift toggles), dragging a
       // selected point moves the selected points in the table XY plane, drag box selects points
-      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered()
+      measureCanStart = m_measure.IsActive() && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate();
+      if (!m_measure.IsActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered()
          && !ImGuizmo::IsUsingViewManipulate()) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
@@ -3332,6 +3337,8 @@ void EditorUI::RenderUI()
       m_pointDragActive = false;
       m_plasticBow = PlasticFromAtlas::Bow(); // Same for a bow: it is only driven inside the gate, a stale one would jump to the cursor on the next press
    }
+   m_measure.UpdateMain(*this, overlayDrawList, measureCanStart); // The rulers, and the tool's mouse
+   m_measure.EndFrame(*this); // After the secondary views and the 3D Viewport had their turn
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
@@ -3481,6 +3488,10 @@ void EditorUI::RenderUI()
             m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
          else if (m_refImage.PickActive())
             m_refImage.CancelPick();
+         else if (m_measure.OnEscape(*this))
+         {
+            // Cancelled the ruler being dragged, or left the Measure tool
+         }
          else if (m_plasticTrace.active && m_plasticTrace.measure != 0)
             m_plasticTrace.measure = 0; // Leave measuring only, the add goes on
          else if (m_plasticTrace.active)
@@ -3533,8 +3544,10 @@ void EditorUI::RenderUI()
          ToggleSnapping(); // Blender's snapping toggle (no ImGui keyboard navigation here)
       else if (ImGui::IsKeyPressed(ImGuiKey_F9, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
-         // Adjust Last Operation as a popup at the mouse
-         if (m_lastOp.type != LastOperation::Type::None)
+         // Adjust Last Operation as a popup at the mouse (it would re-apply a transform to the selection: not under the Measure tool)
+         if (m_measure.IsActive())
+            Report("Measure tool active");
+         else if (m_lastOp.type != LastOperation::Type::None)
          {
             m_adjustPopupOpen = true;
             m_adjustPopupJustOpened = true;
@@ -3610,10 +3623,15 @@ void EditorUI::RenderUI()
          if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
             PasteSelection(ImGui::GetMousePos());
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+      else if (ImGui::IsKeyPressed(ImGuiKey_Delete) || (m_measure.IsActive() && ImGui::IsKeyPressed(ImGuiKey_X)))
       {
          if (!io.KeyAlt && !io.KeyCtrl && !io.KeyShift)
-            DeleteAction();
+         {
+            if (m_measure.IsActive())
+               m_measure.OnDelete(*this); // In the Measure tool Del / X only ever act on rulers (nothing selected: nothing happens)
+            else
+               DeleteAction();
+         }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
       {
@@ -4011,14 +4029,14 @@ bool EditorUI::CanPaste() const
 {
    const bool can = m_pointEditPart ? (m_pointEditCenter ? m_centerSelected && VPX::EditorClipboard::HasPoint() : m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
                                     : VPX::EditorClipboard::HasParts();
-   return can && !m_table->IsLocked() && !IsInspectMode();
+   return can && !m_table->IsLocked() && !IsInspectMode() && !m_measure.IsActive();
 }
 
-bool EditorUI::CanDuplicate() const { return !m_pointEditPart && !m_multiSel.empty() && !IsInspectMode() && !m_table->IsLocked(); }
+bool EditorUI::CanDuplicate() const { return !m_pointEditPart && !m_multiSel.empty() && !IsInspectMode() && !m_table->IsLocked() && !m_measure.IsActive(); }
 
 bool EditorUI::CanDelete() const
 {
-   if (m_table->IsLocked())
+   if (m_table->IsLocked() || m_measure.IsActive())
       return false;
    return m_pointEditPart ? !m_pointSel.empty() : m_selection.GetType() == Selection::S_EDITABLE;
 }
@@ -4028,6 +4046,11 @@ bool EditorUI::CanSelect() const { return !m_table->IsLocked() && m_fileOp == nu
 void EditorUI::DuplicateSelection()
 {
    // Duplicate the selected parts (through the editor clipboard) at the mouse position and grab them
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (!CanDuplicate())
       return;
    const int grabSlot = TransformViewSlot();
@@ -4067,10 +4090,15 @@ void EditorUI::DuplicateSelection()
       SetGizmoOperation(ImGuizmo::TRANSLATE);
 }
 
-bool EditorUI::CanMirror() const { return CanDuplicate(); }
+bool EditorUI::CanMirror() const { return CanDuplicate() && !m_measure.IsActive(); }
 
 void EditorUI::StartMirrorPrompt()
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (!CanMirror())
    {
       Report(m_table->IsLocked() ? "Mirror: not available (table locked)"
@@ -4132,6 +4160,11 @@ bool EditorUI::HandleMirrorPrompt()
 // can not be mirrored honestly (MirrorParts::Refusal) are left out and named in the message; the rest is mirrored. One undo step for all of it.
 void EditorUI::MirrorSelection(const int axisIndex, const bool aboutMedian, const bool duplicate)
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    using MirrorParts::Axis;
    m_mirrorPending = false; // From the prompt, the menu or the palette
    if (!CanMirror())
@@ -4226,6 +4259,11 @@ void EditorUI::MirrorSelection(const int axisIndex, const bool aboutMedian, cons
 
 void EditorUI::DeleteAction()
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (m_pointEditPart)
       DeleteSelectedPoints();
    else
@@ -4935,6 +4973,11 @@ void EditorUI::CopySelection()
 
 void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (m_table->IsLocked() || IsInspectMode())
       return;
    if (m_pointEditPart)
@@ -5202,6 +5245,11 @@ void EditorUI::DropDeletedPostRefs(const vector<IEditable *> &deleted)
 
 void EditorUI::DeleteSelection()
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (m_table->IsLocked() || IsInspectMode())
       return;
    if (m_pointEditPart) // Toolbar delete while editing drag points: delete the points, the edited part must stay alive
@@ -5698,6 +5746,7 @@ void EditorUI::BeginModalTransform(ModalOp op)
       return;
    if (viewSlot < 0 && m_camMode == ViewMode::PreviewCam)
       m_camMode = ViewMode::EditorCam;
+   m_measure.SetActive(*this, false);
    const ImGuizmo::OPERATION savedGizmo = m_gizmoOperation;
    m_gizmoOperation = ImGuizmo::OPERATION(0);
    m_modal = ModalTransform();
@@ -6506,6 +6555,7 @@ void EditorUI::OrbitStep(const bool yaw, const float sign)
 
 void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
 {
+   m_measure.SetActive(*this, false); // Another tool (Select included) leaves the Measure tool
    if (operation == ImGuizmo::OPERATION(0))
    {
       m_gizmoOperation = operation;
@@ -6617,6 +6667,11 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds, const LocalViewParts *local) 
 // Alt+G / Alt+S / Alt+R: one undo step for the reset (the transform funnel itself does not record)
 void EditorUI::ClearSelectionTransform(const Matrix3D &transform, bool clearPosition, bool clearScale, bool clearRotation, const char *label)
 {
+   if (m_measure.IsActive())
+   {
+      Report("Measure tool active");
+      return;
+   }
    if (m_table->m_liveBaseTable == nullptr)
    {
       m_undo.BeginUndo();
@@ -7773,6 +7828,11 @@ bool EditorUI::RenderAdjustParameters()
 
 void EditorUI::RenderAdjustPanel()
 {
+   if (m_measure.IsActive())
+   {
+      m_adjustPopupOpen = false; // Under the Measure tool the panel is off (a popup already open closes); the last operation stays adjustable afterwards
+      return;
+   }
    // The operation can be adjusted as long as it is the last undo step and the selection is the one it was done on
    if (m_lastOp.type != LastOperation::Type::None
       && (m_modal.active || m_pointEditPart != nullptr || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId || m_multiSel != m_lastOp.selection))
@@ -7953,6 +8013,8 @@ bool EditorUI::CanRunCursorOp(const CursorOp op) const
 {
    if (IsInspectMode())
       return false;
+   if (m_measure.IsActive() && (op == CursorOp::SelectionToCursor || op == CursorOp::SelectionToCursorKeepOffset || op == CursorOp::SelectionToGrid))
+      return false; // They move parts (the cursor itself can still be moved)
    switch (op)
    {
    case CursorOp::CursorToWorldOrigin:
@@ -7970,7 +8032,11 @@ bool EditorUI::CanRunCursorOp(const CursorOp op) const
 void EditorUI::RunCursorOp(const CursorOp op, const int viewSlot)
 {
    if (!CanRunCursorOp(op))
+   {
+      if (m_measure.IsActive() && (op == CursorOp::SelectionToCursor || op == CursorOp::SelectionToCursorKeepOffset || op == CursorOp::SelectionToGrid))
+         Report("Measure tool active");
       return;
+   }
    const float grid = max(m_snapMove, 1e-3f); // The move increment of the snapping settings
    const auto snap = [grid](const float v) { return roundf(v / grid) * grid; };
    switch (op)

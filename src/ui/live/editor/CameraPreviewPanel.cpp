@@ -299,7 +299,8 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
    const ImGuiIO &io = ImGui::GetIO();
    EditorUI &e = m_editor;
    const bool viewBlocked = GameOwnsInput() || e.m_camMode == ViewMode::DesktopBackdrop || e.m_modal.active || e.m_fileOp != nullptr;
-   const bool blocked = viewBlocked || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr;
+   const bool blocked = viewBlocked || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr
+      || e.m_measure.IsActive(); // (the Measure tool takes the clicks, see DrawMeasure; Shift + right click still places the 3D cursor)
    if (m_navDragging || blocked)
       m_clickPending = false;
    else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver()) // Not a press on the gizmo
@@ -325,18 +326,36 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
       return;
    view.rectMin = imgMin;
    view.rectSize = imgSize;
-   if (!m_settings.freeOrbit) // A player view shows the parts of its own player mode (as the renderer sets it for the request), the orbit camera the editor view's
-   {
-      const ViewSetupID setup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : e.m_table->GetViewMode();
-      view.visibilityMask = setup == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
-         : setup == BG_FSS ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS : PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
-   }
+   view.visibilityMask = PickVisibilityMask();
    view.local = &m_local; // Only what the view shows can be picked
-   view.hiddenInPlay = m_settings.wireframe ? m_settings.shade.hiddenWire : m_settings.solid ? m_settings.shade.hiddenSolid : m_settings.shade.hiddenPbr;
+   view.hiddenInPlay = PickHiddenInPlay();
    if (select)
       e.SelectAtPoint(end, &view);
    if (placeCursor)
       e.Place3DCursor(end, &view);
+}
+
+unsigned int CameraPreviewPanel::PickVisibilityMask() const
+{
+   if (m_settings.freeOrbit) // A player view shows the parts of its own player mode (as the renderer sets it for the request), the orbit camera the editor view's
+      return 0;
+   const ViewSetupID setup = m_view >= 0 ? static_cast<ViewSetupID>(m_view) : m_editor.m_table->GetViewMode();
+   return setup == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
+      : setup == BG_FSS ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS : PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP;
+}
+
+bool CameraPreviewPanel::PickHiddenInPlay() const
+{
+   return m_settings.wireframe ? m_settings.shade.hiddenWire : m_settings.solid ? m_settings.shade.hiddenSolid : m_settings.shade.hiddenPbr;
+}
+
+void CameraPreviewPanel::DrawMeasure(const Matrix3D &mvp, const ImVec2 &imgMin, const ImVec2 &imgSize, const bool hovered, ImDrawList *drawList)
+{
+   // The Measure tool's rulers over the image, and its mouse (a click is a ruler's here, see HandleSelectInput)
+   const ImGuiIO &io = ImGui::GetIO();
+   EditorUI &e = m_editor;
+   const bool canStart = hovered && !m_navDragging && !GameOwnsInput() && !e.m_modal.active && e.m_fileOp == nullptr && !(e.m_navAltMiddleButton && io.KeyAlt);
+   e.m_measure.UpdateImage(e, m_slot, mvp, imgMin, imgSize, PickVisibilityMask(), &m_local, PickHiddenInPlay(), drawList, canStart);
 }
 
 void CameraPreviewPanel::HandleViewKeys(const float aspect)
@@ -629,6 +648,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                view.local = &m_local;
                m_editor.DrawSelectionLines(drawList, view);
                m_editor.DrawCursor3DInView(drawList, view);
+               DrawMeasure(view.modelViewProj, imgMin, view.rectSize, imgHovered, drawList);
                // The camera and rect for the gizmo and the G / R / S modal transforms (see EditorUI::RenderUI)
                EditorUI::SecondaryViewInfo &info = m_editor.m_viewInfo[m_slot];
                if (renderer->GetEditorViewMatrices(m_slot, info.view, info.proj))

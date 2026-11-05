@@ -513,11 +513,16 @@ void SelectRename::RenderSimilarPopup()
 bool SelectRename::CanRename() const
 {
    const EditorUI &ed = m_editor;
-   return !ed.IsInspectMode() && !ed.m_table->IsLocked() && ed.m_fileOp == nullptr && ed.m_pointEditPart == nullptr && !ed.m_multiSel.empty();
+   return !ed.IsInspectMode() && !ed.m_table->IsLocked() && ed.m_fileOp == nullptr && ed.m_pointEditPart == nullptr && !ed.m_multiSel.empty() && !ed.m_measure.IsActive();
 }
 
 void SelectRename::OpenRename()
 {
+   if (m_editor.m_measure.IsActive())
+   {
+      m_editor.Report("Measure tool active");
+      return;
+   }
    if (!CanRename())
       return;
    if (m_ops.empty())

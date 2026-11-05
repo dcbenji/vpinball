@@ -89,6 +89,9 @@ private:
    void WriteBack(); // Settings to the layout leaf
    void HandleOrbitInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered, bool active);
    void HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered);
+   unsigned int PickVisibilityMask() const; // Player mode visibility of what the view shows (0: the editor view's)
+   bool PickHiddenInPlay() const; // The view's Hidden in Play option
+   void DrawMeasure(const Matrix3D &mvp, const ImVec2 &imgMin, const ImVec2 &imgSize, bool hovered, ImDrawList *drawList); // The Measure tool's rulers and mouse in the view
    void HandleViewKeys(float aspect);
    bool GameOwnsInput() const;
    void FrameBounds(const FRect3D &bounds, float aspect);
