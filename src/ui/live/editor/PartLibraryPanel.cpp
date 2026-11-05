@@ -38,48 +38,6 @@
 
 #include <miniz/miniz.h>
 
-namespace
-{
-
-// Decompose a transform into the position/scale/rotation components used by the parts'
-// SetTransform (same decomposition as EditorUI::SetSelectionTransform)
-void ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
-{
-   const Vertex3Ds right(transform._11, transform._12, transform._13);
-   const Vertex3Ds up(transform._21, transform._22, transform._23);
-   const Vertex3Ds dir(transform._31, transform._32, transform._33);
-   scale.Set(max(right.Length(), 1e-8f), max(up.Length(), 1e-8f), max(dir.Length(), 1e-8f)); // Clamp to avoid division by zero
-
-   transform._11 /= scale.x; // Normalize transform to evaluate rotation
-   transform._12 /= scale.x;
-   transform._13 /= scale.x;
-   transform._21 /= scale.y;
-   transform._22 /= scale.y;
-   transform._23 /= scale.y;
-   transform._31 /= scale.z;
-   transform._32 /= scale.z;
-   transform._33 /= scale.z;
-
-   pos.Set(transform._41, transform._42, transform._43);
-
-   // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
-   const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
-   if (sy > 1e-6f)
-   {
-      rot.x = -RADTOANG(atan2f(transform._32, transform._33));
-      rot.y = -RADTOANG(atan2f(-transform._31, sy));
-      rot.z = -RADTOANG(atan2f(transform._21, transform._11));
-   }
-   else
-   {
-      rot.x = -RADTOANG(atan2f(transform._23, transform._22));
-      rot.y = -RADTOANG(atan2f(-transform._31, sy));
-      rot.z = 0.f;
-   }
-}
-
-}
-
 namespace VPX::EditorUI
 {
 
@@ -2195,7 +2153,7 @@ void PartLibraryPanel::PlaceAt(const Vertex2D &pos)
          if ((m_previewUIParts[i]->GetTransform(transform) & EditorUIPart::TM_TransZ) != 0)
          {
             vec3 p, s, r;
-            ExtractTRS(transform, p, s, r);
+            EditorUI::ReadPartTransform(*m_previewUIParts[i], transform, p, s, r);
             p.z += restZ - minZ;
             m_previewUIParts[i]->SetTransform(p, s, r);
          }

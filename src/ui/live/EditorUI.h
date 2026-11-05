@@ -617,7 +617,10 @@ private:
    vec3 GetTransformPivotPoint() const; // Table coordinates; the gizmo and the mouse of a modal transform work around it (with Individual Origins, the median)
 
    void BeginSelectionXform(SelectionXform &xform) const;
-   void ApplySelectionXform(const SelectionXform &xform, const XformOp &op);
+   // reference: per part, the angles a Primitive's turned matrix is read back nearest to (see EulerFromRotation). By default the ones it stores now (the last frame of a
+   // drag, Blender's behaviour), the snapshot's for an op that does not turn (the restore of a cancel)
+   void ApplySelectionXform(const SelectionXform &xform, const XformOp &op, const vector<vec3> *reference = nullptr);
+   static Matrix3D TurnedAxes(const SelectionXform::Part &part, const XformOp &op); // A Primitive's unit axes under a Rotate op
    void ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec3 &pos, const vec3 &scale, const vec3 &rot);
    // The gizmo of a selection that does not transform as one part (several parts, drag points): it sits on the pivot and has no scale, what it does is read back as an XformOp
    struct GroupGizmo
@@ -733,6 +736,9 @@ private:
    void RenderCursorMenu();
    bool GetSelectionCenter(vec3 &center, int viewSlot) const; // Median of the origins of the selected parts (or the points) the view shows
    void ApplyPartTransform(const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot); // One part under a transform, with the redraw and physics follow-up
+   // A part's matrix (as its GetTransform gives it) read back as the position, size and rotation its SetTransform takes. A Primitive keeps the Rot X / Y / Z nearest
+   // to the ones it stores, also at the gimbal lock (Rot Y +-90)
+   static void ReadPartTransform(EditorUIPart &part, const Matrix3D &transform, vec3 &pos, vec3 &scale, vec3 &rot);
    void PlaceNewPartAtCursor(); // Add part mode armed (outside the desktop backdrop): the part is created at once at the 3D cursor
    float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
    void SetFov(float fovY);

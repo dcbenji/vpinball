@@ -72,6 +72,7 @@ namespace VPX::EditorUI
 namespace
 {
    float YawOfRotation(const Matrix3D &l, float &step); // Defined with the transform helpers below
+   constexpr float kMaxLastOpAngle = 36000.f; // Adjust Last Operation's Rotate Angle: a hundred turns either way
 }
 
 // Vertical field of view (in degrees) of the perspective editor camera
@@ -5699,8 +5700,55 @@ namespace
       }
       return result;
    }
-   // Decompose a transform into the position/scale/rotation components used by the parts' SetTransform
-   void ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
+   inline float WrapAngle(const float a) { return a - 2.f * static_cast<float>(M_PI) * floorf((a + static_cast<float>(M_PI)) / (2.f * static_cast<float>(M_PI))); } // To [-pi, pi)
+   inline float CompatibleAngle(const float a, const float ref) { return ref + WrapAngle(a - ref); } // a + 2 pi n, nearest to ref
+   // Rotation angles (degrees) of a rotation matrix in the parts' order, R = RotZ(z) * RotY(y) * RotX(x) (a Primitive's Rot X / Y / Z, see PrimitiveUIPart::GetTransform).
+   // At y = +-90 (gimbal lock) the matrix only gives x + z (y = 90) or x - z (y = -90), and close to it z only up to the matrix' own precision. Of the angles which rebuild
+   // the matrix, it takes the ones nearest to prev when given (Blender's compatible Euler: read back against the angles it stores, a typed angle does not move; against
+   // the last frame's, a drag never jumps to the other solution (x + pi, pi - y, z + pi), though near the lock x and z turn up to 1 / cos y times as fast as the part),
+   // else y within +-90 and, at the singularity, all of it on x and z 0 (Blender's convention)
+   vec3 EulerFromRotation(const Matrix3D &m, const vec3 *prev)
+   {
+      const float cy = sqrtf(m._11 * m._11 + m._21 * m._21); // |cos y|
+      const float det = m._11 * (m._22 * m._33 - m._23 * m._32) - m._12 * (m._21 * m._33 - m._23 * m._31) + m._13 * (m._21 * m._32 - m._22 * m._31);
+      if (det < 0.f) // A mirror (a negative scale) is no rotation: read back as the editor always did (S X -1 on an unturned part gives Rot Z 180)
+      {
+         if (cy > 1e-6f)
+            return vec3(-RADTOANG(atan2f(m._32, m._33)), -RADTOANG(atan2f(-m._31, cy)), -RADTOANG(atan2f(m._21, m._11)));
+         return vec3(-RADTOANG(atan2f(m._23, m._22)), -RADTOANG(atan2f(-m._31, cy)), 0.f);
+      }
+      const float y1 = atan2f(m._31, cy);
+      // t = x + k z, k the sign of sin y: defined at the singularity too, and well conditioned near it (these sums take out the factor 1 + |sin y|)
+      const float k = m._31 >= 0.f ? 1.f : -1.f;
+      const float t = k > 0.f ? atan2f(m._12 + m._23, m._22 - m._13) : atan2f(m._23 - m._12, m._22 + m._13);
+      const float z1 = atan2f(-m._21, m._11);
+      const float tol = 16.f * FLT_EPSILON / max(cy, 1e-30f); // Moving z by up to tol (x following on t) changes the matrix by ~16 epsilon
+      if (prev == nullptr)
+      {
+         const float z = fabsf(z1) <= tol ? 0.f : z1;
+         return vec3(RADTOANG(WrapAngle(t - k * z)), RADTOANG(y1), RADTOANG(z));
+      }
+      const vec3 p(ANGTORAD(prev->x), ANGTORAD(prev->y), ANGTORAD(prev->z));
+      const float zp = p.z + k * 0.5f * WrapAngle(t - (p.x + k * p.z)); // The previous angles moved onto x + k z = t (the nearest point)
+      vec3 best;
+      float bestDist = FLT_MAX;
+      for (int i = 0; i < 2; i++) // The two solutions: (x, y, z) and (x + pi, pi - y, z + pi)
+      {
+         const float y = CompatibleAngle(i == 0 ? y1 : static_cast<float>(M_PI) - y1, p.y);
+         const float zr = CompatibleAngle(i == 0 ? z1 : z1 + static_cast<float>(M_PI), zp);
+         const float z = clamp(zp, zr - tol, zr + tol);
+         const float x = CompatibleAngle(t - k * z, p.x);
+         const float dist = fabsf(x - p.x) + fabsf(y - p.y) + fabsf(z - p.z);
+         if (dist < bestDist)
+         {
+            bestDist = dist;
+            best = vec3(x, y, z);
+         }
+      }
+      return vec3(RADTOANG(best.x), RADTOANG(best.y), RADTOANG(best.z));
+   }
+   // Decompose a transform into the position/scale/rotation components used by the parts' SetTransform. The rotation stays nearest to prevRot when given (see EulerFromRotation)
+   void ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot, const vec3 *prevRot = nullptr)
    {
       const Vertex3Ds right(transform._11, transform._12, transform._13);
       const Vertex3Ds up(transform._21, transform._22, transform._23);
@@ -5718,21 +5766,18 @@ namespace
       transform._33 /= scale.z;
 
       pos.Set(transform._41, transform._42, transform._43);
-
-      // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
-      const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
-      if (sy > 1e-6f)
-      {
-         rot.x = -RADTOANG(atan2f(transform._32, transform._33));
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = -RADTOANG(atan2f(transform._21, transform._11));
-      }
-      else
-      {
-         rot.x = -RADTOANG(atan2f(transform._23, transform._22));
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = 0.f;
-      }
+      rot = EulerFromRotation(transform, prevRot);
+   }
+   // The angles a part stores when it has all three (a Primitive's Rot X / Y / Z): its matrix is read back nearest to them
+   bool GetPartEuler(EditorUIPart &part, vec3 &rot)
+   {
+      Matrix3D unused;
+      constexpr int full = EditorUIPart::TM_RotX | EditorUIPart::TM_RotY;
+      if ((static_cast<int>(part.GetTransform(unused)) & full) != full || part.GetEditable()->GetItemType() != eItemPrimitive)
+         return false;
+      const Primitive *const prim = static_cast<const Primitive *>(part.GetEditable());
+      rot.Set(prim->m_d.m_aRotAndTra[0], prim->m_d.m_aRotAndTra[1], prim->m_d.m_aRotAndTra[2]);
+      return true;
    }
    // The part of a rotation matrix about the table Z axis (radians): all of it for a rotation about Z, none for one about an axis in the table plane, the axis' Z share between.
    // A matrix only gives the angle up to a half turn: the same rotation is also angle + 2 pi m about the same axis, so the share is only known up to steps of 2 pi x the Z share
@@ -6207,7 +6252,7 @@ void EditorUI::UpdateModalTransform()
    {
       const vec3 k = m_modal.axis >= 0 ? frameAxis(m_modal.axis) : m_modal.freeZ ? TableAxis(2) : dir; // Local: the active part's axis (the mouse turns about it)
       const float facing = k.Dot(dir) >= 0.f ? 1.f : -1.f;
-      float angle = hasValue ? ANGTORAD(value) : -(curAngle - m_modal.startAngle) * facing;
+      float angle = hasValue ? ANGTORAD(clamp(value, -kMaxLastOpAngle, kMaxLastOpAngle)) : -(curAngle - m_modal.startAngle) * facing; // Typed: what F9's Angle field holds
       if (!hasValue && IsSnapActive(SnapKind::Rotate) && m_snapRotate > 0.f)
       {
          angle = ANGTORAD(roundf(RADTOANG(angle) / m_snapRotate) * m_snapRotate);
@@ -6966,7 +7011,7 @@ void EditorUI::BeginSelectionXform(SelectionXform &xform) const
       SelectionXform::Part part;
       part.part = uiPart;
       part.mask = mask;
-      ExtractTRS(start, part.pos, part.scale, part.rot);
+      ReadPartTransform(*uiPart, start, part.pos, part.scale, part.rot);
       part.axes = Matrix3D::MatrixIdentity();
       const float s[3] = { 1.f / part.scale.x, 1.f / part.scale.y, 1.f / part.scale.z };
       for (int i = 0; i < 3; i++)
@@ -6976,7 +7021,18 @@ void EditorUI::BeginSelectionXform(SelectionXform &xform) const
    }
 }
 
-void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &op)
+Matrix3D EditorUI::TurnedAxes(const SelectionXform::Part &part, const XformOp &op)
+{
+   if (!op.ownFrame)
+      return part.axes * op.linear;
+   Matrix3D toFrame = Matrix3D::MatrixIdentity();
+   for (int i = 0; i < 3; i++)
+      for (int j = 0; j < 3; j++)
+         toFrame.m[i][j] = part.axes.m[j][i];
+   return part.axes * (toFrame * op.linear * part.axes);
+}
+
+void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &op, const vector<vec3> *reference)
 {
    if (m_pointEditPart != nullptr)
    {
@@ -7005,8 +7061,10 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
       return;
    }
-   for (const SelectionXform::Part &part : xform.parts)
+   const bool turns = memcmp(op.linear.m, Matrix3D::MatrixIdentity().m, sizeof(op.linear.m)) != 0;
+   for (size_t index = 0; index < xform.parts.size(); index++)
    {
+      const SelectionXform::Part &part = xform.parts[index];
       Matrix3D l = op.linear;
       vec3 move = op.move;
       if (op.ownFrame)
@@ -7027,12 +7085,17 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
          if ((part.mask & EditorUIPart::TM_RotAny) != 0)
          {
             float step;
-            const Matrix3D rotation = (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY) ? l
+            const bool full = (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
+            const Matrix3D rotation = full ? l
                : ZRotation(!op.hasYaw ? YawOfRotation(l, step)
                        : op.ownFrame  ? op.angle * part.axes.MultiplyVectorNoTranslate(op.axis).z // The turn about this part's own axis: its table Z share
                                       : op.yaw);
-            vec3 unusedPos, unusedScale;
-            ExtractTRS(part.axes * rotation, unusedPos, unusedScale, rot);
+            vec3 unusedPos, unusedScale, current;
+            const vec3 *const ref = !full ? nullptr
+               : reference != nullptr                                 ? &(*reference)[index]
+               : turns && GetPartEuler(*part.part, current)           ? &current
+                                                                      : &part.rot;
+            ExtractTRS(part.axes * rotation, unusedPos, unusedScale, rot, ref);
          }
       }
       else if (op.kind == XformKind::Scale)
@@ -7105,10 +7168,16 @@ void EditorUI::ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec
    }
 }
 
+void EditorUI::ReadPartTransform(EditorUIPart &part, const Matrix3D &transform, vec3 &pos, vec3 &scale, vec3 &rot)
+{
+   vec3 stored;
+   ExtractTRS(transform, pos, scale, rot, GetPartEuler(part, stored) ? &stored : nullptr);
+}
+
 void EditorUI::ApplyPartTransform(const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, const bool clearPos, const bool clearScale, const bool clearRot)
 {
    vec3 pos, scale, rot;
-   ExtractTRS(partTransform, pos, scale, rot);
+   ReadPartTransform(*part, partTransform, pos, scale, rot);
    if (clearPos)
       pos.Set(0.f, 0.f, 0.f);
    if (clearScale)
@@ -7647,8 +7716,61 @@ void EditorUI::ApplyLastOperation()
       break;
    case LastOperation::Type::Rotate:
    {
-      const XformOp op = OrientedXform(XformKind::Rotate, m_lastOp.orientation, m_lastOp.viewFrame, m_lastOp.axis, false, ANGTORAD(m_lastOp.angle), m_lastOp.axisView, m_lastOp.xform.parts.size());
-      ApplySelectionXform(m_lastOp.xform, op);
+      if (!std::isfinite(m_lastOp.angle))
+         return;
+      const float angle = clamp(m_lastOp.angle, -kMaxLastOpAngle, kMaxLastOpAngle);
+      const auto turn = [this](const float a)
+      { return OrientedXform(XformKind::Rotate, m_lastOp.orientation, m_lastOp.viewFrame, m_lastOp.axis, false, ANGTORAD(a), m_lastOp.axisView, m_lastOp.xform.parts.size()); };
+      // From the snapshot: a Primitive's angles follow the turn in steps of at most a degree, from the snapshot's, as a slow drag takes them (not from the stored
+      // ones, which hold the previous value). After the first whole turn, a part whose angles it moved by whole turns only takes the same again for each further
+      // turn (the read-back gives the same against angles moved by whole turns), the others (a part at the lock, whose X and Z slide along X +- Z) walk every turn
+      vector<vec3> reference;
+      vector<char> walking; // The parts with all three angles that are still walked
+      for (const SelectionXform::Part &part : m_lastOp.xform.parts)
+      {
+         reference.push_back(part.rot);
+         walking.push_back((part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY));
+      }
+      const auto walk = [&](const float from, const float to, const bool toEnd) // |to - from| <= 360; the last step is left to the caller unless toEnd
+      {
+         const int steps = max(1, static_cast<int>(ceilf(fabsf(to - from))));
+         for (int i = 1; i < (toEnd ? steps + 1 : steps); i++)
+         {
+            const XformOp op = turn(from + (to - from) * static_cast<float>(i) / static_cast<float>(steps));
+            for (size_t j = 0; j < m_lastOp.xform.parts.size(); j++)
+               if (walking[j])
+               {
+                  vec3 unusedPos, unusedScale, rot;
+                  ExtractTRS(TurnedAxes(m_lastOp.xform.parts[j], op), unusedPos, unusedScale, rot, &reference[j]);
+                  reference[j] = rot;
+               }
+         }
+      };
+      const int turns = static_cast<int>(truncf(angle / 360.f)); // |turns| <= 100
+      const float full = turns > 0 ? 360.f : -360.f;
+      if (turns != 0)
+      {
+         const vector<vec3> start(reference);
+         walk(0.f, full, true);
+         for (size_t j = 0; j < reference.size(); j++)
+         {
+            if (!walking[j])
+               continue;
+            const vec3 d = reference[j] - start[j];
+            const vec3 whole(360.f * roundf(d.x / 360.f), 360.f * roundf(d.y / 360.f), 360.f * roundf(d.z / 360.f));
+            if (fabsf(d.x - whole.x) < 0.01f && fabsf(d.y - whole.y) < 0.01f && fabsf(d.z - whole.z) < 0.01f)
+            {
+               reference[j] = start[j] + whole * static_cast<float>(abs(turns));
+               walking[j] = false;
+            }
+         }
+         for (int t = 1; t < abs(turns); t++)
+            walk(full * static_cast<float>(t), full * static_cast<float>(t + 1), true);
+         for (size_t j = 0; j < walking.size(); j++)
+            walking[j] = (m_lastOp.xform.parts[j].mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
+      }
+      walk(full * static_cast<float>(abs(turns)), angle, false);
+      ApplySelectionXform(m_lastOp.xform, turn(angle), &reference);
       return;
    }
    case LastOperation::Type::Scale:
@@ -7843,7 +7965,7 @@ bool EditorUI::RenderAdjustParameters()
    case LastOperation::Type::Rotate:
    {
       row("Angle");
-      changed |= ImGui::DragFloat("##Angle", &m_lastOp.angle, 0.5f, 0.f, 0.f, "%.1f deg");
+      changed |= ImGui::DragFloat("##Angle", &m_lastOp.angle, 0.5f, -kMaxLastOpAngle, kMaxLastOpAngle, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
       row("Axis");
       static constexpr const char *axes[] = { "View", "X", "Y", "Z" };
       int axis = m_lastOp.axis + 1;
