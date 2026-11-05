@@ -1678,16 +1678,14 @@ void EditorChrome::RenderStatusOverlay()
       {
          using PV = EditorUI::PredefinedView;
          const bool editorCam = editor.m_camMode == ViewMode::EditorCam;
-         if (ImGui::MenuItem("Perspective", nullptr, editorCam && editor.m_perspectiveCam) && !(editorCam && editor.m_perspectiveCam))
-         {
-            editor.m_camMode = ViewMode::EditorCam; // As Numpad 5
-            editor.m_perspectiveCam = true;
-         }
-         if (ImGui::MenuItem("Orthographic", "Numpad 5", editorCam && !editor.m_perspectiveCam) && !(editorCam && !editor.m_perspectiveCam))
-         {
-            editor.m_camMode = ViewMode::EditorCam;
-            editor.m_perspectiveCam = false;
-         }
+         // The projection the view really has: the Preview Camera is a perspective view, the Desktop Backdrop an orthographic one
+         const bool perspective = editor.m_camMode == ViewMode::PreviewCam || (editorCam && editor.m_perspectiveCam);
+         const bool orthographic = editor.m_camMode == ViewMode::DesktopBackdrop || (editorCam && !editor.m_perspectiveCam);
+         // Picking the other projection is what Numpad 5 does (it starts from that real projection in every camera mode)
+         if (ImGui::MenuItem("Perspective", nullptr, perspective) && !perspective)
+            editor.TogglePerspectiveCam();
+         if (ImGui::MenuItem("Orthographic", "Numpad 5", orthographic) && !orthographic)
+            editor.TogglePerspectiveCam();
          ImGui::Separator();
          const auto viewItem = [&](const char *label, const char *keys, PV view)
          {
