@@ -458,6 +458,7 @@ private:
    int m_vsmVirtRes = 8192; // ortho virtual map edge in texels (Player_PBRShadowMapSize)
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
    float m_pbrDimLightCutoff = 0.f; // PBR dim light cutoff (Player_PBRDimLightCutoff), 0 = off
+   bool m_pbrShadowFast = true; // shadow filter early-out + importance gate (Player_PBRShadowFastFilter)
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame
    int m_vsmPageBudget = 32; // dirty pages rendered per frame (Player_PBRShadowPagesPerFrame)
    unsigned int m_vsmRebuildSerial = 0; // bumped when the shadow caster content changed (every cached map and shadow bake is stale)

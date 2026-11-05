@@ -1663,6 +1663,7 @@ void Renderer::UpdateVirtualShadowMaps()
    m_vsmPoolPages = m_table->GetSettings().GetPlayer_PBRShadowPoolPages();
    m_vsmVirtRes = m_table->GetSettings().GetPlayer_PBRShadowMapSize();
    m_vsmMaxLights = std::clamp(m_table->GetSettings().GetPlayer_PBRShadowMaxLights(), 1, VSM::MAX_LIGHTS);
+   m_pbrShadowFast = m_table->GetSettings().GetPlayer_PBRShadowFastFilter();
    m_pbrDimLightCutoff = m_table->GetSettings().GetPlayer_PBRDimLightCutoff();
    m_vsmPageBudget = m_table->GetSettings().GetPlayer_PBRShadowPagesPerFrame();
    CreateVSMPagePoolTargets();
@@ -2154,10 +2155,15 @@ void Renderer::UpdateVirtualShadowMaps()
    m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, 0.f);
+   // Shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate), plain floats: pbrShadowParams.w = tap mode, pbrDimParams.y = gate.
+   // The PBRShadowFastFilter setting (default on) = tap mode 1 (4 corner taps first, the other 12 only in a penumbra) + importance gate 0.5
+   // (no shadow lookup for a light whose unshadowed irradiance luminance at the pixel is under it); off = the full 16 tap filter
+   const float shadowTapMode = m_pbrShadowFast ? 1.f : 0.f;
+   const float shadowGate = m_pbrShadowFast ? 0.5f : 0.f;
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowTapMode);
    // Dim light cutoff (fs_pbr pbrDimParams.x, 0 = off): a light under this unshadowed irradiance luminance at the pixel only adds its
    // diffuse (no specular, coat reflection or shadow)
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(m_pbrDimLightCutoff, 0.f), 0.f, 0.f, 0.f);
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(m_pbrDimLightCutoff, 0.f), shadowGate, 0.f, 0.f);
 }
 #endif
 
