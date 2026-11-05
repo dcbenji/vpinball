@@ -311,6 +311,10 @@ private:
    // drag points, the tilt of a Wall, the Z of a Bumper) can not drift, and every frame's result only depends on the operation's current value. p' = c + (p - c) * L + move, with
    // c the pivot (or the part's own origin with Individual Origins), and the part's own rotation or scale following L as far as it can store them (see ApplySelectionXform)
    enum class XformKind { Move, Rotate, Scale };
+   // Transform Orientation (Blender's header dropdown): the axes X / Y / Z of G / R / S and of the gizmo. Global = the table's, Local = each part's own (a multi-selection
+   // moves, turns and scales each part along its own axes), Normal = Local for parts and Global in point edit (the editor has no surface normal), View = the screen's
+   // right, up and depth in the view the transform happens in
+   enum class TransformOrientation { Global, Local, Normal, View };
    struct XformOp
    {
       XformKind kind = XformKind::Move;
@@ -321,10 +325,14 @@ private:
       // gizmo), which only holds it up to a half turn
       bool hasYaw = false;
       float yaw = 0.f;
+      // Rotate with ownFrame: the turn (radians, not limited to a half turn) about axis (the matrix' own sense, in the parts' axes); each part with only a Z rotation
+      // takes angle x the table Z share of its own axis
+      float angle = 0.f;
+      vec3 axis { 0.f, 0.f, 0.f };
       bool negative = false; // Scale: a negative factor (it may reverse two axes, which no determinant shows): the scaled axes are read back as a rotation
       bool operator==(const XformOp &o) const
       {
-         return kind == o.kind && ownFrame == o.ownFrame && hasYaw == o.hasYaw && yaw == o.yaw && negative == o.negative && move.x == o.move.x && move.y == o.move.y && move.z == o.move.z
+         return kind == o.kind && ownFrame == o.ownFrame && hasYaw == o.hasYaw && yaw == o.yaw && angle == o.angle && axis.x == o.axis.x && axis.y == o.axis.y && axis.z == o.axis.z && negative == o.negative && move.x == o.move.x && move.y == o.move.y && move.z == o.move.z
             && memcmp(linear.m, o.linear.m, sizeof(linear.m)) == 0;
       }
    };
@@ -369,6 +377,9 @@ private:
       float angle = 0.f; // Degrees
       float factor = 1.f;
       SelectionXform xform; // Move, rotate, scale from G / R / S: the selection the operation is evaluated from
+      TransformOrientation orientation = TransformOrientation::Global; // Rotate / scale along an axis: whose axes
+      Matrix3D viewFrame = Matrix3D::MatrixIdentity(); // The View orientation's axes (rows, table coordinates) of the view the operation was done in
+      bool ownFrame = false; // Move: the offset is in each part's own axes (Local along an axis)
       int rbThickness = 8; // Guided rubber: the created or bound rubber is the selection, adjusting refits it in place
       float rbHeight = 25.f;
       float rbRoundness = 0.f;
@@ -565,8 +576,15 @@ private:
    // 3D editor
    ImGuizmo::OPERATION m_gizmoOperation = (ImGuizmo::OPERATION)0;
    bool m_hadSelectionTransform = false; // Whether the previous frame had a selection to transform
-   ImGuizmo::MODE m_gizmoMode = ImGuizmo::WORLD;
-   void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
+   void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts (repeating one flips Global / Local)
+   TransformOrientation m_transformOrientation = TransformOrientation::Global; // Saved as Editor.TransformOrientation
+   void SetTransformOrientation(TransformOrientation orientation);
+   bool IsOwnFrameOrientation(TransformOrientation orientation) const; // Local or Normal, outside point edit: each part along its own axes
+   Matrix3D GetViewOrientationFrame(int viewSlot) const; // The View orientation's axes (rows, table coordinates): right, up, and towards the viewer (Blender's View Z)
+   Matrix3D GetActiveAxes() const; // The active part's own axes (unit rows, table coordinates), identity in point edit or with no part
+   // R (value: the angle in radians, freeAxis: the axis with no constraint, camera space) or S (value: the factor) along an axis of an orientation, as an operation on a
+   // selection snapshot of partCount parts (G, F9 and the gizmo build theirs from their own move)
+   XformOp OrientedXform(XformKind kind, TransformOrientation orientation, const Matrix3D &viewFrame, int axis, bool plane, float value, const vec3 &freeAxis, size_t partCount) const;
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds, const LocalViewParts *local = nullptr) const; // With a Local View, only the selected parts it shows
 
@@ -588,9 +606,13 @@ private:
       SelectionXform xform;
       float yaw = 0.f; // The table Z turn of the last frame: the next one is taken nearest to it (continuous past a half turn)
       float yawStep = 0.f; // The last known step between the candidates (2 pi x the Z share), for a frame on a full turn, which does not give it
+      bool ownFrame = false; // Local: what the gizmo does in the active part's axes is done by each part in its own
+      vec3 axis { 0.f, 0.f, 0.f }; // ownFrame rotation: the axis of the drag (in the active part's axes), its signed angle unwrapped from frame to frame
+      float angle = 0.f;
+      XformOp last; // The last one set (Adjust Last Operation of a move)
    } m_groupGizmo;
    bool UsesGroupGizmo() const;
-   Matrix3D GetGroupGizmoMatrix() const;
+   Matrix3D GetGroupGizmoMatrix(int viewSlot) const; // At the pivot, on the axes of the orientation (View: of that view, -1 = the 3D Viewport)
 
    // Blender style modal transform (G / R / S then move the mouse, X / Y / Z to constrain to an axis (Shift for the plane
    // perpendicular to it), type a number for an exact value, Enter / left click to confirm, Esc / right click to cancel)
@@ -611,6 +633,11 @@ private:
       Matrix3D initial; // Selection transform when the operation began
       bool zOnly = false; // Rotation fixed to the table Z axis: an X or Y one would change nothing (drag points, a part that can not tilt turning on its own)
       bool freeZ = false; // No axis means the table Z, not the view axis: no part in the selection takes a tilt
+      TransformOrientation axisOrientation = TransformOrientation::Global; // Whose axes the constraint uses: pressing the same axis key again goes from the scene's
+      // orientation to the other one of Global / Local, then to no constraint (Blender's G X X)
+      Matrix3D activeAxes = Matrix3D::MatrixIdentity(); // The active part's axes (Local: a constrained move follows the mouse along the active part's axis)
+      Matrix3D viewFrame = Matrix3D::MatrixIdentity(); // The View orientation's axes in the view the transform works in
+      bool lastOwnFrame = false; // lastDelta is in each part's own axes
       SelectionXform xform; // The selection when the operation began
       XformOp applied; // The last one set
       struct SDL_Window *textWindow = nullptr; // The window whose text input this modal turned on

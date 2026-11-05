@@ -218,6 +218,11 @@ void SearchPalette::BuildOperators()
    add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
    add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
    add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
+   // Transform Orientation (the 3D view header's dropdown)
+   static constexpr std::pair<const char *, EditorUI::TransformOrientation> orientations[] = { { "Global", EditorUI::TransformOrientation::Global },
+      { "Local", EditorUI::TransformOrientation::Local }, { "Normal", EditorUI::TransformOrientation::Normal }, { "View", EditorUI::TransformOrientation::View } };
+   for (const auto &[name, orientation] : orientations)
+      add("Object" + sep + "Transform Orientation" + sep + name, "", nullptr, [&ed, orientation]() { ed.SetTransformOrientation(orientation); });
    add("Object" + sep + "New Collection from Selection", "", editablePart, [&ed]() { ed.CreateCollection(true); });
    add("Object" + sep + "Edit Points", "Tab", [&ed]() { return ed.CanEnterPointEdit(); }, [&ed]() { ed.EnterPointEditMode(); });
    add("Object" + sep + "Set Origin" + sep + "Origin to Geometry", "", [&ed]() { return SetOrigin::CanApply(ed); }, [&ed]() { SetOrigin::Apply(ed, SetOrigin::Mode::Geometry); });

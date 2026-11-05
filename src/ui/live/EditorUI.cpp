@@ -142,6 +142,7 @@ void EditorUI::LoadNavPreferences()
    m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
    m_navBlenderTransform = settings.GetEditor_NavBlenderTransform();
    m_transformPivot = static_cast<TransformPivot>(settings.GetEditor_TransformPivot());
+   m_transformOrientation = static_cast<TransformOrientation>(settings.GetEditor_TransformOrientation());
    LoadSnapPreferences();
 }
 
@@ -2606,7 +2607,7 @@ void EditorUI::RenderUI()
       const bool groupGizmo = UsesGroupGizmo();
       Matrix3D groupMatrix;
       if (groupGizmo)
-         groupMatrix = m_groupGizmo.active ? m_groupGizmo.current : GetGroupGizmoMatrix();
+         groupMatrix = m_groupGizmo.active ? m_groupGizmo.current : GetGroupGizmoMatrix(m_gizmoSlot);
       Matrix3D &gizmoMatrix = groupGizmo ? groupMatrix : transform;
       const Matrix3D prevTransform(gizmoMatrix);
       ImGuizmo::OPERATION gizmoOperation = m_gizmoOperation;
@@ -2616,6 +2617,17 @@ void EditorUI::RenderUI()
       if ((m_pointEditPart && !railPoints) || m_camMode == ViewMode::DesktopBackdrop)
       {
          // Drag point curves are 2D in the table XY plane, and backdrop parts are 2D in the backdrop XY plane: restrict gizmo operations to this plane
+         if (gizmoOperation == ImGuizmo::TRANSLATE)
+            gizmoOperation = static_cast<ImGuizmo::OPERATION>(ImGuizmo::TRANSLATE_X | ImGuizmo::TRANSLATE_Y);
+         else if (gizmoOperation == ImGuizmo::ROTATE)
+            gizmoOperation = ImGuizmo::ROTATE_Z;
+         else if (gizmoOperation == ImGuizmo::SCALE)
+            gizmoOperation = static_cast<ImGuizmo::OPERATION>(ImGuizmo::SCALE_X | ImGuizmo::SCALE_Y);
+      }
+      else if (m_camMode == ViewMode::EditorCam && gizmoView == nullptr && m_predefinedView != EditorUI::PredefinedView::None && groupGizmo
+         && m_transformOrientation == TransformOrientation::View)
+      {
+         // The View orientation's X and Y are the screen's: a predefined view keeps those (its plane)
          if (gizmoOperation == ImGuizmo::TRANSLATE)
             gizmoOperation = static_cast<ImGuizmo::OPERATION>(ImGuizmo::TRANSLATE_X | ImGuizmo::TRANSLATE_Y);
          else if (gizmoOperation == ImGuizmo::ROTATE)
@@ -2697,7 +2709,11 @@ void EditorUI::RenderUI()
       if (gizmoView != nullptr && !ImGuizmo::IsUsingAny() && !(io.MousePos.x >= gizmoView->rectMin.x && io.MousePos.y >= gizmoView->rectMin.y
             && io.MousePos.x < gizmoView->rectMin.x + gizmoView->rectSize.x && io.MousePos.y < gizmoView->rectMin.y + gizmoView->rectSize.y))
          imguiContext.HoveredId = gizmoView->itemId;
-      ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(gizmoMatrix.m), nullptr, snapPtr);
+      // Local: one part's own matrix, or a group's on the active part's axes. View: a group's matrix on the view's axes (see GetGroupGizmoMatrix)
+      const bool gizmoLocal = IsOwnFrameOrientation(m_transformOrientation)
+         || (groupGizmo && m_transformOrientation == TransformOrientation::View && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop);
+      ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, gizmoLocal ? ImGuizmo::LOCAL : ImGuizmo::WORLD,
+         (float *)(gizmoMatrix.m), nullptr, snapPtr);
       imguiContext.HoveredId = savedIds[0];
       imguiContext.HoveredIdPreviousFrame = savedIds[1];
       imguiContext.ActiveId = savedIds[2];
@@ -2742,6 +2758,9 @@ void EditorUI::RenderUI()
                m_groupGizmo.xform.pivot = vec3(prevTransform._41, prevTransform._42, prevTransform._43);
                m_groupGizmo.yaw = 0.f;
                m_groupGizmo.yawStep = 0.f;
+               m_groupGizmo.ownFrame = m_pointEditPart == nullptr && IsOwnFrameOrientation(m_transformOrientation);
+               m_groupGizmo.axis = vec3(0.f, 0.f, 0.f);
+               m_groupGizmo.angle = 0.f;
             }
             m_groupGizmo.current = gizmoMatrix;
             // What the gizmo did since the drag began, as a move of its origin and a linear map about it
@@ -2754,7 +2773,39 @@ void EditorUI::RenderUI()
             op.kind = (static_cast<int>(gizmoOperation) & ImGuizmo::ROTATE) != 0 ? XformKind::Rotate
                : (static_cast<int>(gizmoOperation) & (ImGuizmo::SCALE | ImGuizmo::SCALEU)) != 0                ? XformKind::Scale
                                                                                                                 : XformKind::Move;
-            if (op.kind == XformKind::Rotate)
+            if (m_groupGizmo.ownFrame)
+            {
+               // Local: the gizmo sits on the active part's axes (the rows of its start matrix), each part does in its own axes what it did in those
+               // (L_local = F L F^T, move_local = move F^T)
+               Matrix3D axes(m_groupGizmo.start), axesT;
+               axes._41 = axes._42 = axes._43 = 0.f;
+               for (int i = 0; i < 3; i++)
+                  for (int j = 0; j < 3; j++)
+                     axesT.m[i][j] = axes.m[j][i];
+               axesT._41 = axesT._42 = axesT._43 = 0.f;
+               op.linear = axes * op.linear * axesT;
+               op.move = axesT.MultiplyVectorNoTranslate(op.move);
+               op.ownFrame = true;
+               if (op.kind == XformKind::Rotate)
+               {
+                  // A drag turns about one axis: take it on the first frame that has one, then the signed angle about it, continuous past a half turn
+                  const Matrix3D &l = op.linear;
+                  const vec3 sv(0.5f * (l._23 - l._32), 0.5f * (l._31 - l._13), 0.5f * (l._12 - l._21));
+                  const float c = 0.5f * (l._11 + l._22 + l._33 - 1.f);
+                  if (m_groupGizmo.axis.LengthSquared() < 0.5f && sv.Length() > 1e-4f)
+                     m_groupGizmo.axis = sv * (1.f / sv.Length());
+                  if (m_groupGizmo.axis.LengthSquared() > 0.5f)
+                  {
+                     float angle = atan2f(sv.Dot(m_groupGizmo.axis), c);
+                     angle += roundf((m_groupGizmo.angle - angle) / (2.f * static_cast<float>(M_PI))) * 2.f * static_cast<float>(M_PI);
+                     m_groupGizmo.angle = angle;
+                     op.hasYaw = true;
+                     op.angle = angle;
+                     op.axis = m_groupGizmo.axis;
+                  }
+               }
+            }
+            else if (op.kind == XformKind::Rotate)
             {
                // The Z share read from the matrix is only known up to steps of 2 pi x the share: take the one nearest to the last frame, so a drag past a half turn goes on
                float step;
@@ -2770,6 +2821,7 @@ void EditorUI::RenderUI()
                m_groupGizmo.yaw = op.yaw;
             }
             ApplySelectionXform(m_groupGizmo.xform, op);
+            m_groupGizmo.last = op;
          }
          else
             SetSelectionTransform(transform);
@@ -2803,7 +2855,8 @@ void EditorUI::RenderUI()
          {
             // A group: adjusting re-evaluates the move from the snapshot of the drag, by the gizmo's own move (a part may not take all of it, a Bumper's Z for one)
             m_lastOp.xform = m_groupGizmo.xform;
-            m_lastOp.offset = vec3(m_groupGizmo.current._41 - m_groupGizmo.start._41, m_groupGizmo.current._42 - m_groupGizmo.start._42, m_groupGizmo.current._43 - m_groupGizmo.start._43);
+            m_lastOp.offset = m_groupGizmo.last.move; // In each part's own axes with Local
+            m_lastOp.ownFrame = m_groupGizmo.last.ownFrame;
          }
       }
       m_gizmoDragTranslate = false;
@@ -5414,6 +5467,9 @@ void EditorUI::BeginModalTransform(ModalOp op)
    }
    m_modal.op = op;
    BeginSelectionXform(m_modal.xform);
+   m_modal.axisOrientation = m_transformOrientation;
+   m_modal.activeAxes = GetActiveAxes();
+   m_modal.viewFrame = GetViewOrientationFrame(viewSlot);
    m_modal.applied.kind = op == ModalOp::Rotate ? XformKind::Rotate : op == ModalOp::Scale ? XformKind::Scale : XformKind::Move;
    if (op == ModalOp::Rotate)
    {
@@ -5427,6 +5483,7 @@ void EditorUI::BeginModalTransform(ModalOp op)
       {
          m_modal.axis = 2;
          m_modal.zOnly = true;
+         m_modal.axisOrientation = TransformOrientation::Global; // The table Z, whatever the orientation
       }
       m_modal.freeZ = !anyTilt;
    }
@@ -5501,6 +5558,7 @@ void EditorUI::EndModalTransform(const bool confirm)
          case ModalOp::Grab:
             SetLastOperation(LastOperation::Type::Move, m_modal.initial);
             m_lastOp.offset = m_modal.lastDelta;
+            m_lastOp.ownFrame = m_modal.lastOwnFrame;
             m_lastOp.xform = m_modal.xform;
             break;
          case ModalOp::Rotate:
@@ -5508,6 +5566,8 @@ void EditorUI::EndModalTransform(const bool confirm)
             m_lastOp.axis = m_modal.axis < 0 && m_modal.freeZ ? 2 : m_modal.axis; // A free rotation that went about the table Z (no part can tilt) is shown as Z
             m_lastOp.axisView = m_modal.lastAxis;
             m_lastOp.angle = m_modal.lastAngle;
+            m_lastOp.orientation = m_modal.axis < 0 ? TransformOrientation::Global : m_modal.axisOrientation;
+            m_lastOp.viewFrame = m_modal.viewFrame;
             m_lastOp.xform = m_modal.xform;
             break;
          case ModalOp::Scale:
@@ -5515,6 +5575,8 @@ void EditorUI::EndModalTransform(const bool confirm)
             m_lastOp.axis = m_modal.axis;
             m_lastOp.plane = m_modal.plane;
             m_lastOp.factor = m_modal.lastFactor;
+            m_lastOp.orientation = m_modal.axisOrientation;
+            m_lastOp.viewFrame = m_modal.viewFrame;
             m_lastOp.xform = m_modal.xform;
             break;
          }
@@ -5551,9 +5613,20 @@ void EditorUI::UpdateModalTransform()
       for (const auto &[key, axis] : axisKeys)
          if (!chord && !m_modal.zOnly && ImGui::IsKeyPressed(key, false))
          {
+            // Blender's cycle: the first press uses the scene's orientation, the second the other one of Global / Local (none when they are the same axes here,
+            // as in point edit), the third removes the constraint
+            const auto axesOf = [this](const TransformOrientation o)
+            { return IsOwnFrameOrientation(o) ? TransformOrientation::Local : o == TransformOrientation::View ? o : TransformOrientation::Global; };
+            const TransformOrientation alternate = m_transformOrientation == TransformOrientation::Global ? TransformOrientation::Local : TransformOrientation::Global;
             const bool same = m_modal.axis == axis && m_modal.plane == io.KeyShift;
-            m_modal.axis = same ? -1 : axis;
-            m_modal.plane = !same && io.KeyShift;
+            if (same && m_modal.axisOrientation == m_transformOrientation && axesOf(alternate) != axesOf(m_transformOrientation))
+               m_modal.axisOrientation = alternate;
+            else
+            {
+               m_modal.axis = same ? -1 : axis;
+               m_modal.plane = !same && io.KeyShift;
+               m_modal.axisOrientation = m_transformOrientation;
+            }
          }
       // Numeric input. The keys are read directly (the digit row and the keypad, the minus and the period): SDL sends no text input here, as no text field is
       // active (the backend starts it only for those). Characters are used when the platform does send them (a layout whose digits are not on the digit keys)
@@ -5653,7 +5726,16 @@ void EditorUI::UpdateModalTransform()
    xformOp.kind = m_modal.applied.kind;
    string partNote; // Parts that can not follow, said plainly
    const char *axisNames[] = { "X", "Y", "Z" };
-   const string axisText = m_modal.axis < 0 ? (m_modal.freeZ && m_modal.op == ModalOp::Rotate ? " Z" : "") : string(m_modal.plane ? " -" : " ") + axisNames[m_modal.axis];
+   // The constraint's axes: the frame's rows (table coordinates; Global = the table's), or each part's own (Local / Normal, the active part's following the mouse)
+   const bool ownAxes = m_modal.axis >= 0 && IsOwnFrameOrientation(m_modal.axisOrientation);
+   const bool viewAxes = m_modal.axis >= 0 && m_modal.axisOrientation == TransformOrientation::View;
+   const Matrix3D &frame = viewAxes ? m_modal.viewFrame : ownAxes ? m_modal.activeAxes : Matrix3D::MatrixIdentity();
+   const auto frameAxis = [&frame](const int a) { return FlipZ(vec3(frame.m[a][0], frame.m[a][1], frame.m[a][2])); }; // In the camera space; Global: TableAxis
+   // As Blender's header says it: "along global X", "locking local Z" (Shift: the plane perpendicular to it)
+   static constexpr const char *orientationNames[] = { "global", "local", "normal", "view" };
+   const char *const orientationName = m_pointEditPart != nullptr && m_modal.axisOrientation != TransformOrientation::View ? "global" : orientationNames[static_cast<int>(m_modal.axisOrientation)];
+   const string axisText = m_modal.axis < 0 ? (m_modal.freeZ && m_modal.op == ModalOp::Rotate ? " along global Z" : "")
+                                            : string(m_modal.plane ? " locking " : " along ") + orientationName + ' ' + axisNames[m_modal.axis];
    char text[128];
    const char *snapText = "";
    switch (m_modal.op)
@@ -5679,10 +5761,10 @@ void EditorUI::UpdateModalTransform()
             move = right * ((dx * by - dy * bx) / det) + up * ((ax * dy - ay * dx) / det);
       }
       if (hasValue)
-         move = TableAxis(m_modal.axis < 0 ? 0 : m_modal.axis) * value;
+         move = m_modal.axis < 0 ? TableAxis(0) * value : frameAxis(m_modal.axis) * value; // No axis: along the table X, whatever the orientation
       else if (m_modal.axis >= 0)
       {
-         const vec3 a = TableAxis(m_modal.axis);
+         const vec3 a = frameAxis(m_modal.axis);
          move = m_modal.plane ? move - a * move.Dot(a) : a * move.Dot(a);
       }
       vec3 delta = FlipZ(move);
@@ -5730,7 +5812,14 @@ void EditorUI::UpdateModalTransform()
                ImGui::GetForegroundDrawList()->AddCircle(marker, 7.f * m_liveUI.GetDPI(), EditorTheme::Accent, 16, 2.f);
             }
          }
-         if (!snappedToPoint && m_snapMove > 0.f)
+         if (!snappedToPoint && m_snapMove > 0.f && (ownAxes || viewAxes))
+         {
+            // Increments along the constraint's axes
+            vec3 u(delta.Dot(vec3(frame._11, frame._12, frame._13)), delta.Dot(vec3(frame._21, frame._22, frame._23)), delta.Dot(vec3(frame._31, frame._32, frame._33)));
+            u.Set(roundf(u.x / m_snapMove) * m_snapMove, roundf(u.y / m_snapMove) * m_snapMove, roundf(u.z / m_snapMove) * m_snapMove);
+            delta = frame.MultiplyVectorNoTranslate(u);
+         }
+         else if (!snappedToPoint && m_snapMove > 0.f)
          {
             delta.x = roundf(delta.x / m_snapMove) * m_snapMove;
             delta.y = roundf(delta.y / m_snapMove) * m_snapMove;
@@ -5738,15 +5827,22 @@ void EditorUI::UpdateModalTransform()
          }
          snapText = "  [snap]";
       }
+      if (ownAxes)
+      {
+         // Local: the move along the active part's axis, in its axes, done by each part along its own (Blender moves each object along its own X)
+         delta = vec3(delta.Dot(vec3(frame._11, frame._12, frame._13)), delta.Dot(vec3(frame._21, frame._22, frame._23)), delta.Dot(vec3(frame._31, frame._32, frame._33)));
+         xformOp.ownFrame = true;
+      }
       xformOp.move = delta;
       m_modal.lastDelta = delta;
+      m_modal.lastOwnFrame = ownAxes;
       snprintf(text, sizeof(text), "Move%s  %.2f  %.2f  %.2f vpu%s%s%s", axisText.c_str(), delta.x, delta.y, delta.z, snapText, hasValue ? "   [" : "",
          hasValue ? (m_modal.typed + "]").c_str() : "");
       break;
    }
    case ModalOp::Rotate:
    {
-      const vec3 k = m_modal.axis >= 0 ? TableAxis(m_modal.axis) : m_modal.freeZ ? TableAxis(2) : dir;
+      const vec3 k = m_modal.axis >= 0 ? frameAxis(m_modal.axis) : m_modal.freeZ ? TableAxis(2) : dir; // Local: the active part's axis (the mouse turns about it)
       const float facing = k.Dot(dir) >= 0.f ? 1.f : -1.f;
       float angle = hasValue ? ANGTORAD(value) : -(curAngle - m_modal.startAngle) * facing;
       if (!hasValue && IsSnapActive(SnapKind::Rotate) && m_snapRotate > 0.f)
@@ -5754,22 +5850,23 @@ void EditorUI::UpdateModalTransform()
          angle = ANGTORAD(roundf(RADTOANG(angle) / m_snapRotate) * m_snapRotate);
          snapText = "  [snap]";
       }
-      xformOp.linear = RotatedTransform(Matrix3D::MatrixIdentity(), k, angle);
-      xformOp.hasYaw = true;
-      xformOp.yaw = angle * k.z; // k is in camera space (FlipZ): its Z is minus the table one, which matches YawOfRotation's sense
+      xformOp = OrientedXform(XformKind::Rotate, m_modal.axisOrientation, m_modal.viewFrame, m_modal.axis, false, angle, k, m_modal.xform.parts.size());
       m_modal.lastAxis = k;
       m_modal.lastAngle = RADTOANG(angle);
       snprintf(text, sizeof(text), "Rotate%s  %.1f deg%s%s", axisText.c_str(), RADTOANG(angle), snapText, hasValue ? "   [typed]" : "");
       if (fabsf(angle) > 1e-5f)
       {
          // Parts with only a Z rotation take the axis' table Z share of the turn: all of it about Z, none about an axis in the table plane
-         const bool aboutZ = fabsf(k.z) > 0.9999f, noZ = fabsf(k.z) < 1e-4f;
          int stay = 0, zOnly = 0;
          for (const SelectionXform::Part &part : m_modal.xform.parts)
+         {
+            const vec3 kp = ownAxes ? FlipZ(vec3(part.axes.m[m_modal.axis][0], part.axes.m[m_modal.axis][1], part.axes.m[m_modal.axis][2])) : k; // Local: the part's own axis
+            const bool aboutZ = fabsf(kp.z) > 0.9999f, noZ = fabsf(kp.z) < 1e-4f;
             if ((part.mask & EditorUIPart::TM_RotAny) == 0)
                stay++;
             else if (!aboutZ && (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY))
                (noZ ? stay : zOnly)++;
+         }
          const size_t count = m_modal.xform.parts.size();
          if (stay > 0)
             partNote = count == 1 ? "   (this part keeps its rotation)" : "   (" + std::to_string(stay) + " of " + std::to_string(count) + " keep their rotation)";
@@ -5788,9 +5885,7 @@ void EditorUI::UpdateModalTransform()
          factor = max(roundf(factor / m_snapScale) * m_snapScale, m_snapScale);
          snapText = "  [snap]";
       }
-      xformOp.linear = ScaledTransform(Matrix3D::MatrixIdentity(), m_modal.axis, m_modal.plane, factor);
-      xformOp.ownFrame = m_modal.xform.parts.size() == 1; // One part: along its own axes. Several: along the table's, each part's size following what its axes become
-      xformOp.negative = factor < 0.f;
+      xformOp = OrientedXform(XformKind::Scale, m_modal.axisOrientation, m_modal.viewFrame, m_modal.axis, m_modal.plane, factor, vec3(0.f, 0.f, 0.f), m_modal.xform.parts.size());
       m_modal.lastFactor = factor;
       snprintf(text, sizeof(text), "Scale%s  %.3f%s%s", axisText.c_str(), factor, snapText, hasValue ? "   [typed]" : "");
       if (fabsf(factor - 1.f) > 1e-5f)
@@ -5802,7 +5897,18 @@ void EditorUI::UpdateModalTransform()
                scaled |= EditorUIPart::TM_ScaleX << i;
          int stay = 0;
          for (const SelectionXform::Part &part : m_modal.xform.parts)
-            stay += (part.mask & scaled) == 0;
+         {
+            int partScaled = scaled;
+            if (m_modal.axis >= 0 && m_modal.axisOrientation == TransformOrientation::View)
+            {
+               // Along the screen's axes: the part's own axes whose length the scale changes
+               partScaled = 0;
+               for (int i = 0; i < 3; i++)
+                  if (fabsf(vec3(xformOp.linear.MultiplyVectorNoTranslate(vec3(part.axes.m[i][0], part.axes.m[i][1], part.axes.m[i][2]))).Length() - 1.f) > 1e-4f)
+                     partScaled |= EditorUIPart::TM_ScaleX << i;
+            }
+            stay += (part.mask & partScaled) == 0;
+         }
          if (stay > 0)
             partNote = m_modal.xform.parts.size() == 1 ? "   (this part keeps its size)" : "   (" + std::to_string(stay) + " of " + std::to_string(m_modal.xform.parts.size()) + " keep their size)";
       }
@@ -6160,8 +6266,10 @@ void EditorUI::SetGizmoOperation(ImGuizmo::OPERATION operation)
    }
    if (m_camMode == ViewMode::PreviewCam)
       m_camMode = ViewMode::EditorCam;
-   // Repeating the same operation toggles between world and local coordinates, switching to another one resets to world
-   m_gizmoMode = m_gizmoOperation == operation ? (m_gizmoMode == ImGuizmo::LOCAL ? ImGuizmo::WORLD : ImGuizmo::LOCAL) : ImGuizmo::WORLD;
+   // Repeating the same operation flips the Transform Orientation between Global and Local (from Normal or View it goes to Global); it is a saved setting, so
+   // switching to another operation keeps it
+   if (m_gizmoOperation == operation)
+      SetTransformOrientation(m_transformOrientation == TransformOrientation::Global ? TransformOrientation::Local : TransformOrientation::Global);
    m_gizmoOperation = operation;
 }
 
@@ -6322,22 +6430,89 @@ bool EditorUI::UsesGroupGizmo() const
 {
    if (m_pointEditPart != nullptr)
       return true;
+   // View: the gizmo lines up with the screen, which one part's own matrix can not do
+   const int needed = m_transformOrientation == TransformOrientation::View && m_camMode != ViewMode::DesktopBackdrop ? 1 : 2;
    int count = 0;
    for (const auto &part : m_multiSel)
    {
       Matrix3D transform;
       count += part->GetTransform(transform) != EditorUIPart::TM_None;
-      if (count > 1)
+      if (count >= needed)
          return true;
    }
    return false;
 }
 
-Matrix3D EditorUI::GetGroupGizmoMatrix() const
+EditorUI::XformOp EditorUI::OrientedXform(const XformKind kind, const TransformOrientation orientation, const Matrix3D &viewFrame, const int axis, const bool plane, const float value,
+   const vec3 &freeAxis, const size_t partCount) const
+{
+   XformOp op;
+   op.kind = kind;
+   const bool own = axis >= 0 && IsOwnFrameOrientation(orientation);
+   const Matrix3D frame = axis >= 0 && orientation == TransformOrientation::View ? viewFrame : Matrix3D::MatrixIdentity();
+   if (kind == XformKind::Rotate)
+   {
+      op.hasYaw = true;
+      if (own)
+      {
+         // About each part's own axis: L in the parts' axes, and the turn of a part that only stores a Z rotation from the table Z share of its own axis
+         op.ownFrame = true;
+         op.linear = RotatedTransform(Matrix3D::MatrixIdentity(), TableAxis(axis), value);
+         op.angle = value;
+         op.axis = vec3(axis == 0 ? -1.f : 0.f, axis == 1 ? -1.f : 0.f, axis == 2 ? -1.f : 0.f); // The matrix' own axis of a turn about TableAxis: minus FlipZ of it
+      }
+      else
+      {
+         const vec3 k = axis < 0 ? freeAxis : FlipZ(vec3(frame.m[axis][0], frame.m[axis][1], frame.m[axis][2])); // Global: TableAxis
+         op.linear = RotatedTransform(Matrix3D::MatrixIdentity(), k, value);
+         op.yaw = value * k.z; // k is in camera space (FlipZ): its Z is minus the table one, which matches YawOfRotation's sense
+      }
+   }
+   else if (kind == XformKind::Scale)
+   {
+      // Global keeps one part along its own axes (as the editor always did; Blender would use the table's), several along the table's, each part's size following
+      // what its axes become. Local / Normal: each part along its own. View: along the screen's
+      const Matrix3D d = ScaledTransform(Matrix3D::MatrixIdentity(), axis, plane, value);
+      op.negative = value < 0.f;
+      if (axis >= 0 && orientation == TransformOrientation::View)
+      {
+         Matrix3D frameT = Matrix3D::MatrixIdentity();
+         for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+               frameT.m[i][j] = frame.m[j][i];
+         op.linear = frameT * d * frame; // F^T D F: into the frame's axes, scaled, back
+      }
+      else
+      {
+         op.linear = d;
+         op.ownFrame = own || partCount == 1;
+      }
+   }
+   return op;
+}
+
+void EditorUI::SetTransformOrientation(const TransformOrientation orientation)
+{
+   m_transformOrientation = orientation;
+   g_settingsService.GetAppSettings().SetEditor_TransformOrientation(static_cast<int>(orientation), false);
+}
+
+bool EditorUI::IsOwnFrameOrientation(const TransformOrientation orientation) const
+{
+   // Drag points have no axes of their own (Blender's edit mode would use the object's, and a normal): Local and Normal act as Global there
+   return (orientation == TransformOrientation::Local || orientation == TransformOrientation::Normal) && m_pointEditPart == nullptr;
+}
+
+Matrix3D EditorUI::GetActiveAxes() const
 {
    Matrix3D result = Matrix3D::MatrixIdentity();
+   if (m_pointEditPart != nullptr)
+      return result; // Drag points are in the table's axes
    Matrix3D active;
-   if (m_gizmoMode == ImGuizmo::LOCAL && m_pointEditPart == nullptr && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart()->GetTransform(active) != EditorUIPart::TM_None)
+   bool found = m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart()->GetTransform(active) != EditorUIPart::TM_None;
+   for (size_t i = 0; !found && i < m_multiSel.size(); i++)
+      found = m_multiSel[i]->GetTransform(active) != EditorUIPart::TM_None;
+   if (found)
    {
       vec3 pos, scale, rot;
       ExtractTRS(active, pos, scale, rot);
@@ -6346,6 +6521,50 @@ Matrix3D EditorUI::GetGroupGizmoMatrix() const
          for (int j = 0; j < 3; j++)
             result.m[i][j] = active.m[i][j] * s[i];
    }
+   return result;
+}
+
+Matrix3D EditorUI::GetViewOrientationFrame(const int viewSlot) const
+{
+   // The camera of the view, as the modal transform reads it (see UpdateModalTransform): its right and up, from the editor camera space (FlipZ) to the table's
+   Matrix3D view(m_camView);
+   if (viewSlot >= 0 && m_viewInfo[viewSlot].valid)
+   {
+      const Matrix3D RH2LH = Matrix3D::MatrixScale(1.f, 1.f, -1.f), YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
+      view = RH2LH * m_viewInfo[viewSlot].view * YAxis;
+   }
+   view.Invert();
+   vec3 x = FlipZ(view.GetOrthoNormalRight()), y = FlipZ(view.GetOrthoNormalUp());
+   x.Normalize();
+   y = y - x * y.Dot(x); // Orthonormal, whatever the precision of the camera matrix
+   y.Normalize();
+   // Z towards the viewer, as Blender's View Z (R Z 90 turns counterclockwise on screen, G Z moves towards the viewer). The table's frame is mirrored from the screen's
+   // (Y towards the player), so in table coordinates this frame is mirrored too: the gizmo, which needs a proper matrix, takes the opposite Z (GetGroupGizmoMatrix)
+   const vec3 z = CrossProduct(y, x);
+   Matrix3D result = Matrix3D::MatrixIdentity();
+   const vec3 rows[3] = { x, y, z };
+   for (int i = 0; i < 3; i++)
+   {
+      result.m[i][0] = rows[i].x;
+      result.m[i][1] = rows[i].y;
+      result.m[i][2] = rows[i].z;
+   }
+   return result;
+}
+
+Matrix3D EditorUI::GetGroupGizmoMatrix(const int viewSlot) const
+{
+   Matrix3D result = Matrix3D::MatrixIdentity();
+   // Drag points stay on the table's axes (their edits are in its plane), as does View in the desktop backdrop (a 2D view of its own)
+   if (m_transformOrientation == TransformOrientation::View && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop)
+   {
+      result = GetViewOrientationFrame(viewSlot);
+      result._31 = -result._31; // A proper matrix for ImGuizmo: Z into the screen (a drag is read back relative to it, the handle's sense changes nothing)
+      result._32 = -result._32;
+      result._33 = -result._33;
+   }
+   else if (IsOwnFrameOrientation(m_transformOrientation))
+      result = GetActiveAxes();
    const vec3 pivot = GetTransformPivotPoint();
    result._41 = pivot.x;
    result._42 = pivot.y;
@@ -6438,7 +6657,9 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
          {
             float step;
             const Matrix3D rotation = (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY) ? l
-               : ZRotation(op.hasYaw ? op.yaw : YawOfRotation(l, step));
+               : ZRotation(!op.hasYaw ? YawOfRotation(l, step)
+                       : op.ownFrame  ? op.angle * part.axes.MultiplyVectorNoTranslate(op.axis).z // The turn about this part's own axis: its table Z share
+                                      : op.yaw);
             vec3 unusedPos, unusedScale;
             ExtractTRS(part.axes * rotation, unusedPos, unusedScale, rot);
          }
@@ -7045,6 +7266,7 @@ void EditorUI::ApplyLastOperation()
       {
          XformOp op;
          op.move = m_lastOp.offset;
+         op.ownFrame = m_lastOp.ownFrame;
          ApplySelectionXform(m_lastOp.xform, op);
          return;
       }
@@ -7054,22 +7276,13 @@ void EditorUI::ApplyLastOperation()
       break;
    case LastOperation::Type::Rotate:
    {
-      XformOp op;
-      op.kind = XformKind::Rotate;
-      const vec3 k = m_lastOp.axis < 0 ? m_lastOp.axisView : TableAxis(m_lastOp.axis);
-      op.linear = RotatedTransform(Matrix3D::MatrixIdentity(), k, ANGTORAD(m_lastOp.angle));
-      op.hasYaw = true;
-      op.yaw = ANGTORAD(m_lastOp.angle) * k.z; // See UpdateModalTransform
+      const XformOp op = OrientedXform(XformKind::Rotate, m_lastOp.orientation, m_lastOp.viewFrame, m_lastOp.axis, false, ANGTORAD(m_lastOp.angle), m_lastOp.axisView, m_lastOp.xform.parts.size());
       ApplySelectionXform(m_lastOp.xform, op);
       return;
    }
    case LastOperation::Type::Scale:
    {
-      XformOp op;
-      op.kind = XformKind::Scale;
-      op.linear = ScaledTransform(Matrix3D::MatrixIdentity(), m_lastOp.axis, m_lastOp.plane, m_lastOp.factor);
-      op.ownFrame = m_lastOp.xform.parts.size() == 1;
-      op.negative = m_lastOp.factor < 0.f;
+      const XformOp op = OrientedXform(XformKind::Scale, m_lastOp.orientation, m_lastOp.viewFrame, m_lastOp.axis, m_lastOp.plane, m_lastOp.factor, vec3(0.f, 0.f, 0.f), m_lastOp.xform.parts.size());
       ApplySelectionXform(m_lastOp.xform, op);
       return;
    }
@@ -7179,12 +7392,23 @@ bool EditorUI::RenderAdjustParameters()
       ImGui::EndGroup();
       return edited;
    };
+   // Whose axes X / Y / Z are (View: the screen's when the operation was done)
+   const auto orientationCombo = [&]()
+   {
+      row("Orientation");
+      static constexpr const char *orientations[] = { "Global", "Local", "Normal", "View" };
+      int orientation = static_cast<int>(m_lastOp.orientation);
+      if (!ImGui::Combo("##Orientation", &orientation, orientations, 4))
+         return false;
+      m_lastOp.orientation = static_cast<TransformOrientation>(orientation);
+      return true;
+   };
    switch (m_lastOp.type)
    {
    case LastOperation::Type::Move:
       row("Delta");
       changed |= dragVec("##Delta", &m_lastOp.offset.x, 3);
-      ImGui::SetItemTooltip("X, Y, Z in VP units");
+      ImGui::SetItemTooltip(m_lastOp.ownFrame ? "X, Y, Z in VP units, along each part's own axes (Local)" : "X, Y, Z in VP units");
       break;
    case LastOperation::Type::Paste:
    case LastOperation::Type::Duplicate:
@@ -7257,6 +7481,8 @@ bool EditorUI::RenderAdjustParameters()
          m_lastOp.axis = axis - 1;
          changed = true;
       }
+      if (m_lastOp.axis >= 0)
+         changed |= orientationCombo();
       break;
    }
    case LastOperation::Type::Scale:
@@ -7275,6 +7501,7 @@ bool EditorUI::RenderAdjustParameters()
       {
          row("");
          changed |= ImGui::Checkbox("Perpendicular plane", &m_lastOp.plane);
+         changed |= orientationCombo();
       }
       break;
    }

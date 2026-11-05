@@ -476,7 +476,66 @@ void EditorChrome::DrawPivotIcon(ImDrawList *const dl, const ImVec2 &c, const fl
    }
 }
 
-float EditorChrome::TransformHeaderRowWidth() { return 1.75f * ImGui::GetFrameHeight(); }
+// The orientation axes, after Blender's icons: a small origin ring with arrows from it
+void EditorChrome::DrawOrientationIcon(ImDrawList *const dl, const ImVec2 &c, const float s, const int orientation, const ImU32 col, const ImU32 dim)
+{
+   const float th = std::max(1.f, s / 8.f), ring = 0.2f * s, head = 0.3f * s;
+   const auto arrow = [&](const ImVec2 &from, const ImVec2 &to, const ImU32 color)
+   {
+      const float dx = to.x - from.x, dy = to.y - from.y, len = std::max(hypotf(dx, dy), 1e-3f), ux = dx / len, uy = dy / len;
+      dl->AddLine(ImVec2(from.x + ux * ring, from.y + uy * ring), to, color, th); // From the ring's edge
+      dl->AddLine(to, ImVec2(to.x - head * (ux - 0.7f * uy), to.y - head * (uy + 0.7f * ux)), color, th);
+      dl->AddLine(to, ImVec2(to.x - head * (ux + 0.7f * uy), to.y - head * (uy - 0.7f * ux)), color, th);
+   };
+   switch (static_cast<EditorUI::TransformOrientation>(orientation))
+   {
+   case EditorUI::TransformOrientation::Global:
+   {
+      const ImVec2 o(c.x - 0.6f * s, c.y + 0.6f * s);
+      arrow(o, ImVec2(o.x, c.y - 0.9f * s), col);
+      arrow(o, ImVec2(c.x + 0.9f * s, o.y), col);
+      arrow(o, ImVec2(c.x + 0.55f * s, c.y - 0.55f * s), dim);
+      dl->AddCircle(o, ring, col, 0, th);
+      break;
+   }
+   case EditorUI::TransformOrientation::Local:
+   {
+      const ImVec2 o(c.x + 0.05f * s, c.y);
+      arrow(o, ImVec2(c.x - 0.9f * s, c.y), col);
+      arrow(o, ImVec2(c.x + 0.75f * s, c.y - 0.75f * s), col);
+      arrow(o, ImVec2(c.x + 0.7f * s, c.y + 0.7f * s), dim);
+      dl->AddCircle(o, ring, col, 0, th);
+      break;
+   }
+   case EditorUI::TransformOrientation::Normal:
+   {
+      // A plane seen at an angle, its normal out of it
+      dl->AddQuad(ImVec2(c.x - 0.85f * s, c.y - 0.55f * s), ImVec2(c.x - 0.1f * s, c.y - 0.85f * s), ImVec2(c.x - 0.1f * s, c.y + 0.6f * s), ImVec2(c.x - 0.85f * s, c.y + 0.9f * s),
+         dim, th);
+      const ImVec2 o(c.x - 0.4f * s, c.y);
+      arrow(o, ImVec2(c.x + 0.9f * s, c.y), col);
+      dl->AddCircle(o, ring, col, 0, th);
+      break;
+   }
+   case EditorUI::TransformOrientation::View:
+   {
+      const ImVec2 o(c.x - 0.6f * s, c.y + 0.6f * s);
+      arrow(o, ImVec2(o.x, c.y - 0.9f * s), col);
+      arrow(o, ImVec2(c.x + 0.9f * s, o.y), col);
+      dl->AddCircle(o, ring, col, 0, th);
+      break;
+   }
+   }
+}
+
+// Orientation (icon, name, caret), then the pivot (icon, caret), as in Blender's header
+float EditorChrome::TransformOrientationWidth()
+{
+   const float h = ImGui::GetFrameHeight();
+   return 1.25f * h + ImGui::CalcTextSize("Normal").x + 0.85f * h;
+}
+
+float EditorChrome::TransformHeaderRowWidth() { return TransformOrientationWidth() + ImGui::GetStyle().ItemSpacing.x + 1.75f * ImGui::GetFrameHeight(); }
 
 void EditorChrome::TransformHeaderRow(const char *id, EditorUI &editor)
 {
@@ -497,8 +556,61 @@ void EditorChrome::TransformHeaderRow(const char *id, EditorUI &editor)
    const ImU32 col = ImGui::GetColorU32(tc), dim = ImGui::GetColorU32(ImVec4(tc.x, tc.y, tc.z, tc.w * 0.5f));
    ImGui::PushID(id);
    {
+      struct OrientationItem
+      {
+         EditorUI::TransformOrientation orientation;
+         const char *name, *desc;
+      };
+      static constexpr OrientationItem orientations[] = {
+         { EditorUI::TransformOrientation::Global, "Global", "Align the transformation axes to the table's (X right, Y towards the player, Z up)" },
+         { EditorUI::TransformOrientation::Local, "Local", "Align the transformation axes to each selected part's own; several parts each move, turn and scale along their own" },
+         { EditorUI::TransformOrientation::Normal, "Normal", "As Local for parts; Global when editing points (the editor has no surface normal)" },
+         { EditorUI::TransformOrientation::View, "View", "Align the transformation axes to the view: X right, Y up, Z into the screen" },
+      };
+      const int current = static_cast<int>(editor.m_transformOrientation);
+      const bool open = ImGui::IsPopupOpen("##OrientationMenu");
+      const bool pressed = ImGui::InvisibleButton("##orientation", ImVec2(TransformOrientationWidth(), h));
+      const bool hovered = ImGui::IsItemHovered();
+      const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      dl->AddRectFilled(a, b, open ? EditorTheme::Fill : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round);
+      DrawOrientationIcon(dl, ImVec2(a.x + 0.6f * h, 0.5f * (a.y + b.y)), 0.36f * h, current, col, dim);
+      dl->AddText(ImVec2(a.x + 1.25f * h, a.y + 0.5f * (h - ImGui::GetFontSize())), col, orientations[current].name);
+      DrawChevron(dl, ImVec2(b.x - 0.38f * h, 0.5f * (a.y + b.y)), ChevronDir::Down, 0.14f * h, ImGui::GetColorU32(ImVec4(tc.x, tc.y, tc.z, open ? 1.f : 0.8f)));
+      Tip("Transform Orientation", nullptr, "The axes of X / Y / Z in G / R / S and of the gizmo. Repeating G / R / S in the gizmo flips Global and Local");
+      if (pressed && !open)
+         ImGui::OpenPopup("##OrientationMenu");
+      ImGui::SetNextWindowPos(ImVec2(a.x, b.y + 2.f));
+      if (ImGui::BeginPopup("##OrientationMenu"))
+      {
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+         {
+            ImGui::CloseCurrentPopup();
+            editor.m_areaEscPending = true; // The Esc that closed the menu is not an editor Esc (it would deselect)
+         }
+         ImGui::TextDisabled("Transform Orientation");
+         ImGui::Separator();
+         ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Fill));
+         const float rowWidth = 12.f * ImGui::GetFontSize();
+         for (const OrientationItem &item : orientations)
+         {
+            ImGui::PushID(static_cast<int>(item.orientation));
+            if (ImGui::Selectable("##row", editor.m_transformOrientation == item.orientation, ImGuiSelectableFlags_None, ImVec2(rowWidth, h)))
+               editor.SetTransformOrientation(item.orientation);
+            const ImVec2 ra = ImGui::GetItemRectMin(), rb = ImGui::GetItemRectMax();
+            ImDrawList *const popupList = ImGui::GetWindowDrawList();
+            DrawOrientationIcon(popupList, ImVec2(ra.x + 0.6f * h, 0.5f * (ra.y + rb.y)), 0.36f * h, static_cast<int>(item.orientation), col, dim);
+            popupList->AddText(ImVec2(ra.x + 1.3f * h, ra.y + 0.5f * (h - ImGui::GetFontSize())), col, item.name);
+            Tip(item.name, nullptr, item.desc);
+            ImGui::PopID();
+         }
+         ImGui::PopStyleColor();
+         ImGui::EndPopup();
+      }
+   }
+   ImGui::SameLine();
+   {
       const bool open = ImGui::IsPopupOpen("##PivotMenu");
-      const bool pressed = ImGui::InvisibleButton("##pivot", ImVec2(TransformHeaderRowWidth(), h));
+      const bool pressed = ImGui::InvisibleButton("##pivot", ImVec2(1.75f * h, h));
       const bool hovered = ImGui::IsItemHovered();
       const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
       dl->AddRectFilled(a, b, open ? EditorTheme::Fill : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round);
@@ -768,6 +880,14 @@ void EditorChrome::RenderMenuBar()
             editor.SetGizmoOperation(ImGuizmo::ROTATE);
          if (ImGui::MenuItem("Scale", "S", editor.m_gizmoOperation == ImGuizmo::SCALE))
             editor.SetGizmoOperation(ImGuizmo::SCALE);
+         if (ImGui::BeginMenu("Transform Orientation"))
+         {
+            static constexpr const char *names[] = { "Global", "Local", "Normal", "View" };
+            for (int i = 0; i < 4; i++)
+               if (ImGui::MenuItem(names[i], nullptr, static_cast<int>(editor.m_transformOrientation) == i))
+                  editor.SetTransformOrientation(static_cast<EditorUI::TransformOrientation>(i));
+            ImGui::EndMenu();
+         }
          ImGui::Separator();
          if (ImGui::MenuItem("New Collection from Selection", nullptr, false, editablePart))
             editor.CreateCollection(true);
@@ -1514,16 +1634,15 @@ void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
       Tip("Add Part", "Shift+A", editor.m_table->IsLocked() ? "The table is locked" : editor.m_pointEditPart != nullptr ? "Not available while editing points" : nullptr);
       ImGui::EndDisabled();
 
-      // Orientation of the gizmo (Global / Local), only meaningful for Grab, Rotate and Scale
+      // Transform Orientation, Global / Local (the header dropdown has all of them): the axes of the gizmo and of X / Y / Z in G / R / S
       {
-         const bool local = (editor.m_gizmoMode == ImGuizmo::LOCAL);
-         ImGui::BeginDisabled(editor.m_gizmoOperation == ImGuizmo::OPERATION(0));
-         if (ToolButton(ICON_LC_BOX, local))
-            editor.m_gizmoMode = local ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
-         Tip(local ? "Orientation: Local" : "Orientation: Global", nullptr,
-            editor.m_gizmoOperation == ImGuizmo::OPERATION(0) ? "Not available in Select mode."
-                                                              : (local ? "Click to switch to Global. Repeating G / R / S also switches." : "Click to switch to Local. Repeating G / R / S also switches."));
-         ImGui::EndDisabled();
+         using Orientation = EditorUI::TransformOrientation;
+         const Orientation orientation = editor.m_transformOrientation;
+         const bool global = orientation == Orientation::Global;
+         if (ToolButton(ICON_LC_BOX, !global))
+            editor.SetTransformOrientation(global ? Orientation::Local : Orientation::Global);
+         static constexpr const char *titles[] = { "Orientation: Global", "Orientation: Local", "Orientation: Normal", "Orientation: View" };
+         Tip(titles[static_cast<int>(orientation)], nullptr, global ? "Click to switch to Local. Repeating G / R / S in the gizmo also switches." : "Click to switch to Global. Repeating G / R / S in the gizmo also switches.");
       }
    }
    ImGui::End();
