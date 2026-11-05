@@ -884,7 +884,7 @@ void EditorUI::SetAreaLayout(const AreaLayout &layout)
    m_raiseAreaWindows = true;
    if (m_areas.IsHosted(AreaEditor::PartLibrary))
       m_partLibrary.Show(); // Rescan the library folders
-   BindAreaPanels(); // The leaves have new ids: each area's panel loads the state saved with it
+   BindAreaPanels(); // The areas of the layout get their panels: a workspace shown again takes back its parked ones, a new area a panel loading the state saved with it
    ComputeAreaRects();
 }
 
@@ -950,6 +950,24 @@ OutlinerPanel *EditorUI::GetOutlinerArea(const int leafId) const
 {
    const auto it = m_outliners.find(leafId);
    return it != m_outliners.end() ? it->second.get() : nullptr;
+}
+
+void EditorUI::RefreshParkedStates(AreaLayout &layout) const
+{
+   // The saved tree of a workspace not shown has the states of when it was left: its parked panels may have changed since (a pinned object renamed)
+   vector<int> leaves;
+   for (const AreaNode &node : layout.Nodes())
+      if (!node.isSplit)
+         leaves.push_back(static_cast<int>(node.id));
+   for (const int id : leaves)
+   {
+      if (const auto it = m_parkedOutliners.find(id); it != m_parkedOutliners.end())
+         layout.SetState(id, it->second->SaveAreaState());
+      // A pin to an object the current table does not have is kept as saved: during a play test the table shown is the live copy, while the
+      // panel was parked pinned to an object of the startup table that is being saved (a pin to a deleted object resolves as not found on load)
+      if (const auto it = m_parkedProperties.find(id); it != m_parkedProperties.end() && it->second->IsPinLive())
+         layout.SetState(id, it->second->SaveAreaState());
+   }
 }
 
 PropertiesPanel *EditorUI::GetPropertiesArea(const int leafId) const
@@ -1018,13 +1036,14 @@ const PropertiesPanel *EditorUI::GetJumpPropertiesPanel() const
 
 PropertiesPanel &EditorUI::GetSelectionProperties(const bool prepare)
 {
-   // A shown Properties area that follows the selection has prepared its curation on it when it was drawn this frame (areas are drawn before the N-panel)
+   // A shown Properties area that follows the selection, prepared on it again here: it was drawn this frame (areas are drawn before the N-panel), except
+   // in fly mode or under the inspection modal (areas not drawn) and for a new area, whose curation would be missing or of an older selection
    for (const LeafRect &leaf : m_leafRects)
       if (leaf.visible && leaf.type == AreaType::Properties)
          if (PropertiesPanel *const panel = GetPropertiesArea(leaf.id); panel != nullptr && !panel->IsPinned())
          {
-            if (prepare && !panel->HasCuration())
-               panel->PrepareCuration(); // Not drawn yet (a new area after a table sync or a workspace switch): its Item tab would be blank for a frame
+            if (prepare)
+               panel->PrepareCuration(); // On the current selection, also when the areas are not drawn (fly mode, inspection) or not yet (a new area); cheap when unchanged
             return *panel;
          }
    if (prepare)
@@ -1295,7 +1314,7 @@ void EditorUI::UpdateAreaLayout()
          else if (!applied && op.kind == PendingAreaOp::Kind::Join)
             Report("Cannot join these areas");
       }
-      BindAreaPanels(); // New areas get their panels (with their saved state), the slots of the areas that are gone are freed
+      BindAreaPanels(); // New areas get their panels (with their saved state), the panels of the areas that are gone are parked or dropped
    }
    ComputeAreaRects();
    // Area under the mouse, for the maximize toggle: not while a popup (View menu, editor type) or the palette covers the areas

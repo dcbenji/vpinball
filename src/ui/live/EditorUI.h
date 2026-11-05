@@ -834,12 +834,13 @@ private:
    };
    vector<AreaCopy> m_areaCopies; // Splits applied this frame, copied once the new areas have their panels
    void BindAreaPanels(); // Panels of the areas of the tree (after any change of m_areas)
+   void RefreshParkedStates(AreaLayout &layout) const; // A hidden workspace's saved tree: its areas' states from their parked panels (table save)
    void SyncAreaStates(); // The panels' states written to their leaves of m_areas (before a split copies one, a save or a workspace capture)
    AreaLayout GetAreaLayoutWithState() const; // m_areas with the panels' current states
    OutlinerPanel *GetOutlinerArea(int leafId) const;
    PropertiesPanel *GetPropertiesArea(int leafId) const;
-   // The first shown Properties area following the selection, else m_properties (prepare: its curation is first prepared on the selection; it may harvest
-   // in a hidden window, so it is called before a window is begun)
+   // The first shown Properties area following the selection, else m_properties (prepare: its curation is first prepared on the current selection; it
+   // may harvest in a hidden window, so it is called before a window is begun)
    PropertiesPanel &GetSelectionProperties(bool prepare = true);
    const PropertiesPanel *GetJumpPropertiesPanel() const; // Properties area a search palette jump goes to: the first shown one following the selection, else the first shown one
    std::vector<PendingAreaOp> m_pendingAreaOps;

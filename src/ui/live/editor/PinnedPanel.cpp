@@ -566,6 +566,9 @@ void PinnedPanel::SaveTo(PinTable *table) const
       return; // Workspaces never used with this table: leave its data as it is
    std::array<Workspace, WorkspaceCount> workspaces = m_workspaces;
    CaptureWorkspace(workspaces[m_activeWorkspace]);
+   for (int i = 0; i < WorkspaceCount; i++)
+      if (i != m_activeWorkspace)
+         m_editor.RefreshParkedStates(workspaces[i].layout); // A pin of a hidden workspace follows a rename made since it was left
    if (m_workspacesPristine)
    {
       // Layout is only shown as active: it becomes the table's workspace as soon as the user changed the areas (editor types, widths,
@@ -1232,7 +1235,7 @@ void PinnedPanel::RenderItemTab(bool hovered)
 {
    // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
    EditorUI &editor = m_editor;
-   const PropertiesPanel &properties = editor.GetSelectionProperties(false); // Prepared by Render (or drawn in its area this frame)
+   const PropertiesPanel &properties = editor.GetSelectionProperties(false); // Prepared on the current selection by Render, before the sidebar window was begun
    // Nothing selected: an empty tab (like Blender's Item tab), not a second copy of the table's Look fields shown in Properties
    const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
    if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
@@ -1340,9 +1343,9 @@ void PinnedPanel::Render()
       LoadFavoriteDefs(); // May harvest (hidden window): before the sidebar window is begun
    if (!editor.m_showSidebar || !editor.IsViewportVisible())
       return; // The N-panel belongs to the viewport area: not with a panel maximized over it
-   // The Item tab shows the Properties editor's Transform list: keep it current when the Properties editor is hidden
+   // The Item tab shows the Transform list of a Properties area following the selection (else of the Properties no area shows)
    if (editor.m_sidebarTab == EditorUI::SidebarTab::Item)
-      editor.GetSelectionProperties(); // Prepares the selection's curation unless a Properties area following the selection has just been drawn
+      editor.GetSelectionProperties(); // Prepares its curation on the current selection (may harvest in a hidden window: before the sidebar window is begun)
 
    // N-panel: a fixed area along the right edge of the viewport area, resized by its splitter
    const float dpi = editor.m_liveUI.GetDPI();

@@ -52,7 +52,8 @@ public:
    void CopyAreaState(const PropertiesPanel &other); // A split's new area: the split area's pin (the same object), tab and search
    int GetLeaf() const { return m_leafId; }
    bool IsPinned() const { return m_locked || !m_pendingPin.is_null(); }
-   bool HasCuration() const { return m_curation.active; } // Its tab lists were prepared (by a draw or PrepareCuration)
+   // Not pinned, or pinned to an object of the current table (not, e.g., a startup table object while a play test shows its live copy)
+   bool IsPinLive() const { return !m_locked || IsSelectionAlive(m_lockedSel); }
    // The tab lists point into the pinned panel's field definitions: dropped with the definitions (table switch)
    void DropCuration();
    // Curated tab lists of the selection (or of the pinned object while the panel is drawn); may harvest in a hidden window: call it before a window is begun
