@@ -125,6 +125,8 @@ void MirrorPrimitive(Primitive &prim, const Axis axis, const float coord)
             wire.x = Neg(wire.x);
          prim.SetRailWires(wires);
          d.m_railThirdRight = !d.m_railThirdRight;
+         for (WireRail::Fixture &fixture : d.m_railFixtures) // Rings, rungs, cradles and stands keep their place along the route, mirrored across it
+            WireRail::MirrorFixture(fixture);
       }
       prim.UpdateWire();
       return;

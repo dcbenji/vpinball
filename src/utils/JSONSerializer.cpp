@@ -492,6 +492,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RLBD), "rail_ball_diameter" },
             { FID(RLCD), "rail_curvature_detail" },
             { FID(RLSC), "rail_show_collider" },
+            { FID(RFIX), "rail_fixtures" },
             { FID(RGRD), "rubber_guide_radius" },
             { FID(PGEN), "plastic_gen" },
             { FID(PHGT), "plastic_height" },
@@ -865,6 +866,35 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(LANR), "named_layer" },
       });
 
+      m[JSONSerializer::kRailFixtureNode] = MakeMap({
+         { FID(RFTY), "type" },
+         { FID(RFPS), "position" },
+         { FID(RFEN), "enabled" },
+         { FID(RFST), "solder_threshold" },
+         { FID(RFSS), "solder_size" },
+         { FID(RFOF), "offset" },
+         { FID(RFSC), "scale" },
+         { FID(RFDN), "density" },
+         { FID(RFCU), "cutout" },
+         { FID(RFSL), "straight" },
+         { FID(RFAN), "angle" },
+         { FID(RFLN), "length" },
+         { FID(RFBL), "bottom_length" },
+         { FID(RFAM), "arm_lengths" },
+         { FID(RFAA), "arm_angle" },
+         { FID(RFRT), "rotation" },
+         { FID(RFCR), "corner_radius" },
+         { FID(RFLS), "leg_side" },
+         { FID(RFSV), "start_vector" },
+         { FID(RFSD), "start_length" },
+         { FID(RFFP), "foot_position" },
+         { FID(RFFR), "foot_rotation" },
+         { FID(RFFC), "foot_clockwise" },
+         { FID(RFFW), "foot_width" },
+         { FID(RFFL), "foot_arm_length" },
+         { FID(RFFA), "foot_connected_arm_length" },
+      });
+
       m[JSONSerializer::kPinBinaryNode] = MakeMap({
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(SIZE), "size" }, { FID(DATA), "data" }, // Pack-relative path of the binary file holding the data
       });
@@ -1011,6 +1041,7 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    {
    case FID(DPNT):
    case FID(PHLS): return kDragPointNode;
+   case FID(RFIX): return kRailFixtureNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
    case FID(JPEG): return kPinBinaryNode;

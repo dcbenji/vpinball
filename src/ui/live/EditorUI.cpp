@@ -17,6 +17,7 @@
 #include "editor/IconsLucide.h"
 #include "editor/LiveRenderContext.h"
 #include "editor/MirrorParts.h"
+#include "editor/PrimitiveUIPart.h"
 #include "editor/PropertyPane.h"
 #include "editor/RubberBetweenPosts.h"
 
@@ -2444,7 +2445,15 @@ void EditorUI::RenderUI()
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
             plastic->m_plasticPickDirty = false;
+            plastic->m_railPickOnlyDirty = false; // The full update refreshes the picking quadtree too
             m_player->m_physics->Update(plastic);
+         }
+         // A support edit of a Wire Rail: the picking quadtree only, the channel colliders are unchanged
+         else if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_railPickOnlyDirty && !IsDragInProgress() && !ImGui::IsAnyItemActive())
+         {
+            Primitive *const rail = static_cast<Primitive *>(part);
+            rail->m_railPickOnlyDirty = false;
+            m_player->m_physics->UpdateUI(rail);
          }
       }
 
@@ -2681,8 +2690,9 @@ void EditorUI::RenderUI()
    }
 
    // Selection manipulator
+   RailFixtureHandle(); // A support's handle on the route, ahead of the gizmo and the box select
    // A Wire Rail, as VPE: double-click the route to insert a point, double-click a point to delete it. Before the gizmo, which the first click of it put on the point
-   if (m_pointEditPart != nullptr && !m_pointEditCenter && m_viewportVisible && (!io.WantCaptureMouse || ImGuizmo::IsOver()) && !io.KeyShift && !m_modal.active && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+   if (m_pointEditPart != nullptr && !m_pointEditCenter && m_viewportVisible && (!io.WantCaptureMouse || ImGuizmo::IsOver()) && !io.KeyShift && !m_modal.active && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !m_railFixtureDrag.active
       && !ImGuizmo::IsViewManipulateHovered() && RailPointDoubleClick(HitTestDragPoint(ImGui::GetMousePos()), ImGui::GetMousePos()))
    {
       m_pointDragPending = false;
@@ -2717,7 +2727,7 @@ void EditorUI::RenderUI()
          m_gizmoSlot = -1; // The view is gone
    }
    const SecondaryViewInfo *const gizmoView = m_gizmoSlot >= 0 && m_viewInfo[m_gizmoSlot].valid ? &m_viewInfo[m_gizmoSlot] : nullptr;
-   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost && SelectionInView(m_gizmoSlot)
+   if (isSelectionTransformValid && !m_table->IsLocked() && !m_modal.active && !gizmoLost && SelectionInView(m_gizmoSlot) && !m_railFixtureDrag.active
       && (m_gizmoSlot >= 0 ? (gizmoView != nullptr && m_pointEditPart == nullptr && m_camMode != ViewMode::DesktopBackdrop) : m_viewportVisible))
    {
       float camViewLH[16];
@@ -3260,7 +3270,7 @@ void EditorUI::RenderUI()
       // selected point moves the selected points in the table XY plane, drag box selects points
       measureCanStart = m_measure.IsActive() && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsViewManipulateHovered() && !ImGuizmo::IsUsingViewManipulate();
       if (!m_measure.IsActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered()
-         && !ImGuizmo::IsUsingViewManipulate()) // Alt+click is orbit when Alt acts as the middle button
+         && !ImGuizmo::IsUsingViewManipulate() && !m_railFixtureDrag.active) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_refImage.PickActive())
@@ -4005,7 +4015,7 @@ string EditorUI::CountLabel(const char *verb, const size_t count, const string &
 }
 
 // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
-bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending || m_plasticBow.pending || m_plasticBow.active || m_plasticPill.pending || m_plasticPill.active; }
+bool EditorUI::IsDragInProgress() const { return m_modal.active || m_gizmoDragActive || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending || m_plasticBow.pending || m_plasticBow.active || m_plasticPill.pending || m_plasticPill.active || m_railFixtureDrag.active; }
 
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
 
@@ -7434,6 +7444,30 @@ void EditorUI::EndPointEdit()
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
 
+// The point of a polyline nearest the mouse on the screen, within maxPx: its segment and how far along it. False: none (or all behind the camera)
+template <class Point>
+static bool NearestOnPolyline(const LiveRenderContext &ctx, const vector<Point> &pts, const ImVec2 &mouse, float maxPx, size_t &segment, float &along)
+{
+   bool found = false;
+   for (size_t i = 0; i + 1 < pts.size(); i++)
+   {
+      const ImVec2 a = ctx.Project(Vertex3Ds(pts[i].x, pts[i].y, pts[i].z)), b = ctx.Project(Vertex3Ds(pts[i + 1].x, pts[i + 1].y, pts[i + 1].z));
+      if (a.x == FLT_MAX || b.x == FLT_MAX)
+         continue;
+      const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+      const float t = len2 > 0.f ? clamp(((mouse.x - a.x) * dx + (mouse.y - a.y) * dy) / len2, 0.f, 1.f) : 0.f;
+      const float d = sqrtf((a.x + t * dx - mouse.x) * (a.x + t * dx - mouse.x) + (a.y + t * dy - mouse.y) * (a.y + t * dy - mouse.y));
+      if (d < maxPx)
+      {
+         maxPx = d;
+         segment = i;
+         along = t;
+         found = true;
+      }
+   }
+   return found;
+}
+
 // Wire Rail, as VPE: double-click the route to insert a point there, double-click a point to delete it. False: not a rail, or nothing near the mouse
 bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
 {
@@ -7450,26 +7484,11 @@ bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
    vector<RenderVertex3D> fine;
    rail->m_wireCurve.GetRgVertex(fine, false, 0.25f);
    const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
-   float best = 8.f * m_liveUI.GetDPI();
-   Vertex2D at;
-   bool found = false;
-   for (size_t i = 0; i + 1 < fine.size(); i++)
-   {
-      const ImVec2 a = ctx.Project(Vertex3Ds(fine[i].x, fine[i].y, fine[i].z)), b = ctx.Project(Vertex3Ds(fine[i + 1].x, fine[i + 1].y, fine[i + 1].z));
-      if (a.x == FLT_MAX || b.x == FLT_MAX)
-         continue;
-      const float dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
-      const float t = len2 > 0.f ? clamp(((mousePos.x - a.x) * dx + (mousePos.y - a.y) * dy) / len2, 0.f, 1.f) : 0.f;
-      const float d = sqrtf((a.x + t * dx - mousePos.x) * (a.x + t * dx - mousePos.x) + (a.y + t * dy - mousePos.y) * (a.y + t * dy - mousePos.y));
-      if (d < best)
-      {
-         best = d;
-         at = Vertex2D(fine[i].x + t * (fine[i + 1].x - fine[i].x), fine[i].y + t * (fine[i + 1].y - fine[i].y));
-         found = true;
-      }
-   }
-   if (!found)
+   size_t seg = 0;
+   float t = 0.f;
+   if (!NearestOnPolyline(ctx, fine, mousePos, 8.f * m_liveUI.GetDPI(), seg, t))
       return false;
+   const Vertex2D at(fine[seg].x + t * (fine[seg + 1].x - fine[seg].x), fine[seg].y + t * (fine[seg + 1].y - fine[seg].y));
    m_undo.BeginUndo();
    m_undo.MarkForUndo(rail);
    m_undo.SetFieldLabel("Add Point");
@@ -7486,6 +7505,91 @@ bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(rail);
    return true;
+}
+
+// The handle of the selected Wire Rail support: a press on it drags its Position along the route (the nearest route point under the mouse), a render mesh edit per frame
+void EditorUI::RailFixtureHandle()
+{
+   const ImGuiIO &io = ImGui::GetIO();
+   RailFixtureDrag &drag = m_railFixtureDrag;
+   Primitive *rail = nullptr;
+   PrimitiveUIPart *ui = nullptr;
+   if (m_selection.GetType() == Selection::S_EDITABLE && m_multiSel.size() <= 1 && m_selection.GetPart() != nullptr)
+   {
+      IEditable *const e = m_selection.GetPart()->GetEditable();
+      if (e->GetItemType() == eItemPrimitive && static_cast<Primitive *>(e)->m_d.m_wireRail)
+      {
+         rail = static_cast<Primitive *>(e);
+         ui = static_cast<PrimitiveUIPart *>(m_selection.GetPart().get());
+      }
+   }
+   if (drag.active)
+   {
+      const bool valid = rail != nullptr && rail == drag.rail && ui->GetRailFixture() == drag.index && drag.index < (int)rail->m_d.m_railFixtures.size();
+      const bool cancel = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+      if (valid && cancel)
+         rail->m_d.m_railFixtures[drag.index].position = drag.startPosition; // Back where it was, and the record of the move dropped
+      if (valid && !cancel && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      {
+         const vector<float> &dist = rail->GetRailRowDist();
+         const vector<WireRail::Frame> &frames = rail->GetRailFrames();
+         vector<Vertex3Ds> pts;
+         for (const WireRail::Frame &f : frames)
+            pts.emplace_back(f.p.x, f.p.y, f.p.z);
+         const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+         size_t seg = 0;
+         float t = 0.f;
+         if (dist.size() == frames.size() && NearestOnPolyline(ctx, pts, ImGui::GetMousePos(), 1e9f, seg, t))
+         {
+            const float position = dist[seg] + t * (dist[seg + 1] - dist[seg]);
+            WireRail::Fixture &fx = rail->m_d.m_railFixtures[drag.index];
+            if (fabsf(position - fx.position) > 1e-4f)
+            {
+               fx.position = position;
+               drag.moved = true;
+               rail->UpdateRailFixtures(); // The render mesh only, the picking collider is refreshed after the release
+            }
+         }
+         return;
+      }
+      // Released, canceled or lost: the record stays only for a move that ended with the release
+      const bool keep = drag.moved && (!cancel || !valid); // Also when the selection changed mid-drag (A, Ctrl+I, Tab): the record holds the start Position, so the move stays undoable
+      if (valid && cancel)
+         rail->UpdateRailFixtures();
+      if (!keep && m_undo.TopRecordId() == drag.recordId)
+         m_undo.Discard();
+      if (valid)
+         m_renderer->InvalidateShadowContent();
+      if (cancel)
+         m_suppressNextEscape = true; // The Esc release is not an editor Esc (no deselect)
+      drag = RailFixtureDrag();
+      return;
+   }
+   if (rail == nullptr || ui == nullptr || m_table->IsLocked() || !m_viewportVisible || m_modal.active || io.KeyShift || m_plasticTrace.active || m_measure.IsActive() || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+      || (io.WantCaptureMouse && !ImGuizmo::IsOver()) || ImGuizmo::IsViewManipulateHovered() || !SelectionInView(-1)) // (not on a rail the 3D Viewport's Local View hides)
+      return;
+   const int index = ui->GetRailFixture();
+   const vector<WireRail::FixtureShape> &shapes = rail->GetRailFixtureShapes();
+   if (index < 0 || index >= (int)shapes.size() || index >= (int)rail->m_d.m_railFixtures.size() || !shapes[index].built)
+      return;
+   const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   const ImVec2 at = ctx.Project(Vertex3Ds(shapes[index].anchor.x, shapes[index].anchor.y, shapes[index].anchor.z));
+   const ImVec2 mouse = ImGui::GetMousePos();
+   const float reach = 8.f * m_liveUI.GetDPI();
+   if (at.x == FLT_MAX || (at.x - mouse.x) * (at.x - mouse.x) + (at.y - mouse.y) * (at.y - mouse.y) > reach * reach)
+      return;
+   m_undo.BeginUndo();
+   m_undo.MarkForUndo(rail);
+   m_undo.SetFieldLabel("Move Fixture");
+   m_undo.EndUndo();
+   drag.active = true;
+   drag.rail = rail;
+   drag.index = index;
+   drag.startPosition = rail->m_d.m_railFixtures[index].position;
+   drag.moved = false;
+   drag.recordId = m_undo.TopRecordId();
+   m_pointDragPending = false; // The press is the handle's, not a point's or the box select's
+   m_boxSelectActive = false;
 }
 
 void EditorUI::AddPointOnNearestSegment()

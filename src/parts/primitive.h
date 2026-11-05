@@ -128,6 +128,7 @@ public:
    float m_railBallDiameter = WireRail::kDefaultBallDiameter; // The channel fit only
    int m_railCurvatureDetail = WireRail::kDefaultCurvatureDetail;
    bool m_railShowCollider = false;
+   vector<WireRail::Fixture> m_railFixtures; // Rings, rungs, cradles and stands, visual only, in the render mesh (RFIX sub objects, none saved when empty)
    // Plastic from Atlas generator (editor operator): host = the print primitive (bottom cap, the atlas image), companions = top cap and bevel. Fields only saved when on
    bool m_plasticGen = false;
    float m_plasticHeight = 50.f; // underside above the playfield
@@ -426,6 +427,12 @@ public:
    const WireRail::Profile &GetRailProfile() const { return m_railProfile; }
    const string &GetRailError() const { return m_railError; } // Why the profile can not be fitted (the rail then has no collider), empty when it fits
    float GetRailMinRadius() const { return m_railMinRadius; }
+   // Fixtures: freezy's supports along the route. UpdateRailFixtures = a fixture edit: the render mesh and the picking collider, never the gameplay colliders
+   void UpdateRailFixtures();
+   const vector<WireRail::FixtureShape> &GetRailFixtureShapes() const { return m_railFixtureShapes; }
+   const vector<float> &GetRailRowDist() const { return m_railRowDist; }
+   float GetRailLength() const { return m_railRowDist.empty() ? 0.f : m_railRowDist.back(); }
+   int GetRailFixtureTriangles() const { return m_railFixtureTriangles; }
 
    // Plastic from Atlas generator: outline (x, y, smooth = arc peak) and holes (x, y, z = diameter) in table coordinates, the mesh is built from them (PlasticMesh)
    DragPointCurve m_plasticCurve;
@@ -437,6 +444,7 @@ public:
    int m_plasticSkippedHoles = 0; // Holes whose centre is outside the outline (left out of the mesh)
    int m_plasticReportedCrossing = 0, m_plasticReportedSkipped = 0; // The counts the editor last said (status message)
    bool m_plasticCrossingWarn = false; // The two counts differ from the ones last said: the editor reports once and clears this
+   bool m_railPickOnlyDirty = false; // A support edit of a Wire Rail: the editor refreshes the picking quadtree only (the channel colliders are unchanged)
    bool m_plasticPickDirty = false; // The mesh was rebuilt: the editor refreshes the picking collider
    void InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool> &smooth, const vector<Vertex3Ds> &holes); // Turns this (new) primitive into a plastic host
    void RegeneratePlastic(); // Rebuilds the host mesh and the meshes of the companions found in the table (no-op unless m_d.m_plasticGen)
@@ -488,6 +496,9 @@ private:
    WireRail::Profile m_railProfile;
    string m_railError;
    float m_railMinRadius = 0.f;
+   vector<float> m_railRowDist; // 3D length along the route to each frame
+   vector<WireRail::FixtureShape> m_railFixtureShapes;
+   int m_railFixtureTriangles = 0;
    Matrix3D m_genDragMatrix; // Applied after m_fullMatrix while m_genDragMoved, a rebuild of the mesh drops it
    bool m_genDragMoved = false;
    bool m_skipRendering = false;

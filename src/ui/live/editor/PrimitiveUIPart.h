@@ -41,6 +41,8 @@ protected:
 public:
 
    void UpdatePropertyPane(PropertyPane& props) override;
+   int GetRailFixture() const { return m_railFixture; } // The Wire Rail support selected in its list (-1 none)
+   void SetRailFixture(const int i) { m_railFixture = i; }
 
    // Traced insert apply button: the fields a slider touched on this primitive (Primitive::m_tracedTouched), and their copy to another traced insert.
    // A look key is written alone in the target's traced_params, its other keys stay
@@ -49,9 +51,11 @@ public:
 
 private:
    void UpdateRailPanel(PropertyPane& props); // WireRailPanel.cpp
+   void UpdateRailFixturePanel(PropertyPane& props);
    void RenderRailOverlay(const EditorRenderContext& ctx);
    int m_railWire = 0; // The wire selected in the cross-section
    bool m_railDrag = false;
+   int m_railFixture = -1; // The support selected in the list of the Fixtures section
 
    void ImportMesh();
    void ExportMesh();

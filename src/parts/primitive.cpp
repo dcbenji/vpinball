@@ -131,6 +131,7 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_railBallDiameter = wireDefaults.m_railBallDiameter;
    m_d.m_railCurvatureDetail = wireDefaults.m_railCurvatureDetail;
    m_d.m_railShowCollider = wireDefaults.m_railShowCollider;
+   m_d.m_railFixtures.clear();
    m_d.m_rubberGuideRadius = wireDefaults.m_rubberGuideRadius;
    m_d.m_plasticGen = wireDefaults.m_plasticGen;
    m_d.m_plasticHeight = wireDefaults.m_plasticHeight;
@@ -2242,8 +2243,16 @@ void Primitive::RegenerateRail()
    vector<Vertex3D_NoTex2> verts;
    vector<unsigned int> idx;
    const vector<WireRail::Wire> wires = GetRailWires();
-   if (WireRail::BuildTubes<Vertex3D_NoTex2>(m_railFrames, wires, radius, m_d.m_wireSides, m_d.m_railCapBevel, verts, idx))
+   const bool tubes = WireRail::BuildTubes<Vertex3D_NoTex2>(m_railFrames, wires, radius, m_d.m_wireSides, m_d.m_railCapBevel, verts, idx);
+   m_railRowDist = WireRail::RowDistances(m_railFrames);
+   m_railError.clear();
+   const bool fits = WireRail::FitProfile(wires, radius, max(m_d.m_railBallDiameter, 1.f) * 0.5f, m_railProfile, m_railError);
+   // The supports and their solder, visual only: after the tubes, into the same mesh (the fit above is what the ball sits on, for the warning of a support in its path)
+   WireRail::BuildFixtures<Vertex3D_NoTex2>(m_railFrames, m_railRowDist, wires, radius, m_d.m_wireSides, m_d.m_railCapBevel, max(m_d.m_railBallDiameter, 1.f) * 0.5f, fits ? m_railProfile : WireRail::Profile {},
+      m_d.m_railFixtures, verts, idx, m_railFixtureShapes);
+   if (tubes)
    {
+      m_railFixtureTriangles = (int)(idx.size() / 3);
       m_mesh.Clear();
       m_mesh.m_vertices = std::move(verts);
       m_mesh.m_indices = std::move(idx);
@@ -2262,10 +2271,15 @@ void Primitive::RegenerateRail()
    };
    identity(this);
 
-   m_railError.clear();
-   const bool fits = WireRail::FitProfile(wires, radius, max(m_d.m_railBallDiameter, 1.f) * 0.5f, m_railProfile, m_railError);
-   m_railChannel = fits ? WireRail::BuildChannel(m_railFrames, m_railProfile) : WireRail::Channel {};
-   m_plasticPickDirty = true; // The editor refreshes the picking collider (same as the plastics) once the mesh has been rebuilt
+   WireRail::Channel channel = fits ? WireRail::BuildChannel(m_railFrames, m_railProfile) : WireRail::Channel {};
+   const bool channelSame = WireRail::SameChannel(channel, m_railChannel);
+   m_railChannel = std::move(channel);
+   // The editor refreshes picking once the mesh has been rebuilt. A rebuild that left the channel as it was (a support edit) needs the picking quadtree only, not the colliders
+   if (channelSame)
+      m_railPickOnlyDirty = true;
+   else
+      m_plasticPickDirty = true; // Never cleared here: a pending full refresh stays
+   // The channel parts are filled every time (a cheap copy): a channel part created after the first build, or restored by an undo or a paste, has no mesh of its own yet
 
    for (Primitive *const comp : GetPlasticCompanions())
    {
@@ -2281,6 +2295,15 @@ void Primitive::RegenerateRail()
       comp->m_mesh.m_indices = m_railChannel.tris;
       identity(comp);
    }
+}
+
+void Primitive::UpdateRailFixtures()
+{
+   // RenderSetup rebuilds the mesh, fixtures included. RegenerateRail compares the channel with the last one: unchanged, it asks for the picking quadtree only (the supports are in the mesh a click picks)
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this);
+   else
+      RegenerateRail();
 }
 
 bool Primitive::GradeRail(const int firstPoint, const int lastPoint)
@@ -2510,6 +2533,98 @@ void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool>
 // Save and Load
 //////////////////////////////
 
+// A Wire Rail fixture (RFIX, a skippable sub object: older versions skip it, still hashing it). All the fields of its type are written
+static void SaveRailFixture(IObjectWriter &writer, const WireRail::Fixture &f)
+{
+   writer.BeginObject(FID(RFIX), true, true);
+   writer.WriteInt(FID(RFTY), f.type);
+   writer.WriteFloat(FID(RFPS), f.position);
+   writer.WriteBool(FID(RFEN), f.enabled);
+   writer.WriteFloat(FID(RFST), f.solderThreshold);
+   writer.WriteFloat(FID(RFSS), f.solderSize);
+   switch (f.type)
+   {
+   case WireRail::kFixtureRing:
+      writer.WriteVector2(FID(RFOF), Vertex2D(f.offsetX, f.offsetZ));
+      writer.WriteFloat(FID(RFSC), f.scale);
+      writer.WriteInt(FID(RFDN), f.density);
+      writer.WriteVector3(FID(RFCU), vec3(f.cutout ? 1.f : 0.f, f.cutoutStart, f.cutoutEnd));
+      writer.WriteVector3(FID(RFSL), vec3(f.straight ? 1.f : 0.f, f.straightStart, f.straightEnd));
+      break;
+   case WireRail::kFixtureRung:
+      writer.WriteVector2(FID(RFOF), Vertex2D(f.offsetX, f.offsetZ));
+      writer.WriteFloat(FID(RFAN), f.angle);
+      writer.WriteFloat(FID(RFLN), f.length);
+      break;
+   case WireRail::kFixtureCradle:
+      writer.WriteVector2(FID(RFOF), Vertex2D(f.offsetX, f.offsetZ));
+      writer.WriteInt(FID(RFDN), f.density);
+      writer.WriteFloat(FID(RFBL), f.bottomLength);
+      writer.WriteVector2(FID(RFAM), Vertex2D(f.leftArm, f.rightArm));
+      writer.WriteFloat(FID(RFAA), f.armAngle);
+      writer.WriteFloat(FID(RFRT), f.rotation);
+      writer.WriteFloat(FID(RFCR), f.cornerRadius);
+      break;
+   case WireRail::kFixtureStand:
+      writer.WriteVector2(FID(RFOF), Vertex2D(f.offsetX, f.offsetZ));
+      writer.WriteFloat(FID(RFLN), f.length);
+      writer.WriteInt(FID(RFLS), f.legLeft ? 0 : 1);
+      writer.WriteVector3(FID(RFSV), vec3(f.startVector.x, f.startVector.y, f.startVector.z));
+      writer.WriteFloat(FID(RFSD), f.startLength);
+      writer.WriteVector3(FID(RFFP), vec3(f.footPosition.x, f.footPosition.y, f.footPosition.z));
+      writer.WriteVector3(FID(RFFR), vec3(f.footRotation.x, f.footRotation.y, f.footRotation.z));
+      writer.WriteBool(FID(RFFC), f.footClockwise);
+      writer.WriteFloat(FID(RFFW), f.footWidth);
+      writer.WriteFloat(FID(RFFL), f.footArm);
+      writer.WriteFloat(FID(RFFA), f.footConnectedArm);
+      break;
+   default: break; // A type of a later version (hairpin, elbow, rail trim) has its fields where it was made: only the common ones are kept
+   }
+   writer.EndObject();
+}
+
+static WireRail::Fixture LoadRailFixture(IObjectReader &reader)
+{
+   WireRail::Fixture f;
+   reader.AsObject(
+      [&f](int tag, IObjectReader &r)
+      {
+         switch (tag)
+         {
+         case FID(RFTY): f.type = r.AsInt(); break;
+         case FID(RFPS): f.position = r.AsFloat(); break;
+         case FID(RFEN): f.enabled = r.AsBool(); break;
+         case FID(RFST): f.solderThreshold = r.AsFloat(); break;
+         case FID(RFSS): f.solderSize = r.AsFloat(); break;
+         case FID(RFOF): { const Vertex2D v = r.AsVector2(); f.offsetX = v.x; f.offsetZ = v.y; break; }
+         case FID(RFSC): f.scale = r.AsFloat(); break;
+         case FID(RFDN): f.density = r.AsInt(); break;
+         case FID(RFCU): { const vec3 v = r.AsVector3(); f.cutout = v.x != 0.f; f.cutoutStart = v.y; f.cutoutEnd = v.z; break; }
+         case FID(RFSL): { const vec3 v = r.AsVector3(); f.straight = v.x != 0.f; f.straightStart = v.y; f.straightEnd = v.z; break; }
+         case FID(RFAN): f.angle = r.AsFloat(); break;
+         case FID(RFLN): f.length = r.AsFloat(); break;
+         case FID(RFBL): f.bottomLength = r.AsFloat(); break;
+         case FID(RFAM): { const Vertex2D v = r.AsVector2(); f.leftArm = v.x; f.rightArm = v.y; break; }
+         case FID(RFAA): f.armAngle = r.AsFloat(); break;
+         case FID(RFRT): f.rotation = r.AsFloat(); break;
+         case FID(RFCR): f.cornerRadius = r.AsFloat(); break;
+         case FID(RFLS): f.legLeft = r.AsInt() == 0; break;
+         case FID(RFSV): { const vec3 v = r.AsVector3(); f.startVector = { v.x, v.y, v.z }; break; }
+         case FID(RFSD): f.startLength = r.AsFloat(); break;
+         case FID(RFFP): { const vec3 v = r.AsVector3(); f.footPosition = { v.x, v.y, v.z }; break; }
+         case FID(RFFR): { const vec3 v = r.AsVector3(); f.footRotation = { v.x, v.y, v.z }; break; }
+         case FID(RFFC): f.footClockwise = r.AsBool(); break;
+         case FID(RFFW): f.footWidth = r.AsFloat(); break;
+         case FID(RFFL): f.footArm = r.AsFloat(); break;
+         case FID(RFFA): f.footConnectedArm = r.AsFloat(); break;
+         }
+         return true;
+      },
+      true);
+   WireRail::ClampFixture(f);
+   return f;
+}
+
 void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
 {
    if (!saveForUndo && m_ptable != nullptr && m_d.m_plasticRole == kRailChannelRole) // The channel part collides in older engines: with the physics of its rail
@@ -2667,6 +2782,8 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
          writer.WriteFloat(FID(RLBD), m_d.m_railBallDiameter);
          writer.WriteInt(FID(RLCD), m_d.m_railCurvatureDetail);
          writer.WriteBool(FID(RLSC), m_d.m_railShowCollider);
+         for (const WireRail::Fixture &f : m_d.m_railFixtures) // None for a rail without supports: it saves byte-identical to one that never had them
+            SaveRailFixture(writer, f);
       }
       m_wireCurve.SavePoints(writer);
    }
@@ -2831,6 +2948,13 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RLBD): m_d.m_railBallDiameter = reader.AsFloat(); break;
          case FID(RLCD): m_d.m_railCurvatureDetail = clamp(reader.AsInt(), 2, 32); break;
          case FID(RLSC): m_d.m_railShowCollider = reader.AsBool(); break;
+         case FID(RFIX):
+         {
+            WireRail::Fixture f = LoadRailFixture(reader);
+            if (m_d.m_railFixtures.size() < WireRail::kMaxFixtures)
+               m_d.m_railFixtures.push_back(f);
+            break;
+         }
          case FID(DPNT): m_wireCurve.LoadPointToken(reader); break; // Moved to the plastic outline after the load if this is a plastic host
          case FID(PGEN): m_d.m_plasticGen = reader.AsBool(); break;
          case FID(PHGT): m_d.m_plasticHeight = reader.AsFloat(); break;

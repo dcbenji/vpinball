@@ -37,6 +37,7 @@
 #include <thread>
 
 class LiveUI;
+class Primitive;
 class EngineMcp;
 class PinTable;
 class Player;
@@ -259,6 +260,19 @@ private:
    Vertex2D UnprojectToPlane(const ImVec2 &mousePos, float z) const;
    void AddPointOnNearestSegment();
    bool RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos);
+   // A Wire Rail support's handle: press within a few pixels of it on the selected rail starts a drag of its Position along the route. One undo record opened at the press,
+   // Esc puts the start Position back and drops it, a release without a move drops it too. Undo and save wait for the release
+   struct RailFixtureDrag
+   {
+      bool active = false;
+      Primitive *rail = nullptr;
+      int index = -1;
+      float startPosition = 0.f;
+      bool moved = false;
+      uint64_t recordId = 0;
+   };
+   RailFixtureDrag m_railFixtureDrag;
+   void RailFixtureHandle();
    void DeleteSelectedPoints();
 
    // DragPointEditContext implementation
