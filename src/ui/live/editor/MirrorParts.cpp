@@ -28,14 +28,19 @@ namespace
 {
 bool HasMeshToFlip(const IEditable *part);
 
-// The reflection F (x -> -x for Axis::X, y -> -y for Axis::Y) turns a rotation by an angle about the axis n into the rotation by the same angle about -F n
-// (a rotation axis is an axial vector). So under F_x a rotation about x keeps its angle and the ones about y and z change sign; under F_y the ones about x
-// and z change sign. For a part whose rotation is Rz * Ry * Rx (row vector convention, any order works) the Euler angles (rx, ry, rz) become (rx, -ry, -rz)
-// under F_x and (-rx, ry, -rz) under F_y, as F (A B C) F = (F A F) (F B F) (F C F).
-float Neg(const float v) { return v == 0.f ? 0.f : -v; } // No negative zero (it would show as -0 in the property panes and the saved files)
+// No negative zero (the mirrored value would be stored as -0 in the table file). The engine builds with -ffast-math (no signed zeros), under which the usual
+// tests for zero (v == 0.f, or a select between 0.f and v, even one written on the bits) are dropped by the optimizer (checked with GCC and clang). So the
+// sign bit is cleared by plain integer arithmetic: the mask keeps it only when the magnitude is not zero (magnitude + 0x7fffffff reaches bit 31 then)
+float NoNegZero(const float v)
+{
+   const uint32_t bits = float_as_uint(v);
+   const uint32_t magnitude = bits & 0x7fffffffu;
+   return uint_as_float(bits & (0x7fffffffu | (((magnitude + 0x7fffffffu) >> 31) << 31)));
+}
+float Neg(const float v) { return NoNegZero(-v); }
 
 // The coordinate along the axis
-float Reflect(const float value, const float coord) { return 2.f * coord - value; }
+float Reflect(const float value, const float coord) { return NoNegZero(2.f * coord - value); }
 
 void ReflectPoint(Vertex2D &v, const Axis axis, const float coord)
 {
@@ -48,8 +53,12 @@ void ReflectPoint(Vertex2D &v, const Axis axis, const float coord)
 // A heading about z (degrees): the direction of a part's own axis, on the mirrored part. For a part symmetric about its own axis (all of them: the mirror image
 // of a flipper is a flipper) the heading a is a -> -a across a vertical line (the axis of rotation stays, the sense reverses), and a -> 180 - a across a
 // horizontal one (the same, then turned half a turn: the line's direction is perpendicular).
-float Heading(const float a, const Axis axis) { return axis == Axis::X ? Neg(a) : 180.f - a; }
+float Heading(const float a, const Axis axis) { return axis == Axis::X ? Neg(a) : NoNegZero(180.f - a); }
 
+// The reflection F (x -> -x for Axis::X, y -> -y for Axis::Y) turns a rotation by an angle about the axis n into the rotation by the same angle about -F n
+// (a rotation axis is an axial vector). So under F_x a rotation about x keeps its angle and the ones about y and z change sign; under F_y the ones about x
+// and z change sign. For a part whose rotation is Rz * Ry * Rx (row vector convention, any order works) the Euler angles (rx, ry, rz) become (rx, -ry, -rz)
+// under F_x and (-rx, ry, -rz) under F_y, as F (A B C) F = (F A F) (F B F) (F C F).
 // Euler angles (x, y, z, degrees) of a 3D rotation
 void MirrorEuler(float &rx, float &ry, float &rz, const Axis axis)
 {
@@ -75,8 +84,7 @@ void MirrorCurve(DragPointCurve &curve, const Axis axis, const float coord, cons
          point->SetX(Reflect(point->GetX(), coord));
       else
          point->SetY(Reflect(point->GetY(), coord));
-      if (point->m_roll != 0.f)
-         point->m_roll = -point->m_roll; // Wire Rail bank: positive raises the right side of the route
+      point->m_roll = Neg(point->m_roll); // Wire Rail bank: positive raises the right side of the route
    }
    if (reverse)
       curve.ReverseOrder();
@@ -131,14 +139,14 @@ void MirrorPrimitive(Primitive &prim, const Axis axis, const float coord)
       const bool x = axis == Axis::X;
       for (Vertex3D_NoTex2 &v : mesh.m_vertices)
       {
-         (x ? v.x : v.y) = -(x ? v.x : v.y);
-         (x ? v.nx : v.ny) = -(x ? v.nx : v.ny);
+         (x ? v.x : v.y) = Neg(x ? v.x : v.y);
+         (x ? v.nx : v.ny) = Neg(x ? v.nx : v.ny);
       }
       for (Mesh::FrameData &frame : mesh.m_animationFrames)
          for (Mesh::VertData &v : frame.m_frameVerts)
          {
-            (x ? v.x : v.y) = -(x ? v.x : v.y);
-            (x ? v.nx : v.ny) = -(x ? v.nx : v.ny);
+            (x ? v.x : v.y) = Neg(x ? v.x : v.y);
+            (x ? v.nx : v.ny) = Neg(x ? v.nx : v.ny);
          }
       for (size_t i = 0; i + 2 < mesh.m_indices.size(); i += 3)
          std::swap(mesh.m_indices[i + 1], mesh.m_indices[i + 2]);
@@ -156,7 +164,7 @@ void MirrorPrimitive(Primitive &prim, const Axis axis, const float coord)
    MirrorEuler(d.m_aRotAndTra[0], d.m_aRotAndTra[1], d.m_aRotAndTra[2], axis);
    MirrorEuler(d.m_aRotAndTra[6], d.m_aRotAndTra[7], d.m_aRotAndTra[8], axis);
    if (viaObjectX)
-      d.m_aRotAndTra[2] += 180.f;
+      d.m_aRotAndTra[2] = NoNegZero(d.m_aRotAndTra[2] + 180.f);
 }
 }
 
