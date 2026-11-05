@@ -245,11 +245,11 @@ void DragPointCurve::GetTextureCoords(const vector<RenderVertex> &vv, float **pp
    }
 }
 
-void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag) const
+void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag, const bool skippable) const
 {
    for (const auto &pdp : m_dragpoints)
    {
-      writer.BeginObject(tag, true, false);
+      writer.BeginObject(tag, true, skippable);
       writer.WriteVector2(FID(VCEN), Vertex2D(pdp->GetX(), pdp->GetY()));
       writer.WriteFloat(FID(POSZ), pdp->GetZ());
       writer.WriteBool(FID(SMTH), pdp->IsSmooth());
@@ -264,7 +264,7 @@ void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag) const
    }
 }
 
-void DragPointCurve::LoadPointToken(IObjectReader &reader)
+void DragPointCurve::LoadPointToken(IObjectReader &reader, const bool skippable)
 {
    auto pdp = std::make_unique<DragPoint>(this, 0.f, 0.f, 0.f, false);
    reader.AsObject(
@@ -292,7 +292,7 @@ void DragPointCurve::LoadPointToken(IObjectReader &reader)
          case FID(LANR): reader.AsString(); break;
          }
          return true;
-      });
+      }, skippable);
    PushPoint(std::move(pdp));
 }
 

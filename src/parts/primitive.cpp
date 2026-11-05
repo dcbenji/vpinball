@@ -2805,7 +2805,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
          for (const WireRail::Fixture &f : m_d.m_railFixtures) // None for a rail without supports: it saves byte-identical to one that never had them
             SaveRailFixture(writer, f);
       }
-      m_wireCurve.SavePoints(writer);
+      m_wireCurve.SavePoints(writer, FID(GRPT), true); // Skippable (not DPNT, which older versions don't know in a primitive and would read the point's fields as the primitive's own)
    }
    if (m_d.m_plasticGen) // Optional fields: only written for plastic hosts and companions, so other primitives save byte-identical
    {
@@ -2820,8 +2820,8 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteFloat(FID(PDPI), m_d.m_plasticDpi);
       writer.WriteVector3(FID(PUVM), vec3(m_d.m_plasticUvm[0], m_d.m_plasticUvm[1], m_d.m_plasticUvm[2]));
       writer.WriteVector3(FID(PUVV), vec3(m_d.m_plasticUvm[3], m_d.m_plasticUvm[4], m_d.m_plasticUvm[5]));
-      m_plasticCurve.SavePoints(writer);
-      m_plasticHoles.SavePoints(writer, FID(PHLS));
+      m_plasticCurve.SavePoints(writer, FID(GRPT), true);
+      m_plasticHoles.SavePoints(writer, FID(PHSK), true);
    }
    if (!m_d.m_plasticHost.empty())
    {
@@ -2977,7 +2977,9 @@ void Primitive::Load(IObjectReader& reader)
                m_d.m_railFixtures.push_back(f);
             break;
          }
-         case FID(DPNT): m_wireCurve.LoadPointToken(reader); break; // Moved to the plastic outline after the load if this is a plastic host
+         // Route and outline points: GRPT (skippable), DPNT as saved by earlier builds. The outline is moved to the plastic curve after the load if this is a plastic host
+         case FID(GRPT): m_wireCurve.LoadPointToken(reader, true); break;
+         case FID(DPNT): m_wireCurve.LoadPointToken(reader); break;
          case FID(PGEN): m_d.m_plasticGen = reader.AsBool(); break;
          case FID(PHGT): m_d.m_plasticHeight = reader.AsFloat(); break;
          case FID(PTHK): m_d.m_plasticThickness = reader.AsFloat(); break;
@@ -2988,7 +2990,8 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PDPI): m_d.m_plasticDpi = clamp(reader.AsFloat(), 10.f, 4800.f); break;
          case FID(PUVM): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[0] = v.x; m_d.m_plasticUvm[1] = v.y; m_d.m_plasticUvm[2] = v.z; break; }
          case FID(PUVV): { const vec3 v = reader.AsVector3(); m_d.m_plasticUvm[3] = v.x; m_d.m_plasticUvm[4] = v.y; m_d.m_plasticUvm[5] = v.z; break; }
-         case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break;
+         case FID(PHSK): m_plasticHoles.LoadPointToken(reader, true); break;
+         case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break; // Holes as saved by earlier builds
          case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
          case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kRailChannelRole); break;
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
@@ -3209,7 +3212,7 @@ void Primitive::Load(IObjectReader& reader)
       RegenerateWire();
    if (m_d.m_plasticGen)
    {
-      // The outline was read as the generic drag points (DPNT, whatever the order of the fields)
+      // The outline was read as the route points (GRPT, or DPNT from earlier builds, whatever the order of the fields)
       for (const auto &dpt : m_wireCurve.GetPoints())
          m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
       m_wireCurve.ClearPoints();

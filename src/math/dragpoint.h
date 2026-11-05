@@ -95,8 +95,9 @@ public:
 
    int GetMinimumPoints() const { return m_minPoints; }
 
-   void SavePoints(IObjectWriter &writer, int tag = FID(DPNT)) const;
-   void LoadPointToken(IObjectReader &reader);
+   // skippable: each point record covers its fields, so a loader without a case for the tag skips it whole (used by generator routes inside primitives)
+   void SavePoints(IObjectWriter &writer, int tag = FID(DPNT), bool skippable = false) const;
+   void LoadPointToken(IObjectReader &reader, bool skippable = false);
 
    const Vertex2D &GetCenter() const;
    const Vertex2D &GetCentroid() const;

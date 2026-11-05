@@ -495,6 +495,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RLCD), "rail_curvature_detail" },
             { FID(RLSC), "rail_show_collider" },
             { FID(RFIX), "rail_fixtures" },
+            { FID(GRPT), "dragpoints" }, // Route and outline points, saved skippable. Same name as the shared DPNT so packs read the same; this later entry wins the name on load
             { FID(RGRD), "rubber_guide_radius" },
             { FID(PGEN), "plastic_gen" },
             { FID(PHGT), "plastic_height" },
@@ -506,7 +507,8 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PDPI), "plastic_dpi" },
             { FID(PUVM), "plastic_uv_u" },
             { FID(PUVV), "plastic_uv_v" },
-            { FID(PHLS), "plastic_holes" },
+            { FID(PHLS), "plastic_holes" }, // Holes as saved by earlier builds
+            { FID(PHSK), "plastic_holes" }, // Holes, saved skippable. The later entry wins the name on load
             { FID(PHST), "plastic_host" },
             { FID(PHRL), "plastic_role" },
          },
@@ -1042,7 +1044,9 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    switch (fieldId)
    {
    case FID(DPNT):
-   case FID(PHLS): return kDragPointNode;
+   case FID(GRPT):
+   case FID(PHLS):
+   case FID(PHSK): return kDragPointNode;
    case FID(RFIX): return kRailFixtureNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
