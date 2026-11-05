@@ -1468,6 +1468,7 @@ PropEnum(Editor, Units, "Units"s, "Unit used in viewport/editor"s, int, 0, "Inch
 PropBool(Editor, AlwaysViewScript, "AlwaysViewScript"s, "Always view Script window"s, false);
 PropString(Editor, PartLibraryView, "PartLibraryView"s, "Part library tile filter and sort (kind;sort;search text)"s, ""s);
 PropString(Editor, PartLibraryFolders, "PartLibraryFolders"s, "List of part library folders (';' separated)"s, ""s);
+PropString(Editor, ReferenceImage, "ReferenceImage"s, "Reference image shown in the live editor's 3D views, per table (version;file;dpi;scale;x;y;rotation;height;opacity;in front;shown;in 3D viewport;in views 1-3)"s, ""s);
 PropString(Editor, ExternalScriptEditor, "ExternalScriptEditor"s, "Command used to edit the table script in an external editor ('{file}' is replaced by the script file path, appended when absent)"s, ""s);
 PropFloatUnbounded(Editor, ThrowBallMass, "ThrowBallMass"s, "Mass of thrown ball in 'throw ball' debugging mode"s, 1.f);
 PropIntUnbounded(Editor, ThrowBallSize, "ThrowBallSize"s, "Size of thrown ball in 'throw ball' debugging mode"s, 50);

@@ -1145,6 +1145,8 @@ void EditorChrome::RenderMenuBar()
             editor.OpenQuickFavorites();
          if (ImGui::MenuItem("Menu Search...", "F3"))
             editor.m_palette.Open();
+         if (ImGui::MenuItem("Reference Image...", nullptr, editor.m_refImage.IsPanelOpen()))
+            editor.m_refImage.TogglePanel();
          if (ImGui::MenuItem("Navigation Cube", nullptr, editor.m_showNavCube))
             editor.m_showNavCube = !editor.m_showNavCube;
          if (ImGui::MenuItem("Tool Shelf", nullptr, m_showToolShelf))

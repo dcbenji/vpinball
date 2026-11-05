@@ -30,6 +30,7 @@ public:
 
    void Render3D(); // Called to contribute to 3D Scene
    void RenderHiddenOverlay3D(); // Called by the editor secondary views after their scene, when their Hidden in Play option is on
+   void RenderReferenceImage3D(int slot); // Called by the editor secondary views after their scene: the reference image
    void RenderSelection3D(); // Called by the editor secondary views, last in their pass: the selection's edges, as the editor view overlays them
    void RenderUI(); // Called to render UI overlay
 

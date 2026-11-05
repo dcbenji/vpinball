@@ -6202,6 +6202,15 @@ void Renderer::ReleaseSwappedInSceneTargets()
       probe->ReleaseRenderTargets();
 }
 
+int Renderer::GetMaxTextureSize() const
+{
+#if defined(ENABLE_BGFX)
+   return static_cast<int>(bgfx::getCaps()->limits.maxTextureSize);
+#else
+   return 16384; // No backend query on the other backends (the live editor is BGFX only): the common limit of current GPUs
+#endif
+}
+
 // Editor secondary view: the scene rendered a second time, into the slot's own scene target set, with the view's camera: the table's view
 // setup (the player view, as the editor's Preview Camera shows it) or a free camera. Full PBR views are tonemapped into the slot's output target;
 // lite (wireframe) views draw the editor's hidden line wireframe straight into an LDR back buffer pair, without post processing. Derived from
@@ -6508,6 +6517,7 @@ void Renderer::RenderEditorView(const int slot)
          probe->MarkDirty();
       m_renderDevice->m_noMovingBalls = true;
       RenderDynamics();
+      g_pplayer->m_liveUI->RenderReferenceImage3D(slot);
       if (ShowsHiddenInPlay()) // The view's Hidden in Play option: the parts hidden in play drawn as in the 3D Viewport, so what a click can pick is what is drawn
          g_pplayer->m_liveUI->RenderHiddenOverlay3D();
    }

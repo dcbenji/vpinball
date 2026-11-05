@@ -17,6 +17,7 @@
 #include "editor/PinnedPanel.h"
 #include "editor/PropertiesPanel.h"
 #include "editor/PlasticFromAtlas.h"
+#include "editor/ReferenceImage.h"
 #include "editor/RubberBetweenPosts.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ConvertToPBRModal.h"
@@ -74,6 +75,7 @@ class EditorUI final
    friend class SelectRename;
    friend class RubberBetweenPosts;
    friend class PlasticFromAtlas;
+   friend class ReferenceImage;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -83,6 +85,7 @@ public:
    bool IsOpened() const { return m_isOpened; }
    void Render3D();
    void RenderHiddenOverlay3D(); // The parts hidden in play, as the 3D Viewport draws them, in a secondary view's 3D pass (the view's Hidden in Play option is checked by the caller)
+   void RenderReferenceImage3D(int slot); // The reference image in the 3D pass of a secondary view (its panel slot)
    void RenderSelection3D(); // The selection's edges in the 3D pass being recorded (the secondary views; the 3D Viewport draws them in RenderUI)
    void RenderUI();
    void Close();
@@ -453,6 +456,8 @@ private:
    void DeleteSelection();
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
    PlasticFromAtlas::Bow m_plasticBow;
+   ReferenceImage m_refImage; // View > Reference Image: a scan under or over the playfield in the 3D views (view-only, kept in the table's settings file)
+   int SecondaryViewOrdinal(int slot) const; // The secondary view of a panel slot among the view areas of the layout (0 = the first), for per view options
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
    bool m_addWireRail = false; // Same: a Wire Rail

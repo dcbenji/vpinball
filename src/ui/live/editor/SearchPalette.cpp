@@ -151,6 +151,7 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Frame Selected", "F", hasPart, [&ed]() { ed.FrameSelection(); });
    add("View" + sep + "Frame All", "Home", nullptr, [&ed]() { ed.FrameAll(); });
    add("View" + sep + (ed.IsLocalView() ? "Local View (on)" : "Local View"), "Numpad /  (US: / \\)", nullptr, [&ed]() { ed.ToggleLocalView(); });
+   add("View" + sep + "Reference Image", "", nullptr, [&ed]() { ed.m_refImage.TogglePanel(); });
    add("View" + sep + "Sidebar", "N", nullptr, [&ed]() { ed.ToggleSidebar(); });
    add("View" + sep + "Sidebar" + sep + "Favorites", "", nullptr, [&ed]() { ed.ShowSidebar(EditorUI::SidebarTab::Favorites); });
    add("View" + sep + "Outliner", "", nullptr, [&ed]() { ed.ToggleAreaEditor(EditorUI::AreaEditor::Outliner); });

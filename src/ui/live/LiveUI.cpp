@@ -416,6 +416,12 @@ void LiveUI::RenderHiddenOverlay3D()
       m_editorUI.RenderHiddenOverlay3D();
 }
 
+void LiveUI::RenderReferenceImage3D(int slot)
+{
+   if (m_editorUI.IsOpened())
+      m_editorUI.RenderReferenceImage3D(slot);
+}
+
 void LiveUI::RenderSelection3D()
 {
    if (m_editorUI.IsOpened())

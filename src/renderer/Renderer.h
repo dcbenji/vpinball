@@ -126,6 +126,11 @@ public:
       Solid // PBR with the table lights, shadows, refraction probe, AO and bloom off (editor view shading)
    };
    static bool IsWireframeShade(ShadeMode mode) { return mode == ShadeMode::Wireframe || mode == ShadeMode::NoDepthWireframe; }
+   bool IsEditorPreviewPlayerCam() const { return m_editorPreviewPass && m_editorPreviewPlayerCam; } // Recording a secondary view as the player sees the table
+   PartGroupData::SpaceReference GetSpaceReference() const { return m_mvpSpaceReference; }
+   void SetSpaceReferenceFor(PartGroupData::SpaceReference space) { SetSpaceReference(space, false); } // Restores a space read with GetSpaceReference
+   void SelectPlayfieldSpace() { SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false); } // After the parts of other part groups (cabinet, room) were drawn
+   int GetMaxTextureSize() const; // The largest image side the GPU takes
    bool IsSolidPass() const { return m_editorPreviewPass ? m_editorSolidPass : m_shadeMode == ShadeMode::Solid; }
    void SetShadeMode(ShadeMode mode) { m_shadeMode = mode; };
    void SetViewShade(const ViewShadeOptions& options) { m_viewShade = options; } // The main editor view's view-only shading options (the defaults outside the editor view)

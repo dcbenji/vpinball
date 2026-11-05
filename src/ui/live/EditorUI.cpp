@@ -209,6 +209,7 @@ EditorUI::~EditorUI()
       context->ConfigNavEnableTabbing = true;
    // The table outlives the editor (Player deletes the UI first)
    m_fileOp.reset(); // Wait for a file operation in progress, its result being discarded with the session
+   m_refImage.Release(*this);
    RestorePartsVisibility();
 }
 
@@ -270,6 +271,7 @@ void EditorUI::Close()
    m_gizmoDragSelection.clear();
    ExitPointEditMode(false);
    RestorePartsVisibility();
+   m_refImage.FlushPending(*this);
    m_inspectionModal.Close();
    m_pbrConvertModal.Close();
    m_selectRename.Close();
@@ -319,6 +321,7 @@ void EditorUI::PlayTest()
 {
    if (IsInspectMode())
       return;
+   m_refImage.FlushPending(*this); // A reference image setting still due goes into the table's settings before the copy (Close() then has nothing left to write)
    // The editor visibility overrides must not leak into the duplicated table used for the play session
    RestorePartsVisibility();
    PinTable *const liveTable = m_table->CopyForPlay();
@@ -2229,6 +2232,7 @@ void EditorUI::Render3D()
    if (IsSaveInProgress())
       return;
    UpdateEditableList();
+   m_refImage.Render3D(*this, -1); // Behind or over the parts, as the image is set
    LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
    for (const auto &uiPart : m_editables)
    {
@@ -2237,6 +2241,28 @@ void EditorUI::Render3D()
       uiPart->Render(ctx);
    }
    m_partLibrary.Render3D();
+}
+
+void EditorUI::RenderReferenceImage3D(const int slot)
+{
+   if (IsSaveInProgress())
+      return;
+   m_refImage.Render3D(*this, SecondaryViewOrdinal(slot));
+}
+
+int EditorUI::SecondaryViewOrdinal(const int slot) const
+{
+   const int leafId = slot >= 0 && slot < AreaLayout::kMaxViewLeaves ? m_cameraPreviews[slot].GetLeaf() : -1;
+   int ordinal = 0;
+   for (const LeafRect &leaf : m_leafRects)
+   {
+      if (leaf.type != AreaEditor::CameraPreview)
+         continue;
+      if (leaf.id == leafId)
+         return ordinal;
+      ordinal++;
+   }
+   return 0;
 }
 
 void EditorUI::RenderHiddenOverlay3D()
@@ -2453,7 +2479,10 @@ void EditorUI::RenderUI()
    {
       RenderAdjustPanel();
       PlasticFromAtlas::RenderPanel(*this);
+      m_refImage.RenderPanel(*this);
    }
+   else
+      m_refImage.UiHidden();
    m_chrome.RenderStatusBar(showFullUI);
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
@@ -2910,6 +2939,7 @@ void EditorUI::RenderUI()
       LiveRenderContext ctx(m_player, overlayDrawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
       ctx.m_selectionDisplay = m_navSelectionDisplay;
       PlasticFromAtlas::DrawBackdrop(*this, overlayDrawList, ctx); // The atlas under the points (trace state, Tab on a placed plastic)
+      m_refImage.DrawOverlay(*this, overlayDrawList, ctx); // The outline of the reference image, the points of a two point scale
       if (!m_multiSel.empty() && m_selectionOverlay && !IsSaveInProgress())
       {
          if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
@@ -3155,7 +3185,9 @@ void EditorUI::RenderUI()
          && !ImGuizmo::IsUsingViewManipulate()) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
-         if (m_plasticTrace.active)
+         if (m_refImage.PickActive())
+            m_refImage.Click(*this, m_boxSelectStart); // Reference image: a point of the two point scale
+         else if (m_plasticTrace.active)
             PlasticFromAtlas::Click(*this, m_boxSelectStart, io.KeyShift);
          else if (m_partLibrary.IsPlacementArmed())
          {
@@ -3447,6 +3479,8 @@ void EditorUI::RenderUI()
       {
          if (m_suppressNextEscape)
             m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
+         else if (m_refImage.PickActive())
+            m_refImage.CancelPick();
          else if (m_plasticTrace.active && m_plasticTrace.measure != 0)
             m_plasticTrace.measure = 0; // Leave measuring only, the add goes on
          else if (m_plasticTrace.active)
