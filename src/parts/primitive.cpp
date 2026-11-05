@@ -1578,7 +1578,7 @@ void Primitive::Render(const unsigned int renderMask)
             vec4(0.f, 0.f, 0.f, 0.f), // table position to ink mask UV (scale, offset), 0 = no mask
             vec4(0.f, 0.f, 0.f, 0.f), // print map texel at the spill mip (u, v), white leak through the plastic, room glint tint
             vec4(0.f, 0.f, 0.f, 0.f), // print map tint on the glow
-            vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 1.f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness; how much the glints turn with the eye
+            vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 0.25f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness; how much the glints turn with the eye
             vec4(m_d.m_bulbStretchX, m_d.m_bulbStretchY, m_d.m_bulbOffsetX, m_d.m_bulbOffsetY) }; // hot spot stretch (u, v), offset (u, v, mm)
          // The lamp-off look atlas, in the Emission Map slot
          Texture *const envMap = m_ptable->GetImage(m_d.m_szEmissionMap);
