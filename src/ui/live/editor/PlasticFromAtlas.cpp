@@ -3,13 +3,17 @@
 #include "core/stdafx.h"
 #include "core/editablereg.h"
 #include "core/player.h"
+#include "core/SettingsService.h"
 #include "PlasticFromAtlas.h"
 #include "EditorUIPart.h"
+#include "RubberBetweenPosts.h"
+#include "imgui/imgui_stdlib.h"
 #include "EditorTheme.h"
 #include "LiveRenderContext.h"
 #include "Selection.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "math/ImageDpi.h"
 #include "math/PlasticMesh.h"
 #include "parts/Material.h"
 #include "parts/primitive.h"
@@ -76,6 +80,30 @@ float PlasticFromAtlas::ParseDpi(const string &imageName)
             return v;
       }
    }
+   return 0.f;
+}
+
+const char *PlasticFromAtlas::DpiSourceText(const int source)
+{
+   static constexpr const char *text[] = { "from file", "from name", "default", "measured", "typed", "fitted" };
+   return text[clamp(source, 0, 5)];
+}
+
+// The resolution the file states, else the number in the name, else 150
+float PlasticFromAtlas::SheetDpi(const Texture *const tex, const string &imageName, int &source)
+{
+   if (tex != nullptr && tex->GetFileSize() > 0)
+      if (const float dpi = ImageDpi::FromFile(tex->GetFileRaw(), tex->GetFileSize()); dpi >= 10.f && dpi <= 2400.f)
+      {
+         source = DpiFile;
+         return dpi;
+      }
+   if (const float dpi = ParseDpi(imageName); dpi > 0.f)
+   {
+      source = DpiName;
+      return dpi;
+   }
+   source = DpiDefault;
    return 150.f;
 }
 
@@ -118,6 +146,72 @@ void PlasticFromAtlas::SetSheet(EditorUI &ed)
    t.uvm[5] = -y0 / sh;
 }
 
+// Use an image of the table as the atlas: its Sheet DPI comes from the file, the name or the default, and the sheet is framed
+void PlasticFromAtlas::SelectAtlas(EditorUI &ed, const string &name)
+{
+   Trace &t = ed.m_plasticTrace;
+   t.image = name;
+   t.dpi = SheetDpi(ed.m_table->GetImage(name), name, t.dpiSource);
+   t.measure = 0;
+   SetSheet(ed);
+   const Vertex2D a = UvToTable(t.uvm, 0.f, 0.f), b = UvToTable(t.uvm, 1.f, 1.f);
+   ed.FrameBounds(FRect3D(a.x, b.x, a.y, b.y, 0.f, 0.f));
+}
+
+namespace
+{
+std::shared_ptr<vector<string>> s_pendingLoad; // The file dialog's answer (it comes back on another thread)
+}
+
+// Load Image: the system file dialog, the same one the Images list uses
+void PlasticFromAtlas::LoadAtlasImage(EditorUI &ed)
+{
+   if (ed.m_player == nullptr || ed.m_player->m_playfieldWnd == nullptr || s_pendingLoad != nullptr)
+      return;
+   s_pendingLoad = std::make_shared<vector<string>>();
+   const SDL_DialogFileFilter filters[] = { { "Image Files", "png;jpg;jpeg;webp" } };
+   const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_ImageDir())); // SDL expects UTF-8
+   SDL_ShowOpenFileDialog(
+      [](void *userdata, const char *const *filelist, int)
+      {
+         auto *res = static_cast<std::shared_ptr<vector<string>> *>(userdata);
+         if (filelist != nullptr && filelist[0] != nullptr)
+            (**res).push_back(filelist[0]);
+         else
+            (**res).push_back(string()); // Cancelled: answered, nothing chosen
+         delete res;
+      },
+      new std::shared_ptr<vector<string>>(s_pendingLoad), //
+      ed.m_player->m_playfieldWnd->GetCore(), filters, 1, dir.empty() ? nullptr : dir.c_str(), false);
+}
+
+void PlasticFromAtlas::ApplyLoadedImage(EditorUI &ed)
+{
+   if (s_pendingLoad == nullptr || s_pendingLoad->empty())
+      return;
+   const string file = s_pendingLoad->front();
+   s_pendingLoad = nullptr;
+   if (file.empty() || !ed.m_plasticTrace.active)
+      return;
+   // A name the table already has gets a number
+   const std::filesystem::path path = PathFromUTF8(file);
+   const string base = PathToUTF8(path.stem());
+   string name = base;
+   for (int n = 1; ed.m_table->GetImage(name) != nullptr; n++)
+      name = base + std::to_string(n);
+   Texture *const tex = ed.m_table->ImportImage(path, name);
+   if (tex == nullptr)
+   {
+      ed.Report("Plastic from Atlas: could not load " + file);
+      return;
+   }
+   g_settingsService.GetAppSettings().SetRecentDir_ImageDir(PathToString(path.parent_path()), false);
+   ed.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   SelectAtlas(ed, tex->m_name);
+   ed.Report("Plastic from Atlas: loaded " + tex->m_name + " (" + std::to_string(static_cast<unsigned>(tex->m_width)) + " x " + std::to_string(static_cast<unsigned>(tex->m_height)) + ", " + DpiSourceText(ed.m_plasticTrace.dpiSource) + " "
+      + std::to_string(static_cast<int>(lroundf(ed.m_plasticTrace.dpi))) + " dpi)");
+}
+
 bool PlasticFromAtlas::CanStart(const EditorUI &ed)
 {
    return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr && !ed.m_plasticTrace.active;
@@ -137,7 +231,7 @@ void PlasticFromAtlas::Start(EditorUI &ed)
    Trace t;
    t.active = true;
    t.image = DefaultImage(ed);
-   t.dpi = ParseDpi(t.image);
+   t.dpi = SheetDpi(ed.m_table->GetImage(t.image), t.image, t.dpiSource);
    t.holeDia = 12.f;
    t.prevPerspective = ed.m_perspectiveCam;
    t.prevView = ed.m_camView;
@@ -162,6 +256,7 @@ void PlasticFromAtlas::Cancel(EditorUI &ed)
    ed.m_camDistance = ed.m_plasticTrace.prevDistance;
    ed.m_predefinedView = static_cast<EditorUI::PredefinedView>(ed.m_plasticTrace.prevPredefined);
    ed.m_plasticTrace = Trace();
+   s_pendingLoad = nullptr; // A file picked in the dialog later is not for the next trace (the dialog's callback keeps its own reference)
    ed.Report("Plastic from Atlas cancelled");
 }
 
@@ -197,7 +292,7 @@ void PlasticFromAtlas::Keys(EditorUI &ed)
 {
    Trace &t = ed.m_plasticTrace;
    const ImGuiIO &io = ImGui::GetIO();
-   if (io.WantCaptureKeyboard || t.measure != 0) // Typing in a field, or measuring: the outline keys are not its own
+   if (io.WantCaptureKeyboard || t.measure != 0 || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) // Typing in a field, measuring, or the Atlas list open: the outline keys are not its own
       return;
    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
       Finish(ed);
@@ -346,7 +441,29 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
       ed.m_undo.MarkForCreate(prim);
    ed.m_undo.SetLabel("Add Plastic from Atlas");
    ed.m_undo.EndUndo();
-   ed.Report("Added " + hostName + " (with " + clearName + " and " + bevelName + ")"
+   // A plastic much bigger than 0.7 of the table's width, or smaller than an inch, almost always has the wrong Sheet DPI
+   string sizeWarning;
+   {
+      float lox = FLT_MAX, hix = -FLT_MAX, loy = FLT_MAX, hiy = -FLT_MAX;
+      for (const Vertex3D_NoTex2 &v : host->m_mesh.m_vertices)
+      {
+         lox = min(lox, v.x);
+         hix = max(hix, v.x);
+         loy = min(loy, v.y);
+         hiy = max(hiy, v.y);
+      }
+      const float w = (hix - lox) / kVPUPerInch, l = (hiy - loy) / kVPUPerInch, tableWidth = (ed.m_table->m_right - ed.m_table->m_left) / kVPUPerInch;
+      char text[256];
+      if (lox <= hix && (w > 0.7f * tableWidth || l > 0.7f * tableWidth)) // 0.7 of the table's width: the 2.4x lion of the acceptance case is 14.4 in on a 20.2 in table
+         snprintf(text, sizeof(text), "Warning: the plastic is %.1f x %.1f in, that looks large for this table (%.1f in wide): if the Sheet DPI is wrong, use Measure (before Enter) or Fit to Posts (right-click it)  ", w, l, tableWidth);
+      else if (lox <= hix && w < 1.f && l < 1.f)
+         snprintf(text, sizeof(text), "Warning: the plastic is %.2f x %.2f in, under 1 inch, Sheet DPI is probably wrong: use Measure (before Enter) or Fit to Posts (right-click it)  ", w, l);
+      else
+         text[0] = '\0';
+      sizeWarning = text;
+   }
+   ed.m_plasticDpiNote = { host, host->m_d.m_plasticDpi, t.dpiSource };
+   ed.Report(sizeWarning + "Added " + hostName + " (with " + clearName + " and " + bevelName + ")"
       + (crossing > 0 ? "  Warning: " + std::to_string(crossing) + (crossing == 1 ? " hole is on or near" : " holes are on or near") + " the outline edge" : string())
       + (skipped > 0 ? (crossing > 0 ? ", " : "  Warning: ") + std::to_string(skipped) + (skipped == 1 ? " hole is" : " holes are") + " outside the outline (left out)" : string()));
    host->m_plasticReportedCrossing = host->m_plasticCrossingHoles; // Said in the message above
@@ -356,6 +473,7 @@ void PlasticFromAtlas::Finish(EditorUI &ed)
    s_lastImage = t.image;
    ed.m_perspectiveCam = t.prevPerspective;
    ed.m_plasticTrace = Trace();
+   s_pendingLoad = nullptr;
 
    ed.UpdateEditableList();
    if (const auto it = ed.m_editableMap.find(host); it != ed.m_editableMap.end())
@@ -837,7 +955,7 @@ void PlasticFromAtlas::SetHoleDiameter(EditorUI &ed, const float dia)
 void PlasticFromAtlas::RenderEditPanel(EditorUI &ed)
 {
    Primitive *const host = EditedHost(ed);
-   if (host == nullptr || !ed.m_viewportVisible || ed.m_plasticTrace.active)
+   if (host == nullptr || !ed.m_viewportVisible || ed.m_plasticTrace.active || ed.m_plasticFit.active)
       return;
    const float dpi = ed.m_liveUI.GetDPI();
    ImGui::SetNextWindowPos(ImVec2(ed.m_viewportContentRect.x0 + 8.f * dpi, ed.m_viewportContentRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
@@ -899,6 +1017,15 @@ void PlasticFromAtlas::RenderEditPanel(EditorUI &ed)
          ed.m_renderer->InvalidateShadowContent();
       }
       ImGui::SetItemTooltip("How smooth arcs and hole circles are (1 = default, at most 96 segments on any one arc)");
+      // The Sheet DPI, and where it came from while that is known
+      if (ed.m_plasticDpiNote.host == host && fabsf(ed.m_plasticDpiNote.dpi - host->m_d.m_plasticDpi) < 0.05f)
+         ImGui::Text("Sheet DPI %.1f (%s)", host->m_d.m_plasticDpi, DpiSourceText(ed.m_plasticDpiNote.source));
+      else
+         ImGui::Text("Sheet DPI %.1f", host->m_d.m_plasticDpi);
+      ImGui::SameLine();
+      if (ImGui::Button("Fit to Posts"))
+         FitStart(ed);
+      ImGui::SetItemTooltip("Click two holes of the plastic, then the two posts under them: the plastic is scaled, turned and moved onto the posts");
    }
    ImGui::End();
    ImGui::PopStyleColor(2);
@@ -920,7 +1047,7 @@ void PlasticFromAtlas::ViewportRightClick(EditorUI &ed)
    const ImVec2 mouse = ImGui::GetMousePos();
    if (fabsf(mouse.x - ed.m_plasticRmbStart.x) > 4.f || fabsf(mouse.y - ed.m_plasticRmbStart.y) > 4.f) // A drag is not a click
       return;
-   if (ed.m_plasticTrace.active || ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_addPartType != eItemInvalid || ed.m_partLibrary.IsPlacementArmed() || ed.IsDragInProgress()
+   if (ed.m_plasticTrace.active || ed.m_plasticFit.active || ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_addPartType != eItemInvalid || ed.m_partLibrary.IsPlacementArmed() || ed.IsDragInProgress()
       || ed.m_boxSelectActive)
       return;
    if (ed.m_pointEditPart != nullptr)
@@ -961,6 +1088,8 @@ void PlasticFromAtlas::RenderMenu(EditorUI &ed)
    {
       if (ImGui::MenuItem("Edit Shape", "Tab", false, ed.CanEnterPointEdit()))
          ed.EnterPointEditMode();
+      if (ImGui::MenuItem("Fit to Posts", nullptr, false, CanFit(ed)))
+         FitStart(ed);
    }
    else if (Primitive *const host = EditedHost(ed))
    {
@@ -978,10 +1107,268 @@ void PlasticFromAtlas::RenderMenu(EditorUI &ed)
       if (ImGui::MenuItem("Show Sheet", nullptr, ed.m_plasticShowSheet))
          ed.m_plasticShowSheet = !ed.m_plasticShowSheet;
       ImGui::Separator();
+      if (ImGui::MenuItem("Fit to Posts", nullptr, false, CanFit(ed)))
+         FitStart(ed);
+      ImGui::Separator();
       if (ImGui::MenuItem("Done Editing", "Tab"))
          ed.ExitPointEditMode(true);
    }
    ImGui::EndPopup();
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Fit to Posts: two holes of the plastic, the two posts under them
+
+namespace
+{
+struct HoleSpot
+{
+   const DragPoint *a, *b; // The centre (a == b), or the two ends of a pill
+   float r;
+   Vertex2D centre;
+};
+
+vector<HoleSpot> HoleSpots(const Primitive *const host)
+{
+   vector<HoleSpot> spots;
+   const auto &pts = host->m_plasticHoles.GetPoints();
+   const vector<int> partner = Primitive::PlasticPillPartners(host->m_plasticHoles);
+   for (int i = 0; i < static_cast<int>(pts.size()); i++)
+   {
+      if (partner[i] >= 0 && partner[i] < i)
+         continue; // The second end of a pill
+      const DragPoint *const a = pts[i].get(), *const b = partner[i] > i ? pts[partner[i]].get() : a;
+      spots.push_back({ a, b, 0.5f * a->GetZ(), Vertex2D(0.5f * (a->GetX() + b->GetX()), 0.5f * (a->GetY() + b->GetY())) }); // A pill counts as its middle
+   }
+   return spots;
+}
+}
+
+bool PlasticFromAtlas::CanFit(const EditorUI &ed)
+{
+   if (ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_plasticTrace.active || ed.m_plasticFit.active || ed.m_modal.active || ed.m_addPartType != eItemInvalid)
+      return false;
+   return IsEditing(ed) || (ed.m_pointEditPart == nullptr && ed.m_multiSel.size() == 1 && IsHostSelected(ed));
+}
+
+void PlasticFromAtlas::FitStart(EditorUI &ed)
+{
+   if (!CanFit(ed))
+      return;
+   const bool editing = IsEditing(ed);
+   Primitive *const host = editing ? EditedHost(ed) : static_cast<Primitive *>(ed.m_selection.GetPart()->GetEditable());
+   const size_t holes = HoleSpots(host).size();
+   if (holes < 2)
+   {
+      ed.Report("Fit to Posts: " + host->GetName() + " has " + (holes == 0 ? "no holes" : "1 hole") + ", it needs 2 to fit onto posts");
+      return;
+   }
+   Fit f;
+   f.active = true;
+   f.host = host;
+   f.editing = editing;
+   f.selectHost = !editing;
+   f.undoId = ed.m_undo.TopRecordId();
+   ed.m_pointSel.clear(); // No gizmo over the holes
+   ed.m_plasticBow = Bow();
+   ed.m_plasticPill = Pill();
+   ed.m_boxSelectActive = false;
+   if (!editing)
+      ed.ClearSelection();
+   ed.m_plasticFit = f;
+   ed.Report("Fit to Posts 1/4: click a hole of the plastic (Esc stops)");
+}
+
+void PlasticFromAtlas::FitCancel(EditorUI &ed, const char *const message)
+{
+   Fit &f = ed.m_plasticFit;
+   if (!f.active)
+      return;
+   Primitive *const host = f.host;
+   const bool reselect = f.selectHost;
+   f = Fit();
+   if (reselect && host != nullptr && !ed.m_plasticTrace.active)
+      if (const auto it = ed.m_editableMap.find(host); it != ed.m_editableMap.end())
+         ed.SetSelection(Selection(it->second));
+   if (message != nullptr)
+      ed.Report(message);
+}
+
+namespace
+{
+const char *const kFitPrompt[4] = { "click a hole of the plastic", "click a second hole", "click the post under the first hole (or its place on the playfield)",
+   "click the post under the second hole" };
+}
+
+bool PlasticFromAtlas::FitInvalid(const EditorUI &ed)
+{
+   const Fit &f = ed.m_plasticFit;
+   // Anything that changed the table (an undo, a delete), or left the shape edit, ends the steps
+   return ed.m_table->IsLocked() || ed.IsInspectMode() || ed.m_plasticTrace.active || ed.m_undo.TopRecordId() != f.undoId || IsEditing(ed) != f.editing
+      || std::ranges::find(ed.m_table->GetParts(), static_cast<IEditable *>(f.host)) == ed.m_table->GetParts().end() || (f.editing && EditedHost(ed) != f.host);
+}
+
+void PlasticFromAtlas::FitClick(EditorUI &ed, const ImVec2 &mouse)
+{
+   Fit &f = ed.m_plasticFit;
+   Primitive *const host = f.host;
+   if (!f.active || host == nullptr)
+      return;
+   if (FitInvalid(ed)) // Checked here too: the panel's check does not run in fly mode or with the full UI off
+   {
+      FitCancel(ed, "Fit to Posts stopped");
+      return;
+   }
+   if (f.step < 2)
+   {
+      const float z = host->m_d.m_plasticHeight + host->m_d.m_plasticThickness;
+      const Vertex2D p = ed.UnprojectToPlane(mouse, z), q = ed.UnprojectToPlane(ImVec2(mouse.x + 8.f * ed.m_liveUI.GetDPI(), mouse.y), z);
+      const float tol = hypotf(q.x - p.x, q.y - p.y);
+      const vector<HoleSpot> spots = HoleSpots(host);
+      int best = -1;
+      float bestDist = FLT_MAX;
+      for (int i = 0; i < static_cast<int>(spots.size()); i++)
+      {
+         const float d = SegDist(p, spots[i].a, spots[i].b);
+         if (d <= spots[i].r + tol && d < bestDist)
+         {
+            bestDist = d;
+            best = i;
+         }
+      }
+      if (best < 0)
+      {
+         ed.Report(string("Fit to Posts ") + std::to_string(f.step + 1) + "/4: that is not on a hole, " + kFitPrompt[f.step]);
+         return;
+      }
+      if (f.step == 1 && (best == f.hole[0] || hypotf(spots[best].centre.x - f.holePos[0].x, spots[best].centre.y - f.holePos[0].y) < 0.05f))
+      {
+         ed.Report("Fit to Posts 2/4: that is the first hole again, click a different hole");
+         return;
+      }
+      PLOGI << "Plastic from Atlas: fit hole " << f.step + 1 << " at table " << spots[best].centre.x << ' ' << spots[best].centre.y;
+      f.hole[f.step] = best;
+      f.holePos[f.step] = spots[best].centre;
+      f.step++;
+      ed.Report(string("Fit to Posts ") + std::to_string(f.step + 1) + "/4: " + kFitPrompt[f.step]);
+      return;
+   }
+
+   // A post: the centre of the primitive under the cursor (as a guided rubber takes it), else that point of the playfield
+   Vertex2D pos = ed.UnprojectToPlane(mouse, 0.f);
+   string what = "the playfield";
+   {
+      vector<HitTestResult> hits;
+      ed.RayCastParts(mouse, hits, nullptr);
+      Vertex3Ds rayNear, rayFar;
+      ed.PickRay(mouse, nullptr, rayNear, rayFar);
+      for (const HitTestResult &hit : hits)
+      {
+         IEditable *const e = hit.m_obj != nullptr ? hit.m_obj->m_editable : nullptr;
+         if (e == nullptr)
+            break;
+         if (e->GetItemType() == eItemPrimitive && (IsHost(e) || static_cast<Primitive *>(e)->IsPlasticCompanion()))
+            continue; // A plastic is in the way (this one, or another): the post is under it
+         if (e->GetItemType() == eItemPrimitive)
+         {
+            float x, y, r;
+            // A post is clicked on its body: a click farther from the centre than its footprint is on something big (an insert, a plate) and means the playfield
+            // The footprint is tested where the ray meets the part (hit.m_time runs 0..1 from the near to the far point), not at the playfield behind the click:
+            // on a post standing 50 VPU high that point is far off in a tilted view
+            const float hitX = rayNear.x + hit.m_time * (rayFar.x - rayNear.x), hitY = rayNear.y + hit.m_time * (rayFar.y - rayNear.y);
+            if (RubberBetweenPosts::PostPosition(static_cast<Primitive *>(e), x, y, &r) && hypotf(hitX - x, hitY - y) <= r + 2.f)
+            {
+               pos = Vertex2D(x, y);
+               what = e->GetName();
+            }
+         }
+         break;
+      }
+   }
+   const int i = f.step - 2;
+   if (i == 1 && hypotf(pos.x - f.postPos[0].x, pos.y - f.postPos[0].y) < 0.05f)
+   {
+      ed.Report("Fit to Posts 4/4: that is the first post again, click a different one");
+      return;
+   }
+   PLOGI << "Plastic from Atlas: fit post " << i + 1 << " at table " << pos.x << ' ' << pos.y << " (" << what << ")";
+   f.postPos[i] = pos;
+   if (i == 0)
+   {
+      f.step++;
+      char text[160];
+      snprintf(text, sizeof(text), "Fit to Posts 4/4: %s (first post: %s at %.1f %.1f)", kFitPrompt[3], what.c_str(), pos.x, pos.y);
+      ed.Report(text);
+      return;
+   }
+
+   // Both posts known: one uniform scale, a turn and a move that bring the two holes onto the posts, in one undo step
+   const Vertex2D h1 = f.holePos[0], h2 = f.holePos[1], p1 = f.postPos[0], p2 = f.postPos[1];
+   const float dh = hypotf(h2.x - h1.x, h2.y - h1.y), dp = hypotf(p2.x - p1.x, p2.y - p1.y);
+   const float scale = dp / dh;
+   float angle = RADTOANG(atan2f(p2.y - p1.y, p2.x - p1.x) - atan2f(h2.y - h1.y, h2.x - h1.x));
+   while (angle > 180.f)
+      angle -= 360.f;
+   while (angle <= -180.f)
+      angle += 360.f;
+   const float oldDpi = host->m_d.m_plasticDpi;
+   ed.m_undo.BeginUndo();
+   ed.m_undo.MarkForUndo(host);
+   ed.m_undo.SetFieldLabel("Fit to Posts");
+   ed.m_undo.EndUndo();
+   host->Scale(scale, scale, h1, false); // The existing transforms: the art stays on the part, the holes scale with it
+   host->Rotate(angle, h1, false);
+   host->Translate(Vertex2D(p1.x - h1.x, p1.y - h1.y));
+   host->m_d.m_plasticDpi = clamp(oldDpi / scale, 10.f, 4800.f); // The sheet's pixels per inch follow the scale
+   ed.m_plasticDpiNote = { host, host->m_d.m_plasticDpi, DpiFitted };
+   ed.m_renderer->ReinitRenderable(host->GetIRenderable());
+   ed.m_renderer->InvalidateShadowContent();
+   ed.m_player->m_physics->Update(host);
+   {
+      const vector<HoleSpot> after = HoleSpots(host);
+      float r1 = -1.f, r2 = -1.f;
+      if (f.hole[0] < static_cast<int>(after.size()) && f.hole[1] < static_cast<int>(after.size()))
+      {
+         r1 = hypotf(after[f.hole[0]].centre.x - p1.x, after[f.hole[0]].centre.y - p1.y);
+         r2 = hypotf(after[f.hole[1]].centre.x - p2.x, after[f.hole[1]].centre.y - p2.y);
+      }
+      PLOGI << "Plastic from Atlas: fit to posts scale " << scale << " turn " << angle << " deg, holes now " << r1 << " and " << r2 << " VPU from the posts, Sheet DPI " << oldDpi << " -> " << host->m_d.m_plasticDpi;
+   }
+   char text[256];
+   snprintf(text, sizeof(text), "Fit to Posts: scaled %.3fx, turned %.1f deg, Sheet DPI %.1f (fitted)%s", scale, angle, host->m_d.m_plasticDpi,
+      scale > 1.5f || scale < 0.67f ? "  Warning: a big change of size, check the two holes and the two posts" : "");
+   FitCancel(ed); // Done: back to the selection (or the shape edit)
+   ed.Report(text);
+}
+
+void PlasticFromAtlas::RenderFitPanel(EditorUI &ed)
+{
+   Fit &f = ed.m_plasticFit;
+   if (!f.active || !ed.m_viewportVisible)
+      return;
+   if (FitInvalid(ed))
+   {
+      FitCancel(ed, "Fit to Posts stopped");
+      return;
+   }
+   const float dpi = ed.m_liveUI.GetDPI();
+   ImGui::SetNextWindowPos(ImVec2(ed.m_viewportContentRect.x0 + 8.f * dpi, ed.m_viewportContentRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+   ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
+   if (ImGui::Begin("Plastic from Atlas##Fit", nullptr,
+          ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+             | ImGuiWindowFlags_NoMove))
+   {
+      ImGui::Text("Fit to Posts %d/4: %s", f.step + 1, kFitPrompt[f.step]);
+      ImGui::SameLine();
+      if (ImGui::Button("Stop (Esc)"))
+         FitCancel(ed, "Fit to Posts stopped");
+   }
+   ImGui::End();
+   ImGui::PopStyleColor(2);
+   ImGui::PopStyleVar(2);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1227,28 +1614,64 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
              | ImGuiWindowFlags_NoMove))
    {
       ImGui::Text("Plastic from Atlas: trace    %d point(s), %d hole(s)", static_cast<int>(t.pts.size()), static_cast<int>(t.holeList.size()));
+      ApplyLoadedImage(ed);
       ImGui::SetNextItemWidth(300.f * dpi);
-      if (ImGui::BeginCombo("Atlas", t.image.c_str()))
+      const bool comboOpen = ImGui::BeginCombo("Atlas", t.image.c_str());
+      if (comboOpen)
       {
+         // A search box on top (Enter takes the first match), the images sorted by name
+         if (ImGui::IsWindowAppearing())
+         {
+            t.atlasFilter.clear();
+            ImGui::SetKeyboardFocusHere();
+         }
+         ImGui::SetNextItemWidth(-FLT_MIN);
+         const bool enter = ImGui::InputTextWithHint("##AtlasSearch", "Search by name", &t.atlasFilter, ImGuiInputTextFlags_EnterReturnsTrue);
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) // The Esc that closes the list is not the Esc that cancels the add
+            ed.m_suppressNextEscape = true;
+         vector<const Texture *> images;
+         const string needle = lowerCase(t.atlasFilter);
          for (const Texture *const tex : ed.m_table->GetImageList())
-            if (ImGui::Selectable(tex->m_name.c_str(), tex->m_name == t.image) && tex->m_name != t.image)
-            {
-               t.image = tex->m_name;
-               t.dpi = ParseDpi(t.image);
-               t.measure = 0;
-               SetSheet(ed);
-            }
+            if (needle.empty() || lowerCase(tex->m_name).find(needle) != string::npos)
+               images.push_back(tex);
+         std::ranges::sort(images, [](const Texture *a, const Texture *b) { return lowerCase(a->m_name) < lowerCase(b->m_name); });
+         const Texture *chosen = nullptr;
+         if (enter && !images.empty())
+            chosen = images.front();
+         else if (enter)
+            ImGui::SetKeyboardFocusHere(-1); // No match: the search box keeps the focus
+         for (const Texture *const tex : images)
+            if (ImGui::Selectable(tex->m_name.c_str(), tex->m_name == t.image))
+               chosen = tex;
+         if (images.empty())
+            ImGui::TextDisabled("No image matches");
+         if (chosen != nullptr)
+         {
+            if (chosen->m_name != t.image)
+               SelectAtlas(ed, chosen->m_name);
+            ImGui::CloseCurrentPopup();
+         }
          ImGui::EndCombo();
       }
+      ImGui::SameLine();
+      if (ImGui::Button("Load Image"))
+         LoadAtlasImage(ed);
+      ImGui::SetItemTooltip("Add an image file (png, jpg, webp) to the table and use it as the atlas");
       ImGui::SetNextItemWidth(90.f * dpi);
       if (ImGui::DragFloat("Sheet DPI", &t.dpi, 0.5f, 10.f, 2400.f, "%.1f"))
+      {
+         t.dpiSource = DpiTyped;
          SetSheet(ed);
+      }
       if (ImGui::IsItemDeactivatedAfterEdit()) // Keep the whole sheet in view at its new size
       {
          const Vertex2D a = UvToTable(t.uvm, 0.f, 0.f), b = UvToTable(t.uvm, 1.f, 1.f);
          ed.FrameBounds(FRect3D(a.x, b.x, a.y, b.y, 0.f, 0.f));
       }
       ImGui::SetItemTooltip("47.06 VPU per inch at this DPI. Traced points stay where they are, the sheet is rescaled about its centre");
+      ImGui::SameLine();
+      ImGui::TextDisabled("(%s)", DpiSourceText(t.dpiSource));
+      ImGui::SetItemTooltip("Where the Sheet DPI came from: the image file, the number in its name, the default 150, a measured distance, or typed");
       ImGui::SameLine();
       if (ImGui::Button(t.measure != 0 ? "Measuring" : "Measure"))
          t.measure = t.measure != 0 ? 0 : 1;
@@ -1292,6 +1715,7 @@ void PlasticFromAtlas::RenderPanel(EditorUI &ed)
             {
                PLOGI << "Plastic from Atlas: measure apply " << px << " px / " << t.measureIn << " in = " << newDpi << " dpi";
                t.dpi = newDpi;
+               t.dpiSource = DpiMeasured;
                t.measure = 0;
                SetSheet(ed);
                const Vertex2D a = UvToTable(t.uvm, 0.f, 0.f), b = UvToTable(t.uvm, 1.f, 1.f);

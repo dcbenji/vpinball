@@ -75,6 +75,19 @@ void SetPoints(Rubber *const rubber, const vector<RubberFit::Point> &pts, const 
 
 }
 
+bool RubberBetweenPosts::PostPosition(Primitive *const post, float &x, float &y, float *const radius)
+{
+   RubberFit::Post fp;
+   string error;
+   if (!Footprint(post, fp, error))
+      return false;
+   x = fp.x;
+   y = fp.y;
+   if (radius != nullptr)
+      *radius = fp.r;
+   return true;
+}
+
 void RubberBetweenPosts::Refresh(EditorUI &ed, Rubber *const rubber, const bool physics)
 {
    ed.m_renderer->ReinitRenderable(rubber);

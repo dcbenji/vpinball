@@ -12,6 +12,7 @@ class DragPoint;
 class Primitive;
 class PinTable;
 class Material;
+class Texture;
 
 namespace VPX::EditorUI
 {
@@ -29,12 +30,17 @@ class PlasticFromAtlas final
 public:
    static constexpr float kVPUPerInch = 47.06f;
 
+   enum DpiSource { DpiFile, DpiName, DpiDefault, DpiMeasured, DpiTyped, DpiFitted };
+   static const char *DpiSourceText(int source); // "from file", "from name", "default", "measured", "typed", "fitted"
+
    struct Trace
    {
       bool active = false;
       bool holes = false; // Placing holes instead of outline points
       string image; // The atlas
       float dpi = 150.f;
+      int dpiSource = DpiDefault; // Where the Sheet DPI came from, shown beside it
+      string atlasFilter; // The search box of the Atlas list
       float uvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to the atlas' UV (sheet centred on the table)
       vector<Vertex3Ds> pts; // outline points (x, y), smooth = arc peak
       vector<bool> smooth;
@@ -48,6 +54,32 @@ public:
       float measureUv[4] = { 0.f, 0.f, 0.f, 0.f }; // The two points in atlas UV, so zoom, pan and a rescale of the sheet don't move them
       float measureIn = 0.f; // The real distance in inches
    };
+
+   // Fit to Posts: click two holes of the plastic and the two posts under them; the plastic is scaled, turned and moved onto them in one step
+   struct Fit
+   {
+      bool active = false;
+      int step = 0; // 0 first hole, 1 second hole, 2 post under the first, 3 post under the second
+      Primitive *host = nullptr;
+      int hole[2] = { -1, -1 }; // Index in the plastic's holes (a pill is one)
+      Vertex2D holePos[2] {};
+      Vertex2D postPos[2] {};
+      uint64_t undoId = 0; // The undo stack when it began: any change (an undo too) ends it
+      bool editing = false; // Started inside the shape edit: leaving it ends the steps
+      bool selectHost = false; // The host was the selection (not in point edit) and is selected again afterwards
+   };
+   // The Sheet DPI of the plastic last placed or fitted and where it came from, session only (shown in the edit panel while it still matches)
+   struct DpiNote
+   {
+      const Primitive *host = nullptr;
+      float dpi = 0.f;
+      int source = DpiDefault;
+   };
+   static bool CanFit(const EditorUI &ed);
+   static void FitStart(EditorUI &ed);
+   static void FitCancel(EditorUI &ed, const char *message = nullptr);
+   static void FitClick(EditorUI &ed, const ImVec2 &mouse);
+   static void RenderFitPanel(EditorUI &ed);
 
    static bool CanStart(const EditorUI &ed);
    static void Start(EditorUI &ed); // Add Plastic from Atlas
@@ -112,11 +144,16 @@ public:
    static void Adjust(Primitive *host, float height, float thickness, float bevel, int segs, float holeDia, float dpi, int detail);
 
 private:
+   static bool FitInvalid(const EditorUI &ed); // The table changed under Fit to Posts (an undo, a delete, locked, left the edit): the steps end
    static Primitive *EditedHost(const EditorUI &ed); // The plastic host whose points are being edited, else null
    static Primitive *NewPrimitive(EditorUI &ed, const string &name, float x, float y);
    static string UniqueName(EditorUI &ed, const string &name);
    static Material *EnsureMaterial(PinTable *table, int which);
-   static float ParseDpi(const string &imageName);
+   static float ParseDpi(const string &imageName); // The number before "dpi" in the name, 0 when there is none
+   static float SheetDpi(const Texture *tex, const string &imageName, int &source); // The file, else the name, else 150
+   static void SelectAtlas(EditorUI &ed, const string &name);
+   static void LoadAtlasImage(EditorUI &ed); // The Load Image button: the system file dialog
+   static void ApplyLoadedImage(EditorUI &ed); // The dialog's result, once it came back
    static void SetSheet(EditorUI &ed); // Default mapping for the image and dpi, the sheet centred on the table
    static string DefaultImage(const EditorUI &ed);
 };

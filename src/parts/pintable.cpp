@@ -5136,17 +5136,17 @@ Texture *PinTable::ImportImage(const std::filesystem::path &filename, const stri
    }
 
    m_vimage.push_back(image);
-   if (m_liveBaseTable)
-   {
+   if (m_liveBaseTable || !m_textureMap.empty()) // The by-name lookup of a table in play (or in the editor) must find the new image too
       m_textureMap[image->m_name] = image;
+   if (m_liveBaseTable)
       m_vliveimage.push_back(image);
-   }
    return image;
 }
 
 void PinTable::RemoveImage(Texture * const ppi)
 {
    RemoveFromVectorSingle(m_vimage, ppi);
+   m_textureMap.erase(ppi->m_name); // The by-name lookup must not keep a freed image
 
    delete ppi;
 }

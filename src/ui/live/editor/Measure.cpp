@@ -156,6 +156,8 @@ const char *MeasureTool::Refusal(const EditorUI &ed)
       return "Not available while editing points";
    if (ed.m_plasticTrace.active)
       return "Not available while tracing a plastic";
+   if (ed.m_plasticFit.active)
+      return "Not available while fitting a plastic to its posts";
    if (ed.m_refImage.PickActive())
       return "Not available while picking the points of a reference image scale";
    return nullptr;
@@ -261,7 +263,7 @@ void MeasureTool::EndFrame(EditorUI &ed)
          m_drag = Drag();
    }
    if (m_active
-      && (ed.IsInspectMode() || ed.m_camMode == ViewMode::DesktopBackdrop || ed.m_pointEditPart != nullptr || ed.m_addPartType != eItemInvalid || ed.m_plasticTrace.active || ed.m_refImage.PickActive()
+      && (ed.IsInspectMode() || ed.m_camMode == ViewMode::DesktopBackdrop || ed.m_pointEditPart != nullptr || ed.m_addPartType != eItemInvalid || ed.m_plasticTrace.active || ed.m_plasticFit.active || ed.m_refImage.PickActive()
          || ed.m_partLibrary.IsPlacementArmed()))
       SetActive(ed, false);
 }

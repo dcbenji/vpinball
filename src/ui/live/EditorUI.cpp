@@ -2552,6 +2552,7 @@ void EditorUI::RenderUI()
       PlasticFromAtlas::RenderPanel(*this);
       m_refImage.RenderPanel(*this);
       PlasticFromAtlas::RenderEditPanel(*this);
+      PlasticFromAtlas::RenderFitPanel(*this);
       PlasticFromAtlas::RenderMenu(*this);
    }
    else
@@ -3266,6 +3267,8 @@ void EditorUI::RenderUI()
             m_refImage.Click(*this, m_boxSelectStart); // Reference image: a point of the two point scale
          else if (m_plasticTrace.active)
             PlasticFromAtlas::Click(*this, m_boxSelectStart, io.KeyShift);
+         else if (m_plasticFit.active)
+            PlasticFromAtlas::FitClick(*this, m_boxSelectStart);
          else if (m_partLibrary.IsPlacementArmed())
          {
             // Part library placement mode: drop the previewed part at its ghost position
@@ -3569,6 +3572,8 @@ void EditorUI::RenderUI()
          {
             // Cancelled the ruler being dragged, or left the Measure tool
          }
+         else if (m_plasticFit.active)
+            PlasticFromAtlas::FitCancel(*this, "Fit to Posts stopped"); // Leave the steps only
          else if (m_plasticTrace.active && m_plasticTrace.measure != 0)
             m_plasticTrace.measure = 0; // Leave measuring only, the add goes on
          else if (m_plasticTrace.active)

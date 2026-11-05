@@ -23,6 +23,9 @@ public:
    static constexpr float kDefaultHeight = 25.f;
    static constexpr float kMaxAutoPostRadius = 150.f; // VPU, bigger primitives are not posts unless they have a Rubber Guide Radius
 
+   // The position a guided rubber takes for this post (the centre of its footprint in table XY). False when the primitive is no post (too big, no mesh)
+   static bool PostPosition(Primitive *post, float &x, float &y, float *radius = nullptr);
+
    // 2+ primitives (other than the playfield mesh) selected, table editable
    static bool CanCreate(const EditorUI &ed);
    // Exactly one rubber and 1+ primitives selected

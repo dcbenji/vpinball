@@ -106,6 +106,8 @@ set(VPX_SOURCES
    src/math/wirerail.h
    src/math/PlasticMesh.h
    src/math/PlasticMesh.cpp
+   src/math/ImageDpi.h
+   src/math/ImageDpi.cpp
    src/math/ModelViewProj.h
 
    src/meshes/ballMesh.h

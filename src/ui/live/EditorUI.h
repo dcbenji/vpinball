@@ -472,6 +472,8 @@ private:
    ImVec2 m_plasticRmbStart {};
    int m_plasticMenu = -1; // Edit menu to open: 0 = Edit Shape on a selected plastic, 1 = the menu while editing
    ImVec2 m_plasticMenuPos {};
+   PlasticFromAtlas::Fit m_plasticFit; // Fit to Posts: the steps
+   PlasticFromAtlas::DpiNote m_plasticDpiNote;
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    MeasureTool m_measure; // The Measure tool (Blender's Ruler): view-only rulers kept for the session
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
