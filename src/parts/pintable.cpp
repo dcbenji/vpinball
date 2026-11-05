@@ -3375,11 +3375,13 @@ vector<IEditable *> PinTable::ImportParts(PinTable *const source, PartGroup *con
 {
    // Move all the parts of the source table, keeping their authored part groups
    const vector<IEditable *> imported = source->m_vedit;
+   vector<std::pair<string, string>> packHosts; // Each plastic or Wire Rail host of the pack: its name in the pack, its name here (a renamed host's clear, bevel or channel part follows)
    for (IEditable *const part : imported)
    {
       part->AddRef();
       source->RemovePart(part);
       // If the original name is not yet used, use that one, otherwise add/increase the suffix until we find a name that's not used yet
+      const string oldName = part->GetName();
       if (!IsNameUnique(part->GetName()))
       {
          const string input = part->GetName();
@@ -3388,10 +3390,27 @@ vector<IEditable *> PinTable::ImportParts(PinTable *const source, PartGroup *con
             --lastNonDigit;
          part->SetName(GetUniqueName(input.substr(0, lastNonDigit)));
       }
+      if (part->GetItemType() == eItemPrimitive && (static_cast<Primitive *>(part)->m_d.m_plasticGen || static_cast<Primitive *>(part)->m_d.m_wireRail))
+         packHosts.emplace_back(oldName, part->GetName());
       if (part->GetPartGroup() == nullptr)
          part->SetPartGroup(targetGroup);
       AddPart(part);
       part->Release();
+   }
+   for (IEditable *const part : imported) // A companion follows its renamed host; one whose host is not in the pack becomes a plain primitive (it would bind to any part of that name here)
+   {
+      if (part->GetItemType() != eItemPrimitive || static_cast<Primitive *>(part)->m_d.m_plasticHost.empty())
+         continue;
+      Primitive *const companion = static_cast<Primitive *>(part);
+      const auto host = std::ranges::find_if(packHosts, [companion](const auto &h) { return StrCompareNoCase(h.first, companion->m_d.m_plasticHost); });
+      if (host != packHosts.end())
+         companion->m_d.m_plasticHost = host->second;
+      else
+      {
+         companion->m_d.m_plasticHost.clear();
+         companion->m_d.m_plasticRole = 0;
+         companion->SetUILock(false);
+      }
    }
 
    // Merge the collections: same named collections get their members merged into the existing one

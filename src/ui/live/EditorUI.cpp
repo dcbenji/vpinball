@@ -2440,7 +2440,7 @@ void EditorUI::RenderUI()
             }
          }
          // A drag waits for its end: the companions sit in the static UI quadtree, each update of one waits for a rebuild of that tree (~75 ms on a big table)
-         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty && !IsDragInProgress())
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_plasticPickDirty && !IsDragInProgress() && !ImGui::IsAnyItemActive())
          {
             Primitive *const plastic = static_cast<Primitive *>(part);
             plastic->m_plasticPickDirty = false;
@@ -4530,8 +4530,17 @@ void EditorUI::RestoreUndoSelection(const UndoSelectionState &state)
    m_outlinerAnchor = resolve(state.outlinerAnchor);
 }
 
-void EditorUI::SetSelection(const Selection &selection)
+void EditorUI::SetSelection(const Selection &requested)
 {
+   Selection selection = requested;
+   if (selection.GetType() == Selection::S_EDITABLE && selection.GetPart() != nullptr) // A plastic's clear or bevel part is never the selection (the Users lists, popups and collections name them): its host is
+   {
+      IEditable *const editable = selection.GetPart()->GetEditable();
+      IEditable *const host = PlasticFromAtlas::HostOf(m_table, editable);
+      if (host != editable)
+         if (const auto it = m_editableMap.find(host); it != m_editableMap.end())
+            selection = Selection(it->second);
+   }
    m_selection = selection;
    m_multiSel.clear();
    m_multiSelImages.clear();
@@ -4577,8 +4586,8 @@ void EditorUI::SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &part)
    int anchorPos = -1, partPos = -1, pos = 0;
    for (const auto &edit : m_editables)
    {
-      if (edit->GetEditable()->GetItemType() == eItemPartGroup || (edit->GetEditable()->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop)))
-         continue;
+      if (edit->GetEditable()->GetItemType() == eItemPartGroup || (edit->GetEditable()->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop)) || PlasticFromAtlas::IsCompanion(edit->GetEditable()))
+         continue; // (a plastic's clear and bevel parts are not listed in the outliner)
       if (edit == m_outlinerAnchor)
          anchorPos = pos;
       if (edit == part)
@@ -4596,8 +4605,8 @@ void EditorUI::SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &part)
    pos = 0;
    for (const auto &edit : m_editables)
    {
-      if (edit->GetEditable()->GetItemType() == eItemPartGroup || (edit->GetEditable()->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop)))
-         continue;
+      if (edit->GetEditable()->GetItemType() == eItemPartGroup || (edit->GetEditable()->m_desktopBackdrop != (m_camMode == ViewMode::DesktopBackdrop)) || PlasticFromAtlas::IsCompanion(edit->GetEditable()))
+         continue; // (a plastic's clear and bevel parts are not listed in the outliner)
       if (pos >= anchorPos && pos <= partPos)
          m_multiSel.push_back(edit);
       pos++;
@@ -4612,7 +4621,7 @@ void EditorUI::SelectPartsInGroup(const PartGroup *group)
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable->GetItemType() != eItemPartGroup && editable->IsChild(group) && (editable->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop)))
+      if (editable->GetItemType() != eItemPartGroup && editable->IsChild(group) && (editable->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop)) && !PlasticFromAtlas::IsCompanion(editable))
          m_multiSel.push_back(uiPart);
    }
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
@@ -4654,11 +4663,7 @@ void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
 IEditable *EditorUI::HitEditable(const HitTestResult &hit) const
 {
    IEditable *const editable = hit.m_obj->m_editable;
-   if (editable != nullptr && editable->GetItemType() == eItemPrimitive && static_cast<Primitive *>(editable)->IsPlasticCompanion())
-      for (IEditable *const part : m_table->GetParts())
-         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_plasticGen && StrCompareNoCase(part->GetName(), static_cast<Primitive *>(editable)->m_d.m_plasticHost))
-            return part;
-   return editable;
+   return editable != nullptr ? PlasticFromAtlas::HostOf(m_table, editable) : nullptr;
 }
 
 void EditorUI::SelectAtPoint(const ImVec2 &mousePos, const PickView *view)
@@ -4819,7 +4824,7 @@ void EditorUI::SelectAllParts()
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable) && local.Allows(editable))
+      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable) && local.Allows(editable) && !PlasticFromAtlas::IsCompanion(editable))
          m_multiSel.push_back(uiPart);
    }
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
@@ -4978,12 +4983,15 @@ void EditorUI::CreateCollection(bool fromSelection)
    pcol->AddRef();
    pcol->m_name = m_table->GetUniqueName("Collection"s);
    if (fromSelection)
+   {
+      vector<IEditable *> members;
       for (const auto &uiPart : m_multiSel)
-      {
-         IEditable *const editable = uiPart->GetEditable();
+         members.push_back(uiPart->GetEditable());
+      PlasticFromAtlas::AddCompanions(members); // A script hiding the collection's plastics hides all three parts of each
+      for (IEditable *const editable : members)
          if (editable && editable->GetIScriptable()) // Collections only reference scriptable parts (persisted by name)
             m_table->AddPartToCollection(pcol, editable);
-      }
+   }
    m_table->AddCollection(pcol);
    pcol->Release();
    m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
@@ -5420,6 +5428,11 @@ void EditorUI::RestorePartsVisibility() const
 
 void EditorUI::UpdateEditableList()
 {
+   if (m_plasticRepairedTable != m_table && m_renderer != nullptr && m_player != nullptr) // Once per table, before its parts are listed
+   {
+      m_plasticRepairedTable = m_table;
+      PlasticFromAtlas::RepairCompanions(*this);
+   }
    // In full edit mode, parts without a part group are live objects generated at runtime (implicit
    // playfield mesh, script created parts, ...): they are not part of the table file, so they are
    // not listed in the outliner and can not be selected
@@ -6221,7 +6234,7 @@ void EditorUI::UpdateModalTransform()
                for (const auto &uiPart : m_editables)
                {
                   IEditable *const editable = uiPart->GetEditable();
-                  if (editable == nullptr || editable->GetItemType() == eItemPartGroup || editable->GetItemType() == eItemBall || IsPartSelected(uiPart) || !editable->IsUIVisible(false))
+                  if (editable == nullptr || editable->GetItemType() == eItemPartGroup || editable->GetItemType() == eItemBall || IsPartSelected(uiPart) || !editable->IsUIVisible(false) || PlasticFromAtlas::IsCompanion(editable))
                      continue;
                   m_modal.snapPoints.push_back(editable->GetCenter());
                   if (DragPointCurve *const curve = uiPart->GetDragPointCurve())
@@ -6454,6 +6467,13 @@ bool EditorUI::BuildLocalViewParts(LocalViewParts &parts) const
                      break;
                   }
    }
+   // A plastic is shown whole (its clear and bevel parts), a Wire Rail with its channel part: the selection never holds those
+   vector<IEditable *> withCompanions;
+   for (const IEditable *const editable : parts.set)
+      withCompanions.push_back(const_cast<IEditable *>(editable));
+   PlasticFromAtlas::AddCompanions(withCompanions);
+   for (const IEditable *const editable : withCompanions)
+      add(editable);
    return !parts.set.empty();
 }
 

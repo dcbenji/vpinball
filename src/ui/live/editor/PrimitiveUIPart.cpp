@@ -3,6 +3,7 @@
 
 #include "core/extern.h"
 #include "core/player.h"
+#include "PlasticFromAtlas.h"
 #include "math/matrix.h"
 #include "utils/color.h"
 
@@ -376,8 +377,63 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
    }
    else if (m_part->IsPlasticCompanion() && props.BeginSection("Plastic from Atlas"s))
    {
-      ImGui::TextDisabled("Companion of %s: its mesh is derived from the host", m_part->m_d.m_plasticHost.c_str());
+      ImGui::TextDisabled("Part of %s: its mesh is derived from the plastic, edit it there", m_part->m_d.m_plasticHost.c_str());
       props.EndSection();
+   }
+   // The clear and bevel parts are engine details of a plastic: their materials and refraction are edited here, on the plastic, in the same undo step
+   if (m_part->m_d.m_plasticGen && !props.IsMultiEdit())
+   {
+      Primitive *const clear = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(m_part), 1);
+      Primitive *const bevel = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(m_part), 2);
+      if (clear != nullptr && bevel != nullptr && props.BeginSection("Clear Plastic"s))
+      {
+         const auto refraction = [&props](Primitive *const part, const string &prefix)
+         {
+            props.RenderProbeCombo<Primitive>(
+               part, prefix + "Refraction Probe"s, //
+               [](const Primitive* p) { return p->m_d.m_szRefractionProbe; }, //
+               [](Primitive* p, const string& v) { p->m_d.m_szRefractionProbe = v; }, "Render probe providing the image seen through the clear plastic");
+            props.InputFloat<Primitive>(
+               part, prefix + "Refraction Thickness"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionThickness; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionThickness = v; }, PropertyPane::Unit::None, 3, "Simulated thickness used to refract light through the plastic");
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Curvature"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionCurvature; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionCurvature = max(v, 0.f); }, 0.f, 8.f, 2, "Curvature-driven refraction strength (0 = off)");
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Anisotropy"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionAnisotropy; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionAnisotropy = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Wave"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionWave; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionWave = max(v, 0.f); }, 0.f, 3.f, 2);
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Wave Flow"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionWaveFlow; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionWaveFlow = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2);
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Noise"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionNoise; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionNoise = max(v, 0.f); }, 0.f, 10.f, 2);
+            props.SliderFloat<Primitive>(
+               part, prefix + "Refraction Noise Scale (mm)"s, //
+               [](const Primitive* p) { return p->m_d.m_refractionNoiseScale; }, //
+               [](Primitive* p, float v) { p->m_d.m_refractionNoiseScale = max(v, 0.01f); }, 0.5f, 10.f, 2);
+         };
+         props.MaterialCombo<Primitive>(
+            clear, "Clear Material"s, //
+            [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
+            [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the clear top");
+         refraction(clear, "Clear "s);
+         props.MaterialCombo<Primitive>(
+            bevel, "Bevel Material"s, //
+            [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
+            [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the walls and bevel");
+         refraction(bevel, "Bevel "s);
+         props.EndSection(); // (RefreshEditedParts reinitializes both parts after an edit)
+      }
    }
 
    // Apply asynchronous mesh file dialog results (not in the hidden pin harvest pane, which would open the dialogs out of sight)

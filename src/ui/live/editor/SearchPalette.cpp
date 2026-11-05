@@ -280,7 +280,7 @@ void SearchPalette::BuildIndex()
    for (IEditable *const part : table->GetParts())
    {
       const ItemTypeEnum itemType = part->GetItemType();
-      if (itemType == eItemTable)
+      if (itemType == eItemTable || PlasticFromAtlas::IsCompanion(part)) // (a plastic's clear and bevel parts are not offered)
          continue;
       int type;
       if (itemType == eItemPrimitive && static_cast<const Primitive *>(part)->IsRailChannel())

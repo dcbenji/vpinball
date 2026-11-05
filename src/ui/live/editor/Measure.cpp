@@ -10,6 +10,7 @@
 
 #include "EditorTheme.h"
 #include "EditorUIPart.h"
+#include "PlasticFromAtlas.h"
 #include "IconsLucide.h"
 
 namespace VPX::EditorUI
@@ -331,7 +332,7 @@ bool MeasureTool::FindSnap(EditorUI &ed, const View &view, const ImVec2 &mouse, 
       IEditable *const editable = part->GetEditable();
       if (!ed.IsEditablePickable(editable, view.pick.visibilityMask) || !ed.IsInLocalView(view.PickPtr(), editable))
          continue;
-      if (!ed.IsPartPickableInView(part, ed.IsHiddenInPlayPickable(view.PickPtr())))
+      if (!ed.IsPartPickableInView(part, ed.IsHiddenInPlayPickable(view.PickPtr())) || PlasticFromAtlas::IsCompanion(editable)) // (a plastic's clear and bevel parts sit at the origin: the host has the snap points)
          continue;
       Matrix3D m;
       if ((part->GetTransform(m) & EditorUIPart::TM_TransAny) == EditorUIPart::TM_TransAny)

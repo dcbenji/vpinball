@@ -779,7 +779,13 @@ void PropertiesPanel::ResolvePendingPin()
    }
    else if (kind == "part")
    {
-      const auto it = std::ranges::find_if(editor.m_editables, [&name](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->GetName() == name; });
+      auto it = std::ranges::find_if(editor.m_editables, [&name](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->GetName() == name; });
+      if (it != editor.m_editables.end() && PlasticFromAtlas::IsCompanion((*it)->GetEditable()))
+      {
+         // A pin saved on a plastic's clear or bevel part (a layout from before they were hidden) shows the plastic: they are never shown on their own
+         const IEditable *const host = PlasticFromAtlas::HostOf(table, (*it)->GetEditable());
+         it = std::ranges::find_if(editor.m_editables, [host](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable() == host; });
+      }
       found = it != editor.m_editables.end();
       if (found)
          sel = Selection(*it);
@@ -1007,6 +1013,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
          else
             editor.m_undo.MarkForUndo(editable);
+         if (editable->GetItemType() == eItemPrimitive && !props.IsMultiEdit()) // The Clear Plastic fields edit the clear and bevel parts: in the same step as the plastic
+            for (const int role : { 1, 2 })
+               if (Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(editable), role); comp != nullptr)
+                  editor.m_undo.MarkForUndo(comp, true, false);
          editor.MarkDependentsForUndo(); // Rubbers following an edited post (guided rubbers)
          // Alt held while editing: the fields also write to the other selected parts, snapshotted in the same record
          const bool areaActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
@@ -1154,6 +1164,10 @@ void PropertiesPanel::RefreshEditedParts(PropertyPane &props)
    {
       editor.m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
       editor.m_player->m_physics->Update(part->GetEditable());
+      if (part->GetEditable()->GetItemType() == eItemPrimitive) // The Clear Plastic fields edit the clear and bevel parts of a plastic
+         for (const int role : { 1, 2 })
+            if (Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part->GetEditable()), role); comp != nullptr)
+               editor.m_renderer->ReinitRenderable(comp->GetIRenderable());
       // Multi-edit writes the co-edited parts' visibility fields directly: resync their editor overrides
       // (the active part's overrides are updated by the pane's own setters, so it must be excluded)
       if (part != editor.m_selection.GetPart())
@@ -2118,7 +2132,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
       {
          vector<IEditable *> candidates;
          for (IEditable *const part : editedTable->GetParts())
-            if (part->GetIScriptable() != nullptr && std::ranges::find(members, part) == members.end())
+            if (part->GetIScriptable() != nullptr && !PlasticFromAtlas::IsCompanion(part) && std::ranges::find(members, part) == members.end())
                candidates.push_back(part);
          std::ranges::sort(candidates, [](const IEditable *a, const IEditable *b) { return StrLessNoCase(a->GetName(), b->GetName()); });
          for (IEditable *const part : candidates)
@@ -2126,6 +2140,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
             {
                vector<IEditable *> newContent(members);
                newContent.push_back(part);
+               PlasticFromAtlas::AddCompanions(newContent); // A plastic joins with its clear and bevel parts
                editedTable->SetCollectionContent(edited, newContent);
                editedTable->SetNonUndoableDirty(SaveDirtyState::Dirty);
             }

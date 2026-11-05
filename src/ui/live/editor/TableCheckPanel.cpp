@@ -5,6 +5,7 @@
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 #include "EditorChrome.h"
+#include "PlasticFromAtlas.h"
 
 #include "math/MeshUtils.h"
 #include "parts/Material.h"
@@ -63,6 +64,7 @@ struct ResourceRef
    const char *field = "";
    string name;
    bool isImage = true;
+   bool companion = false; // From a plastic's clear or bevel part: it counts as used, but a missing name is not listed on a part the author never sees
 };
 
 // What the checks work on, built once per scan
@@ -70,7 +72,8 @@ struct ScanContext
 {
    PinTable &table;
    const vector<std::shared_ptr<EditorUIPart>> &uiParts;
-   vector<IEditable *> parts; // Parts of the table listed in the editor, in outliner order
+   vector<IEditable *> parts; // Parts of the table listed in the editor, in outliner order (a plastic's clear and bevel parts and a rail's channel are not parts for the author)
+   vector<IEditable *> companions; // Those, for the resources they use
    ankerl::unordered_dense::map<IEditable *, EditorUIPart *> uiOf;
    ankerl::unordered_dense::set<string> imageNames, materialNames; // Lower case
    vector<ResourceRef> refs;
@@ -127,10 +130,13 @@ void CollectRefs(const PinTable &table, const ScanContext &ctx, vector<ResourceR
       r.field = field;
       r.name = name;
       r.isImage = isImage;
+      r.companion = PlasticFromAtlas::IsCompanion(part);
       refs.push_back(std::move(r));
    };
 
-   for (IEditable *const part : ctx.parts)
+   vector<IEditable *> withCompanions = ctx.parts;
+   withCompanions.insert(withCompanions.end(), ctx.companions.begin(), ctx.companions.end());
+   for (IEditable *const part : withCompanions)
    {
       const string &owner = part->GetName();
       const auto img = [&](const char *field, const string &name) { add(part, owner, field, name, true); };
@@ -314,6 +320,8 @@ void CheckMissingResources(const ScanContext &ctx, vector<Finding> &out)
 {
    for (const ResourceRef &r : ctx.refs)
    {
+      if (r.companion)
+         continue;
       const bool found = (r.isImage ? ctx.imageNames : ctx.materialNames).contains(Lower(r.name));
       if (found)
          continue;
@@ -544,8 +552,11 @@ void TableCheckPanel::Scan()
       IEditable *const edit = uiPart->GetEditable();
       if (edit == nullptr || !live.contains(edit))
          continue;
-      if (edit->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edit)->IsRailChannel())
-         continue; // Hidden Wire Rail channels: not listed by the Outliner either
+      if (PlasticFromAtlas::IsCompanion(edit))
+      {
+         ctx.companions.push_back(edit); // A plastic's clear and bevel parts, a Wire Rail's hidden channel: not listed by the Outliner either, and derived from the host
+         continue;
+      }
       ctx.parts.push_back(edit);
       ctx.uiOf[edit] = uiPart.get();
    }

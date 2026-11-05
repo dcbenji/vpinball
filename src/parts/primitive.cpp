@@ -2444,6 +2444,11 @@ void Primitive::RegeneratePlastic()
    setMesh(this, res.bottom);
    for (Primitive *const comp : GetPlasticCompanions())
    {
+      // The author sees one plastic: the render flags of its Properties reach the clear and bevel parts too
+      comp->m_d.m_visible = m_d.m_visible;
+      comp->m_d.m_staticRendering = m_d.m_staticRendering;
+      comp->m_d.m_depthBias = m_d.m_depthBias;
+      comp->m_d.m_reflectionEnabled = m_d.m_reflectionEnabled;
       setMesh(comp, comp->m_d.m_plasticRole == 1 ? res.top : res.bevel);
       if (comp->m_renderer != nullptr)
          comp->m_renderer->ReinitRenderable(comp);

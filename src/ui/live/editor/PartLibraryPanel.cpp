@@ -454,6 +454,7 @@ void PartLibraryPanel::Update()
       vector<IEditable *> parts;
       for (const auto &part : m_editor.m_multiSel)
          parts.push_back(part->GetEditable());
+      PlasticFromAtlas::AddCompanions(parts); // A plastic is exported with its clear and bevel parts
       VPXFileFeedback feedback;
       m_editor.RestorePartsVisibility(); // Export the authored visibility, not the editor display state
       const HRESULT hr = m_editor.m_table->SavePartsToJSONPack(file, parts, feedback);
@@ -1987,13 +1988,14 @@ void PartLibraryPanel::ImportPack(const std::filesystem::path &path)
    // Player side setup, same as part creation
    for (IEditable *const part : imported)
       SetupPlayerSide(part, true);
+   PlasticFromAtlas::RepairCompanions(m_editor, &imported); // A pack made before plastics had a clear and a bevel part
    m_editor.m_undo.EndUndo();
 
    // Select the imported parts
    m_editor.UpdateEditableList();
    m_editor.m_multiSel.clear();
    for (IEditable *const part : imported)
-      if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end())
+      if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end() && !PlasticFromAtlas::IsCompanion(part))
          m_editor.m_multiSel.push_back(it->second);
    if (!m_editor.m_multiSel.empty())
       m_editor.m_selection = Selection(m_editor.m_multiSel.back());
@@ -2117,16 +2119,20 @@ void PartLibraryPanel::PlaceAt(const Vertex2D &pos)
 
    // Move the whole pack content rigidly: the centroid of its part centers tracks the pointed point
    Vertex2D centroid(0.f, 0.f);
+   size_t centred = 0;
    for (IEditable *const part : m_previewParts)
    {
+      if (PlasticFromAtlas::IsCompanion(part)) // Sits at the origin, derived from its host
+         continue;
       const Vertex2D c = part->GetCenter();
       centroid.x += c.x;
       centroid.y += c.y;
+      centred++;
    }
-   if (!m_previewParts.empty())
+   if (centred > 0)
    {
-      centroid.x /= static_cast<float>(m_previewParts.size());
-      centroid.y /= static_cast<float>(m_previewParts.size());
+      centroid.x /= static_cast<float>(centred);
+      centroid.y /= static_cast<float>(centred);
    }
    const Vertex2D delta(pos.x - centroid.x, pos.y - centroid.y);
    for (IEditable *const part : m_previewParts)
@@ -2186,6 +2192,7 @@ void PartLibraryPanel::CommitPlacement()
    // the assets of the edited table (pack assets skipped by the merge are released with the scratch table)
    for (IEditable *const part : imported)
       SetupPlayerSide(part, false);
+   PlasticFromAtlas::RepairCompanions(m_editor, &imported); // A pack made before plastics had a clear and a bevel part
    m_editor.m_undo.SetLabel("Place " + PathToUTF8(m_placementPack.stem()));
    m_editor.m_undo.EndUndo();
    for (RenderProbe *const probe : m_previewTable->m_vrenderprobe) // The ones the merge left (duplicates): the merged ones moved to the table, set up
@@ -2200,7 +2207,7 @@ void PartLibraryPanel::CommitPlacement()
    m_editor.UpdateEditableList();
    vector<std::shared_ptr<EditorUIPart>> placedParts;
    for (IEditable *const part : imported)
-      if (part->GetItemType() != eItemPartGroup)
+      if (part->GetItemType() != eItemPartGroup && !PlasticFromAtlas::IsCompanion(part))
          if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end())
             placedParts.push_back(it->second);
    if (!placedParts.empty())

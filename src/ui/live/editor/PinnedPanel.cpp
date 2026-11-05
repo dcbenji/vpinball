@@ -9,6 +9,7 @@
 #include "core/player.h"
 #include "parts/Material.h"
 #include "parts/primitive.h"
+#include "PlasticFromAtlas.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
@@ -167,6 +168,8 @@ void PinnedPanel::CollectCopyTargets(IEditable *source, const PinCopyFn &copy, v
 {
    out.clear();
    if (source == nullptr || !copy || m_editor.IsInspectMode())
+      return;
+   if (PlasticFromAtlas::IsCompanion(source)) // A Clear Plastic field is the clear or bevel part's: it must not land on the host print or any other part
       return;
    for (const std::shared_ptr<EditorUIPart> &part : m_editor.m_multiSel)
    {

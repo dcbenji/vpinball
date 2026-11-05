@@ -431,6 +431,7 @@ private:
    // Status bar report (see Report)
    string m_report;
    double m_reportTime = -1000.0;
+   const PinTable *m_plasticRepairedTable = nullptr; // The table whose plastics were checked for missing clear / bevel parts
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
    bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc

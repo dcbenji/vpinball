@@ -23,6 +23,7 @@ class LiveRenderContext;
 // Plastic from Atlas: a plastic is traced on top of a print atlas image (a closed outline of straight runs and arcs, plus circular holes) and becomes
 // three primitives built by PlasticMesh: the host (print: bottom cap with the atlas image, holds the curve and all parameters) and two companions,
 // <host>_Clear (top cap) and <host>_Bevel (walls and bevel), whose meshes are always derived from the host (see Primitive::RegeneratePlastic).
+// The author only ever sees the plastic: the companions are engine details (not in the outliner, never selected, edited through the host's Clear Plastic section).
 // Add Plastic from Atlas starts a trace state (top view, the atlas drawn as a backdrop under the points): LMB corner, Backspace
 // removes the last point, H switches between the outline and the holes, Enter closes the loop and creates the plastic, Esc cancels.
 class PlasticFromAtlas final
@@ -137,6 +138,10 @@ public:
    // Undo / redo reload a host (its eye included) and not its companions: the companions of the hosts whose eye changed follow
    static std::map<const IEditable *, bool> SnapshotHostVisibility(const EditorUI &ed);
    static void SyncChangedHostVisibility(const EditorUI &ed, const std::map<const IEditable *, bool> &before);
+   static bool IsCompanion(const IEditable *part); // A plastic's clear or bevel part: listed nowhere, never selected
+   static void RepairCompanions(EditorUI &ed, const vector<IEditable *> *only = nullptr); // Recreates the clear and bevel parts a plastic lacks (host-only library packs, parts deleted alone): defaults, one log line per plastic. Of the table, or of 'only' within the open undo record. Does nothing for a plastic that has both
+   static IEditable *HostOf(const PinTable *table, const IEditable *companion); // The plastic host of a companion (the part itself if it is none, or its host is missing)
+   static Primitive *CompanionOf(const Primitive *host, int role); // The companion of a plastic host with that role (1 = clear, 2 = bevel), else null
    static void AddCompanions(vector<IEditable *> &parts); // Appends the companions of the plastic hosts in 'parts' that are not in it
    static void FixPasted(const vector<IEditable *> &pasted, const vector<string> &originalNames); // Pasted companions follow the pasted host copies, else become plain primitives
 

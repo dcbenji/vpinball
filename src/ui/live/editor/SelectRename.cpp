@@ -423,8 +423,9 @@ void SelectRename::SelectSimilar(const Similar mode)
    for (const auto &uiPart : ed.m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      // The parts Select All takes: not the part groups, the pickable ones (not hidden), those the view shows
-      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !ed.IsEditablePickable(editable) || !local.Allows(editable) || ed.IsPartSelected(uiPart))
+      // The parts Select All takes: not the part groups, the pickable ones (not hidden), those the view shows, not a plastic's clear and bevel parts
+      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !ed.IsEditablePickable(editable) || !local.Allows(editable) || ed.IsPartSelected(uiPart)
+         || PlasticFromAtlas::IsCompanion(editable))
          continue;
       bool similar = false;
       switch (mode)

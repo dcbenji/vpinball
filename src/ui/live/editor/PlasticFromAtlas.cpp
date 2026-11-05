@@ -536,6 +536,75 @@ void PlasticFromAtlas::SyncChangedHostVisibility(const EditorUI &ed, const std::
    SyncCompanionVisibility(changed);
 }
 
+bool PlasticFromAtlas::IsCompanion(const IEditable *part)
+{
+   return part != nullptr && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsPlasticCompanion();
+}
+
+void PlasticFromAtlas::RepairCompanions(EditorUI &ed, const vector<IEditable *> *const only)
+{
+   if (ed.m_table->m_liveBaseTable != nullptr || ed.m_renderer == nullptr || ed.m_player == nullptr) // Not on the live copy of an inspected table
+      return;
+   const vector<IEditable *> parts = only != nullptr ? *only : ed.m_table->GetParts(); // Parts are added below
+   for (IEditable *const part : parts)
+   {
+      if (!IsPointEditHost(part) || static_cast<const Primitive *>(part)->GetName().empty()) // A Wire Rail's companion is its channel, made with the rail
+         continue;
+      Primitive *const host = static_cast<Primitive *>(part);
+      vector<Primitive *> created;
+      string made;
+      for (const int role : { 1, 2 })
+      {
+         if (CompanionOf(host, role) != nullptr)
+            continue;
+         const string name = UniqueName(ed, host->GetName() + (role == 1 ? "_Clear" : "_Bevel"));
+         Primitive *const comp = NewPrimitive(ed, name, 0.f, 0.f);
+         if (comp == nullptr)
+            continue;
+         comp->SetPartGroup(host->GetPartGroup());
+         comp->m_d.m_szMaterial = EnsureMaterial(ed.m_table, role)->m_name;
+         comp->m_d.m_plasticHost = host->GetName();
+         comp->m_d.m_plasticRole = role;
+         comp->SetUILock(true);
+         if (only != nullptr)
+            ed.m_undo.MarkForCreate(comp);
+         created.push_back(comp);
+         made += (made.empty() ? "" : " and ") + name;
+      }
+      if (created.empty())
+         continue;
+      host->RegeneratePlastic(); // Fills the new parts' meshes
+      for (Primitive *const comp : created)
+      {
+         ed.m_player->TimerSetup(comp);
+         comp->GetIRenderable()->RenderSetup(ed.m_renderer.get());
+         if (comp->GetIHitable())
+            ed.m_player->m_physics->Add(comp);
+      }
+      ed.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      PLOGW << "Plastic " << host->GetName() << " lacked part(s): recreated " << made << " from defaults";
+   }
+}
+
+IEditable *PlasticFromAtlas::HostOf(const PinTable *table, const IEditable *companion)
+{
+   if (IsCompanion(companion))
+      for (IEditable *const part : table->GetParts())
+         if (IsHost(part) && StrCompareNoCase(part->GetName(), static_cast<const Primitive *>(companion)->m_d.m_plasticHost))
+            return part;
+   return const_cast<IEditable *>(companion);
+}
+
+Primitive *PlasticFromAtlas::CompanionOf(const Primitive *host, const int role)
+{
+   if (host == nullptr || !host->m_d.m_plasticGen)
+      return nullptr;
+   for (Primitive *const comp : host->GetPlasticCompanions())
+      if (comp->m_d.m_plasticRole == role)
+         return comp;
+   return nullptr;
+}
+
 void PlasticFromAtlas::AddCompanions(vector<IEditable *> &parts)
 {
    const size_t n = parts.size();
