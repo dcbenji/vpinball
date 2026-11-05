@@ -85,6 +85,7 @@ using LocalViewSet = ankerl::unordered_dense::set<const IEditable *>;
 namespace PerfAblate { enum : int { BLOOM = 1, AA = 2, REFL = 4, REFR = 8, SHADOW = 16, LIGHTS = 32, UI = 64, SPEC = 128, MBLUR = 256 }; }
 extern std::atomic<int> g_perfAblateMask;
 extern std::atomic<int> g_perfAblateStep;
+extern std::atomic<float> g_perfAblateShadowOpts;
 const char* PerfAblateStepName(const int step);
 
 class Renderer final

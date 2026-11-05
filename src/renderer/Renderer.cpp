@@ -3603,7 +3603,15 @@ void Renderer::UpdateVirtualShadowMaps()
    m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, 0.f);
+   // w: shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate): VPX_SHADOW_EARLY=1 (4 corner taps first, the other 12 only
+   // in a penumbra) or 2 (4 taps only); VPX_SHADOW_GATE=<radiance> no shadow lookup for a light under it at the pixel (1e-4 steps)
+   static const float shadowEarly = (std::getenv("VPX_SHADOW_EARLY") ? (float)atoi(std::getenv("VPX_SHADOW_EARLY")) : 0.f)
+      + 10.f * (std::getenv("VPX_SHADOW_GATE") ? floorf((float)atof(std::getenv("VPX_SHADOW_GATE")) * 10000.f + 0.5f) : 0.f);
+   // VPX_SHADOW_AB=1 (diagnostic): the options above on odd frames only, so consecutive captured frames are an A/B pair
+   static const bool shadowAB = std::getenv("VPX_SHADOW_AB") != nullptr;
+   const float ablateOpts = g_perfAblateShadowOpts.load();
+   const float shadowOpts = ablateOpts >= 0.f ? ablateOpts : (shadowAB && (g_pplayer->m_overall_frames & 1) == 0) ? 0.f : shadowEarly;
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowOpts);
 }
 #endif
 
@@ -3911,9 +3919,60 @@ void Renderer::BuildPBRLightList(const int altSlot)
    // Cell size adapts to the table bounds (>= 64 units) so any playfield fits the fixed 32x16 grid capacity
    const float tableW = m_table->m_right - m_table->m_left;
    const float tableH = m_table->m_bottom - m_table->m_top;
-   const float cellSize = max(64.f, max(tableW / 32.f, tableH / 16.f));
-   const int cellsX = clamp(static_cast<int>(ceilf(tableW / cellSize)), 1, 32);
-   const int cellsY = clamp(static_cast<int>(ceilf(tableH / cellSize)), 1, 16);
+   // VPX_PERF_LIGHTS (diagnostic): "drop=<name prefixes>,proxy;range=<scale of non-room light ranges>;cell=<grid cell VPU>"
+   struct PerfLights { vector<string> drop, unshadow; bool dropProxy = false; float range = 1.f; float cell = 0.f; };
+   static const PerfLights perfLights = []()
+   {
+      PerfLights p;
+      const char* const env = std::getenv("VPX_PERF_LIGHTS");
+      if (env == nullptr)
+         return p;
+      std::stringstream ss(env);
+      string tok;
+      while (std::getline(ss, tok, ';'))
+      {
+         const size_t eq = tok.find('=');
+         if (eq == string::npos)
+            continue;
+         const string key = tok.substr(0, eq), val = tok.substr(eq + 1);
+         if (key == "drop")
+         {
+            std::stringstream sv(val);
+            string name;
+            while (std::getline(sv, name, ','))
+               if (name == "proxy")
+                  p.dropProxy = true;
+               else if (!name.empty())
+                  p.drop.push_back(lowerCase(name));
+         }
+         else if (key == "unshadow")
+         {
+            std::stringstream sv(val);
+            string name;
+            while (std::getline(sv, name, ','))
+               if (!name.empty())
+                  p.unshadow.push_back(name == "all" ? string() : lowerCase(name));
+         }
+         else if (key == "range")
+            p.range = (float)atof(val.c_str());
+         else if (key == "cell")
+            p.cell = (float)atof(val.c_str());
+      }
+      PLOGI << "VPX_PERF_LIGHTS: " << p.drop.size() << " drop prefixes, proxy " << p.dropProxy << ", range x" << p.range << ", cell " << p.cell;
+      return p;
+   }();
+   float cellSize = max(64.f, max(tableW / 32.f, tableH / 16.f));
+   int cellsX = clamp(static_cast<int>(ceilf(tableW / cellSize)), 1, 32);
+   int cellsY = clamp(static_cast<int>(ceilf(tableH / cellSize)), 1, 16);
+   if (perfLights.cell > 0.f)
+   {
+      // Table-shaped grid of the requested cell size, grown until it fits the 512 cells of the light texture
+      cellSize = perfLights.cell;
+      while (static_cast<int>(ceilf(tableW / cellSize)) * static_cast<int>(ceilf(tableH / cellSize)) > 512)
+         cellSize *= 1.05f;
+      cellsX = max(1, static_cast<int>(ceilf(tableW / cellSize)));
+      cellsY = max(1, static_cast<int>(ceilf(tableH / cellSize)));
+   }
    const int cellCount = cellsX * cellsY;
 
    // Intensity to linear radiance scale: intensity is the authored emission power, irradiance = intensity / (4.pi.d_m^2),
@@ -3961,6 +4020,12 @@ void Renderer::BuildPBRLightList(const int altSlot)
       const bool fixedDome = fixedLevel > 0.f && domeCookies.find(light) != domeCookies.end();
       if (light->m_d.m_type != LightType::PBR || !light->m_d.m_visible || (light->m_currentIntensity <= 0.f && !fixedDome) || light->m_desktopBackdrop)
          continue;
+      if (!perfLights.drop.empty())
+      {
+         const string lname = lowerCase(light->GetName());
+         if (std::any_of(perfLights.drop.begin(), perfLights.drop.end(), [&lname](const string& pre) { return lname.rfind(pre, 0) == 0; }))
+            continue;
+      }
       if (lightCount >= maxLights)
          break;
 
@@ -3977,7 +4042,7 @@ void Renderer::BuildPBRLightList(const int altSlot)
       }
       LightEntry& e = entries[lightCount];
       e.pos = Vertex3Ds(light->m_d.m_vCenter.x, light->m_d.m_vCenter.y, light->GetCurrentHeight());
-      e.range = PBRLightRange(light);
+      e.range = PBRLightRange(light) * (light->m_d.m_roomLight ? 1.f : perfLights.range);
       // A room light (window, ceiling key) follows the scene lighting level (Day/Night) as the env and ambient do; lamps (GI,
       // inserts, flashers) keep their intensity, as legacy lights do, so the room darkens or brightens around them
       const float radiance = light->m_currentIntensity * intensityToLinear * (light->m_d.m_roomLight ? m_sceneLighting.GetGlobalEmissionScale() : 1.f);
@@ -3987,6 +4052,12 @@ void Renderer::BuildPBRLightList(const int altSlot)
       const int shadowInfo = static_cast<int>(light->m_d.m_shadows) | ((shadowIndex + 1) << 4) | (light->m_pbrShadowLayout << 12)
          | (PBRPenumbraHalfUnits(light) << 16); // bulb radius as the PCSS penumbra (>= 2 VPU, 255 keeps the float exact)
       e.radiance = vec4(tint.x * radiance, tint.y * radiance, tint.z * radiance, (float)shadowInfo);
+      if (!perfLights.unshadow.empty())
+      {
+         const string lname = lowerCase(light->GetName());
+         if (std::any_of(perfLights.unshadow.begin(), perfLights.unshadow.end(), [&lname](const string& pre) { return lname.rfind(pre, 0) == 0; }))
+            e.radiance.w = (float)(shadowInfo & ~4095);
+      }
       e.radius = PBRLightSphereRadius(light);
       e.upward = false;
       e.index = lightCount;
@@ -4009,7 +4080,7 @@ void Renderer::BuildPBRLightList(const int altSlot)
    // insert colour.
    // VPX_T11_INSERT_GAIN is the PBR light intensity of a fully lit insert
    static const float insertGain = std::getenv("VPX_T11_INSERT_GAIN") ? (float)atof(std::getenv("VPX_T11_INSERT_GAIN")) : 0.025f;
-   if (areaLights && insertGain > 0.f)
+   if (areaLights && insertGain > 0.f && !perfLights.dropProxy)
    {
       for (IEditable* const part : m_table->GetParts())
       {
@@ -4157,12 +4228,12 @@ void Renderer::BuildPBRLightList(const int altSlot)
       m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDomeSpillCol, spillCol, 8);
    }
 
-   // VPX_PERF_ABLATE: no PBR lights at all / no shadow lookups (shadow mode bits 0-3 cleared)
+   // VPX_PERF_ABLATE: no PBR lights at all / no shadow lookups (shadow mode and map index, bits 0-11, cleared: fs_pbr keys the lookup on the index)
    if (g_perfAblateMask.load() & PerfAblate::LIGHTS)
       lightCount = 0;
    if (g_perfAblateMask.load() & PerfAblate::SHADOW)
       for (int i = 0; i < lightCount; i++)
-         entries[i].radiance.w = (float)(static_cast<int>(entries[i].radiance.w) & ~15);
+         entries[i].radiance.w = (float)(static_cast<int>(entries[i].radiance.w) & ~4095);
 
    // Bucket into all cells overlapped by the light range (cell count caps at maxPerCell lights)
    for (int i = 0; i < lightCount; i++)
@@ -5723,9 +5794,11 @@ void Renderer::RestoreLampTest()
 // run measures what each one costs on the GPU (the frame log's 'ablate' column names the step of each frame). Unset = no change.
 std::atomic<int> g_perfAblateMask { 0 };
 std::atomic<int> g_perfAblateStep { -1 };
+std::atomic<float> g_perfAblateShadowOpts { -1.f }; // >= 0: overrides the shadow filter options (VPX_SHADOW_EARLY / _GATE) for this ablation step
 const char* PerfAblateStepName(const int step)
 {
-   static const char* const names[] = { "base", "nobloom", "noaa", "norefl", "norefr", "noshadow", "nolights", "noui", "nospec", "nomblur", "floor", "base2" };
+   static const char* const names[] = { "base", "nobloom", "noaa", "norefl", "norefr", "noshadow", "nolights", "noui", "nospec", "nomblur", "floor", "base2",
+      "sh_early", "sh_early_g05", "sh_tap4_g2" };
    return (step >= 0 && step < (int)std::size(names)) ? names[step] : "";
 }
 void UpdatePerfAblation(Renderer* r)
@@ -5745,12 +5818,15 @@ void UpdatePerfAblation(Renderer* r)
       perfMode = g_pplayer->m_liveUI->m_perfUI.GetPerfMode();
       saved = true;
    }
-   constexpr int nSteps = 12;
+   constexpr int nSteps = 15;
    const int step = static_cast<int>((usec() - start) / (uint64_t)(stepSec * 1e6f)) % nSteps;
    if (step == g_perfAblateStep.load())
       return;
    using namespace PerfAblate;
-   static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0 };
+   static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0, 0, 0, 0 };
+   // Shadow filter option steps (pbrShadowParams.w, see BuildPBRLightList): early-out, early-out + gate 0.5, 4 taps + gate 2
+   static constexpr float shadowOpts[nSteps] = { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, 1.f, 1.f + 10.f * 5000.f, 2.f + 10.f * 20000.f };
+   g_perfAblateShadowOpts = shadowOpts[step];
    const int m = masks[step];
    r->m_bloomOff = bloomOff || (m & BLOOM);
    r->m_FXAA = (m & AA) ? 0 : fxaa;
