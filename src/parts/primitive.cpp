@@ -1364,7 +1364,10 @@ void Primitive::Render(const unsigned int renderMask)
    const bool flasherDome = IsFlasherDome();
    const uint32_t bodyIndices = m_groupdRendering ? m_numGroupIndices : (flasherDome && m_dome.valid) ? m_dome.outerIndices : (uint32_t)m_mesh.NumIndices();
    if (!m_d.m_stateSrcLink.empty() && g_pplayer->m_resURIResolver.TryGetFloatState(m_d.m_stateSrcLink, linkState))
+   {
+      m_renderer->LampTestLinkLevel(this, m_lightmap, linkState); // Lamp Test of the view being drawn, if any
       alpha *= linkState;
+   }
    else if (m_lightmap && !flasherDome) // a flasher dome's lamp drives its dome layer, not its body
    {
       if (m_lightmap->m_d.m_intensity != 0.f && m_lightmap->m_d.m_intensity_scale != 0.f)

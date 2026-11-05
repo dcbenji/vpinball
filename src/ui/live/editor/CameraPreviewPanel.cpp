@@ -586,7 +586,9 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          const bool ownsEdit = (m_editor.m_modal.active && m_editor.m_modal.viewSlot == m_slot) || (ImGuizmo::IsUsingAny() && m_editor.m_gizmoSlot == m_slot);
          const bool scheduled = (ownsEdit && (!m_settings.wireframe || frame % 2u == 0u))
             || (m_settings.wireframe ? (frame % 4u) == kWirePhases[static_cast<unsigned int>(m_rank) % 4u] : ((frame + static_cast<unsigned int>(m_rank)) % 2u) == 0);
-         if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging) && scheduled)))
+         // A Blink Lamp Test keeps even a not live view drawing (the phase moves with time)
+         const bool blinking = !m_settings.wireframe && m_settings.shade.Lamp(m_settings.solid).mode == LampTestMode::Blink && !m_editor.m_player->IsPlaying(false);
+         if (!pbrRefused && (m_refresh || m_camMoved || ((m_settings.live || dragging || blinking) && scheduled)))
          {
             Renderer::EditorViewRequest req;
             req.width = m_width;

@@ -2,6 +2,34 @@
 
 #pragma once
 
+#include <string>
+
+// Lamp Test: a view-only override of what the table's lamps (lights, and the inserts / flashers they drive) show in this view. Never changes the table
+enum class LampTestMode : int
+{
+   Off, // The lamps as the table has them
+   AllOn, // Every lamp at its full intensity
+   AllOff, // Every lamp dark
+   Blink, // Every lamp, on and off together
+   Collection // The lamps of one collection on, the others dark
+};
+
+// One Lamp Test setting. Solid and PBR keep their own (switching a view's shading keeps each; Wireframe draws no lamps and has none)
+struct LampTestSettings
+{
+   LampTestMode mode = LampTestMode::Off;
+   float blinkHz = 2.f; // Blink rate, cycles per second (0.25 .. 8)
+   std::string collection; // Collection mode: the collection's name
+
+   bool operator==(const LampTestSettings &o) const { return mode == o.mode && blinkHz == o.blinkHz && collection == o.collection; }
+   bool operator!=(const LampTestSettings &o) const { return !(*this == o); }
+   // Whether two settings show the lamps alike (the light list built for one serves the other)
+   bool Same(const LampTestSettings &o) const
+   {
+      return mode == o.mode && (mode != LampTestMode::Collection || collection == o.collection) && (mode != LampTestMode::Blink || blinkHz == o.blinkHz);
+   }
+};
+
 // View-only shading options of the live editor's 3D views (the Viewport Shading popover next to the shading icon row).
 // One set per view (the main 3D Viewport, each secondary view). They only change how that view is drawn: nothing here is a table setting,
 // and the defaults are exactly the look the views had before the options existed.
@@ -32,6 +60,9 @@ struct ViewShadeOptions
    float envAngle = 0.f; // Rotation of the table's environment about the table's vertical axis in this view, degrees (-180 .. 180)
    float envStrength = 1.f; // Level of the table's environment light in this view (0 .. 4, 1 = the table's)
    bool tableLights = true; // The table's lights (and their shadows) light this view
+   // Lamp Test (never in play), per shading mode
+   LampTestSettings lampSolid, lampPbr;
+   const LampTestSettings &Lamp(const bool solid) const { return solid ? lampSolid : lampPbr; }
 
    bool operator==(const ViewShadeOptions &o) const
    {
@@ -57,6 +88,8 @@ struct ViewShadeOptions
          && envStrength == o.envStrength
          && envAngle == o.envAngle
          && tableLights == o.tableLights
+         && lampSolid == o.lampSolid
+         && lampPbr == o.lampPbr
          && hiddenWire == o.hiddenWire
          && hiddenSolid == o.hiddenSolid
          && hiddenPbr == o.hiddenPbr;

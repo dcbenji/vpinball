@@ -221,6 +221,16 @@ nlohmann::json ShadeOptionsToJson(const ViewShadeOptions& o)
       j["env_angle"] = o.envAngle;
    if (!o.tableLights)
       j["table_lights"] = false;
+   const auto lampToJson = [&](const LampTestSettings& l, const char* const suffix) {
+      if (l.mode != LampTestMode::Off)
+         j[std::string("lamp_test") + suffix] = l.mode == LampTestMode::AllOn ? "all_on" : l.mode == LampTestMode::AllOff ? "all_off" : l.mode == LampTestMode::Blink ? "blink" : "collection";
+      if (l.blinkHz != d.lampPbr.blinkHz)
+         j[std::string("lamp_blink_hz") + suffix] = l.blinkHz;
+      if (!l.collection.empty())
+         j[std::string("lamp_collection") + suffix] = l.collection;
+   };
+   lampToJson(o.lampPbr, "");
+   lampToJson(o.lampSolid, "_solid");
    if (o.hiddenWire != d.hiddenWire)
       j["hidden_wire"] = o.hiddenWire;
    if (o.hiddenSolid != d.hiddenSolid)
@@ -276,6 +286,19 @@ ViewShadeOptions ShadeOptionsFromJson(const nlohmann::json& j)
    num("env_strength", o.envStrength, 0.f, 4.f);
    num("env_angle", o.envAngle, -180.f, 180.f);
    flag("table_lights", o.tableLights);
+   const auto lampFromJson = [&](LampTestSettings& l, const char* const suffix) {
+      if (const auto it = j.find(std::string("lamp_test") + suffix); it != j.end() && it->is_string())
+      {
+         const std::string v = it->get<std::string>();
+         l.mode = v == "all_on" ? LampTestMode::AllOn : v == "all_off" ? LampTestMode::AllOff : v == "blink" ? LampTestMode::Blink : v == "collection" ? LampTestMode::Collection : LampTestMode::Off;
+      }
+      if (const auto it = j.find(std::string("lamp_blink_hz") + suffix); it != j.end() && it->is_number() && std::isfinite(it->get<double>()))
+         l.blinkHz = std::clamp(static_cast<float>(it->get<double>()), 0.25f, 8.f);
+      if (const auto it = j.find(std::string("lamp_collection") + suffix); it != j.end() && it->is_string())
+         l.collection = it->get<std::string>();
+   };
+   lampFromJson(o.lampPbr, "");
+   lampFromJson(o.lampSolid, "_solid");
    flag("hidden_wire", o.hiddenWire);
    flag("hidden_solid", o.hiddenSolid);
    flag("hidden_pbr", o.hiddenPbr);

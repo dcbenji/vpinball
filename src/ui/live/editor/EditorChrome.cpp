@@ -215,6 +215,57 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       ImGui::PopStyleColor(4);
       return open;
    };
+   // Lamp Test (Solid and PBR): what the table's lamps show in this view, never the table. Collection picks from the table's collections
+   const auto lampTestSection = [&]() {
+      if (!section("Lamp Test"))
+         return;
+      static const char *const modes[5] = { "Off", "All On", "All Off", "Blink", "Collection" };
+      const bool playing = g_pplayer != nullptr && g_pplayer->IsPlaying(false);
+      LampTestSettings &l = mode == 1 ? o.lampSolid : o.lampPbr; // Solid and PBR keep their own
+      int sel = static_cast<int>(l.mode);
+      ImGui::BeginDisabled(playing);
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::BeginCombo("##lampTest", modes[sel]))
+      {
+         for (int i = 0; i < 5; i++)
+            if (ImGui::Selectable(modes[i], sel == i))
+            {
+               l.mode = static_cast<LampTestMode>(i);
+               changed = true;
+            }
+         ImGui::EndCombo();
+      }
+      resetMenu([&]() { l = LampTestSettings {}; });
+      if (l.mode == LampTestMode::Blink)
+         slider("blinkHz", l.blinkHz, 0.25f, 8.f, "Blink Rate  %.2f Hz", LampTestSettings {}.blinkHz);
+      else if (l.mode == LampTestMode::Collection)
+      {
+         const PinTable *const table = g_pplayer != nullptr ? g_pplayer->m_ptable : nullptr;
+         bool found = false;
+         if (table != nullptr)
+            for (const auto *const col : table->GetCollections())
+               found |= col->m_name == l.collection;
+         const std::string shown = l.collection.empty() ? "(choose a collection)" : found ? l.collection : l.collection + " (missing)"; // A missing one tests nothing
+         ImGui::SetNextItemWidth(-FLT_MIN);
+         if (ImGui::BeginCombo("##lampCollection", shown.c_str()))
+         {
+            if (table != nullptr)
+               for (const auto *const col : table->GetCollections())
+                  if (ImGui::Selectable(col->m_name.c_str(), col->m_name == l.collection))
+                  {
+                     l.collection = col->m_name;
+                     changed = true;
+                  }
+            ImGui::EndCombo();
+         }
+      }
+      ImGui::EndDisabled();
+      if (l.mode != LampTestMode::Off)
+      {
+         heading(playing ? "Off while playing" : "This view only, no table change");
+      }
+   };
+
    ImGui::PushStyleColor(ImGuiCol_Text, dim);
    ImGui::TextUnformatted("Viewport Shading");
    ImGui::PopStyleColor();
@@ -251,6 +302,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
             slider("xrayAlpha", o.xrayAlpha, 0.f, 1.f, "Opacity  %.2f", def.xrayAlpha);
          checkbox("hidden", "Hidden in Play", o.hiddenSolid, def.hiddenSolid);
       }
+      lampTestSection();
    }
    else if (mode == 0)
    {
@@ -277,6 +329,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
       }
       if (section("Options"))
          checkbox("hidden", "Hidden in Play", o.hiddenPbr, def.hiddenPbr);
+      lampTestSection();
    }
    ImGui::Spacing();
    if (ImGui::Button("Reset", ImVec2(-FLT_MIN, 0.f)))
@@ -296,6 +349,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          o.xraySolid = def.xraySolid;
          o.xrayAlpha = def.xrayAlpha;
          o.hiddenSolid = def.hiddenSolid;
+         o.lampSolid = LampTestSettings {};
       }
       else if (mode == 0)
       {
@@ -312,6 +366,7 @@ static bool ShadeOptionsPopover(EditorUI *const editor, const int mode, ViewShad
          o.envAngle = def.envAngle;
          o.tableLights = def.tableLights;
          o.hiddenPbr = def.hiddenPbr;
+         o.lampPbr = LampTestSettings {};
       }
       changed = true;
    }

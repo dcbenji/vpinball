@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <unordered_set>
 #include "unordered_dense.h"
 #include "gpuprofiler.h"
 #include "math/matrix.h"
@@ -407,7 +408,7 @@ private:
    void PreparePBRPasses(); // Record PBR sideband clear and early AO passes when PBR is active
    void AddPBRShadowDependencies(); // Order this frame's shadow page passes before the (just created) scene pass (no-op without BGFX)
 #if defined(ENABLE_BGFX)
-   void BuildPBRLightList(); // Rebuild the Forward+ clustered light list (CPU world-space XY grid, per frame)
+   void BuildPBRLightList(int altSlot = -1); // Rebuild the Forward+ clustered light list (CPU world-space XY grid, per frame). altSlot >= 0: into that editor view's own list (Lamp Test)
    void UpdateVirtualShadowMaps(); // Paged virtual shadow maps: mark coverage, allocate pages, render dirty pages
    void CreateVSMPagePoolTargets(); // Lazily create the physical page pool texture array and its per-layer render targets
    Vertex3Ds GetShadowCasterBoundsMin(IEditable* part, Vertex3Ds& boundsMax) const; // World AABB of a shadow caster part
@@ -613,6 +614,41 @@ private:
    bool NoTableLights() const { return IsSolidPass() || !m_viewShade.tableLights; } // No table lights (nor shadows) in the view being drawn
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
+   // Lamp Test (ViewShadeOptions::lampTest): while a view is recorded the lamps' intensities are overridden, and put back after it. Never saved, never the table's
+   struct LampTestSaved
+   {
+      class Light* light;
+      float intensity;
+      double temperature;
+   };
+   vector<LampTestSaved> m_lampTestSaved;
+   bool m_lampTestApplied = false; // A Lamp Test is applied right now (the lights above are overridden)
+   LampTestMode m_lampTestMode = LampTestMode::Off;
+   bool m_lampTestBlinkOn = false;
+   std::unordered_set<const IEditable*> m_lampTestParts; // Collection mode: the collection's parts
+   std::unordered_set<const Light*> m_lampTestLights; // ... and the lights they are or are driven by
+   LampTestSettings m_lampTestMain; // What the main view showed this frame (a secondary view with another setting builds its own light list)
+   double m_lampTestTime = 0.; // Seconds, taken once per frame so that every view blinks together
+   void ApplyLampTest(const LampTestSettings& options);
+   void RestoreLampTest();
+public:
+   bool LampTestLinkLevel(const IEditable* part, const Light* lightmap, float& level) const; // A state linked flasher / primitive's level while a Lamp Test is applied (false: none)
+private:
+   bool LampTestActive(const LampTestSettings& options) const; // A lamp test is asked for, and the table is not playing
+#if defined(ENABLE_BGFX)
+   struct DomeLightState
+   {
+      class Primitive* prim;
+      vec3 gi;
+      vec4 giDir;
+      vec4 lights[8];
+   };
+   vector<DomeLightState> m_lampTestDomeSaved; // The flasher domes' light state as the main view built it, while a view's own light list rewrites it
+   int m_lampTestListSlot = -1; // The secondary view being recorded uses the light list of this slot (-1: the main one)
+   std::shared_ptr<Sampler> m_altLightList[kMaxEditorViews]; // Secondary views' own light lists (tex_pbr_lights), created when first needed
+   static_assert(kMaxEditorViews == 3, "m_altLightListTex is initialised for 3 views");
+   bgfx::TextureHandle m_altLightListTex[kMaxEditorViews] = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE }; // ... their textures (owned by the samplers)
+#endif
    bool m_editorLitePass = false; // ... on the lite wireframe path (LDR output without tonemapping: the wireframe colors are given display referred)
    const ViewSetup* m_editorPreviewViewSetup = nullptr; // Setup rendered by the preview pass while it records, null otherwise (see GetRenderViewSetup)
 

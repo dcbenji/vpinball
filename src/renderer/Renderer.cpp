@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "Renderer.h"
+#include <unordered_set>
 
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
@@ -24,6 +25,7 @@
 #include "parts/spinner.h"
 #include "parts/surface.h"
 #include "parts/trigger.h"
+#include "parts/flasher.h"
 #include "physics/cabinet/NudgeHandler.h"
 #include "renderer/Anaglyph.h"
 #include "renderer/Shader.h"
@@ -546,6 +548,8 @@ Renderer::~Renderer()
    m_vsmTransSampler = nullptr;
    m_vsmPageTableSampler = nullptr;
    m_shadowCacheSampler = nullptr; // owns m_shadowCacheTex
+   for (std::shared_ptr<Sampler>& list : m_altLightList)
+      list = nullptr; // owns its texture
    if (bgfx::isValid(m_vsmPoolTex))
       bgfx::destroy(m_vsmPoolTex);
    if (bgfx::isValid(m_vsmTransTex))
@@ -2843,6 +2847,8 @@ void Renderer::PreparePBRPasses()
          m_vsmTouchedRTs.clear(); // Last frame's list holds RTs deleted at its end (the shadow cache bake target): not to be depended on by this frame's passes
       BuildPBRLightList();
    }
+   else if (m_lampTestListSlot >= 0)
+      BuildPBRLightList(m_lampTestListSlot); // This view's lamps are not the main view's: its own light list
    else
       ApplyPBRLightGrid2();
    static const char* const frameLogLights = std::getenv("VPX_FRAME_LOG") != nullptr ? std::getenv("VPX_FRAME_LOG_LIGHTS") : nullptr;
@@ -3896,7 +3902,7 @@ void Renderer::ApplyPBRLightGrid2()
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, m_pbrLightGrid2.x, NoTableLights() ? 0.f : m_pbrLightGrid2.y, m_pbrLightGrid2.z, m_pbrLightGrid2.w);
 }
 
-void Renderer::BuildPBRLightList()
+void Renderer::BuildPBRLightList(const int altSlot)
 {
    constexpr int texW = 256, texH = 32;
    constexpr int maxLights = 256, gridBase = 512, indexBase = 1024;
@@ -4180,8 +4186,21 @@ void Renderer::BuildPBRLightList()
    static const float refrDebug = std::getenv("VPX_REFR_DEBUG") ? (float)atof(std::getenv("VPX_REFR_DEBUG")) : 0.f;
    m_pbrLightGrid2 = vec4((float)cellsY, (float)lightCount, specAA, refrDebug);
    ApplyPBRLightGrid2();
-   m_renderDevice->AddBeginOfFrameCmd([rd = m_renderDevice, data = std::move(texData)]()
-      { bgfx::updateTexture2D(rd->m_pbrLightListTex, 0, 0, 0, 0, 256, 32, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
+   bgfx::TextureHandle listTex = m_renderDevice->m_pbrLightListTex;
+   if (altSlot >= 0)
+   {
+      // A secondary view with its own Lamp Test: its own list texture (the uploads run at the start of the frame, before any view samples)
+      if (m_altLightList[altSlot] == nullptr)
+      {
+         m_altLightListTex[altSlot] = bgfx::createTexture2D(256, 32, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
+         bgfx::setName(m_altLightListTex[altSlot], "PBR Light List (view)");
+         m_altLightList[altSlot] = std::make_shared<Sampler>(m_renderDevice, "PBR Light List (view)"s, SurfaceType::RT_DEFAULT, m_altLightListTex[altSlot], bgfx::TextureFormat::RGBA32F, 256, 32, true);
+      }
+      listTex = m_altLightListTex[altSlot];
+      m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_altLightList[altSlot]);
+   }
+   m_renderDevice->AddBeginOfFrameCmd([listTex, data = std::move(texData)]()
+      { bgfx::updateTexture2D(listTex, 0, 0, 0, 0, 256, 32, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
 }
 #endif
 
@@ -5548,9 +5567,113 @@ void Renderer::RenderUIScene()
    }
 }
 
+// Lamp Test is for editing: never while the table plays, so a play test shows what the script drives. A Collection that does not resolve (renamed, deleted,
+// another table, none chosen yet) is no test at all: the lamps stay as the table has them
+bool Renderer::LampTestActive(const LampTestSettings& options) const
+{
+   if (options.mode == LampTestMode::Off || g_pplayer == nullptr || g_pplayer->IsPlaying(false))
+      return false;
+   if (options.mode == LampTestMode::Collection)
+   {
+      if (m_table == nullptr)
+         return false;
+      for (const auto* const col : m_table->GetCollections())
+         if (col->m_name == options.collection)
+            return true;
+      return false;
+   }
+   return true;
+}
+
+// Overrides the lamps' current intensity (and filament temperature) as the options ask. Lights are the lamps; the inserts (lightmap primitives), flashers with a lightmap,
+// bulbs and halos all draw from a light's current intensity, so they follow. Flashers and primitives driven by a state link (not by a lightmap) ask LampTestLinkLevel
+// where they read the link. A flasher with neither is script driven opacity: not a lamp, left alone
+void Renderer::ApplyLampTest(const LampTestSettings& options)
+{
+   RestoreLampTest();
+   if (!LampTestActive(options))
+      return;
+   m_lampTestMode = options.mode;
+   const double cycle = m_lampTestTime * static_cast<double>(options.blinkHz);
+   m_lampTestBlinkOn = (cycle - floor(cycle)) < 0.5;
+   if (options.mode == LampTestMode::Collection)
+   {
+      for (const auto* const col : m_table->GetCollections())
+         if (col->m_name == options.collection)
+            for (IEditable* const part : col->GetParts())
+            {
+               m_lampTestParts.insert(part);
+               if (part->GetItemType() == eItemLight)
+                  m_lampTestLights.insert(static_cast<const Light*>(part));
+               else if (part->GetItemType() == eItemPrimitive)
+               {
+                  if (const Light* const lamp = static_cast<const Primitive*>(part)->GetLightmap())
+                     m_lampTestLights.insert(lamp);
+               }
+               else if (part->GetItemType() == eItemFlasher)
+               {
+                  if (const Light* const lamp = m_table->GetLight(static_cast<const Flasher*>(part)->m_d.m_szLightmap))
+                     m_lampTestLights.insert(lamp);
+               }
+            }
+   }
+   m_lampTestApplied = true;
+   for (IEditable* const part : m_table->GetParts())
+   {
+      if (part->GetItemType() != eItemLight)
+         continue;
+      Light* const light = static_cast<Light*>(part);
+      const bool on = options.mode == LampTestMode::AllOn || (options.mode == LampTestMode::Blink && m_lampTestBlinkOn)
+         || (options.mode == LampTestMode::Collection && m_lampTestLights.count(light) != 0);
+      m_lampTestSaved.push_back({ light, light->m_currentIntensity, light->m_currentFilamentTemperature });
+      light->m_currentIntensity = on ? light->m_d.m_intensity * light->m_d.m_intensity_scale : 0.f;
+      light->m_currentFilamentTemperature = on ? 2700.0 : 293.0;
+   }
+}
+
+// The level (0 / 1) a flasher or primitive takes in place of its state link's value while a Lamp Test is applied
+bool Renderer::LampTestLinkLevel(const IEditable* const part, const Light* const lightmap, float& level) const
+{
+   if (!m_lampTestApplied)
+      return false;
+   switch (m_lampTestMode)
+   {
+   case LampTestMode::AllOn: level = 1.f; break;
+   case LampTestMode::AllOff: level = 0.f; break;
+   case LampTestMode::Blink: level = m_lampTestBlinkOn ? 1.f : 0.f; break;
+   default: level = (m_lampTestParts.count(part) != 0 || (lightmap != nullptr && m_lampTestLights.count(lightmap) != 0)) ? 1.f : 0.f; break;
+   }
+   return true;
+}
+
+void Renderer::RestoreLampTest()
+{
+   for (const LampTestSaved& saved : m_lampTestSaved)
+   {
+      saved.light->m_currentIntensity = saved.intensity;
+      saved.light->m_currentFilamentTemperature = saved.temperature;
+   }
+   m_lampTestSaved.clear();
+   m_lampTestApplied = false;
+   m_lampTestParts.clear();
+   m_lampTestLights.clear();
+}
+
 void Renderer::Render3DScene()
 {
    ResizeRenderTargets();
+
+   // Lamp Test of the main view, for the whole recording of the scene (every way out of this function puts the lamps back)
+   struct LampTestRestorer
+   {
+      Renderer* r;
+      ~LampTestRestorer() { r->RestoreLampTest(); }
+   } lampTestRestorer { this };
+   m_lampTestTime = static_cast<double>(usec()) * 1e-6;
+   static const LampTestSettings noLampTest;
+   // Wireframe draws no lamps: no Lamp Test there
+   const LampTestSettings& mainLamp = IsWireframeShade(m_shadeMode) ? noLampTest : m_viewShade.Lamp(IsSolidPass());
+   m_lampTestMain = LampTestActive(mainLamp) ? mainLamp : noLampTest;
 
    // Keep previous render as a reflection probe for ball reflection and for hires motion blur
    SwapBackBufferRenderTargets();
@@ -5586,6 +5709,7 @@ void Renderer::Render3DScene()
    for (auto renderable : m_renderableToSetup)
       renderable->RenderSetup(this);
    m_renderableToSetup.clear();
+   ApplyLampTest(mainLamp); // After the parts' RenderSetup (which rewrites a light's current intensity), before anything reads it
 
    // Update backdrop visibility and visibility mask
    // For the time being, the Render3DScene only support rendering one 3D view for main scene: dedicated 3D rendering for backglass, topper, apron are not yet implemented
@@ -5713,6 +5837,8 @@ void Renderer::Render3DScene()
 
    // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
    renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : m_renderDevice->GetOutputBackBuffer());
+
+   RestoreLampTest(); // Everything is recorded: the UI (stereo / XR paths included) and the secondary views see the lamps as they are
 
    // If using OpenVR, render LiveUI before pushing eyes to headset
    // If using 3D TV stereo mode, render LiveUI before stereo as it must be duplicated per view to be correct
@@ -6181,6 +6307,33 @@ void Renderer::RenderEditorView(const int slot)
    const unsigned int mainRenderMask = m_render_mask;
    m_shadeMode = lite ? (req.shade.xray ? ShadeMode::NoDepthWireframe : ShadeMode::Wireframe) : ShadeMode::Default; // The secondary view's own shading, whatever the editor view's
    m_viewShade = req.shade;
+   // This view's Lamp Test. When it shows the lamps otherwise than the main view did, the PBR light list is built for it alone
+#if defined(ENABLE_BGFX)
+   const vec4 mainLightGrid2Saved = m_pbrLightGrid2;
+#endif
+   m_lampTestListSlot = -1;
+   if (req.isolated == nullptr)
+   {
+      static const LampTestSettings noLampTest;
+      const LampTestSettings& lamp = lite ? noLampTest : req.shade.Lamp(req.solid); // Wireframe draws no lamps
+      ApplyLampTest(lamp);
+#if defined(ENABLE_BGFX)
+      if (m_renderDevice->m_pbrActive && !req.wireframe && !req.solid && req.shade.tableLights && !(LampTestActive(lamp) ? lamp : noLampTest).Same(m_lampTestMain))
+      {
+         m_lampTestListSlot = slot;
+         // The list build also rewrites the flasher domes' GI / glint lights (per part, not per view): keep the main view's for the views after this one
+         m_lampTestDomeSaved.clear();
+         for (IEditable* const part : m_table->GetParts())
+            if (part->GetItemType() == eItemPrimitive && static_cast<Primitive*>(part)->IsFlasherDome())
+            {
+               Primitive* const prim = static_cast<Primitive*>(part);
+               DomeLightState state { prim, prim->m_domeGI, prim->m_domeGIDir, {} };
+               std::copy(prim->m_domeLights, prim->m_domeLights + 8, state.lights);
+               m_lampTestDomeSaved.push_back(state);
+            }
+      }
+#endif
+   }
    const LocalViewSet* const mainLocalView = m_localView;
    m_localView = req.localView;
    m_editorPreviewPass = true;
@@ -6401,6 +6554,23 @@ void Renderer::RenderEditorView(const int slot)
    m_editorPreviewViewSetup = nullptr;
    m_shadeMode = mainShadeMode;
    m_viewShade = mainViewShade;
+   RestoreLampTest();
+#if defined(ENABLE_BGFX)
+   if (m_lampTestListSlot >= 0)
+   {
+      m_lampTestListSlot = -1;
+      for (const DomeLightState& state : m_lampTestDomeSaved)
+      {
+         state.prim->m_domeGI = state.gi;
+         state.prim->m_domeGIDir = state.giDir;
+         std::copy(state.lights, state.lights + 8, state.prim->m_domeLights);
+      }
+      m_lampTestDomeSaved.clear();
+      m_pbrLightGrid2 = mainLightGrid2Saved;
+      m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
+      ApplyPBRLightGrid2();
+   }
+#endif
    m_localView = mainLocalView;
    m_renderDevice->m_depthPrepassTarget = mainDepthPrepassTarget;
    m_renderDevice->m_depthPrepassNormals = mainDepthPrepassNormals;

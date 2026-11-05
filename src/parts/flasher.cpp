@@ -1010,7 +1010,10 @@ void Flasher::Render(const unsigned int renderMask)
    float alpha = (float) m_d.m_alpha;
    float linkState;
    if (!m_d.m_stateSrcLink.empty() && g_pplayer->m_resURIResolver.TryGetFloatState(m_d.m_stateSrcLink, linkState))
+   {
+      m_renderer->LampTestLinkLevel(this, m_lightmap, linkState); // Lamp Test of the view being drawn, if any
       alpha *= linkState;
+   }
    else if (m_lightmap)
    {
       if (m_lightmap->m_d.m_intensity != 0.f && m_lightmap->m_d.m_intensity_scale != 0.f)
