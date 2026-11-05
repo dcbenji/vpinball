@@ -298,7 +298,8 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
    // No selection while the game is inspected, a part is being added, drag points edited, a modal runs, or Alt + left orbits this view.
    const ImGuiIO &io = ImGui::GetIO();
    EditorUI &e = m_editor;
-   const bool blocked = GameOwnsInput() || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr || e.m_camMode == ViewMode::DesktopBackdrop || e.m_modal.active || e.m_fileOp != nullptr;
+   const bool viewBlocked = GameOwnsInput() || e.m_camMode == ViewMode::DesktopBackdrop || e.m_modal.active || e.m_fileOp != nullptr;
+   const bool blocked = viewBlocked || e.m_addPartType != eItemInvalid || e.m_pointEditPart != nullptr;
    if (m_navDragging || blocked)
       m_clickPending = false;
    else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(e.m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver()) // Not a press on the gizmo
@@ -306,13 +307,18 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
       m_clickPending = true;
       m_clickStart = ImGui::GetMousePos();
    }
-   if (!m_clickPending || ImGui::IsMouseDown(ImGuiMouseButton_Left))
+   // Shift + right click puts the 3D cursor on the surface under the mouse, picking with this view's camera (also while drag points are edited, as in the 3D
+   // Viewport). It does not consume a left click pending its release.
+   const bool placeCursor = !viewBlocked && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt && !ImGuizmo::IsOver();
+   const bool selectReady = m_clickPending && !ImGui::IsMouseDown(ImGuiMouseButton_Left);
+   if (!placeCursor && !selectReady)
       return;
-   m_clickPending = false;
+   if (selectReady)
+      m_clickPending = false;
    const ImVec2 end = ImGui::GetMousePos();
-   if (fabsf(end.x - m_clickStart.x) > 4.f || fabsf(end.y - m_clickStart.y) > 4.f)
-      return;
-   if (end.x < imgMin.x || end.y < imgMin.y || end.x >= imgMin.x + imgSize.x || end.y >= imgMin.y + imgSize.y)
+   const bool inside = end.x >= imgMin.x && end.y >= imgMin.y && end.x < imgMin.x + imgSize.x && end.y < imgMin.y + imgSize.y;
+   const bool select = selectReady && inside && fabsf(end.x - m_clickStart.x) <= 4.f && fabsf(end.y - m_clickStart.y) <= 4.f;
+   if (!inside || (!select && !placeCursor))
       return;
    EditorUI::PickView view;
    if (!m_editor.m_renderer->GetEditorViewMVP(m_slot, view.modelViewProj)) // The view as last rendered, which is what the image shows
@@ -327,7 +333,10 @@ void CameraPreviewPanel::HandleSelectInput(const ImVec2 &imgMin, const ImVec2 &i
    }
    view.local = &m_local; // Only what the view shows can be picked
    view.hiddenInPlay = m_settings.wireframe ? m_settings.shade.hiddenWire : m_settings.solid ? m_settings.shade.hiddenSolid : m_settings.shade.hiddenPbr;
-   e.SelectAtPoint(end, &view);
+   if (select)
+      e.SelectAtPoint(end, &view);
+   if (placeCursor)
+      e.Place3DCursor(end, &view);
 }
 
 void CameraPreviewPanel::HandleViewKeys(const float aspect)
@@ -617,6 +626,7 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                view.rectSize = ImVec2(imgW, imgH);
                view.local = &m_local;
                m_editor.DrawSelectionLines(drawList, view);
+               m_editor.DrawCursor3DInView(drawList, view);
                // The camera and rect for the gizmo and the G / R / S modal transforms (see EditorUI::RenderUI)
                EditorUI::SecondaryViewInfo &info = m_editor.m_viewInfo[m_slot];
                if (renderer->GetEditorViewMatrices(m_slot, info.view, info.proj))

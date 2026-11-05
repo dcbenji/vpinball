@@ -92,6 +92,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_undo(m_player->m_ptable)
 {
    m_table = m_player->m_ptable;
+   Reset3DCursor();
    m_pininput = &(m_player->m_pininput);
 
    EditorUIPartRegistry::InitRegistry();
@@ -2120,6 +2121,8 @@ void EditorUI::RenderUI()
    // while not in drag point edit mode, so cancel it if one of these conditions is no longer met
    if (m_addPartType != eItemInvalid && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       m_addPartType = eItemInvalid;
+   else if (m_addPartType != eItemInvalid && m_camMode != ViewMode::DesktopBackdrop && m_fileOp == nullptr && !m_modal.active)
+      PlaceNewPartAtCursor(); // As Blender's: a new part goes to the 3D cursor (the desktop backdrop, a 2D plane, keeps the click to place)
    if (m_plasticTrace.active && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       PlasticFromAtlas::Cancel(*this);
    // Plastics whose meshes were rebuilt: their picking colliders follow
@@ -2285,6 +2288,7 @@ void EditorUI::RenderUI()
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings
          | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus);
    ImDrawList *const overlayDrawList = ImGui::GetWindowDrawList();
+   RenderCursorMenu();
 
    // Confirmation popup for discarding unsaved changes when loading another table or closing (OpenPopup must be
    // called in the same window scope as the matching BeginPopupModal)
@@ -2685,6 +2689,9 @@ void EditorUI::RenderUI()
             overlayDrawList->AddCircleFilled(pos, 3.f * m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
+      if (m_viewportVisible)
+         DrawCursor3D(overlayDrawList, ctx, ImVec2(m_viewportRect.x0, m_viewportRect.y0), ImVec2(m_viewportRect.x1, m_viewportRect.y1));
+
       if (m_modal.active && m_modal.viewSlot < 0 && m_viewportVisible)
       {
          // Modal readout on the viewport header line (top centre, on a dark pill), like Blender's header text
@@ -2889,6 +2896,11 @@ void EditorUI::RenderUI()
             }
          }
       }
+
+      // 3D cursor: Shift+right click puts it on the surface under the mouse (a part, else the playfield plane)
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsViewManipulateHovered()
+         && !ImGuizmo::IsUsingViewManipulate() && m_camMode != ViewMode::DesktopBackdrop)
+         Place3DCursor(ImGui::GetMousePos(), nullptr);
 
       // Select: click selects the front-most part (click again to cycle through overlapping parts),
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
@@ -3379,10 +3391,21 @@ void EditorUI::RenderUI()
          // Ctrl+S (save) is handled earlier, before the WantCaptureKeyboard check
          if (!io.KeyCtrl)
          {
+            const bool snapMenuKey = io.KeyShift && !io.KeyAlt && m_navBlenderTransform && m_camMode != ViewMode::DesktopBackdrop; // (without the Blender keys, and in the desktop backdrop view where the cursor is not shown, Shift+S is the modal scale: the menu is in Object > Snap)
             // Scale
-            if (m_camMode == ViewMode::PreviewCam && TransformViewSlot() == -1)
+            if (m_camMode == ViewMode::PreviewCam && TransformViewSlot() == -1 && !snapMenuKey)
                m_camMode = ViewMode::EditorCam;
-            if (io.KeyAlt && !m_pointEditPart)
+            if (snapMenuKey)
+            {
+               // Shift+S: the snap menu of the 3D cursor (Blender's), for the view under the mouse
+               if (!IsInspectMode() && m_viewportVisible && ImGui::IsKeyPressed(ImGuiKey_S, false))
+               {
+                  m_cursorMenuRequest = true;
+                  m_cursorMenuPos = ImGui::GetMousePos();
+                  m_cursorMenuSlot = std::max(TransformViewSlot(), -1);
+               }
+            }
+            else if (io.KeyAlt && !m_pointEditPart)
             {
                Matrix3D tmp;
                if (GetSelectionTransform(tmp))
@@ -4230,7 +4253,7 @@ void EditorUI::BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool
       m_selection = Selection(m_multiSel.back());
 }
 
-void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bool wireform, const bool wireRail)
+void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bool wireform, const bool wireRail, const float *const z)
 {
    IEditable *const pie = EditableRegistry::CreateAndInit(type, m_table, pos.x, pos.y);
    if (pie == nullptr)
@@ -4302,6 +4325,16 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos, const bo
    {
       SetSelection(Selection(it->second));
       m_outlinerAnchor = it->second;
+      if (z != nullptr && !wireRail && !wireform)
+      {
+         // The height of the 3D cursor, for a part type which has one (the others report no Z move, or ignore it)
+         Matrix3D placed;
+         if ((it->second->GetTransform(placed) & EditorUIPart::TM_TransZ) != 0)
+         {
+            placed._43 = *z;
+            ApplyPartTransform(it->second, placed, false, false, false);
+         }
+      }
       if (wireRail)
       {
          // F9: applied in place (the undo record above already holds the state before the add)
@@ -5859,7 +5892,7 @@ void EditorUI::FrameAll()
 // Editor Camera to an axis aligned view, keeping the orbit target and distance
 // Change the vertical field of view keeping the framing of the orbit target (the distance is adjusted so the view does not jump)
 // 3D point (camera space) under the cursor: the front-most pickable part hit by the mouse ray, else the playfield plane
-bool EditorUI::PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickView *view) const
+bool EditorUI::PickSurfacePoint(const ImVec2 &mousePos, vec3 &point, const PickView *view) const
 {
    Vertex3Ds a, b;
    PickRay(mousePos, view, a, b);
@@ -5872,7 +5905,16 @@ bool EditorUI::PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickVie
       t = (0.f - a.z) / (b.z - a.z);
    if (!(t >= 0.f && t <= 1.f))
       return false;
-   point = FlipZ(vec3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z + t * (b.z - a.z)));
+   point = vec3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z + t * (b.z - a.z));
+   return true;
+}
+
+bool EditorUI::PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickView *view) const
+{
+   vec3 surface;
+   if (!PickSurfacePoint(mousePos, surface, view))
+      return false;
+   point = FlipZ(surface);
    return true;
 }
 
@@ -6297,6 +6339,19 @@ void EditorUI::ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec
    }
 }
 
+void EditorUI::ApplyPartTransform(const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, const bool clearPos, const bool clearScale, const bool clearRot)
+{
+   vec3 pos, scale, rot;
+   ExtractTRS(partTransform, pos, scale, rot);
+   if (clearPos)
+      pos.Set(0.f, 0.f, 0.f);
+   if (clearScale)
+      scale.Set(1.f, 1.f, 1.f);
+   if (clearRot)
+      rot.Set(0.f, 0.f, 0.f);
+   ApplyPartTRS(part, pos, scale, rot);
+}
+
 void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation)
 {
    if (m_pointEditPart)
@@ -6347,15 +6402,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 
    const auto applyTransform = [this](const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot)
    {
-      vec3 pos, scale, rot;
-      ExtractTRS(partTransform, pos, scale, rot);
-      if (clearPos)
-         pos.Set(0.f, 0.f, 0.f);
-      if (clearScale)
-         scale.Set(1.f, 1.f, 1.f);
-      if (clearRot)
-         rot.Set(0.f, 0.f, 0.f);
-      ApplyPartTRS(part, pos, scale, rot);
+      ApplyPartTransform(part, partTransform, clearPos, clearScale, clearRot);
    };
 
    if (clearPosition || clearScale || clearRotation)
@@ -7152,4 +7199,247 @@ void EditorUI::RenderAdjustPanel()
    if (changed)
       ApplyLastOperation();
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// 3D cursor (Blender's): Shift+right click places it, Shift+S snaps the cursor to the selection / world origin / grid and the selection to the cursor / grid.
+// View state of the editing session: not in the table file, no undo step, never drawn while the game plays.
+//
+
+void EditorUI::Place3DCursor(const ImVec2 &mousePos, const PickView *view)
+{
+   if (IsInspectMode())
+      return;
+   vec3 point;
+   if (PickSurfacePoint(mousePos, point, view))
+      m_cursor3D = point;
+}
+
+void EditorUI::DrawCursor3D(ImDrawList *const drawList, const EditorRenderContext &ctx, const ImVec2 &clipMin, const ImVec2 &clipMax) const
+{
+   if (IsInspectMode() || m_camMode == ViewMode::DesktopBackdrop)
+      return;
+   const ImVec2 c = ctx.Project(Vertex3Ds(m_cursor3D.x, m_cursor3D.y, m_cursor3D.z));
+   if (c.x == FLT_MAX)
+      return; // Behind the camera
+   // Blender's look: a ring of red and white dashes with four crosshair ticks
+   const float dpi = m_liveUI.GetDPI();
+   const float radius = 10.f * dpi, tickIn = 4.f * dpi, tickOut = 7.f * dpi;
+   constexpr int dashes = 24, steps = 3;
+   drawList->PushClipRect(clipMin, clipMax, true);
+   for (int pass = 0; pass < 2; pass++)
+   {
+      const float outlineWidth = pass == 0 ? 2.f * dpi : 0.f;
+      for (int i = 0; i < dashes; i++)
+      {
+         ImVec2 points[steps + 1];
+         for (int j = 0; j <= steps; j++)
+         {
+            const float angle = 2.f * static_cast<float>(M_PI) * (static_cast<float>(i * steps + j) / static_cast<float>(dashes * steps));
+            points[j] = ImVec2(c.x + radius * cosf(angle), c.y + radius * sinf(angle));
+         }
+         const ImU32 color = pass == 0 ? IM_COL32(0, 0, 0, 200) : (i % 2 == 0 ? IM_COL32(235, 35, 35, 255) : IM_COL32(255, 255, 255, 255));
+         drawList->AddPolyline(points, steps + 1, color, ImDrawFlags_None, 2.f * dpi + outlineWidth);
+      }
+   }
+   for (int k = 0; k < 4; k++)
+   {
+      const float angle = static_cast<float>(M_PI) * 0.5f * static_cast<float>(k);
+      const ImVec2 dir(cosf(angle), sinf(angle));
+      const ImVec2 from(c.x + dir.x * (radius - tickIn), c.y + dir.y * (radius - tickIn)), to(c.x + dir.x * (radius + tickOut), c.y + dir.y * (radius + tickOut));
+      drawList->AddLine(from, to, IM_COL32(0, 0, 0, 220), 3.5f * dpi);
+      drawList->AddLine(from, to, IM_COL32(255, 255, 255, 255), 1.5f * dpi);
+   }
+   drawList->PopClipRect();
+}
+
+void EditorUI::DrawCursor3DInView(ImDrawList *const drawList, const PickView &view) const
+{
+   LiveRenderContext ctx(m_player, drawList, m_camMode, m_shadeMode, false);
+   ctx.SetImageView(view.modelViewProj, view.rectMin, view.rectSize);
+   DrawCursor3D(drawList, ctx, view.rectMin, ImVec2(view.rectMin.x + view.rectSize.x, view.rectMin.y + view.rectSize.y));
+}
+
+bool EditorUI::GetSelectionCenter(vec3 &center, const int viewSlot) const
+{
+   if (m_pointEditPart)
+   {
+      Matrix3D transform;
+      if (!GetSelectionTransform(transform))
+         return false;
+      center = vec3(transform._41, transform._42, transform._43);
+      return true;
+   }
+   const LocalViewParts &local = ViewLocalView(viewSlot);
+   // Each axis is averaged over the parts which move along it (a part without Z reports a constant height: it must not pull the median)
+   vec3 sum(0.f, 0.f, 0.f);
+   int count[3] = { 0, 0, 0 };
+   for (const auto &part : m_multiSel)
+   {
+      Matrix3D transform;
+      if (!local.Allows(part->GetEditable()))
+         continue;
+      const int mask = static_cast<int>(part->GetTransform(transform));
+      if ((mask & EditorUIPart::TM_TransX) != 0)
+         sum.x += transform._41, count[0]++;
+      if ((mask & EditorUIPart::TM_TransY) != 0)
+         sum.y += transform._42, count[1]++;
+      if ((mask & EditorUIPart::TM_TransZ) != 0)
+         sum.z += transform._43, count[2]++;
+   }
+   if (count[0] + count[1] + count[2] == 0)
+      return false;
+   center = vec3(count[0] ? sum.x / static_cast<float>(count[0]) : 0.f, count[1] ? sum.y / static_cast<float>(count[1]) : 0.f, count[2] ? sum.z / static_cast<float>(count[2]) : 0.f);
+   return true;
+}
+
+void EditorUI::Reset3DCursor()
+{
+   // The middle of the playfield, on it: a part added with an untouched cursor goes where the table centre was its default
+   m_cursor3D = vec3(0.5f * (m_table->m_left + m_table->m_right), 0.5f * (m_table->m_top + m_table->m_bottom), 0.f);
+}
+
+bool EditorUI::CanRunCursorOp(const CursorOp op) const
+{
+   if (IsInspectMode())
+      return false;
+   switch (op)
+   {
+   case CursorOp::CursorToWorldOrigin:
+   case CursorOp::CursorToGrid: return true;
+   case CursorOp::CursorToSelected: return m_pointEditPart != nullptr || !m_multiSel.empty();
+   case CursorOp::SelectionToCursor:
+   case CursorOp::SelectionToCursorKeepOffset:
+      if (m_camMode == ViewMode::DesktopBackdrop)
+         return false; // The cursor is neither drawn nor placeable in that view: a move to it would be unseen
+      [[fallthrough]];
+   default: return !m_table->IsLocked() && m_fileOp == nullptr && !m_modal.active && m_pointEditPart == nullptr && !m_multiSel.empty();
+   }
+}
+
+void EditorUI::RunCursorOp(const CursorOp op, const int viewSlot)
+{
+   if (!CanRunCursorOp(op))
+      return;
+   const float grid = max(m_snapMove, 1e-3f); // The move increment of the snapping settings
+   const auto snap = [grid](const float v) { return roundf(v / grid) * grid; };
+   switch (op)
+   {
+   case CursorOp::CursorToWorldOrigin: m_cursor3D = vec3(0.f, 0.f, 0.f); return;
+   case CursorOp::CursorToGrid: m_cursor3D = vec3(snap(m_cursor3D.x), snap(m_cursor3D.y), snap(m_cursor3D.z)); return;
+   case CursorOp::CursorToSelected:
+      if (vec3 center; GetSelectionCenter(center, viewSlot))
+         m_cursor3D = center;
+      else
+         Report("3D cursor: nothing selected is shown in this view");
+      return;
+   default: break;
+   }
+
+   // The selection moves: refused, as G is, when the selection holds a part the view's Local View hides
+   UpdateLocalViews();
+   if (!SelectionInView(viewSlot))
+   {
+      Report("Local View: the selection has parts this view does not show");
+      return;
+   }
+   vec3 center(0.f, 0.f, 0.f);
+   if (op == CursorOp::SelectionToCursorKeepOffset && !GetSelectionCenter(center, viewSlot))
+      return;
+   struct Item
+   {
+      std::shared_ptr<EditorUIPart> part;
+      Matrix3D transform;
+   };
+   vector<Item> items;
+   for (const auto &part : m_multiSel)
+   {
+      Matrix3D transform;
+      const int mask = static_cast<int>(part->GetTransform(transform));
+      if (mask == EditorUIPart::TM_None)
+         continue; // (a part group has no transform of its own)
+      vec3 pos(transform._41, transform._42, transform._43), target = pos;
+      switch (op)
+      {
+      case CursorOp::SelectionToCursor: target = m_cursor3D; break;
+      case CursorOp::SelectionToCursorKeepOffset: target = pos + (m_cursor3D - center); break;
+      default: target = vec3(snap(pos.x), snap(pos.y), snap(pos.z)); break; // Selection to Grid
+      }
+      // A part moves along the axes of its transform mask only (a part without Z keeps its height)
+      if ((mask & EditorUIPart::TM_TransX) == 0)
+         target.x = pos.x;
+      if ((mask & EditorUIPart::TM_TransY) == 0)
+         target.y = pos.y;
+      if ((mask & EditorUIPart::TM_TransZ) == 0)
+         target.z = pos.z;
+      if (fabsf(target.x - pos.x) < 1e-4f && fabsf(target.y - pos.y) < 1e-4f && fabsf(target.z - pos.z) < 1e-4f)
+         continue;
+      transform._41 = target.x;
+      transform._42 = target.y;
+      transform._43 = target.z;
+      items.push_back({ part, transform });
+   }
+   if (items.empty())
+   {
+      Report("Nothing to move");
+      return;
+   }
+   const char *const label = op == CursorOp::SelectionToCursor ? "Selection to Cursor" : op == CursorOp::SelectionToCursorKeepOffset ? "Selection to Cursor (Keep Offset)" : "Selection to Grid";
+   vector<IEditable *> touched;
+   for (const Item &item : items)
+      touched.push_back(item.part->GetEditable());
+   m_undo.BeginUndo();
+   for (const auto &part : m_multiSel) // All the selection: a selected rubber which did not move can still be detached from its posts below
+      m_undo.MarkForUndo(part->GetEditable());
+   MarkDependentsForUndo(SelectedEditables());
+   m_undo.SetLabel(CountLabel(label, touched.size(), touched.front()->GetName()));
+   m_undo.EndUndo();
+   m_lastUndoPart = nullptr; // As the other paths which open a record: the next field edit starts its own
+   m_lastUndoId = 0;
+   m_lastOp.type = LastOperation::Type::None;
+   for (const Item &item : items)
+      ApplyPartTransform(item.part, item.transform, false, false, false);
+   DetachSelectedRubbersFromUnselectedPosts();
+   RefitSelectionDependents();
+}
+
+void EditorUI::RenderCursorMenu()
+{
+   // Called in the scope of the overlay window (OpenPopup and BeginPopup share it). A popup at the mouse rather than a pie: ImGui has none
+   if (m_cursorMenuRequest)
+   {
+      m_cursorMenuRequest = false;
+      ImGui::OpenPopup("3D Cursor Snap");
+   }
+   ImGui::SetNextWindowPos(m_cursorMenuPos, ImGuiCond_Appearing);
+   if (!ImGui::BeginPopup("3D Cursor Snap"))
+      return;
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+      m_paneEscPending = true; // The Esc closing the menu is not an editor Esc (it would clear the selection)
+   const int slot = m_cursorMenuSlot;
+   const auto item = [this, slot](const char *name, const CursorOp op)
+   {
+      if (ImGui::MenuItem(name, nullptr, false, CanRunCursorOp(op)))
+         RunCursorOp(op, slot);
+   };
+   ImGui::TextDisabled("Snap");
+   ImGui::Separator();
+   item("Cursor to Selected", CursorOp::CursorToSelected);
+   item("Cursor to World Origin", CursorOp::CursorToWorldOrigin);
+   item("Cursor to Grid", CursorOp::CursorToGrid);
+   ImGui::Separator();
+   item("Selection to Cursor", CursorOp::SelectionToCursor);
+   item("Selection to Cursor (Keep Offset)", CursorOp::SelectionToCursorKeepOffset);
+   item("Selection to Grid", CursorOp::SelectionToGrid);
+   ImGui::EndPopup();
+}
+
+void EditorUI::PlaceNewPartAtCursor()
+{
+   const ItemTypeEnum type = m_addPartType;
+   m_addPartType = eItemInvalid;
+   const float z = m_cursor3D.z;
+   CreatePart(type, Vertex2D(m_cursor3D.x, m_cursor3D.y), m_addWireform && type == eItemPrimitive, m_addWireRail && type == eItemPrimitive, z > 1e-4f ? &z : nullptr);
+}
+
    }

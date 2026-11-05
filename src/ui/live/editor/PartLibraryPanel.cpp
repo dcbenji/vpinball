@@ -2311,12 +2311,11 @@ void PartLibraryPanel::Render3D()
             m_editor.m_renderer->RenderItemOfTable(part, m_previewTable, false);
 }
 
-// The double click position: the centre of the selection bounds if there is a selection, else the table centre
+// The double click position: the 3D cursor's (Blender puts new objects at the cursor). The part rests on the surface under it, as for a dragged placement
 Vertex2D PartLibraryPanel::DefaultPlacementPos() const
 {
-   if (FRect3D bounds; !m_editor.m_multiSel.empty() && m_editor.GetSelectionBounds(bounds))
-      return Vertex2D(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom));
-   return Vertex2D(0.5f * (m_editor.m_table->m_left + m_editor.m_table->m_right), 0.5f * (m_editor.m_table->m_top + m_editor.m_table->m_bottom));
+   const vec3 &cursor = m_editor.Get3DCursor();
+   return Vertex2D(cursor.x, cursor.y);
 }
 
 bool PartLibraryPanel::PlaceItem(const LibraryItem &item)

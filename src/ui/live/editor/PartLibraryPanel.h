@@ -142,7 +142,7 @@ private:
    void StartPlacement();
    void UpdatePlacement(const ImVec2 &mousePos);
    void PlaceAt(const Vertex2D &pos);
-   Vertex2D DefaultPlacementPos() const; // Centre of the selection bounds, else the table centre
+   Vertex2D DefaultPlacementPos() const; // The 3D cursor's X / Y
    bool PlaceItem(const LibraryItem &item); // Double click: placed at the default position
    void ApplyMaterialItem(const LibraryItem &item); // Double click on a material: imported, and assigned to the selected parts in the same undo step
    void SetupPlayerSide(IEditable *part, bool initRenderable);

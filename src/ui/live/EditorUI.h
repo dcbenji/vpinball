@@ -425,7 +425,7 @@ private:
    PlasticFromAtlas::Trace m_plasticTrace; // Add Plastic from Atlas: the trace state (the plastic is created when the loop is closed)
    bool m_addWireform = false; // With m_addPartType == eItemPrimitive: the pending part is a Wireform (set whenever add part mode is armed)
    bool m_addWireRail = false; // Same: a Wire Rail
-   void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false, bool wireRail = false);
+   void CreatePart(ItemTypeEnum type, const Vertex2D &pos, bool wireform = false, bool wireRail = false, const float *z = nullptr); // z: height of the part when its type has one
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
    vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first
@@ -653,6 +653,29 @@ private:
    bool m_orbitPivotValid = false; // m_orbitPivot (camera space) is the orbit pivot of the current drag
    vec3 m_orbitPivot;
    bool PickDepthPoint(const ImVec2 &mousePos, vec3 &point, const PickView *view = nullptr) const;
+   bool PickSurfacePoint(const ImVec2 &mousePos, vec3 &point, const PickView *view = nullptr) const; // The table space point under the mouse: the front-most part hit, else the playfield plane (z = 0)
+
+   // 3D cursor (Blender's): a point of the table space (view state of the editing session, not in the table file, never drawn in play). Shift+right click places it
+   // on the surface under the mouse, Shift+S opens the snap menu. Add Part places the new part at its X / Y (and Z where the part type has one).
+public:
+   const vec3 &Get3DCursor() const { return m_cursor3D; } // Table space (x, y, z up)
+   void Set3DCursor(const vec3 &position) { m_cursor3D = position; }
+private:
+   enum class CursorOp { CursorToSelected, CursorToWorldOrigin, CursorToGrid, SelectionToCursor, SelectionToCursorKeepOffset, SelectionToGrid };
+   vec3 m_cursor3D { 0.f, 0.f, 0.f }; // Set by Reset3DCursor
+   void Reset3DCursor(); // To the playfield centre at z = 0
+   bool m_cursorMenuRequest = false; // Shift+S pressed: the menu is opened from the overlay window scope (see RenderUI)
+   ImVec2 m_cursorMenuPos;
+   int m_cursorMenuSlot = -1; // The view the menu was asked in (a secondary view's slot, else -1): its Local View decides what can be moved
+   void Place3DCursor(const ImVec2 &mousePos, const PickView *view); // Shift+right click
+   void DrawCursor3D(ImDrawList *drawList, const EditorRenderContext &ctx, const ImVec2 &clipMin, const ImVec2 &clipMax) const;
+   void DrawCursor3DInView(ImDrawList *drawList, const PickView &view) const; // In a secondary view's image
+   bool CanRunCursorOp(CursorOp op) const;
+   void RunCursorOp(CursorOp op, int viewSlot);
+   void RenderCursorMenu();
+   bool GetSelectionCenter(vec3 &center, int viewSlot) const; // Median of the origins of the selected parts (or the points) the view shows
+   void ApplyPartTransform(const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot); // One part under a transform, with the redraw and physics follow-up
+   void PlaceNewPartAtCursor(); // Add part mode armed (outside the desktop backdrop): the part is created at once at the 3D cursor
    float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
    void SetFov(float fovY);
    bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)

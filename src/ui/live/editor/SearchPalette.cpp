@@ -205,6 +205,11 @@ void SearchPalette::BuildOperators()
          ed.m_addWireRail = true;
       });
    add("Object" + sep + "Add Plastic from Atlas", "", [&ed]() { return PlasticFromAtlas::CanStart(ed); }, [&ed]() { PlasticFromAtlas::Start(ed); });
+   for (const auto &[name, op] : { std::pair<const char *, EditorUI::CursorOp> { "Cursor to Selected", EditorUI::CursorOp::CursorToSelected },
+           { "Cursor to World Origin", EditorUI::CursorOp::CursorToWorldOrigin }, { "Cursor to Grid", EditorUI::CursorOp::CursorToGrid },
+           { "Selection to Cursor", EditorUI::CursorOp::SelectionToCursor }, { "Selection to Cursor (Keep Offset)", EditorUI::CursorOp::SelectionToCursorKeepOffset },
+           { "Selection to Grid", EditorUI::CursorOp::SelectionToGrid } })
+      add("Object" + sep + "Snap" + sep + name, "Shift+S", [&ed, op]() { return ed.CanRunCursorOp(op); }, [&ed, op]() { ed.RunCursorOp(op, -1); });
    add("Object" + sep + "Add Part...", "Shift+A", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; }, [&ed]() { ed.m_chrome.RequestAddPartPopup(ImGui::GetMousePos()); });
    add("Object" + sep + "Rubber" + sep + "Create Rubber Around Selected Posts", "", [&ed]() { return RubberBetweenPosts::CanCreate(ed); }, [&ed]() { RubberBetweenPosts::Create(ed); });
    add("Object" + sep + "Rubber" + sep + "Bind Selected", "", [&ed]() { return RubberBetweenPosts::CanBind(ed); }, [&ed]() { RubberBetweenPosts::Bind(ed); });
@@ -385,7 +390,7 @@ void SearchPalette::MakeResult(Result &r) const
       r.label = op.label;
       // Parent path only: the label is the last component of the path
       r.right = op.path == op.label ? string() : op.path.substr(0, op.path.size() - op.label.size() - strlen(kSep) - 2);
-      r.chip = op.shortcut;
+      r.chip = op.shortcut == "Shift+S" && !m_editor.m_navBlenderTransform ? string() : op.shortcut; // (the snap menu key: Shift+S is the modal scale without the Blender keys)
       return;
    }
    const Object &o = m_objects[r.obj];

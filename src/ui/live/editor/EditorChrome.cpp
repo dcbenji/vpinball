@@ -742,6 +742,25 @@ void EditorChrome::RenderMenuBar()
          }
          if (ImGui::MenuItem("Add Plastic from Atlas", nullptr, false, PlasticFromAtlas::CanStart(editor)))
             PlasticFromAtlas::Start(editor);
+         if (ImGui::BeginMenu("Snap"))
+         {
+            // The 3D cursor (Shift+right click places it): see EditorUI::RunCursorOp
+            using Op = EditorUI::CursorOp;
+            if (ImGui::MenuItem("Cursor to Selected", nullptr, false, editor.CanRunCursorOp(Op::CursorToSelected)))
+               editor.RunCursorOp(Op::CursorToSelected, -1);
+            if (ImGui::MenuItem("Cursor to World Origin", nullptr, false, editor.CanRunCursorOp(Op::CursorToWorldOrigin)))
+               editor.RunCursorOp(Op::CursorToWorldOrigin, -1);
+            if (ImGui::MenuItem("Cursor to Grid", nullptr, false, editor.CanRunCursorOp(Op::CursorToGrid)))
+               editor.RunCursorOp(Op::CursorToGrid, -1);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Selection to Cursor", nullptr, false, editor.CanRunCursorOp(Op::SelectionToCursor)))
+               editor.RunCursorOp(Op::SelectionToCursor, -1);
+            if (ImGui::MenuItem("Selection to Cursor (Keep Offset)", nullptr, false, editor.CanRunCursorOp(Op::SelectionToCursorKeepOffset)))
+               editor.RunCursorOp(Op::SelectionToCursorKeepOffset, -1);
+            if (ImGui::MenuItem("Selection to Grid", nullptr, false, editor.CanRunCursorOp(Op::SelectionToGrid)))
+               editor.RunCursorOp(Op::SelectionToGrid, -1);
+            ImGui::EndMenu();
+         }
          ImGui::Separator();
          if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
             editor.SetGizmoOperation(ImGuizmo::TRANSLATE);
