@@ -3946,12 +3946,20 @@ void Renderer::BuildPBRLightList(const int altSlot)
          if (prim->GetLightmap() != nullptr && prim->m_d.m_visible && prim->IsFlasherDome() && prim->GetFlasherDomeCookie(cookie))
             domeCookies[prim->GetLightmap()] = cookie;
       }
+   // VPX_T9_TUNE lvl= (a fixed dome lamp level for look checks) holds the dome lamps' own light at that level too
+   static const float fixedLevel = []()
+   {
+      const char *const t = std::getenv("VPX_T9_TUNE"), *p;
+      float v;
+      return (t && (p = strstr(t, "lvl=")) && sscanf(p + 4, "%f", &v) == 1) ? v : -1.f;
+   }();
    for (IEditable* const part : m_table->GetParts())
    {
       if (part->GetItemType() != eItemLight)
          continue;
       const Light* const light = static_cast<const Light*>(part);
-      if (light->m_d.m_type != LightType::PBR || !light->m_d.m_visible || light->m_currentIntensity <= 0.f || light->m_desktopBackdrop)
+      const bool fixedDome = fixedLevel > 0.f && domeCookies.find(light) != domeCookies.end();
+      if (light->m_d.m_type != LightType::PBR || !light->m_d.m_visible || (light->m_currentIntensity <= 0.f && !fixedDome) || light->m_desktopBackdrop)
          continue;
       if (lightCount >= maxLights)
          break;
@@ -3984,6 +3992,11 @@ void Renderer::BuildPBRLightList(const int altSlot)
       e.index = lightCount;
       if (const auto dome = domeCookies.find(light); dome != domeCookies.end())
       {
+         if (fixedLevel >= 0.f)
+         {
+            const float r = fixedLevel * light->m_d.m_intensity * light->m_d.m_intensity_scale * intensityToLinear;
+            e.radiance = vec4(tint.x * r, tint.y * r, tint.z * r, e.radiance.w);
+         }
          float phase = dome->second.y * (float)(0.5 / M_PI);
          e.cookie = dome->second.x + (phase - floorf(phase)) * 0.999f;
          e.cut = dome->second.z;
