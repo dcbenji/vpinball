@@ -61,6 +61,7 @@ constexpr TracedLookKey kLookKeys[] = {
    { "Room Glint", "room", 0.3f, 0.f, 3.f, 2, "The room's light glinting in the facets, lamp on or off" },
    { "Room Glint Tint", "roomtint", 0.f, 0.f, 1.f, 2, "0 = white room glints, 1 = the plastic's colour" },
    { "Lamp-Off Look", "env", 1.f, 0.f, 3.f, 2, "Strength of the baked lamp-off image" },
+   { "Plastic Tint", "plastictint", 1.f, 0.f, 1.f, 2, "How much the plastic's colour tints the baked lamp-off image: 1 = fully, 0 = the image keeps its own baked colour" },
    { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
    { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
 };
@@ -68,6 +69,7 @@ constexpr TracedLookKey kLookKeys[] = {
 // The traced fields a slider marks as touched in Primitive::m_tracedTouched: one bit per field, the bulb fields then the look keys
 constexpr uint32_t kTouchBulbDepth = 1u << 0, kTouchBulbScale = 1u << 1, kTouchBulbBrightness = 1u << 2, kTouchBulbStretchX = 1u << 3, kTouchBulbStretchY = 1u << 4, kTouchBulbOffsetX = 1u << 5, kTouchBulbOffsetY = 1u << 6;
 constexpr uint32_t LookKeyBit(size_t index) { return 1u << (7 + index); }
+static_assert(7 + std::size(kLookKeys) <= 32, "Primitive::m_tracedTouched has a bit for each bulb field and look key");
 
 struct TracedBulbField
 {

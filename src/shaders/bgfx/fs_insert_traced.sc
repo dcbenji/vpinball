@@ -19,7 +19,7 @@
 // [4] x glint keys, y glint turn (incl. the per-insert turn), z facet waviness, w waviness wavelength
 // [5] x per-insert seed, y has facets, z mm per table unit, w frost (0 clear top, saturating: 3 about two thirds, 10+ a fully frosted cap)
 // [6] rgb: room light glinting in the facets, lamp on or off, w: lamp-off look gain (0 = no lamp-off atlas)
-// [7] rgb: the plastic's colour, tinting the (neutral) lamp-off look, w: facet blur for the glints in mips (hides a hard-edged facet map)
+// [7] rgb: the plastic's colour, tinting the (neutral) lamp-off look by [11].y, w: facet blur for the glints in mips (hides a hard-edged facet map)
 // [8] x 1 = spill pass (the card scaled up about its centre), y spill size in card widths, z spill strength,
 //     w spill reach as a print map mip (-1: no print map, a round falloff)
 // [9] table position to print map UV: xy scale, zw offset (x = 0: no print map)
@@ -28,6 +28,8 @@
 //      w how much the plastic's colour tints the room glints (0 white, 1 the plastic's colour)
 // [11] x print map tint (inktint): an insert under printed art (Police Force's jackpot car and character patches) shows
 //      through the print by its alpha (the print's transmission) tinted by its hue; 0 = alpha only, as a cut-out window
+//      y how much the plastic's colour tints the lamp-off look (plastictint: 1 = fully, for a neutral bake; 0 = not at all,
+//      the atlas keeps the colour baked into it: a bake that already shows the plastic's colour is not filtered twice)
 // [12] parallax hot spot: x the bulb's depth below the insert top in mm (0 = off: the block is skipped, output unchanged),
 //      y spot size (1 = a soft spot ~19 mm across at half height), z brightness (1 = +80 % of the glow's peak at its centre),
 //      w how much the glints' highlights turn with the eye's bearing (glintturn: 1 = fully, 0 = they hold still relative to the
@@ -268,10 +270,11 @@ void main()
 		glint *= 0.25 * (1.0 - 0.95 * frost);
 	}
 
-	// The lamp-off look, always there under the lamp, at the same card point and weights as the traced light
+	// The lamp-off look, always there under the lamp, at the same card point and weights as the traced light, filtered by
+	// the plastic's colour by plastictint: mix(1, colour, plastictint), written so that 1 gives exactly the colour
 	vec3 lampOff = vec3(0.0, 0.0, 0.0);
 	if (tracedParams[6].w > 0.0)
-		lampOff = tracedParams[6].w * tracedParams[7].rgb * tracedEnv(lightUv, weights, 8.0 * frost);
+		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * tracedEnv(lightUv, weights, 8.0 * frost);
 
 	// The lamp's glow and glints, plus the room glinting in the facets whatever the lamp does
 	// (the white share grows with the glow: the bake's peak (1) gets all of it, the dim body almost none)
