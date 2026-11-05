@@ -89,6 +89,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_partLibrary(*this)
    , m_cameraPreviews { CameraPreviewPanel(*this, 0), CameraPreviewPanel(*this, 1), CameraPreviewPanel(*this, 2) }
    , m_scriptPanel(*this)
+   , m_tableCheck(*this)
    , m_pinned(*this)
    , m_palette(*this)
    , m_undo(m_player->m_ptable)
@@ -860,6 +861,7 @@ const char *EditorUI::AreaEditorName(const AreaEditor type)
    case AreaEditor::PartLibrary: return "Part Library";
    case AreaEditor::Viewport: return "3D Viewport";
    case AreaEditor::CameraPreview: return "Camera / 3D View";
+   case AreaEditor::TableCheck: return "Table Check";
    case AreaEditor::Count: break;
    }
    return "";
@@ -874,6 +876,7 @@ const char *EditorUI::AreaEditorIcon(const AreaEditor type)
    case AreaEditor::Script: return ICON_LC_CODE_XML;
    case AreaEditor::PartLibrary: return ICON_LC_BOX;
    case AreaEditor::CameraPreview: return ICON_LC_EYE;
+   case AreaEditor::TableCheck: return ICON_LC_TRIANGLE_ALERT;
    case AreaEditor::Viewport:
    case AreaEditor::Count: break;
    }
@@ -1133,7 +1136,7 @@ ImVec2 EditorUI::GetViewportContentCenter() const
 void EditorUI::WidenArea(const int leafId, const AreaType type)
 {
    // Switching the type of an area that is too narrow for the new editor widens it (once, the splitter can shrink it again afterwards)
-   const float minimum = type == AreaEditor::Properties ? 300.f : type == AreaEditor::Script ? 400.f : 0.f;
+   const float minimum = type == AreaEditor::Properties ? 300.f : type == AreaEditor::Script ? 400.f : type == AreaEditor::TableCheck ? 320.f : 0.f;
    if (minimum <= 0.f)
       return;
    // The split whose stored size is the width of the area: the nearest vertical ancestor whose fixed child holds the area
@@ -1234,7 +1237,8 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
          return m_areas.SetHidden(id, false);
       }
       // Not hosted: it replaces the editor of the preferred area. Rects are computed with the hidden areas shown
-      const bool right = op.type == AreaEditor::Script || op.type == AreaEditor::Properties;
+      const bool right = op.type == AreaEditor::Script || op.type == AreaEditor::Properties || op.type == AreaEditor::TableCheck;
+      const bool isTableCheck = op.type == AreaEditor::TableCheck;
       AreaLayout reference = m_areas;
       vector<int> leafIds;
       for (const AreaNode &node : reference.Nodes())
@@ -1249,14 +1253,55 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
       float best = 0.f;
       for (const LeafRect &leaf : leaves)
       {
-         if (leaf.type == AreaType::Viewport)
-            continue;
+         if (leaf.type == AreaType::Viewport || (isTableCheck && leaf.type == AreaType::CameraPreview))
+            continue; // (the Table Check goes by the right-most area that is not a 3D view)
          const float centre = 0.5f * (leaf.rect.x0 + leaf.rect.x1);
          if (preferred < 0 || (right ? centre > best : centre < best))
          {
             preferred = leaf.id;
             best = centre;
          }
+      }
+      if (isTableCheck)
+      {
+         // The Table Check is added beside the others, never in place of a working editor: the right-most area that is not a 3D view is split (new area
+         // below it), else the 3D viewport (new area on its right). The new leaf is the one the split returns. With no room at all, the area of a
+         // Part Library, Outliner or Script is replaced (in that order, never Properties nor a 3D view), and with none of those the request is refused
+         const auto splitInto = [this, &op](const int leaf, const SplitAxis axis, const float size)
+         {
+            int newLeaf = -1;
+            if (!m_areas.Split(leaf, axis, true, size, &newLeaf) || newLeaf < 0)
+               return -1;
+            return m_areas.SetType(newLeaf, op.type) ? newLeaf : -1; // (the split gave it a copy's type: it becomes the Table Check)
+         };
+         int fresh = -1;
+         if (preferred >= 0)
+            fresh = splitInto(preferred, SplitAxis::Horizontal, 320.f);
+         if (fresh < 0)
+            fresh = splitInto(m_areas.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, AreaLayout::kDefaultPropertiesWidth);
+         if (fresh < 0)
+         {
+            for (const AreaType type : { AreaType::PartLibrary, AreaType::Outliner, AreaType::Script })
+            {
+               const int target = m_areas.FindLeaf(type);
+               if (target >= 0 && m_areas.SetType(target, op.type))
+               {
+                  fresh = target;
+                  m_liveUI.PushNotification("No room for another area: Table Check replaced the "s + AreaEditorName(type) + " editor"s, 6000);
+                  break;
+               }
+            }
+         }
+         if (fresh < 0)
+         {
+            m_liveUI.PushNotification("No room for another area: close or join one first"s, 6000);
+            return false;
+         }
+         m_areas.SetHidden(fresh, false);
+         if (m_maximizedLeafId >= 0 && m_maximizedLeafId != fresh)
+            m_maximizedLeafId = -1;
+         WidenArea(fresh, op.type);
+         return true;
       }
       if (preferred < 0)
       {
@@ -1624,7 +1669,7 @@ void EditorUI::RenderAreaCorners()
             return strncmp(hwName, base, n) == 0 && (hwName[n] == '\0' || strncmp(hwName + n, "##", 2) == 0);
          };
          const bool overArea = hw == nullptr || isAreaWindow("OUTLINER") || isAreaWindow("PROPERTIES") || isAreaWindow("SCRIPT")
-            || isAreaWindow("PARTLIBRARY") || strncmp(hwName, "CAMERAPREVIEW", 13) == 0
+            || isAreaWindow("PARTLIBRARY") || isAreaWindow("TABLECHECK") || strncmp(hwName, "CAMERAPREVIEW", 13) == 0
             || strcmp(hwName, "SIDEBAR") == 0 || strcmp(hwName, "orbit lock toggle") == 0; // The N-panel and the orbit lock button belong to the viewport area
          // A floating window (popup, tooltip, palette, history, overlay) keeps all its clicks: no corner acts through it
          const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
@@ -2036,6 +2081,7 @@ void EditorUI::RenderAreas()
       case AreaEditor::PartLibrary:
          m_partLibrary.RenderInArea(pos, size, leaf.id);
          break;
+      case AreaEditor::TableCheck: m_tableCheck.RenderInArea(pos, size, leaf.id); break;
       case AreaEditor::Viewport: break; // The 3D view shows through
       case AreaEditor::CameraPreview:
          // The view settings are saved in the layout leaf: read when a panel is bound to it, written back by the panel on every change
@@ -2108,9 +2154,10 @@ void EditorUI::RenderAreaTypeButton(const AreaEditor current, const int leafId)
       ImGui::TextUnformatted("Editor Type");
       ImGui::PopStyleColor();
       ImGui::Separator();
-      for (int i = 0; i <= kPanelTypeCount; ++i)
+      for (int i = 0; i <= kPanelTypeCount + 1; ++i)
       {
-         const AreaEditor type = i < kPanelTypeCount ? static_cast<AreaEditor>(i) : AreaEditor::CameraPreview; // The panels, then the camera preview
+         // The panels, then the camera preview, then the table check
+         const AreaEditor type = i < kPanelTypeCount ? static_cast<AreaEditor>(i) : i == kPanelTypeCount ? AreaEditor::CameraPreview : AreaEditor::TableCheck;
          if (type == AreaEditor::CameraPreview && !AreaLayout::cameraPreviewEnabled)
             continue;
          const string label = string(AreaEditorIcon(type)) + "  " + AreaEditorName(type);

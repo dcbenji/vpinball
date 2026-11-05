@@ -29,6 +29,7 @@ enum class AreaType : uint8_t
    PartLibrary = 3, // == legacy left/right_editor ints
    Viewport = 4,
    CameraPreview = 5,
+   TableCheck = 6, // Not a legacy left/right editor (kPanelTypeCount): chosen from the editor type menu or Show Editor; any number of areas
    Count
 };
 
@@ -52,7 +53,7 @@ struct AreaViewSettings
    bool SameChoices(const AreaViewSettings& o) const { return freeOrbit == o.freeOrbit && wireframe == o.wireframe && solid == o.solid && live == o.live && shade == o.shade; }
 };
 
-// Names used in the workspace JSON ("Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview")
+// Names used in the workspace JSON ("Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview", "TableCheck")
 const char* AreaTypeJsonName(AreaType type);
 bool AreaTypeFromJsonName(const std::string& name, AreaType& type);
 

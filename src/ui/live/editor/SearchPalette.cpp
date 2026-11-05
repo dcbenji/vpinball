@@ -164,6 +164,7 @@ void SearchPalette::BuildOperators()
       const EditorUI::AreaEditor type = static_cast<EditorUI::AreaEditor>(i);
       add("View" + sep + "Show " + EditorUI::AreaEditorName(type), "", nullptr, [&ed, type]() { ed.ShowAreaEditor(type); });
    }
+   add("View" + sep + "Show Table Check", "", nullptr, [&ed]() { ed.ShowAreaEditor(EditorUI::AreaEditor::TableCheck); });
    add("View" + sep + "Toggle Maximize Area", "Ctrl+Space", nullptr, [&ed]() { ed.ToggleMaximizeArea(); });
    add("View" + sep + "Tool Shelf", "", nullptr, [&ed]() { ed.m_chrome.ToggleToolShelf(); });
    add("View" + sep + "Navigation Cube", "", nullptr, [&ed]() { ed.m_showNavCube = !ed.m_showNavCube; });

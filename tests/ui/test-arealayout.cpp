@@ -828,6 +828,42 @@ TEST_CASE("AreaLayout set type and hidden")
       CHECK(l.CountLeaves(AreaType::Outliner) == 1);
       CHECK(l.Validate());
    }
+
+   SUBCASE("TableCheck: chosen by type only, saved by name, never in the legacy keys")
+   {
+      AreaLayout l = FromLegacy(kLayout);
+      const int out = l.FindLeaf(AreaType::Outliner);
+      REQUIRE(l.SetType(out, AreaType::TableCheck));
+      CHECK(l.Validate());
+      CHECK(l.FindLeaf(AreaType::TableCheck) == out);
+      CHECK_FALSE(l.IsHosted(AreaType::Outliner));
+      Legacy legacy {};
+      Legacy2(l, legacy);
+      CHECK(legacy.left >= 0);
+      CHECK(legacy.left < kPanelTypeCount);
+      CHECK(legacy.right == static_cast<int>(AreaType::Properties));
+      AreaLayout b;
+      REQUIRE(b.FromJson(l.ToJson()));
+      CHECK(b.FindLeaf(AreaType::TableCheck) >= 0);
+      CHECK(std::string(AreaTypeJsonName(AreaType::TableCheck)) == "TableCheck");
+   }
+
+   SUBCASE("TableCheck: a split leaf becomes one by SetType, and there can be several")
+   {
+      AreaLayout l = FromLegacy(kLayout);
+      int fresh = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Properties), SplitAxis::Horizontal, true, 320.f, &fresh));
+      REQUIRE(fresh >= 0);
+      REQUIRE(l.SetType(fresh, AreaType::TableCheck));
+      CHECK(l.Find(fresh)->type == AreaType::TableCheck);
+      CHECK(l.IsHosted(AreaType::Properties));
+      CHECK(l.Validate());
+      int second = -1;
+      REQUIRE(l.Split(fresh, SplitAxis::Horizontal, true, 200.f, &second));
+      CHECK(l.Find(second)->type == AreaType::TableCheck); // a split copies the area
+      CHECK(l.CountLeaves(AreaType::TableCheck) == 2);
+      CHECK(l.Validate());
+   }
 }
 
 TEST_CASE("AreaLayout invalid JSON is rejected")

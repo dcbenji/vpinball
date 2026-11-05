@@ -1142,6 +1142,8 @@ void EditorChrome::RenderMenuBar()
                if (ImGui::MenuItem(EditorUI::AreaEditorName(type), nullptr, editor.IsAreaEditorShown(type)))
                   editor.ShowAreaEditor(type);
             }
+            if (ImGui::MenuItem(EditorUI::AreaEditorName(EditorUI::AreaEditor::TableCheck), nullptr, editor.IsAreaEditorShown(EditorUI::AreaEditor::TableCheck)))
+               editor.ShowAreaEditor(EditorUI::AreaEditor::TableCheck);
             ImGui::EndMenu();
          }
          if (ImGui::MenuItem("Toggle Maximize Area", "Ctrl+Space"))
@@ -2107,6 +2109,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
          break;
       case EditorUI::AreaEditor::Script: hints = { { mod + "+S", "Save Table" }, { "F3", "Menu Search" } }; break;
       case EditorUI::AreaEditor::PartLibrary: hints = { { "Wheel", "Scroll" } }; break;
+      case EditorUI::AreaEditor::TableCheck: hints = { { "LMB", "Select" }, { "Double-click", "Frame" }, { "Wheel", "Scroll" } }; break;
       case EditorUI::AreaEditor::CameraPreview: hints = { { "Live", "Render Continuously" }, { "Refresh", "Update Once" } }; break;
       default: hints = { { "LMB", "Select" }, { "Wheel", "Scroll" } }; break;
       }

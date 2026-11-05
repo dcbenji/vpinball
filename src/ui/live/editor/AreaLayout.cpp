@@ -17,7 +17,7 @@ std::atomic<uint32_t> g_nextNodeId { 1 };
 
 uint32_t NewNodeId() { return g_nextNodeId.fetch_add(1, std::memory_order_relaxed); }
 
-constexpr const char* kTypeNames[] = { "Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview" };
+constexpr const char* kTypeNames[] = { "Outliner", "Properties", "Script", "PartLibrary", "Viewport", "CameraPreview", "TableCheck" };
 static_assert(std::size(kTypeNames) == static_cast<size_t>(AreaType::Count));
 
 // Types a split may give to a new leaf, in order
@@ -130,7 +130,7 @@ void AreaLayout::ToLegacy(bool& outliner, bool& properties, float& outlinerW, fl
    float leftCx = 0.f, rightCx = 0.f;
    for (const LeafRect& lr : leaves)
    {
-      if (lr.type == AreaType::Viewport || lr.type == AreaType::CameraPreview) // Legacy keys only know the 4 panel types
+      if (lr.type == AreaType::Viewport || lr.type == AreaType::CameraPreview || lr.type == AreaType::TableCheck) // Legacy keys only know the 4 panel types
          continue;
       const float cx = (lr.rect.x0 + lr.rect.x1) * 0.5f;
       if (cx < vcx && (!left || cx > leftCx))

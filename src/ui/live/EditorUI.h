@@ -14,6 +14,7 @@
 #include "editor/EditorChrome.h"
 #include "editor/Measure.h"
 #include "editor/OutlinerPanel.h"
+#include "editor/TableCheckPanel.h"
 #include "editor/PartLibraryPanel.h"
 #include "editor/PinnedPanel.h"
 #include "editor/PropertiesPanel.h"
@@ -70,6 +71,7 @@ class EditorUI final
    friend class PartLibraryPanel;
    friend class CameraPreviewPanel;
    friend class ScriptPanel;
+   friend class TableCheckPanel;
    friend class PinnedPanel;
    friend class SearchPalette;
    friend class SetOrigin;
@@ -162,6 +164,7 @@ private:
    SecondaryViewInfo m_viewInfo[AreaLayout::kMaxViewLeaves];
    int m_gizmoSlot = -1; // The view the gizmo is drawn in and works in: -1 = the 3D Viewport, else a secondary view slot. The mouse picks it; a drag keeps it until it ends
    ScriptPanel m_scriptPanel;
+   TableCheckPanel m_tableCheck;
    PinnedPanel m_pinned; // Floating overlay of pinned properties
    SearchPalette m_palette; // Cmd/Ctrl+K search to field
 
