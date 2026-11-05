@@ -3,6 +3,7 @@
 #pragma once
 
 #if defined(ENABLE_BGFX)
+#include <atomic>
 #include "bgfx/bgfx.h"
 #endif
 
@@ -102,6 +103,13 @@ private:
    std::shared_ptr<Sampler> m_depth_sampler;
 
    static RenderTarget* current_render_target;
+public:
+   // Pixel rect (x, y from the top, w, h) of the scissor of the render pass being executed, w = 0 when it has none (set by RenderPass::Execute)
+   static int s_passRegion[4];
+   // Diagnostic overrides set by VPX_PERF_ABLATE steps: mip 0 copy limited to the pass rect (-1 = VPX_MIPGEN_REGION) and
+   // refraction probe downscale (0 = VPX_REFR_SCALE)
+   static std::atomic<int> s_perfMipRegion, s_perfRefrScale;
+private:
    static int current_render_layer;
 
 #if defined(ENABLE_BGFX)

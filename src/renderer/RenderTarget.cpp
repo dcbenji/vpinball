@@ -18,6 +18,9 @@
 RenderTarget* RenderTarget::current_render_target = nullptr;
 RenderTarget* RenderTarget::GetCurrentRenderTarget() { return current_render_target; }
 
+int RenderTarget::s_passRegion[4] = { 0, 0, 0, 0 };
+std::atomic<int> RenderTarget::s_perfMipRegion { -1 };
+std::atomic<int> RenderTarget::s_perfRefrScale { 0 };
 int RenderTarget::current_render_layer = 0; // For layered render targets (stereo, cubemaps,...)
 int RenderTarget::GetCurrentRenderLayer() { return current_render_layer; }
 
@@ -994,15 +997,29 @@ void RenderTarget::GenerateMipmaps()
    }
    // Refresh mip 0 of the sampled texture from the render attachment (BGFX does not support blitting multiple
    // layers at once on all backends, so blit layer by layer). Within a view, BGFX executes blits before dispatches.
+   // VPX_MIPGEN_REGION=1: only the pass's scissor rect (its area of interest: nothing samples the probe outside it), padded
+   // to the coarsest mip's texel so every mip texel the area reads is built from fresh mip 0 texels. Mips are still built
+   // over the whole texture (stale outside the rect, never sampled there).
+   static const bool regionEnv = std::getenv("VPX_MIPGEN_REGION") != nullptr && atoi(std::getenv("VPX_MIPGEN_REGION")) != 0;
+   const bool regionOnly = s_perfMipRegion.load() >= 0 ? s_perfMipRegion.load() != 0 : regionEnv;
+   int rx = 0, ry = 0, rw = m_width, rh = m_height;
+   if (regionOnly && s_passRegion[2] > 0 && s_passRegion[3] > 0)
+   {
+      const int align = 1 << std::min(static_cast<int>(m_numMips) - 1, 6);
+      rx = std::max(0, (s_passRegion[0] / align) * align);
+      ry = std::max(0, (s_passRegion[1] / align) * align);
+      rw = std::min(m_width, ((s_passRegion[0] + s_passRegion[2] + align - 1) / align) * align) - rx;
+      rh = std::min(m_height, ((s_passRegion[1] + s_passRegion[3] + align - 1) / align) * align) - ry;
+   }
    for (int layer = 0; layer < m_nLayers; ++layer)
    {
       bgfx::TextureRegion src;
       bgfx::TextureRegion dst;
-      src.init(m_color_tex, 0, 0, m_width, m_height);
+      src.init(m_color_tex, rx, ry, rw, rh);
       src.mip = 0;
       src.z = layer;
       src.depth = 1;
-      dst.init(m_colorTexMips, 0, 0, m_width, m_height);
+      dst.init(m_colorTexMips, rx, ry, rw, rh);
       dst.mip = 0;
       dst.z = layer;
       dst.depth = 1;

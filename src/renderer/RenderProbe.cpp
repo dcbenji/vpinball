@@ -231,7 +231,12 @@ void RenderProbe::ApplyAreaOfInterest()
 int RenderProbe::GetRoughnessDownscale(const int roughness) const
 {
    if (m_type == SCREEN_SPACE_TRANSPARENCY)
-      return 1; // No downscaling since this is not supported by hardware for depth buffer
+   {
+      // No downscaling by default (a hardware blit can not scale a depth buffer). VPX_REFR_SCALE=2 (diagnostic): a half resolution
+      // probe, copied through the scaled copy path (quad draws of the color and of the depth, RenderTarget::CopyTo)
+      static const int refrScale = std::getenv("VPX_REFR_SCALE") ? std::clamp(atoi(std::getenv("VPX_REFR_SCALE")), 1, 4) : 1;
+      return RenderTarget::s_perfRefrScale.load() > 0 ? RenderTarget::s_perfRefrScale.load() : refrScale;
+   }
    return roughness < 7 ? 1 : 2;
 }
 
@@ -271,6 +276,9 @@ void RenderProbe::RenderScreenSpaceTransparency()
    m_dirty = false;
    RenderPass* const renderedPass = m_renderer->m_renderDevice->GetCurrentPass();
    const size_t firstPass = m_renderer->m_renderDevice->GetRenderFramePasses().size();
+   // The downscale may change at runtime (VPX_PERF_ABLATE steps): recreate the probe targets at the new size
+   if (m_dynamicRT != nullptr && m_dynamicRT->GetWidth() != renderedPass->m_rt->GetWidth() / GetRoughnessDownscale(m_roughness))
+      ReleaseRenderTargets();
    if (m_dynamicRT == nullptr)
    {
       const int downscale = GetRoughnessDownscale(m_roughness);

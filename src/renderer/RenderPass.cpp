@@ -212,6 +212,10 @@ bool RenderPass::Execute(const bool log)
       assert((left <= right) && (bottom <= top));
       if (left == right || bottom == top)
          return false;
+      RenderTarget::s_passRegion[0] = left;
+      RenderTarget::s_passRegion[1] = m_rt->GetHeight() - top;
+      RenderTarget::s_passRegion[2] = right - left;
+      RenderTarget::s_passRegion[3] = top - bottom;
       #if defined(ENABLE_BGFX)
       m_rt->GetRenderDevice()->m_scissorCache = bgfx::setScissor(static_cast<uint16_t>(left), static_cast<uint16_t>(m_rt->GetHeight() - top), static_cast<uint16_t>(right - left), static_cast<uint16_t>(top - bottom));
       // Only keep the cached rect, applied by each draw (ApplyScissor): the pending draw state would leak into the next pass if this one submits no draw
@@ -310,6 +314,7 @@ bool RenderPass::Execute(const bool log)
       }
    }
 
+   RenderTarget::s_passRegion[2] = 0; // no pass scissor rect any more
    if (m_areaOfInterest.x != FLT_MAX)
    {
       #if defined(ENABLE_BGFX)
