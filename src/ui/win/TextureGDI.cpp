@@ -34,9 +34,14 @@ HBITMAP TextureGDICache::Get(const Texture& tex)
    bmi.bmiHeader.biSizeImage = 0;
 
    std::shared_ptr<BaseTexture> bgr32bits = buffer->ToBGRA();
-   SetStretchBltMode(hdcNew, COLORONCOLOR);
-   StretchDIBits(hdcNew, 0, 0, tex.m_width, tex.m_height, 0, 0, tex.m_width, tex.m_height, bgr32bits->data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
-   bgr32bits = nullptr;
+   if (bgr32bits == nullptr)
+      PLOGE << "Image '" << tex.GetName() << "' cannot be converted for display (out of memory or too large), leaving it blank";
+   else
+   {
+      SetStretchBltMode(hdcNew, COLORONCOLOR);
+      StretchDIBits(hdcNew, 0, 0, tex.m_width, tex.m_height, 0, 0, tex.m_width, tex.m_height, bgr32bits->data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+      bgr32bits = nullptr;
+   }
 
    SelectObject(hdcNew, hbmOld);
    DeleteDC(hdcNew);

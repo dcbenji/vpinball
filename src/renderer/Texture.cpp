@@ -50,6 +50,15 @@ static inline int GetPixelSize(const BaseTexture::Format format)
    }
 }
 
+// Size in bytes of a w x h pixel buffer, computed in 64 bit (a 32 bit w * h * pixelSize wraps above 4 GiB, e.g. 46341 x 46341 x 4)
+static inline uint64_t PixelBufferSize(const unsigned int w, const unsigned int h, const BaseTexture::Format format)
+{
+   return static_cast<uint64_t>(w) * h * static_cast<uint64_t>(GetPixelSize(format));
+}
+
+// Largest pixel buffer we accept: stb_image, QOI and SDL (pitch) all use signed 32 bit sizes
+static constexpr uint64_t MAX_PIXEL_BUFFER_SIZE = static_cast<uint64_t>(INT_MAX);
+
 static inline uint64_t NextLiveHash()
 {
    static std::atomic<uint64_t> s_counter { 1 };
@@ -63,7 +72,7 @@ BaseTexture::BaseTexture(const unsigned int w, const unsigned int h, const Forma
    , m_width(w)
    , m_height(h)
    , m_liveHash(NextLiveHash())
-   , m_data(allocate ? reinterpret_cast<uint8_t*>(SDL_aligned_alloc(16, w * h * GetPixelSize(format))) : nullptr)
+   , m_data(allocate ? reinterpret_cast<uint8_t*>(SDL_aligned_alloc(16, static_cast<size_t>(PixelBufferSize(w, h, format)))) : nullptr)
 {
 }
 
@@ -80,9 +89,19 @@ unsigned int BaseTexture::pitch() const
 std::shared_ptr<BaseTexture> BaseTexture::Create(const unsigned int w, const unsigned int h, const Format format) noexcept
 {
    BaseTexture* tex = nullptr;
+   if (PixelBufferSize(w, h, format) > MAX_PIXEL_BUFFER_SIZE)
+   {
+      PLOGE << "Image too large (" << w << " x " << h << ", " << BaseTexture::GetFormatString(format) << "), the pixel buffer would exceed 2 GiB";
+      return nullptr;
+   }
    try
    {
       tex = new BaseTexture(w, h, format);
+      if (tex->m_data == nullptr && PixelBufferSize(w, h, format) != 0) // out of memory
+      {
+         delete tex;
+         return nullptr;
+      }
    }
    // failed to get mem?
    catch (...)
@@ -149,7 +168,7 @@ std::shared_ptr<BaseTexture> BaseTexture::CreateFromData(const void* data, const
          {
             uint8_t* const __restrict pdst = static_cast<uint8_t*>(tex->data());
             const uint8_t* const __restrict psrc = (uint8_t*)stbi_data;
-            memcpy(pdst, psrc, x * y * channels_in_file);
+            memcpy(pdst, psrc, static_cast<size_t>(x) * y * channels_in_file);
             stbi_image_free(stbi_data);
             return tex;
          }
@@ -440,9 +459,9 @@ void BaseTexture::Update(std::shared_ptr<BaseTexture>& tex, const unsigned int w
       name = tex->GetName();
       if ((tex->m_width == width) && (tex->m_height == height) && (tex->m_format == texFormat))
       {
-         assert(tex->pitch() * tex->height() == width * height * pixelSize);
+         assert(static_cast<size_t>(tex->pitch()) * tex->height() == static_cast<size_t>(width) * height * pixelSize);
          if (tex->data() != image && image)
-            memcpy(tex->data(), image, width * height * pixelSize);
+            memcpy(tex->data(), image, static_cast<size_t>(width) * height * pixelSize);
          {
             std::lock_guard lock(tex->m_aliasMutex);
             tex->m_aliases.clear();
@@ -572,6 +591,8 @@ std::shared_ptr<BaseTexture> BaseTexture::GetAlias(Format format) const
    if (auto it = m_aliases.find(format); it == m_aliases.end())
    {
       std::shared_ptr<BaseTexture> alias = Convert(format);
+      if (alias == nullptr) // Conversion failed (out of memory or converted size over the limit), nothing is cached
+         return nullptr;
       if (!m_isOpaqueDirty)
          alias->SetIsOpaque(IsOpaque());
       if (!m_isMD5Dirty)
@@ -689,6 +710,8 @@ std::shared_ptr<BaseTexture> BaseTexture::Convert(Format format) const
    {
       assert(tex == nullptr);
       tex = BaseTexture::Create(m_width, m_height, m_format);
+      if (tex == nullptr)
+         return nullptr;
       memcpy(tex->data(), datac(), (size_t)m_width * m_height * GetPixelSize(m_format));
    }
 

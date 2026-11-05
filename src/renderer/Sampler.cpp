@@ -60,7 +60,17 @@ Sampler::Sampler(RenderDevice* rd, string name, std::shared_ptr<const BaseTextur
    // Costs twice the texture memory, the same price BGFX pays, and it is the only way
    // to get the gamma right. Doing it before the dispatch below leaves a single conversion for both upload paths
    if (surf->m_format == BaseTexture::SRGB565)
-      surf = surf->Convert(BaseTexture::SRGBA);
+   {
+      std::shared_ptr<const BaseTexture> widened = surf->Convert(BaseTexture::SRGBA);
+      if (widened == nullptr)
+      {
+         PLOGE << "Texture '" << m_name << "' cannot be converted for upload (out of memory or too large), using the fallback texture";
+         widened = m_rd->m_fallbackTexture;
+         m_width = widened->width();
+         m_height = widened->height();
+      }
+      surf = std::move(widened);
+   }
    colorFormat format;
    if (surf->m_format == BaseTexture::RGB)
       format = colorFormat::RGB;
@@ -514,6 +524,13 @@ void Sampler::UpdateTexture(std::shared_ptr<const BaseTexture> surf, const bool 
    default: assert(false); break;
    }
 
+   if (ref->surf == nullptr) // Widening conversion failed (out of memory or converted size over the limit)
+   {
+      delete ref;
+      PLOGE << "Texture '" << m_name << "' cannot be converted for upload (out of memory or too large), keeping previous content";
+      return;
+   }
+
    assert(bgfx::isTextureValid(1, false, 1, m_bgfx_format, m_isTextureUpdateLinear ? BGFX_TEXTURE_NONE : BGFX_TEXTURE_SRGB));
    assert(bgfx::isTextureValid(1, false, 1, m_bgfx_format, (m_isTextureUpdateLinear ? BGFX_TEXTURE_NONE : BGFX_TEXTURE_SRGB) | BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST));
 
@@ -522,7 +539,14 @@ void Sampler::UpdateTexture(std::shared_ptr<const BaseTexture> surf, const bool 
 #elif defined(ENABLE_OPENGL)
    // Widened to 8 bits per channel for the reason given in the constructor (GL cannot decode a 5.6.5 texture as sRGB)
    if (surf->m_format == BaseTexture::SRGB565)
+   {
       surf = surf->Convert(BaseTexture::SRGBA);
+      if (surf == nullptr)
+      {
+         PLOGE << "Texture '" << m_name << "' cannot be converted for upload (out of memory or too large), keeping previous content";
+         return;
+      }
+   }
    colorFormat format;
    if (surf->m_format == BaseTexture::RGB)
       format = colorFormat::RGB;

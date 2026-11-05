@@ -425,7 +425,9 @@ void Decal::RenderSetup(Renderer *renderer)
 
       m_textImg = BaseTexture::Create(imgW, imgH, BaseTexture::SRGBA);
 
-      SDL_Surface *const surface = SDL_CreateSurface(imgW, imgH, SDL_PIXELFORMAT_ABGR8888);
+      if (m_textImg == nullptr)
+         PLOGE << "Decal '" << GetName() << "' text image is too large (" << imgW << " x " << imgH << "), it will not be drawn";
+      SDL_Surface *const surface = m_textImg ? SDL_CreateSurface(imgW, imgH, SDL_PIXELFORMAT_ABGR8888) : nullptr;
       if (surface)
       {
          SDL_FillSurfaceRect(surface, nullptr, SDL_MapRGBA(SDL_GetPixelFormatDetails(surface->format), nullptr, 255, 255, 255, 255));

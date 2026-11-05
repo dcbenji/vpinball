@@ -1007,6 +1007,11 @@ EngineMcp::json EngineMcp::FinishView(const ToolReply& reply)
       const unsigned int x = std::min(static_cast<unsigned int>(reply.imageCrop[0] * static_cast<float>(imageW)), imageW - 1), y = std::min(static_cast<unsigned int>(reply.imageCrop[1] * static_cast<float>(imageH)), imageH - 1);
       const unsigned int w = std::clamp(static_cast<unsigned int>(reply.imageCrop[2] * static_cast<float>(imageW)), 1u, imageW - x), h = std::clamp(static_cast<unsigned int>(reply.imageCrop[3] * static_cast<float>(imageH)), 1u, imageH - y);
       const std::shared_ptr<BaseTexture> cropped = BaseTexture::Create(w, h, image->m_format);
+      if (cropped == nullptr)
+      {
+         cleanup();
+         return failed("Could not allocate the cropped capture");
+      }
       const unsigned int bytes = image->pitch() / imageW;
       for (unsigned int row = 0; row < h; row++)
          memcpy(static_cast<uint8_t*>(cropped->data()) + row * cropped->pitch(), static_cast<const uint8_t*>(image->data()) + (y + row) * image->pitch() + x * bytes, static_cast<size_t>(w) * bytes);

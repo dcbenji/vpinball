@@ -208,8 +208,13 @@ void Textbox::RenderSetup(Renderer *renderer)
    if (width > 0 && height > 0)
    {
       m_texture = BaseTexture::Create(width, height, BaseTexture::SRGBA);
-      m_texture->SetName("Textbox." + GetName());
-      m_textureDirty = true;
+      if (m_texture == nullptr)
+         PLOGE << "Textbox '" << GetName() << "' is too large (" << width << " x " << height << "), it will not be drawn";
+      else
+      {
+         m_texture->SetName("Textbox." + GetName());
+         m_textureDirty = true;
+      }
    }
 }
 
@@ -297,6 +302,8 @@ void Textbox::Render(const unsigned int renderMask)
          m_uploadedFrameId = dmd.state.frameId;
          m_hasUploadedFrame = true;
       }
+      if (m_texture == nullptr) // Update could not allocate the frame
+         return;
       // DMD support for textbox is for backward compatibility only, so only use compatibility style #0
       const vec3 color = m_texture->m_format == BaseTexture::BW_FP32 ? convertColor(m_d.m_fontcolor) : vec3(1.f, 1.f, 1.f);
       m_renderer->SetupDMDRender(0, true, color, m_d.m_intensity_scale, m_texture, 1.f, 0.f, Renderer::Reinhard, nullptr,

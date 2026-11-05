@@ -760,6 +760,8 @@ STDMETHODIMP Flasher::put_VideoCapUpdate(BSTR cWinTitle)
         try
         {
            m_videoCapTex = BaseTexture::Create(m_videoCapWidth, m_videoCapHeight, BaseTexture::SRGBA);
+           if (m_videoCapTex == nullptr)
+              return E_FAIL;
         }
         catch (...)
         {

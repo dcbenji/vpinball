@@ -637,7 +637,14 @@ DisplayFrame VPXPluginAPIImpl::ControllerOnGetRenderDMD(void* callContext)
    {
    case BaseTexture::BW_FP32: result.frame = dmdFrame->data(); break;
    case BaseTexture::SRGB: result.frame = dmdFrame->data(); break;
-   case BaseTexture::SRGBA: result.frame = dmdFrame->GetAlias(BaseTexture::SRGB)->data(); break;
+   case BaseTexture::SRGBA:
+   {
+      const std::shared_ptr<BaseTexture> alias = dmdFrame->GetAlias(BaseTexture::SRGB);
+      if (alias == nullptr)
+         return { 0, nullptr };
+      result.frame = alias->data();
+      break;
+   }
    default: assert(false); return { 0, nullptr };  // Not yet supported
    }
 
