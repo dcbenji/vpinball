@@ -1612,6 +1612,7 @@ void EditorChrome::RenderStatusOverlay()
    }
    case ViewMode::DesktopBackdrop: ShadowedText("Desktop Backdrop"); break;
    }
+   const ImVec2 viewLabelMin = ImGui::GetItemRectMin(), viewLabelMax = ImGui::GetItemRectMax(); // The view name just drawn, without "(Local)" (the window is NoInputs: its click target is a window of its own, below)
    if (editor.IsLocalView()) // Blender's viewport name, "(Local)" after it
    {
       ImGui::SameLine(0.f, ImGui::CalcTextSize(" ").x);
@@ -1649,6 +1650,81 @@ void EditorChrome::RenderStatusOverlay()
    if (editor.m_pointEditPart)
       ShadowedText(editor.m_pointEditCenter ? "Center Edit (Tab to exit)" : "Drag Point Edit (Tab to exit)");
    ImGui::End();
+
+   // Click target over the view name: Blender's View > Viewpoint menu, same actions as the numpad keys and the View menu
+   {
+      const float pad = 3.f * dpi;
+      ImGui::SetNextWindowPos(ImVec2(viewLabelMin.x - pad, viewLabelMin.y - pad));
+      ImGui::SetNextWindowSize(ImVec2(viewLabelMax.x - viewLabelMin.x + 2.f * pad, viewLabelMax.y - viewLabelMin.y + 2.f * pad));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+      ImGui::Begin("view label menu", nullptr,
+         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus
+            | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+      ImGui::PopStyleVar();
+      // A click that confirms a G / R / S transform (the modal ends on the press) must not also open the menu
+      static bool s_modalLastFrame = false;
+      static bool s_ignoreClick = false;
+      const bool pressed = ImGui::InvisibleButton("##viewlabel", ImGui::GetContentRegionAvail());
+      if (ImGui::IsItemActivated())
+         s_ignoreClick = editor.m_modal.active || s_modalLastFrame;
+      s_modalLastFrame = editor.m_modal.active;
+      if (pressed && !s_ignoreClick && !editor.m_modal.active)
+         ImGui::OpenPopup("##viewpoint");
+      if (ImGui::IsItemHovered() || ImGui::IsPopupOpen("##viewpoint"))
+         ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+            ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered, 0.5f), 3.f * dpi);
+      ImGui::SetNextWindowPos(ImVec2(viewLabelMin.x - pad, viewLabelMax.y + pad)); // Drops down from the label, which stays readable
+      if (ImGui::BeginPopup("##viewpoint"))
+      {
+         using PV = EditorUI::PredefinedView;
+         const bool editorCam = editor.m_camMode == ViewMode::EditorCam;
+         if (ImGui::MenuItem("Perspective", nullptr, editorCam && editor.m_perspectiveCam) && !(editorCam && editor.m_perspectiveCam))
+         {
+            editor.m_camMode = ViewMode::EditorCam; // As Numpad 5
+            editor.m_perspectiveCam = true;
+         }
+         if (ImGui::MenuItem("Orthographic", "Numpad 5", editorCam && !editor.m_perspectiveCam) && !(editorCam && !editor.m_perspectiveCam))
+         {
+            editor.m_camMode = ViewMode::EditorCam;
+            editor.m_perspectiveCam = false;
+         }
+         ImGui::Separator();
+         const auto viewItem = [&](const char *label, const char *keys, PV view)
+         {
+            if (ImGui::MenuItem(label, keys, editorCam && editor.m_predefinedView == view))
+               editor.SetView(view);
+         };
+         viewItem("Top", "Numpad 7", PV::Top);
+         viewItem("Bottom", "Ctrl+Numpad 7", PV::Bottom);
+         viewItem("Front", "Numpad 1", PV::Front);
+         viewItem("Back", "Ctrl+Numpad 1", PV::Back);
+         viewItem("Left", "Numpad 3", PV::Left);
+         viewItem("Right", "Ctrl+Numpad 3", PV::Right);
+         ImGui::Separator();
+         if (ImGui::MenuItem("Frame All", "Home"))
+            editor.FrameAll();
+         ImGui::Separator();
+         // The cameras Numpad 0 cycles through, picked directly
+         if (ImGui::MenuItem("Preview Camera", nullptr, editor.m_camMode == ViewMode::PreviewCam) && editor.m_camMode != ViewMode::PreviewCam)
+         {
+            editor.m_predefinedView = EditorUI::PredefinedView::None;
+            editor.m_camMode = ViewMode::PreviewCam;
+         }
+         if (ImGui::MenuItem("Desktop Backdrop", nullptr, editor.m_camMode == ViewMode::DesktopBackdrop) && editor.m_camMode != ViewMode::DesktopBackdrop)
+         {
+            editor.m_predefinedView = EditorUI::PredefinedView::None;
+            editor.m_camMode = ViewMode::DesktopBackdrop;
+            editor.SetBackdropCamera();
+         }
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) // Esc closes the menu (keyboard navigation is off: ImGui does not), it is not an editor Esc
+         {
+            editor.m_paneEscPending = true;
+            ImGui::CloseCurrentPopup();
+         }
+         ImGui::EndPopup();
+      }
+      ImGui::End();
+   }
 }
 
 void EditorChrome::RenderUndoHistory()
