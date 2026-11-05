@@ -123,6 +123,9 @@ public:
    // (drag point curves are 2D in the table XY plane, the display height is part specific)
    virtual float GetDragPointZ(const DragPoint* point) const { return point->GetZ(); }
 
+   // The part was just mirrored across a line (Object > Mirror): the rotation its gizmo reports follows
+   void OnMirrored() { m_curveRot = -m_curveRot; }
+
    // Drag point edit mode: the editor sets the context while this part's curve is being edited
    void SetPointEditContext(DragPointEditContext* ctx) { m_pointEditCtx = ctx; }
 

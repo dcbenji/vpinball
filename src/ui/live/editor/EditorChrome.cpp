@@ -883,6 +883,20 @@ void EditorChrome::RenderMenuBar()
          const bool editablePart = editor.m_selection.GetType() == Selection::S_EDITABLE && !editor.m_table->IsLocked();
          if (ImGui::MenuItem("Duplicate", "Shift+D", false, editor.CanDuplicate()))
             editor.DuplicateSelection();
+         // Mirror (Ctrl+M, then X or Y): across the table's centre line, or across the median of the selection; the second menu mirrors copies, for left / right pairs
+         for (const bool duplicate : { false, true })
+            if (ImGui::BeginMenu(duplicate ? "Duplicate Mirrored" : "Mirror", editor.CanMirror()))
+            {
+               if (ImGui::MenuItem("Across Table Centre, X (Left / Right)", duplicate ? "Ctrl+M, D, X" : "Ctrl+M, X"))
+                  editor.MirrorSelection(0, false, duplicate);
+               if (ImGui::MenuItem("Across Table Centre, Y (Front / Back)", duplicate ? "Ctrl+M, D, Y" : "Ctrl+M, Y"))
+                  editor.MirrorSelection(1, false, duplicate);
+               if (ImGui::MenuItem("Across Selection Median, X", duplicate ? "Ctrl+M, D, Shift+X" : "Ctrl+M, Shift+X"))
+                  editor.MirrorSelection(0, true, duplicate);
+               if (ImGui::MenuItem("Across Selection Median, Y", duplicate ? "Ctrl+M, D, Shift+Y" : "Ctrl+M, Shift+Y"))
+                  editor.MirrorSelection(1, true, duplicate);
+               ImGui::EndMenu();
+            }
          if (ImGui::MenuItem("Delete", "Del", false, editor.CanDelete()))
             editor.DeleteAction();
          if (ImGui::MenuItem("Add Part...", "Shift+A", false, !editor.m_table->IsLocked() && editor.m_pointEditPart == nullptr))

@@ -16,6 +16,7 @@
 #include "editor/EditorUIPartRegistry.h"
 #include "editor/IconsLucide.h"
 #include "editor/LiveRenderContext.h"
+#include "editor/MirrorParts.h"
 #include "editor/PropertyPane.h"
 #include "editor/RubberBetweenPosts.h"
 
@@ -3428,9 +3429,21 @@ void EditorUI::RenderUI()
    }
    if (globalKeyOverItem)
       ImGui::ClearActiveID(); // The held item keeps its old text, which it would write back (maybe into another part after the undo) when it deactivates
+   // The Ctrl+M prompt does not survive a mouse click (a view, a menu, a panel), a text field, a grab, a file operation or the game taking the keys
+   if (m_mirrorPending
+      && (modalWasActive || gameKeys || m_fileOp != nullptr || (io.WantCaptureKeyboard && !globalKeyOverItem) || ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)
+         || ImGui::IsMouseClicked(ImGuiMouseButton_Middle)))
+   {
+      m_mirrorPending = false;
+      Report(string());
+   }
    if ((!io.WantCaptureKeyboard || globalKeyOverItem) && m_fileOp == nullptr && !modalWasActive && !gameKeys && (!tracing || ImGui::IsKeyReleased(ImGuiKey_Escape)))
    {
-      if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
+      if (m_mirrorPending && HandleMirrorPrompt())
+      {
+         // Ctrl+M is waiting for its axis
+      }
+      else if (ImGui::IsKeyReleased(ImGuiKey_Escape) && !paletteEsc)
       {
          if (m_suppressNextEscape)
             m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
@@ -3544,6 +3557,13 @@ void EditorUI::RenderUI()
          }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_I, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift) InvertSelection(); // Blender's Select > Invert (Ctrl+I)
+      else if (ImGui::IsKeyPressed(ImGuiKey_M, false) && !io.KeyAlt && !io.KeyShift
+         && (io.KeyCtrl
+#ifdef __APPLE__
+            || io.KeySuper // ImGui swaps Cmd and Ctrl on macOS: the physical Control key is KeySuper. Cmd+M is the system's Minimize (SDL's Window menu takes it before the editor)
+#endif
+            ))
+         StartMirrorPrompt(); // Blender's Object > Mirror (Ctrl+M), then X or Y
       else if (ImGui::IsKeyPressed(ImGuiKey_C))
       {
          // Copy the selected parts (or the coordinates of the selected drag point in point edit mode)
@@ -4011,6 +4031,163 @@ void EditorUI::DuplicateSelection()
    }
    else
       SetGizmoOperation(ImGuizmo::TRANSLATE);
+}
+
+bool EditorUI::CanMirror() const { return CanDuplicate(); }
+
+void EditorUI::StartMirrorPrompt()
+{
+   if (!CanMirror())
+   {
+      Report(m_table->IsLocked() ? "Mirror: not available (table locked)"
+            : IsInspectMode()   ? "Mirror: not available (inspecting the game)"
+            : m_pointEditPart   ? "Mirror: not available in point edit mode (Tab leaves it)"
+                                : "Mirror: select the parts to mirror first");
+      return;
+   }
+   m_mirrorPending = true;
+   m_mirrorDuplicate = false;
+}
+
+// Ctrl+M is modal like Blender's: while armed every key is its own (X / Y pick the axis, Shift the median, D toggles the copy, Esc cancels, the modifiers
+// pass), any other key, a mouse click, or a text field / grab / game taking over cancels it. It returns true while armed, so that the key chain does not run
+bool EditorUI::HandleMirrorPrompt()
+{
+   ImGuiIO &io = ImGui::GetIO();
+   const auto cancel = [this]()
+   {
+      m_mirrorPending = false;
+      Report(string()); // The prompt text is shown only while armed
+   };
+   if (!CanMirror())
+   {
+      cancel();
+      return false;
+   }
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+   {
+      cancel();
+      m_paneEscPending = true; // The release of this Esc is not the editor's (it would clear the selection)
+      return true;
+   }
+   if (!io.KeyAlt && (ImGui::IsKeyPressed(ImGuiKey_X, false) || ImGui::IsKeyPressed(ImGuiKey_Y, false)))
+   {
+      const int axis = ImGui::IsKeyPressed(ImGuiKey_X, false) ? 0 : 1;
+      MirrorSelection(axis, io.KeyShift, m_mirrorDuplicate); // Disarms
+      return true;
+   }
+   if (ImGui::IsKeyPressed(ImGuiKey_D, false))
+      m_mirrorDuplicate = !m_mirrorDuplicate;
+   else
+   {
+      static constexpr ImGuiKey kModifiers[] = { ImGuiKey_LeftCtrl, ImGuiKey_RightCtrl, ImGuiKey_LeftShift, ImGuiKey_RightShift, ImGuiKey_LeftAlt, ImGuiKey_RightAlt, ImGuiKey_LeftSuper,
+         ImGuiKey_RightSuper, ImGuiKey_Menu };
+      for (int key = ImGuiKey_Tab; key < ImGuiKey_GamepadStart; key++)
+         if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false) && std::ranges::find(kModifiers, static_cast<ImGuiKey>(key)) == std::end(kModifiers))
+         {
+            cancel(); // Any other key is not a Mirror key: it is swallowed, and the prompt is over
+            return true;
+         }
+   }
+   Report(string("Mirror") + (m_mirrorDuplicate ? " a copy" : "") + ": X = left / right, Y = front / back across the table centre, Shift+X / Shift+Y across the selection's median, D = "
+      + (m_mirrorDuplicate ? "mirror in place instead" : "mirror a copy instead") + ", Esc cancels");
+   return true;
+}
+
+// Object > Mirror: the selection across the vertical line x = the table's centre (Y: the horizontal line), or across the median of the selection. Parts that
+// can not be mirrored honestly (MirrorParts::Refusal) are left out and named in the message; the rest is mirrored. One undo step for all of it.
+void EditorUI::MirrorSelection(const int axisIndex, const bool aboutMedian, const bool duplicate)
+{
+   using MirrorParts::Axis;
+   m_mirrorPending = false; // From the prompt, the menu or the palette
+   if (!CanMirror())
+      return;
+   const Axis axis = axisIndex == 0 ? Axis::X : Axis::Y;
+   const char *const axisName = axis == Axis::X ? "X" : "Y";
+   vector<std::shared_ptr<EditorUIPart>> todo;
+   string refused;
+   for (const auto &part : m_multiSel)
+   {
+      const IEditable *const edit = part->GetEditable();
+      if (edit->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(edit)->IsPlasticCompanion())
+         continue; // Derived from its host: follows it
+      const string reason = MirrorParts::Refusal(edit, axis);
+      if (reason.empty())
+         todo.push_back(part);
+      else
+         refused += (refused.empty() ? "" : ", ") + edit->GetName() + " (" + reason + ")";
+   }
+   if (todo.empty())
+   {
+      Report("Nothing mirrored" + (refused.empty() ? string() : ": " + refused));
+      return;
+   }
+   // The mirror line: the table's centre line, or the median (mean of the centres) of the parts to mirror
+   float coord;
+   if (aboutMedian)
+   {
+      double sum = 0.;
+      for (const auto &part : todo)
+         sum += MirrorParts::Position(part->GetEditable(), axis);
+      coord = static_cast<float>(sum / static_cast<double>(todo.size()));
+   }
+   else
+      coord = axis == Axis::X ? 0.5f * (m_table->m_left + m_table->m_right) : 0.5f * (m_table->m_top + m_table->m_bottom);
+   const string firstName = todo.front()->GetEditable()->GetName();
+   const size_t count = todo.size();
+   if (duplicate)
+   {
+      // Copies of the parts that can be mirrored, on the originals, then mirrored (one undo step with the paste)
+      if (todo.size() != m_multiSel.size())
+      {
+         m_multiSel = todo;
+         m_selection = Selection(todo.back());
+      }
+      CopySelection();
+      const uint64_t topBefore = m_undo.TopRecordId();
+      PasteSelection(ImGui::GetMousePos(), true);
+      if (m_undo.TopRecordId() == topBefore || m_multiSel.empty())
+      {
+         Report("Nothing to duplicate");
+         return;
+      }
+      m_undo.SetLabel(CountLabel("Duplicate Mirrored", m_multiSel.size(), m_multiSel.front()->GetEditable()->GetName()));
+   }
+   const vector<std::shared_ptr<EditorUIPart>> targets = duplicate ? m_multiSel : todo; // The copies, or the parts that can be mirrored
+   vector<IEditable *> touched;
+   for (const auto &part : targets)
+      touched.push_back(part->GetEditable());
+   m_undo.BeginUndo();
+   for (IEditable *const edit : touched)
+      m_undo.MarkForUndo(edit);
+   MarkDependentsForUndo(touched);
+   if (!duplicate)
+      MirrorParts::MarkMeshesForUndo(m_undo, m_table, touched); // The copies of a duplicate are new parts: their undo removes them
+   if (!duplicate)
+      m_undo.SetLabel(CountLabel("Mirror", targets.size(), touched.front()->GetName()) + (axis == Axis::X ? " (X)" : " (Y)"));
+   m_undo.EndUndo();
+   if (duplicate)
+      m_undo.MergeLastIntoPrevious();
+   for (const auto &part : targets)
+   {
+      IEditable *const edit = part->GetEditable();
+      MirrorParts::Apply(edit, axis, coord);
+      part->OnMirrored();
+      const Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<const Primitive *>(edit) : nullptr;
+      if (prim == nullptr || !(prim->m_d.m_plasticGen || prim->m_d.m_wireGen)) // A wire or a plastic refreshed itself
+         if (edit->GetIRenderable() != nullptr)
+            m_renderer->ReinitRenderable(edit->GetIRenderable());
+      m_player->m_physics->Update(edit);
+   }
+   m_renderer->InvalidateShadowContent();
+   DetachSelectedRubbersFromUnselectedPosts();
+   RefitSelectionDependents();
+   m_lastOp.type = LastOperation::Type::None; // The paste of a duplicate is not adjustable any more: its panel would put the copies back as pasted, unmirrored
+   string message = string(duplicate ? "Duplicated and mirrored " : "Mirrored ") + (count == 1 ? firstName : std::to_string(count) + " parts") + " across the "
+      + (aboutMedian ? "selection's median " : "table centre ") + axisName + " = " + std::to_string(static_cast<int>(lroundf(coord)));
+   if (!refused.empty())
+      message += "; left out: " + refused;
+   Report(message);
 }
 
 void EditorUI::DeleteAction()

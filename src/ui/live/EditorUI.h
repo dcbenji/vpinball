@@ -290,6 +290,13 @@ private:
    bool CanDelete() const;
    bool CanSelect() const; // Select all / invert
    void DuplicateSelection();
+   // Object > Mirror (Ctrl+M, then X or Y): the selection across the table centre line or across the median of the selection, optionally mirrored copies
+   bool CanMirror() const;
+   void MirrorSelection(int axis, bool aboutMedian, bool duplicate); // axis 0 = X (left / right), 1 = Y (front / back)
+   void StartMirrorPrompt(); // Ctrl+M: waits for X or Y (Shift: about the median, D: duplicate mirrored), Esc cancels
+   bool HandleMirrorPrompt(); // True when it used the keys of the frame
+   bool m_mirrorPending = false;
+   bool m_mirrorDuplicate = false;
    void DeleteAction(); // Delete key: the selected drag points in point edit mode, the selected parts otherwise
    void SelectAllAction(); // A key: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
    void InvertSelection();

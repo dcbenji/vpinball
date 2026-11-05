@@ -471,6 +471,7 @@ void Primitive::OnMeshVerticesChanged()
    m_mesh.m_validBounds = false; // UpdateBounds keeps cached bounds otherwise
    m_mesh.UpdateBounds();
    m_dome.measured = false;
+   m_physicMatrix.Scale(0.f, 0.f, 0.f); // The collider (and the editor pick triangles) come from the mesh: rebuild them even if the transform did not change
    // Not m_vertexBufferRegenerate: a static mesh has an immutable vertex buffer, the renderable reinit rebuilds it
 }
 

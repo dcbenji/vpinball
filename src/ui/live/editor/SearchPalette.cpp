@@ -191,6 +191,14 @@ void SearchPalette::BuildOperators()
    add("Edit" + sep + "Snapping", "Shift+Tab", nullptr, [&ed]() { ed.ToggleSnapping(); });
    add("View" + sep + "Status Bar", "", nullptr, [&ed]() { ed.m_chrome.ToggleStatusBar(); });
    add("Object" + sep + "Duplicate", "Shift+D", [&ed]() { return ed.CanDuplicate(); }, [&ed]() { ed.DuplicateSelection(); });
+   for (const bool duplicate : { false, true })
+   {
+      const string menu = duplicate ? "Duplicate Mirrored" : "Mirror";
+      add("Object" + sep + menu + sep + "Across Table Centre, X (Left / Right)", duplicate ? "Ctrl+M, D, X" : "Ctrl+M, X", [&ed]() { return ed.CanMirror(); }, [&ed, duplicate]() { ed.MirrorSelection(0, false, duplicate); });
+      add("Object" + sep + menu + sep + "Across Table Centre, Y (Front / Back)", duplicate ? "Ctrl+M, D, Y" : "Ctrl+M, Y", [&ed]() { return ed.CanMirror(); }, [&ed, duplicate]() { ed.MirrorSelection(1, false, duplicate); });
+      add("Object" + sep + menu + sep + "Across Selection Median, X", duplicate ? "Ctrl+M, D, Shift+X" : "Ctrl+M, Shift+X", [&ed]() { return ed.CanMirror(); }, [&ed, duplicate]() { ed.MirrorSelection(0, true, duplicate); });
+      add("Object" + sep + menu + sep + "Across Selection Median, Y", duplicate ? "Ctrl+M, D, Shift+Y" : "Ctrl+M, Shift+Y", [&ed]() { return ed.CanMirror(); }, [&ed, duplicate]() { ed.MirrorSelection(1, true, duplicate); });
+   }
    add("Object" + sep + "Delete", "Del", [&ed]() { return ed.CanDelete(); }, [&ed]() { ed.DeleteAction(); });
    add("Object" + sep + "Add Metal Wire Guide", "", [&ed]() { return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_pointEditPart == nullptr; },
       [&ed]()
