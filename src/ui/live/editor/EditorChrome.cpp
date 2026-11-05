@@ -426,6 +426,119 @@ bool EditorChrome::ShadeIconRow(const char *id, int &mode, ViewShadeOptions *con
    return changed;
 }
 
+// Icons of the transform dropdowns: our own vector drawings of what Blender's show, in a box of half size s around c
+void EditorChrome::DrawPivotIcon(ImDrawList *const dl, const ImVec2 &c, const float s, const int pivot, const ImU32 col, const ImU32 dim)
+{
+   const float th = std::max(1.f, s / 8.f), rr = 0.42f * s, dot = 0.17f * s;
+   const ImVec2 a(c.x - 0.32f * s, c.y + 0.32f * s), b(c.x + 0.3f * s, c.y - 0.3f * s); // The two rings: lower left, upper right
+   const auto ring = [&](const ImVec2 &at, const float gapAt, const bool whole, const ImU32 color)
+   {
+      if (whole)
+         dl->AddCircle(at, rr, color, 0, th);
+      else
+      {
+         dl->PathArcTo(at, rr, gapAt + 0.9f, gapAt + 2.f * IM_PI - 0.9f, 20);
+         dl->PathStroke(color, 0, th);
+      }
+   };
+   const float towardsA = 0.75f * IM_PI, towardsB = -0.25f * IM_PI; // Screen angles (Y down) of the side of a ring which faces the other one
+   switch (static_cast<EditorUI::TransformPivot>(pivot))
+   {
+   case EditorUI::TransformPivot::BoundingBoxCenter:
+   {
+      const float e = 0.78f * s, l = 0.34f * s;
+      for (const float sx : { -1.f, 1.f })
+         for (const float sy : { -1.f, 1.f })
+         {
+            const ImVec2 corner(c.x + sx * e, c.y + sy * e);
+            dl->AddLine(corner, ImVec2(corner.x - sx * l, corner.y), col, th);
+            dl->AddLine(corner, ImVec2(corner.x, corner.y - sy * l), col, th);
+         }
+      dl->AddCircleFilled(c, 1.3f * dot, col);
+      break;
+   }
+   case EditorUI::TransformPivot::IndividualOrigins:
+      ring(a, towardsB, true, col);
+      dl->AddCircleFilled(a, dot, col);
+      ring(b, towardsA, false, col);
+      dl->AddCircleFilled(b, dot, col);
+      break;
+   case EditorUI::TransformPivot::MedianPoint:
+      ring(a, towardsB, false, col);
+      ring(b, towardsA, false, col);
+      dl->AddCircleFilled(ImVec2(0.5f * (a.x + b.x), 0.5f * (a.y + b.y)), dot, col);
+      break;
+   case EditorUI::TransformPivot::ActiveElement:
+      ring(a, towardsB, true, col);
+      dl->AddCircleFilled(a, dot, col);
+      ring(b, towardsA, false, dim);
+      break;
+   }
+}
+
+float EditorChrome::TransformHeaderRowWidth() { return 1.75f * ImGui::GetFrameHeight(); }
+
+void EditorChrome::TransformHeaderRow(const char *id, EditorUI &editor)
+{
+   struct PivotItem
+   {
+      EditorUI::TransformPivot pivot;
+      const char *name, *desc;
+   };
+   static constexpr PivotItem items[] = {
+      { EditorUI::TransformPivot::BoundingBoxCenter, "Bounding Box Center", "Rotate and scale about the center of the box around the origins of the selected parts" },
+      { EditorUI::TransformPivot::IndividualOrigins, "Individual Origins", "Each part rotates and scales about its own origin, staying where it is" },
+      { EditorUI::TransformPivot::MedianPoint, "Median Point", "Rotate and scale about the average of the origins of the selected parts" },
+      { EditorUI::TransformPivot::ActiveElement, "Active Element", "Rotate and scale about the origin of the active part" },
+   };
+   const float h = ImGui::GetFrameHeight(), round = 0.22f * h;
+   ImDrawList *const dl = ImGui::GetWindowDrawList();
+   const ImVec4 tc = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+   const ImU32 col = ImGui::GetColorU32(tc), dim = ImGui::GetColorU32(ImVec4(tc.x, tc.y, tc.z, tc.w * 0.5f));
+   ImGui::PushID(id);
+   {
+      const bool open = ImGui::IsPopupOpen("##PivotMenu");
+      const bool pressed = ImGui::InvisibleButton("##pivot", ImVec2(TransformHeaderRowWidth(), h));
+      const bool hovered = ImGui::IsItemHovered();
+      const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+      dl->AddRectFilled(a, b, open ? EditorTheme::Fill : (hovered ? EditorTheme::Hover : EditorTheme::Raised), round);
+      DrawPivotIcon(dl, ImVec2(a.x + 0.55f * h, 0.5f * (a.y + b.y)), 0.36f * h, static_cast<int>(editor.m_transformPivot), col, dim);
+      DrawChevron(dl, ImVec2(b.x - 0.38f * h, 0.5f * (a.y + b.y)), ChevronDir::Down, 0.14f * h, ImGui::GetColorU32(ImVec4(tc.x, tc.y, tc.z, open ? 1.f : 0.8f)));
+      Tip("Transform Pivot Point", nullptr, "Where R and S happen on a selection");
+      if (pressed && !open)
+         ImGui::OpenPopup("##PivotMenu");
+      ImGui::SetNextWindowPos(ImVec2(a.x, b.y + 2.f));
+      if (ImGui::BeginPopup("##PivotMenu"))
+      {
+         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+         {
+            ImGui::CloseCurrentPopup();
+            editor.m_areaEscPending = true; // The Esc that closed the menu is not an editor Esc (it would deselect)
+         }
+         ImGui::TextDisabled("Transform Pivot Point");
+         ImGui::Separator();
+         ImGui::PushStyleColor(ImGuiCol_Header, EditorTheme::V(EditorTheme::Fill));
+         const float rowWidth = 15.f * ImGui::GetFontSize();
+         for (const PivotItem &item : items)
+         {
+            ImGui::PushID(static_cast<int>(item.pivot));
+            const bool selected = editor.m_transformPivot == item.pivot;
+            if (ImGui::Selectable("##row", selected, ImGuiSelectableFlags_None, ImVec2(rowWidth, h)))
+               editor.SetTransformPivot(item.pivot);
+            const ImVec2 ra = ImGui::GetItemRectMin(), rb = ImGui::GetItemRectMax();
+            ImDrawList *const popupList = ImGui::GetWindowDrawList();
+            DrawPivotIcon(popupList, ImVec2(ra.x + 0.6f * h, 0.5f * (ra.y + rb.y)), 0.36f * h, static_cast<int>(item.pivot), col, dim);
+            popupList->AddText(ImVec2(ra.x + 1.3f * h, ra.y + 0.5f * (h - ImGui::GetFontSize())), col, item.name);
+            Tip(item.name, nullptr, item.desc);
+            ImGui::PopID();
+         }
+         ImGui::PopStyleColor();
+         ImGui::EndPopup();
+      }
+   }
+   ImGui::PopID();
+}
+
 void EditorChrome::Tip(const char *title, const char *shortcut, const char *description)
 {
    // Own hover delay: ImGui's delay timers do not run on disabled items, which made their tooltips appear much later than the enabled ones
@@ -1439,6 +1552,16 @@ void EditorChrome::RenderStatusOverlay()
       else if (xray != xrayBefore && Renderer::IsWireframeShade(editor.m_shadeMode))
          editor.m_shadeMode = xray ? Renderer::ShadeMode::NoDepthWireframe : Renderer::ShadeMode::Wireframe;
       ImGui::End();
+      // The transform dropdowns on the left of it, as in Blender's header (hidden first when it gets narrow)
+      if (vc.Width() > 720.f * dpi)
+      {
+         ImGui::SetNextWindowPos(ImVec2(vc.x1 - 16.f * dpi - ShadeIconRowWidth(shadeOptions) - 12.f * dpi - TransformHeaderRowWidth(), overlayPos.y), 0, ImVec2(0.f, 0.f));
+         ImGui::Begin("transform row", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+               | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav);
+         TransformHeaderRow("##MainTransform", editor);
+         ImGui::End();
+      }
       ImGui::PopStyleVar();
    }
 

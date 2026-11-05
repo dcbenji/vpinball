@@ -67,6 +67,11 @@
 namespace VPX::EditorUI
 {
 
+namespace
+{
+   float YawOfRotation(const Matrix3D &l, float &step); // Defined with the transform helpers below
+}
+
 // Vertical field of view (in degrees) of the perspective editor camera
 
 
@@ -135,6 +140,7 @@ void EditorUI::LoadNavPreferences()
    m_navTrackpad = settings.GetEditor_NavTrackpad();
    m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
    m_navBlenderTransform = settings.GetEditor_NavBlenderTransform();
+   m_transformPivot = static_cast<TransformPivot>(settings.GetEditor_TransformPivot());
    LoadSnapPreferences();
 }
 
@@ -2434,7 +2440,12 @@ void EditorUI::RenderUI()
          for (int i = 8; i < 12; i++)
             camViewLH[i] = -camViewLH[i];
       }
-      const Matrix3D prevTransform(transform);
+      const bool groupGizmo = UsesGroupGizmo();
+      Matrix3D groupMatrix;
+      if (groupGizmo)
+         groupMatrix = m_groupGizmo.active ? m_groupGizmo.current : GetGroupGizmoMatrix();
+      Matrix3D &gizmoMatrix = groupGizmo ? groupMatrix : transform;
+      const Matrix3D prevTransform(gizmoMatrix);
       ImGuizmo::OPERATION gizmoOperation = m_gizmoOperation;
       // A Wire Rail's route is 3D: its points keep the Z handle (the predefined views still restrict to their plane, below)
       const bool railPoints = m_pointEditPart && !m_pointEditCenter && gizmoOperation == ImGuizmo::TRANSLATE && m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive
@@ -2523,7 +2534,7 @@ void EditorUI::RenderUI()
       if (gizmoView != nullptr && !ImGuizmo::IsUsingAny() && !(io.MousePos.x >= gizmoView->rectMin.x && io.MousePos.y >= gizmoView->rectMin.y
             && io.MousePos.x < gizmoView->rectMin.x + gizmoView->rectSize.x && io.MousePos.y < gizmoView->rectMin.y + gizmoView->rectSize.y))
          imguiContext.HoveredId = gizmoView->itemId;
-      ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m), nullptr, snapPtr);
+      ImGuizmo::Manipulate(camViewLH, gizmoView != nullptr ? (float *)(secondaryProj.m) : (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(gizmoMatrix.m), nullptr, snapPtr);
       imguiContext.HoveredId = savedIds[0];
       imguiContext.HoveredIdPreviousFrame = savedIds[1];
       imguiContext.ActiveId = savedIds[2];
@@ -2536,7 +2547,7 @@ void EditorUI::RenderUI()
          ImGuizmo::SetDrawlist(ImGui::FindWindowByName("gizmo")->DrawList);
          ImGuizmo::SetOrthographic(m_camMode == ViewMode::DesktopBackdrop || (m_camMode == ViewMode::EditorCam && !m_perspectiveCam));
       }
-      if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
+      if (memcmp(gizmoMatrix.m, prevTransform.m, 16 * sizeof(float)) != 0)
       {
          // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
          if (!m_gizmoDragActive && m_table->m_liveBaseTable == nullptr)
@@ -2555,10 +2566,50 @@ void EditorUI::RenderUI()
             m_gizmoDragRecordId = m_undo.TopRecordId();
             m_lastUndoPart = nullptr;
             m_lastUndoId = 0x1000;
-            m_gizmoStartTransform = prevTransform;
+            m_gizmoStartTransform = groupGizmo ? transform : prevTransform;
             m_gizmoDragTranslate = (static_cast<int>(m_gizmoOperation) & (ImGuizmo::ROTATE | ImGuizmo::SCALE | ImGuizmo::SCALEU)) == 0 && !m_pointEditPart;
          }
-         SetSelectionTransform(transform);
+         if (groupGizmo)
+         {
+            if (!m_groupGizmo.active)
+            {
+               m_groupGizmo.active = true;
+               m_groupGizmo.start = prevTransform;
+               BeginSelectionXform(m_groupGizmo.xform);
+               m_groupGizmo.xform.pivot = vec3(prevTransform._41, prevTransform._42, prevTransform._43);
+               m_groupGizmo.yaw = 0.f;
+               m_groupGizmo.yawStep = 0.f;
+            }
+            m_groupGizmo.current = gizmoMatrix;
+            // What the gizmo did since the drag began, as a move of its origin and a linear map about it
+            Matrix3D inverse(m_groupGizmo.start);
+            inverse.Invert();
+            XformOp op;
+            op.linear = inverse * gizmoMatrix;
+            op.move = vec3(gizmoMatrix._41 - m_groupGizmo.start._41, gizmoMatrix._42 - m_groupGizmo.start._42, gizmoMatrix._43 - m_groupGizmo.start._43);
+            op.linear._41 = op.linear._42 = op.linear._43 = 0.f;
+            op.kind = (static_cast<int>(gizmoOperation) & ImGuizmo::ROTATE) != 0 ? XformKind::Rotate
+               : (static_cast<int>(gizmoOperation) & (ImGuizmo::SCALE | ImGuizmo::SCALEU)) != 0                ? XformKind::Scale
+                                                                                                                : XformKind::Move;
+            if (op.kind == XformKind::Rotate)
+            {
+               // The Z share read from the matrix is only known up to steps of 2 pi x the share: take the one nearest to the last frame, so a drag past a half turn goes on
+               float step;
+               op.yaw = YawOfRotation(op.linear, step);
+               if (fabsf(step) > 1e-4f)
+               {
+                  op.yaw += roundf((m_groupGizmo.yaw - op.yaw) / step) * step;
+                  m_groupGizmo.yawStep = step;
+               }
+               else if (step == 0.f) // On a full turn: a whole number of steps, the one nearest to the last frame
+                  op.yaw = fabsf(m_groupGizmo.yawStep) > 1e-4f ? roundf(m_groupGizmo.yaw / m_groupGizmo.yawStep) * m_groupGizmo.yawStep : m_groupGizmo.yaw;
+               op.hasYaw = true;
+               m_groupGizmo.yaw = op.yaw;
+            }
+            ApplySelectionXform(m_groupGizmo.xform, op);
+         }
+         else
+            SetSelectionTransform(transform);
       }
    }
    // A drag interrupted with the mouse still held (Alt+A, Esc hiding the gizmo, a modal transform starting, the table getting locked,...) is not manipulated
@@ -2585,8 +2636,19 @@ void EditorUI::RenderUI()
       {
          SetLastOperation(LastOperation::Type::Move, m_gizmoStartTransform);
          m_lastOp.offset = vec3(released._41 - m_gizmoStartTransform._41, released._42 - m_gizmoStartTransform._42, released._43 - m_gizmoStartTransform._43);
+         if (m_groupGizmo.active && !m_groupGizmo.xform.parts.empty())
+         {
+            // A group: adjusting re-evaluates the move from the snapshot of the drag, by the gizmo's own move (a part may not take all of it, a Bumper's Z for one)
+            m_lastOp.xform = m_groupGizmo.xform;
+            m_lastOp.offset = vec3(m_groupGizmo.current._41 - m_groupGizmo.start._41, m_groupGizmo.current._42 - m_groupGizmo.start._42, m_groupGizmo.current._43 - m_groupGizmo.start._43);
+         }
       }
       m_gizmoDragTranslate = false;
+   }
+   if (m_groupGizmo.active && (gizmoLost || !ImGuizmo::IsUsing()))
+   {
+      m_groupGizmo.active = false;
+      m_groupGizmo.xform = SelectionXform();
    }
 
    m_renderer->SetShadeMode(m_shadeMode);
@@ -5015,6 +5077,72 @@ namespace
       }
       return result;
    }
+   // Decompose a transform into the position/scale/rotation components used by the parts' SetTransform
+   void ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
+   {
+      const Vertex3Ds right(transform._11, transform._12, transform._13);
+      const Vertex3Ds up(transform._21, transform._22, transform._23);
+      const Vertex3Ds dir(transform._31, transform._32, transform._33);
+      scale.Set(max(right.Length(), 1e-8f), max(up.Length(), 1e-8f), max(dir.Length(), 1e-8f)); // Clamp to avoid division by zero
+
+      transform._11 /= scale.x; // Normalize transform to evaluate rotation
+      transform._12 /= scale.x;
+      transform._13 /= scale.x;
+      transform._21 /= scale.y;
+      transform._22 /= scale.y;
+      transform._23 /= scale.y;
+      transform._31 /= scale.z;
+      transform._32 /= scale.z;
+      transform._33 /= scale.z;
+
+      pos.Set(transform._41, transform._42, transform._43);
+
+      // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
+      const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
+      if (sy > 1e-6f)
+      {
+         rot.x = -RADTOANG(atan2f(transform._32, transform._33));
+         rot.y = -RADTOANG(atan2f(-transform._31, sy));
+         rot.z = -RADTOANG(atan2f(transform._21, transform._11));
+      }
+      else
+      {
+         rot.x = -RADTOANG(atan2f(transform._23, transform._22));
+         rot.y = -RADTOANG(atan2f(-transform._31, sy));
+         rot.z = 0.f;
+      }
+   }
+   // The part of a rotation matrix about the table Z axis (radians): all of it for a rotation about Z, none for one about an axis in the table plane, the axis' Z share between.
+   // A matrix only gives the angle up to a half turn: the same rotation is also angle + 2 pi m about the same axis, so the share is only known up to steps of 2 pi x the Z share
+   // (step), and a drag picks the candidate nearest to its previous frame
+   float YawOfRotation(const Matrix3D &l, float &step)
+   {
+      const float sx = 0.5f * (l._23 - l._32), sy = 0.5f * (l._31 - l._13), sz = 0.5f * (l._12 - l._21);
+      const float s = sqrtf(sx * sx + sy * sy + sz * sz), c = 0.5f * (l._11 + l._22 + l._33 - 1.f);
+      step = 2.f * static_cast<float>(M_PI);
+      if (s > 1e-5f)
+      {
+         step *= sz / s;
+         return atan2f(s, c) * sz / s;
+      }
+      if (c < 0.f) // A half turn: the axis comes from the diagonal
+      {
+         const float share = sqrtf(max(0.f, (l._33 - c) / (1.f - c)));
+         step *= share;
+         return static_cast<float>(M_PI) * share;
+      }
+      step = 0.f; // No turn, or a whole number of turns about an axis it does not give: the step is unknown
+      return 0.f;
+   }
+   // Rotation about the table Z axis, in YawOfRotation's sense
+   Matrix3D ZRotation(const float yaw)
+   {
+      Matrix3D result = Matrix3D::MatrixIdentity();
+      result._11 = result._22 = cosf(yaw);
+      result._12 = sinf(yaw);
+      result._21 = -result._12;
+      return result;
+   }
    // Transform scaled by a factor along its own axes: all of them (axis < 0), the given one, or the two others (plane)
    Matrix3D ScaledTransform(const Matrix3D &m0, const int axis, const bool plane, const float factor)
    {
@@ -5078,25 +5206,24 @@ void EditorUI::BeginModalTransform(ModalOp op)
       m_modal.textWindow = window;
    }
    m_modal.op = op;
+   BeginSelectionXform(m_modal.xform);
+   m_modal.applied.kind = op == ModalOp::Rotate ? XformKind::Rotate : op == ModalOp::Scale ? XformKind::Scale : XformKind::Move;
    if (op == ModalOp::Rotate)
    {
-      // Drag points keep X and Y only, curve and translation only parts keep no tilt: a free or X / Y axis rotation would lose its Z every frame and drift (the gizmo
-      // does the same with ROTATE_Z). Those rotate about the table Z axis
-      bool zOnly = m_pointEditPart != nullptr;
-      for (const auto &part : m_multiSel)
-      {
-         Matrix3D unused;
-         const int mask = static_cast<int>(part->GetTransform(unused));
-         zOnly |= mask != EditorUIPart::TM_None && (mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY); // (a part group has no transform of its own)
-      }
-      if (zOnly)
+      // Drag points and parts that keep no tilt can not follow an X or Y rotation: their positions still orbit the pivot, their own rotation stays (UpdateModalTransform
+      // says so). What is left to do, so that the keys do not look broken: nothing can orbit (points in their plane, one part or Individual Origins) means table Z only, and
+      // with no part able to tilt the free rotation is about the table Z, not the view axis
+      bool anyTilt = false;
+      for (const SelectionXform::Part &part : m_modal.xform.parts)
+         anyTilt |= (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
+      if (m_pointEditPart != nullptr || (!anyTilt && (m_modal.xform.parts.size() < 2 || m_modal.xform.individual)))
       {
          m_modal.axis = 2;
          m_modal.zOnly = true;
       }
+      m_modal.freeZ = !anyTilt;
    }
    m_modal.initial = initial;
-   m_modal.applied = initial;
    m_modal.startMouse = ImGui::GetMousePos();
    // Same undo record as a gizmo drag: one entry for the whole operation
    if (m_table->m_liveBaseTable == nullptr)
@@ -5132,7 +5259,11 @@ void EditorUI::EndModalTransform(const bool confirm)
       if (m_modal.hasUndo)
          RestoreUndoState(m_undo.Undo(false)); // Canceled: nothing to redo
       else
-         SetSelectionTransform(m_modal.initial, false, false, false, &m_modal.applied);
+      {
+         XformOp restore;
+         restore.kind = m_modal.applied.kind;
+         ApplySelectionXform(m_modal.xform, restore);
+      }
    }
    m_modal.active = false;
    FlushRubberDrag(); // After the restore of a canceled drag
@@ -5163,22 +5294,26 @@ void EditorUI::EndModalTransform(const bool confirm)
          case ModalOp::Grab:
             SetLastOperation(LastOperation::Type::Move, m_modal.initial);
             m_lastOp.offset = m_modal.lastDelta;
+            m_lastOp.xform = m_modal.xform;
             break;
          case ModalOp::Rotate:
             SetLastOperation(LastOperation::Type::Rotate, m_modal.initial);
-            m_lastOp.axis = m_modal.axis;
+            m_lastOp.axis = m_modal.axis < 0 && m_modal.freeZ ? 2 : m_modal.axis; // A free rotation that went about the table Z (no part can tilt) is shown as Z
             m_lastOp.axisView = m_modal.lastAxis;
             m_lastOp.angle = m_modal.lastAngle;
+            m_lastOp.xform = m_modal.xform;
             break;
          case ModalOp::Scale:
             SetLastOperation(LastOperation::Type::Scale, m_modal.initial);
             m_lastOp.axis = m_modal.axis;
             m_lastOp.plane = m_modal.plane;
             m_lastOp.factor = m_modal.lastFactor;
+            m_lastOp.xform = m_modal.xform;
             break;
          }
       }
    }
+   m_modal.xform = SelectionXform();
 }
 
 void EditorUI::UpdateModalTransform()
@@ -5276,7 +5411,7 @@ void EditorUI::UpdateModalTransform()
    view.Invert();
    const vec3 right = view.GetOrthoNormalRight(), up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), eye = view.GetOrthoNormalPos();
    const Matrix3D &m0 = m_modal.initial;
-   const vec3 pivot = FlipZ(vec3(m0._41, m0._42, m0._43));
+   const vec3 pivot = FlipZ(m_modal.xform.pivot);
    const float aspect = viewSize.x / viewSize.y;
    // Camera space point (right handed, see FlipZ) to the screen. The 3D Viewport's camera is a plain look at; a secondary view's can be any view setup of the table
    // (the player's: layback, off axis), so it projects with the model view projection its image was rendered with
@@ -5307,9 +5442,11 @@ void EditorUI::UpdateModalTransform()
       m_modal.startDist = max(curDist, 8.f);
    }
 
-   Matrix3D result(m0);
+   XformOp xformOp;
+   xformOp.kind = m_modal.applied.kind;
+   string partNote; // Parts that can not follow, said plainly
    const char *axisNames[] = { "X", "Y", "Z" };
-   const string axisText = m_modal.axis < 0 ? "" : string(m_modal.plane ? " -" : " ") + axisNames[m_modal.axis];
+   const string axisText = m_modal.axis < 0 ? (m_modal.freeZ && m_modal.op == ModalOp::Rotate ? " Z" : "") : string(m_modal.plane ? " -" : " ") + axisNames[m_modal.axis];
    char text[128];
    const char *snapText = "";
    switch (m_modal.op)
@@ -5394,9 +5531,7 @@ void EditorUI::UpdateModalTransform()
          }
          snapText = "  [snap]";
       }
-      result._41 += delta.x;
-      result._42 += delta.y;
-      result._43 += delta.z;
+      xformOp.move = delta;
       m_modal.lastDelta = delta;
       snprintf(text, sizeof(text), "Move%s  %.2f  %.2f  %.2f vpu%s%s%s", axisText.c_str(), delta.x, delta.y, delta.z, snapText, hasValue ? "   [" : "",
          hasValue ? (m_modal.typed + "]").c_str() : "");
@@ -5404,7 +5539,7 @@ void EditorUI::UpdateModalTransform()
    }
    case ModalOp::Rotate:
    {
-      const vec3 k = m_modal.axis < 0 ? dir : TableAxis(m_modal.axis);
+      const vec3 k = m_modal.axis >= 0 ? TableAxis(m_modal.axis) : m_modal.freeZ ? TableAxis(2) : dir;
       const float facing = k.Dot(dir) >= 0.f ? 1.f : -1.f;
       float angle = hasValue ? ANGTORAD(value) : -(curAngle - m_modal.startAngle) * facing;
       if (!hasValue && IsSnapActive(SnapKind::Rotate) && m_snapRotate > 0.f)
@@ -5412,10 +5547,28 @@ void EditorUI::UpdateModalTransform()
          angle = ANGTORAD(roundf(RADTOANG(angle) / m_snapRotate) * m_snapRotate);
          snapText = "  [snap]";
       }
-      result = RotatedTransform(m0, k, angle);
+      xformOp.linear = RotatedTransform(Matrix3D::MatrixIdentity(), k, angle);
+      xformOp.hasYaw = true;
+      xformOp.yaw = angle * k.z; // k is in camera space (FlipZ): its Z is minus the table one, which matches YawOfRotation's sense
       m_modal.lastAxis = k;
       m_modal.lastAngle = RADTOANG(angle);
       snprintf(text, sizeof(text), "Rotate%s  %.1f deg%s%s", axisText.c_str(), RADTOANG(angle), snapText, hasValue ? "   [typed]" : "");
+      if (fabsf(angle) > 1e-5f)
+      {
+         // Parts with only a Z rotation take the axis' table Z share of the turn: all of it about Z, none about an axis in the table plane
+         const bool aboutZ = fabsf(k.z) > 0.9999f, noZ = fabsf(k.z) < 1e-4f;
+         int stay = 0, zOnly = 0;
+         for (const SelectionXform::Part &part : m_modal.xform.parts)
+            if ((part.mask & EditorUIPart::TM_RotAny) == 0)
+               stay++;
+            else if (!aboutZ && (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) != (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY))
+               (noZ ? stay : zOnly)++;
+         const size_t count = m_modal.xform.parts.size();
+         if (stay > 0)
+            partNote = count == 1 ? "   (this part keeps its rotation)" : "   (" + std::to_string(stay) + " of " + std::to_string(count) + " keep their rotation)";
+         if (zOnly > 0)
+            partNote += count == 1 ? "   (this part only turns about Z)" : "   (" + std::to_string(zOnly) + " of " + std::to_string(count) + " only turn about Z)";
+      }
       break;
    }
    case ModalOp::Scale:
@@ -5428,17 +5581,32 @@ void EditorUI::UpdateModalTransform()
          factor = max(roundf(factor / m_snapScale) * m_snapScale, m_snapScale);
          snapText = "  [snap]";
       }
-      result = ScaledTransform(m0, m_modal.axis, m_modal.plane, factor); // Axes are the part's local ones
+      xformOp.linear = ScaledTransform(Matrix3D::MatrixIdentity(), m_modal.axis, m_modal.plane, factor);
+      xformOp.ownFrame = m_modal.xform.parts.size() == 1; // One part: along its own axes. Several: along the table's, each part's size following what its axes become
+      xformOp.negative = factor < 0.f;
       m_modal.lastFactor = factor;
       snprintf(text, sizeof(text), "Scale%s  %.3f%s%s", axisText.c_str(), factor, snapText, hasValue ? "   [typed]" : "");
+      if (fabsf(factor - 1.f) > 1e-5f)
+      {
+         // The scaled axes: all (a uniform scale also reaches the parts that only scale as a whole), the given one, or the two others (plane)
+         int scaled = m_modal.axis < 0 ? EditorUIPart::TM_ScaleAll : 0;
+         for (int i = 0; i < 3; i++)
+            if (m_modal.axis < 0 || (m_modal.plane ? i != m_modal.axis : i == m_modal.axis))
+               scaled |= EditorUIPart::TM_ScaleX << i;
+         int stay = 0;
+         for (const SelectionXform::Part &part : m_modal.xform.parts)
+            stay += (part.mask & scaled) == 0;
+         if (stay > 0)
+            partNote = m_modal.xform.parts.size() == 1 ? "   (this part keeps its size)" : "   (" + std::to_string(stay) + " of " + std::to_string(m_modal.xform.parts.size()) + " keep their size)";
+      }
       break;
    }
    }
-   m_modal.hud = text;
-   if (memcmp(result.m, m_modal.applied.m, sizeof(result.m)) != 0) // Nothing to apply while the mouse rests
+   m_modal.hud = text + partNote;
+   if (!(xformOp == m_modal.applied)) // Nothing to apply while the mouse rests
    {
-      SetSelectionTransform(result, false, false, false, &m_modal.applied);
-      m_modal.applied = result;
+      ApplySelectionXform(m_modal.xform, xformOp);
+      m_modal.applied = xformOp;
    }
 }
 
@@ -5890,7 +6058,246 @@ void EditorUI::ClearSelectionTransform(const Matrix3D &transform, bool clearPosi
    SetSelectionTransform(transform, clearPosition, clearScale, clearRotation);
 }
 
-void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation, const Matrix3D *reference)
+void EditorUI::SetTransformPivot(const TransformPivot pivot)
+{
+   m_transformPivot = pivot;
+   g_settingsService.GetAppSettings().SetEditor_TransformPivot(static_cast<int>(pivot), false);
+}
+
+vec3 EditorUI::GetTransformPivotPoint() const
+{
+   vec3 sum(0.f, 0.f, 0.f), low(FLT_MAX, FLT_MAX, FLT_MAX), high(-FLT_MAX, -FLT_MAX, -FLT_MAX), active(0.f, 0.f, 0.f);
+   int count = 0;
+   const auto add = [&](const vec3 &p)
+   {
+      sum = sum + p;
+      low.Set(min(low.x, p.x), min(low.y, p.y), min(low.z, p.z));
+      high.Set(max(high.x, p.x), max(high.y, p.y), max(high.z, p.z));
+      count++;
+   };
+   if (m_pointEditPart != nullptr)
+   {
+      if (m_pointEditCenter)
+         return m_pointEditPart->GetEditCenter();
+      for (const DragPoint *point : m_pointSel)
+         add(active = vec3(point->GetX(), point->GetY(), m_pointEditPart->GetDragPointZ(point))); // The active point is the last one selected
+   }
+   else
+      for (const auto &part : m_multiSel)
+      {
+         Matrix3D transform;
+         if (part->GetTransform(transform) == EditorUIPart::TM_None)
+            continue;
+         add(transform.GetOrthoNormalPos());
+         if (part == m_selection.GetPart())
+            active = transform.GetOrthoNormalPos();
+      }
+   if (count == 0)
+      return active;
+   switch (m_transformPivot)
+   {
+   case TransformPivot::ActiveElement: return active;
+   case TransformPivot::BoundingBoxCenter: return (low + high) * 0.5f;
+   default: return sum * (1.f / static_cast<float>(count));
+   }
+}
+
+bool EditorUI::UsesGroupGizmo() const
+{
+   if (m_pointEditPart != nullptr)
+      return true;
+   int count = 0;
+   for (const auto &part : m_multiSel)
+   {
+      Matrix3D transform;
+      count += part->GetTransform(transform) != EditorUIPart::TM_None;
+      if (count > 1)
+         return true;
+   }
+   return false;
+}
+
+Matrix3D EditorUI::GetGroupGizmoMatrix() const
+{
+   Matrix3D result = Matrix3D::MatrixIdentity();
+   Matrix3D active;
+   if (m_gizmoMode == ImGuizmo::LOCAL && m_pointEditPart == nullptr && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart()->GetTransform(active) != EditorUIPart::TM_None)
+   {
+      vec3 pos, scale, rot;
+      ExtractTRS(active, pos, scale, rot);
+      const float s[3] = { 1.f / scale.x, 1.f / scale.y, 1.f / scale.z };
+      for (int i = 0; i < 3; i++)
+         for (int j = 0; j < 3; j++)
+            result.m[i][j] = active.m[i][j] * s[i];
+   }
+   const vec3 pivot = GetTransformPivotPoint();
+   result._41 = pivot.x;
+   result._42 = pivot.y;
+   result._43 = pivot.z;
+   return result;
+}
+
+void EditorUI::BeginSelectionXform(SelectionXform &xform) const
+{
+   xform = SelectionXform();
+   xform.pivot = GetTransformPivotPoint();
+   if (m_pointEditPart != nullptr)
+   {
+      xform.centerEdit = m_pointEditCenter;
+      xform.rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
+      if (!m_pointEditCenter)
+         for (DragPoint *point : m_pointSel)
+            xform.points.push_back({ point, point->GetX(), point->GetY(), point->GetZ(), m_pointEditPart->GetDragPointZ(point) });
+      return;
+   }
+   xform.individual = m_transformPivot == TransformPivot::IndividualOrigins;
+   for (const auto &uiPart : m_multiSel)
+   {
+      Matrix3D start;
+      const int mask = static_cast<int>(uiPart->GetTransform(start));
+      if (mask == EditorUIPart::TM_None)
+         continue;
+      SelectionXform::Part part;
+      part.part = uiPart;
+      part.mask = mask;
+      ExtractTRS(start, part.pos, part.scale, part.rot);
+      part.axes = Matrix3D::MatrixIdentity();
+      const float s[3] = { 1.f / part.scale.x, 1.f / part.scale.y, 1.f / part.scale.z };
+      for (int i = 0; i < 3; i++)
+         for (int j = 0; j < 3; j++)
+            part.axes.m[i][j] = start.m[i][j] * s[i];
+      xform.parts.push_back(part);
+   }
+}
+
+void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &op)
+{
+   if (m_pointEditPart != nullptr)
+   {
+      // Points keep X and Y (their Z is the part's, but for a Wire Rail): rotations are about the table Z here (see BeginModalTransform), and a point's data is its position
+      if (xform.centerEdit)
+      {
+         const vec3 c = vec3(xform.pivot.x + op.move.x, xform.pivot.y + op.move.y, 0.f);
+         m_pointEditPart->SetEditCenter(Vertex2D(c.x, c.y));
+      }
+      else
+      {
+         for (const SelectionXform::Point &point : xform.points)
+         {
+            const float dz = xform.rail ? point.viewZ - xform.pivot.z : 0.f;
+            const Vertex3Ds v = op.linear.MultiplyVectorNoTranslate(Vertex3Ds(point.x - xform.pivot.x, point.y - xform.pivot.y, dz));
+            point.point->SetX(xform.pivot.x + v.x + op.move.x);
+            point.point->SetY(xform.pivot.y + v.y + op.move.y);
+            if (xform.rail)
+               point.point->SetZ(point.z + v.z - dz + op.move.z);
+         }
+         m_pointEditPart->GetDragPointCurve()->OnPointsModified();
+         DetachRubberRefs(m_pointEditPart->GetEditable());
+      }
+      m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
+      m_renderer->InvalidateShadowContent();
+      m_player->m_physics->Update(m_pointEditPart->GetEditable());
+      return;
+   }
+   for (const SelectionXform::Part &part : xform.parts)
+   {
+      Matrix3D l = op.linear;
+      vec3 move = op.move;
+      if (op.ownFrame)
+      {
+         Matrix3D toFrame = Matrix3D::MatrixIdentity();
+         for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+               toFrame.m[i][j] = part.axes.m[j][i];
+         l = toFrame * op.linear * part.axes;
+         move = part.axes.MultiplyVectorNoTranslate(op.move);
+      }
+      const vec3 c = xform.individual ? part.pos : xform.pivot;
+      const vec3 pos = c + vec3(l.MultiplyVectorNoTranslate(part.pos - c)) + move;
+      vec3 scale = part.scale, rot = part.rot;
+      if (op.kind == XformKind::Rotate)
+      {
+         // Parts with a full rotation take L. A part with only a Z rotation takes what L has about the table Z (see YawOfRotation), a part with none keeps its own
+         if ((part.mask & EditorUIPart::TM_RotAny) != 0)
+         {
+            float step;
+            const Matrix3D rotation = (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY) ? l
+               : ZRotation(op.hasYaw ? op.yaw : YawOfRotation(l, step));
+            vec3 unusedPos, unusedScale;
+            ExtractTRS(part.axes * rotation, unusedPos, unusedScale, rot);
+         }
+      }
+      else if (op.kind == XformKind::Scale)
+      {
+         // The rotation is kept and the parts do not shear: a part's size along each of its axes is the length L gives that axis (Blender does the same to objects).
+         // A negative factor is not stored as a mirror: the scaled axes are read back as a rotation and positive sizes, as the editor always did (a negative size
+         // would render inside out with backface culling, and read back as a half turn by the next transform). Two reversed axes (a plane) are a half turn
+         const float det = l._11 * (l._22 * l._33 - l._23 * l._32) - l._12 * (l._21 * l._33 - l._23 * l._31) + l._13 * (l._21 * l._32 - l._22 * l._31);
+         if (op.negative || det < 0.f)
+         {
+            Matrix3D m = Matrix3D::MatrixIdentity();
+            const float axisScale[3] = { part.scale.x, part.scale.y, part.scale.z };
+            for (int i = 0; i < 3; i++)
+            {
+               const vec3 axis = vec3(l.MultiplyVectorNoTranslate(vec3(part.axes.m[i][0], part.axes.m[i][1], part.axes.m[i][2]))) * axisScale[i];
+               m.m[i][0] = axis.x;
+               m.m[i][1] = axis.y;
+               m.m[i][2] = axis.z;
+            }
+            vec3 unusedPos;
+            ExtractTRS(m, unusedPos, scale, rot);
+         }
+         else
+         {
+            const float axisScale[3] = { part.scale.x, part.scale.y, part.scale.z };
+            float out[3];
+            for (int i = 0; i < 3; i++)
+               out[i] = axisScale[i] * max(vec3(l.MultiplyVectorNoTranslate(vec3(part.axes.m[i][0], part.axes.m[i][1], part.axes.m[i][2]))).Length(), 1e-8f);
+            scale.Set(out[0], out[1], out[2]);
+         }
+      }
+      ApplyPartTRS(part.part, pos, scale, rot);
+   }
+   DetachSelectedRubbersFromUnselectedPosts();
+   RefitSelectionDependents();
+}
+
+void EditorUI::ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec3 &pos, const vec3 &scale, const vec3 &rot)
+{
+   IEditable *const edit = part->GetEditable();
+   Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<Primitive *>(edit) : nullptr;
+   const bool generated = prim != nullptr && (prim->m_d.m_plasticGen || prim->m_d.m_wireGen);
+   // In a drag, a wire or a plastic is drawn under a matrix too (with its companions), its mesh is rebuilt at the drag end (FlushDrag)
+   const bool deferred = generated && (m_modal.active || m_gizmoDragActive) && prim->CanDeferGenMesh();
+   if (generated)
+      prim->m_genDragDefer = deferred;
+   part->SetTransform(pos, scale, rot);
+   if (generated)
+      prim->m_genDragDefer = false;
+   if (prim == nullptr || !prim->IsTransformedByMatrix() || (generated && !deferred)) // A primitive is drawn under its matrix (a generated one was rebuilt, its static buffer can only be replaced)
+      m_renderer->ReinitRenderable(edit->GetIRenderable());
+   if (m_modal.active || m_gizmoDragActive)
+   {
+      // Per frame while dragging: the static shadow pages and the gameplay colliders follow at the drag end (FlushDrag)
+      m_drag.shadowDirty = true;
+      // The collider overlay shows the gameplay colliders: while it is on, the dragged parts' colliders follow per frame (1-2 ms each)
+      // Above kMaxLiveColliderParts dragged parts (~1.7 ms each) the per-frame rebuild is skipped: the overlay catches up at the drag end (FlushDrag)
+      constexpr size_t kMaxLiveColliderParts = 32;
+      if (m_physOverlay != PhysicOverlay::None && m_multiSel.size() <= kMaxLiveColliderParts)
+         m_player->m_physics->Update(edit);
+      else
+         m_player->m_physics->UpdateUI(edit);
+      if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
+         m_drag.pendingPhysics.push_back(edit);
+   }
+   else
+   {
+      m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
+      m_player->m_physics->Update(edit);
+   }
+}
+
+void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation)
 {
    if (m_pointEditPart)
    {
@@ -5902,8 +6309,6 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             return;
          Matrix3D oldTransform;
          GetSelectionTransform(oldTransform);
-         if (reference != nullptr)
-            oldTransform = *reference; // The reported transform is the center / centroid only: it does not carry a rotation or a scale already applied
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
@@ -5916,8 +6321,6 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
             return;
          Matrix3D oldTransform;
          GetSelectionTransform(oldTransform);
-         if (reference != nullptr)
-            oldTransform = *reference; // See above
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
@@ -5942,83 +6345,17 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
    if (m_selection.GetType() != Selection::S_EDITABLE)
       return;
 
-   // Decompose a transform into the position/scale/rotation components used by the parts' SetTransform
-   const auto extractTRS = [](Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
-   {
-      const Vertex3Ds right(transform._11, transform._12, transform._13);
-      const Vertex3Ds up(transform._21, transform._22, transform._23);
-      const Vertex3Ds dir(transform._31, transform._32, transform._33);
-      scale.Set(max(right.Length(), 1e-8f), max(up.Length(), 1e-8f), max(dir.Length(), 1e-8f)); // Clamp to avoid division by zero
-
-      transform._11 /= scale.x; // Normalize transform to evaluate rotation
-      transform._12 /= scale.x;
-      transform._13 /= scale.x;
-      transform._21 /= scale.y;
-      transform._22 /= scale.y;
-      transform._23 /= scale.y;
-      transform._31 /= scale.z;
-      transform._32 /= scale.z;
-      transform._33 /= scale.z;
-
-      pos.Set(transform._41, transform._42, transform._43);
-
-      // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
-      const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
-      if (sy > 1e-6f)
-      {
-         rot.x = -RADTOANG(atan2f(transform._32, transform._33));
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = -RADTOANG(atan2f(transform._21, transform._11));
-      }
-      else
-      {
-         rot.x = -RADTOANG(atan2f(transform._23, transform._22));
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = 0.f;
-      }
-   };
-
-   const auto applyTransform = [this, &extractTRS](const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot)
+   const auto applyTransform = [this](const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot)
    {
       vec3 pos, scale, rot;
-      extractTRS(partTransform, pos, scale, rot);
+      ExtractTRS(partTransform, pos, scale, rot);
       if (clearPos)
          pos.Set(0.f, 0.f, 0.f);
       if (clearScale)
          scale.Set(1.f, 1.f, 1.f);
       if (clearRot)
          rot.Set(0.f, 0.f, 0.f);
-      IEditable *const edit = part->GetEditable();
-      Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<Primitive *>(edit) : nullptr;
-      const bool generated = prim != nullptr && (prim->m_d.m_plasticGen || prim->m_d.m_wireGen);
-      // In a drag, a wire or a plastic is drawn under a matrix too (with its companions), its mesh is rebuilt at the drag end (FlushDrag)
-      const bool deferred = generated && (m_modal.active || m_gizmoDragActive) && prim->CanDeferGenMesh();
-      if (generated)
-         prim->m_genDragDefer = deferred;
-      part->SetTransform(pos, scale, rot);
-      if (generated)
-         prim->m_genDragDefer = false;
-      if (prim == nullptr || !prim->IsTransformedByMatrix() || (generated && !deferred)) // A primitive is drawn under its matrix (a generated one was rebuilt, its static buffer can only be replaced)
-         m_renderer->ReinitRenderable(edit->GetIRenderable());
-      if (m_modal.active || m_gizmoDragActive)
-      {
-         // Per frame while dragging: the static shadow pages and the gameplay colliders follow at the drag end (FlushDrag)
-         m_drag.shadowDirty = true;
-         // The collider overlay shows the gameplay colliders: while it is on, the dragged parts' colliders follow per frame (1-2 ms each)
-         // Above kMaxLiveColliderParts dragged parts (~1.7 ms each) the per-frame rebuild is skipped: the overlay catches up at the drag end (FlushDrag)
-         constexpr size_t kMaxLiveColliderParts = 32;
-         if (m_physOverlay != PhysicOverlay::None && m_multiSel.size() <= kMaxLiveColliderParts)
-            m_player->m_physics->Update(edit);
-         else
-            m_player->m_physics->UpdateUI(edit);
-         if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
-            m_drag.pendingPhysics.push_back(edit);
-      }
-      else
-      {
-         m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
-         m_player->m_physics->Update(edit);
-      }
+      ApplyPartTRS(part, pos, scale, rot);
    };
 
    if (clearPosition || clearScale || clearRotation)
@@ -6039,8 +6376,6 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
    // Apply the active part's transform delta to every selected part
    Matrix3D delta;
    m_selection.GetPart()->GetTransform(delta);
-   if (reference != nullptr)
-      delta = *reference; // The active part may not report (or keep) the rotation or scale applied to the others (translation only parts, curve parts without a Z scale): the delta is taken from the last applied transform
    delta.Invert();
    delta = delta * newTransform;
    for (const auto &part : m_multiSel)
@@ -6485,12 +6820,38 @@ void EditorUI::ApplyLastOperation()
       result._43 = m_lastOp.base.z + m_lastOp.offset.z;
       break;
    case LastOperation::Type::Move:
+      if (!m_lastOp.xform.parts.empty())
+      {
+         XformOp op;
+         op.move = m_lastOp.offset;
+         ApplySelectionXform(m_lastOp.xform, op);
+         return;
+      }
       result._41 += m_lastOp.offset.x;
       result._42 += m_lastOp.offset.y;
       result._43 += m_lastOp.offset.z;
       break;
-   case LastOperation::Type::Rotate: result = RotatedTransform(m_lastOp.initial, m_lastOp.axis < 0 ? m_lastOp.axisView : TableAxis(m_lastOp.axis), ANGTORAD(m_lastOp.angle)); break;
-   case LastOperation::Type::Scale: result = ScaledTransform(m_lastOp.initial, m_lastOp.axis, m_lastOp.plane, m_lastOp.factor); break;
+   case LastOperation::Type::Rotate:
+   {
+      XformOp op;
+      op.kind = XformKind::Rotate;
+      const vec3 k = m_lastOp.axis < 0 ? m_lastOp.axisView : TableAxis(m_lastOp.axis);
+      op.linear = RotatedTransform(Matrix3D::MatrixIdentity(), k, ANGTORAD(m_lastOp.angle));
+      op.hasYaw = true;
+      op.yaw = ANGTORAD(m_lastOp.angle) * k.z; // See UpdateModalTransform
+      ApplySelectionXform(m_lastOp.xform, op);
+      return;
+   }
+   case LastOperation::Type::Scale:
+   {
+      XformOp op;
+      op.kind = XformKind::Scale;
+      op.linear = ScaledTransform(Matrix3D::MatrixIdentity(), m_lastOp.axis, m_lastOp.plane, m_lastOp.factor);
+      op.ownFrame = m_lastOp.xform.parts.size() == 1;
+      op.negative = m_lastOp.factor < 0.f;
+      ApplySelectionXform(m_lastOp.xform, op);
+      return;
+   }
    case LastOperation::Type::RubberBetweenPosts:
    {
       // The created rubber is the selection: refit it in place (the undo record of its creation is unchanged)

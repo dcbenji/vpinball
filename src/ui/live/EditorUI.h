@@ -297,6 +297,50 @@ private:
    bool IsSnapActive(SnapKind kind) const; // Snapping enabled (inverted while Ctrl is held) and applying to the kind of transform
    void ToggleSnapping();
 
+   // A transform of the selection evaluated from a snapshot taken when it began, not from the state of the previous frame: parts that lose what they can not store (the Z of
+   // drag points, the tilt of a Wall, the Z of a Bumper) can not drift, and every frame's result only depends on the operation's current value. p' = c + (p - c) * L + move, with
+   // c the pivot (or the part's own origin with Individual Origins), and the part's own rotation or scale following L as far as it can store them (see ApplySelectionXform)
+   enum class XformKind { Move, Rotate, Scale };
+   struct XformOp
+   {
+      XformKind kind = XformKind::Move;
+      Matrix3D linear = Matrix3D::MatrixIdentity(); // L, in table axes
+      vec3 move { 0.f, 0.f, 0.f };
+      bool ownFrame = false; // linear and move are given in each part's own axes
+      // Rotate: the turn about the table Z (radians) of the parts that only store a Z rotation, angle x the axis' table Z share. Read back from linear when not given (the
+      // gizmo), which only holds it up to a half turn
+      bool hasYaw = false;
+      float yaw = 0.f;
+      bool negative = false; // Scale: a negative factor (it may reverse two axes, which no determinant shows): the scaled axes are read back as a rotation
+      bool operator==(const XformOp &o) const
+      {
+         return kind == o.kind && ownFrame == o.ownFrame && hasYaw == o.hasYaw && yaw == o.yaw && negative == o.negative && move.x == o.move.x && move.y == o.move.y && move.z == o.move.z
+            && memcmp(linear.m, o.linear.m, sizeof(linear.m)) == 0;
+      }
+   };
+   struct SelectionXform
+   {
+      struct Part
+      {
+         std::shared_ptr<EditorUIPart> part;
+         int mask = 0;
+         vec3 pos, scale, rot;
+         Matrix3D axes; // Unit rows: the part's own axes in table coordinates
+      };
+      vector<Part> parts;
+      struct Point
+      {
+         DragPoint *point;
+         float x, y, z; // z: the point's own Z (a Wire Rail's route is 3D)
+         float viewZ; // The height it is drawn at (GetDragPointZ)
+      };
+      vector<Point> points;
+      bool rail = false; // A Wire Rail's points also take Z
+      bool centerEdit = false;
+      vec3 pivot { 0.f, 0.f, 0.f };
+      bool individual = false; // Each part about its own origin
+   };
+
    // Adjust Last Operation (Blender's redo panel, F9): the parameters of the last move / rotate / scale / duplicate / paste / add part,
    // editable as long as nothing else happened (no new undo step, same selection). Adjusting re-evaluates the operation from the state it
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
@@ -314,6 +358,7 @@ private:
       bool plane = false; // Scale: the axes perpendicular to the axis
       float angle = 0.f; // Degrees
       float factor = 1.f;
+      SelectionXform xform; // Move, rotate, scale from G / R / S: the selection the operation is evaluated from
       int rbThickness = 8; // Guided rubber: the created or bound rubber is the selection, adjusting refits it in place
       float rbHeight = 25.f;
       float rbRoundness = 0.f;
@@ -515,6 +560,28 @@ private:
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds, const LocalViewParts *local = nullptr) const; // With a Local View, only the selected parts it shows
 
+   // Transform Pivot Point (Blender's header dropdown): where R and S happen on the selection. All modes use the parts' origins (their reported transforms), never their
+   // geometry, as Blender does in Object Mode; with one part they are all the part's origin. In point edit they use the selected points (Individual Origins = Median)
+   enum class TransformPivot { MedianPoint, ActiveElement, IndividualOrigins, BoundingBoxCenter };
+   TransformPivot m_transformPivot = TransformPivot::MedianPoint;
+   void SetTransformPivot(TransformPivot pivot);
+   vec3 GetTransformPivotPoint() const; // Table coordinates; the gizmo and the mouse of a modal transform work around it (with Individual Origins, the median)
+
+   void BeginSelectionXform(SelectionXform &xform) const;
+   void ApplySelectionXform(const SelectionXform &xform, const XformOp &op);
+   void ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec3 &pos, const vec3 &scale, const vec3 &rot);
+   // The gizmo of a selection that does not transform as one part (several parts, drag points): it sits on the pivot and has no scale, what it does is read back as an XformOp
+   struct GroupGizmo
+   {
+      bool active = false; // A drag runs: its matrix lives here
+      Matrix3D start, current;
+      SelectionXform xform;
+      float yaw = 0.f; // The table Z turn of the last frame: the next one is taken nearest to it (continuous past a half turn)
+      float yawStep = 0.f; // The last known step between the candidates (2 pi x the Z share), for a frame on a full turn, which does not give it
+   } m_groupGizmo;
+   bool UsesGroupGizmo() const;
+   Matrix3D GetGroupGizmoMatrix() const;
+
    // Blender style modal transform (G / R / S then move the mouse, X / Y / Z to constrain to an axis (Shift for the plane
    // perpendicular to it), type a number for an exact value, Enter / left click to confirm, Esc / right click to cancel)
    enum class ModalOp { Grab, Rotate, Scale };
@@ -532,8 +599,10 @@ private:
       ImVec2 startMouse;
       float startAngle = 0.f, startDist = 1.f; // Angle and distance of the start mouse position around the pivot on screen
       Matrix3D initial; // Selection transform when the operation began
-      bool zOnly = false; // Rotation fixed to the table Z axis (parts that can not keep a tilted one)
-      Matrix3D applied; // The last one set (the reported selection transform does not carry a rotation or scale for drag points and translation only parts)
+      bool zOnly = false; // Rotation fixed to the table Z axis: an X or Y one would change nothing (drag points, a part that can not tilt turning on its own)
+      bool freeZ = false; // No axis means the table Z, not the view axis: no part in the selection takes a tilt
+      SelectionXform xform; // The selection when the operation began
+      XformOp applied; // The last one set
       struct SDL_Window *textWindow = nullptr; // The window whose text input this modal turned on
       vec3 duplicateOrigin { 0.f, 0.f, 0.f }; // Position of the duplicated selection
       bool duplicate = false; // Grab following a duplicate: its undo record is folded into the one of the paste on confirmation
@@ -565,7 +634,7 @@ private:
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
    bool IsNumpadPressed(int digit, bool repeat = true) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
-   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false, const Matrix3D *reference = nullptr); // reference: the transform the part selection was last set to, when the reported one does not carry it (see UpdateModalTransform)
+   void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false);
 
    // Editor camera
    ViewMode m_camMode = ViewMode::PreviewCam;

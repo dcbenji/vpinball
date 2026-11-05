@@ -451,6 +451,9 @@ void CameraPreviewPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          m_refresh = true;
       }
 
+      // Left of the shading, as in the 3D Viewport header
+      nextItem(EditorChrome::TransformHeaderRowWidth());
+      EditorChrome::TransformHeaderRow("##ViewTransform", m_editor);
       nextItem(EditorChrome::ShadeIconRowWidth(true));
       int shadeMode = m_settings.wireframe ? 0 : m_settings.solid ? 1 : 2;
       if (EditorChrome::ShadeIconRow("##ViewShading", shadeMode, &m_settings.shade, &m_editor))

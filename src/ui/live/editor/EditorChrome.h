@@ -42,6 +42,10 @@ public:
    // xray = its wireframe X-Ray, kept in its shade mode; a secondary view leaves it null: options->xray). The popover changes `options` (and *xray) in place
    static bool ShadeIconRow(const char *id, int &mode, ViewShadeOptions *options = nullptr, EditorUI *editor = nullptr, bool *xray = nullptr);
    static float ShadeIconRowWidth(bool withCaret = false); // Width of the row, for placing it
+   // Blender's transform controls of the 3D view header: the Transform Pivot Point dropdown (Global editor setting, each view's header shows the same one)
+   static void TransformHeaderRow(const char *id, EditorUI &editor);
+   static float TransformHeaderRowWidth(); // Width of the row, for placing it
+   static void DrawPivotIcon(ImDrawList *dl, const ImVec2 &center, float size, int pivot, ImU32 color, ImU32 dim); // pivot: EditorUI::TransformPivot
 
    void Render(bool showFullUI);
    float GetTopBarHeight() const { return m_menuBarHeight + m_toolBarHeight; }
