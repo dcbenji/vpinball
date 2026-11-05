@@ -23,7 +23,7 @@ public:
    UndoRecord();
    ~UndoRecord();
 
-   void MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject = true);
+   void MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject = true, std::any frame = {});
    bool IsMarked(IEditable *const pie) const { return FindIndexOf(m_vieMark, pie) != -1 || FindIndexOf(m_vieCreate, pie) != -1; }
    void MarkForCreate(IEditable *const pie);
    void MarkForDelete(IEditable *const pie);
@@ -40,6 +40,7 @@ public:
    size_t m_cleanpointAtBegin = 0;
    SaveDirtyState m_dirtyStateAtBegin = SaveDirtyState::Clean;
    vector<std::unique_ptr<InMemStream>> m_vstm;
+   vector<std::any> m_vframe; // Editor frame of each saved part (parallel to m_vstm), see PinUndo::SetPartFrameHooks
    vector<IEditable *> m_vieCreate;
    vector<IEditable *> m_vieDelete;
    vector<IEditable *> m_vieMark;
@@ -93,7 +94,7 @@ string UndoRecord::Label() const
    return "Edit";
 }
 
-void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject)
+void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bool noteSubject, std::any frame)
 {
    if (FindIndexOf(m_vieMark, pie) != -1) // Been marked already
       return;
@@ -113,6 +114,7 @@ void UndoRecord::MarkForUndo(IEditable *const pie, const bool saveForUndo, const
    pie->Save(writer, saveForUndo);
 
    m_vstm.push_back(std::move(pstm));
+   m_vframe.push_back(std::move(frame));
 }
 
 void UndoRecord::MarkForCreate(IEditable *const pie)
@@ -162,6 +164,7 @@ bool PinUndo::MergeLastIntoPrevious()
    // Only part edits can be folded in (the previous record keeps the older snapshot of the parts it already holds)
    if (!last.m_vieCreate.empty() || !last.m_vieDelete.empty() || !last.m_actions.empty())
       return false;
+   assert(last.m_vframe.size() == last.m_vstm.size() && prev.m_vframe.size() == prev.m_vstm.size());
    for (size_t i = 0; i < last.m_vieMark.size(); i++)
    {
       IEditable *const pie = last.m_vieMark[i];
@@ -169,6 +172,7 @@ bool PinUndo::MergeLastIntoPrevious()
          continue;
       prev.m_vieMark.push_back(pie);
       prev.m_vstm.push_back(std::move(last.m_vstm[i]));
+      prev.m_vframe.push_back(std::move(last.m_vframe[i]));
    }
    m_undoRecords.pop_back();
    if (m_cleanpoint != NoCleanPoint && m_cleanpoint > m_undoRecords.size())
@@ -283,7 +287,10 @@ void PinUndo::MarkForUndo(IEditable *const pie, const bool saveForUndo, const bo
 
    if (m_partStateSync && !m_undoRecords.back()->IsMarked(pie)) // Only the first mark of a part in the record saves it
       m_partStateSync(pie, false);
-   m_undoRecords.back()->MarkForUndo(pie, saveForUndo, noteSubject);
+   std::any frame;
+   if (m_partFrameCapture && !m_undoRecords.back()->IsMarked(pie))
+      frame = m_partFrameCapture(pie);
+   m_undoRecords.back()->MarkForUndo(pie, saveForUndo, noteSubject, std::move(frame));
 }
 
 void PinUndo::MarkForCreate(IEditable *const pie)
@@ -485,8 +492,10 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
       }
    }
 
-   for (const auto &pstm : record.m_vstm)
+   assert(record.m_vframe.size() == record.m_vstm.size());
+   for (size_t i = 0; i < record.m_vstm.size(); i++)
    {
+      const auto &pstm = record.m_vstm[i];
       IEditable *const pie = *reinterpret_cast<IEditable *const *>(pstm->Data());
       if (inverse && FindIndexOf(inverse->m_vieCreate, pie) == -1) // Parts that are deleted again by the inverse need no snapshot
       {
@@ -499,9 +508,12 @@ std::any PinUndo::ApplyRecord(UndoRecord &record, const bool buildInverse, std::
          pie->Save(inverseWriter, true);
          inverse->m_vieMark.push_back(pie);
          inverse->m_vstm.push_back(std::move(inverseStm));
+         inverse->m_vframe.push_back(m_partFrameCapture ? m_partFrameCapture(pie) : std::any());
       }
       BiffReader reader(pstm->Data() + sizeof(IEditable *), static_cast<uint32_t>(pstm->Size() - sizeof(IEditable *)), CURRENT_FILE_FORMAT_VERSION, nullptr, 0);
       OverwritePart(pie, reader);
+      if (m_partFrameRestore && record.m_vframe[i].has_value())
+         m_partFrameRestore(pie, record.m_vframe[i]);
    }
 
    record.m_ownsCreateRefs = false; // Uncreate drops the creation references

@@ -126,6 +126,26 @@ EditorUI::EditorUI(LiveUI &liveUI)
             }
       });
 
+   // The rotation & scale frame of a curve part is editor state outside the saved part: records keep it with the part
+   m_undo.SetPartFrameHooks(
+      [this](IEditable *part) -> std::any
+      {
+         for (const auto &uiPart : m_editables)
+            if (uiPart->GetEditable() == part)
+               return uiPart->GetCurveFrame();
+         return {};
+      },
+      [this](IEditable *part, const std::any &frame)
+      {
+         for (const auto &uiPart : m_editables)
+            if (uiPart->GetEditable() == part)
+            {
+               if (const auto *curveFrame = std::any_cast<EditorUIPart::CurveFrame>(&frame))
+                  uiPart->SetCurveFrame(*curveFrame);
+               break;
+            }
+      });
+
    ClearSelection();
    LoadNavPreferences();
 

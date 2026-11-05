@@ -126,6 +126,16 @@ public:
    // The part was just mirrored across a line (Object > Mirror): the rotation its gizmo reports follows
    void OnMirrored() { m_curveRot = -m_curveRot; }
 
+   // The rotation & scale frame tracked for a curve part (see GetCurveTransform). It is editor state, not part data (never saved in the table), so an undo record
+   // keeps it next to the saved part and gives it back when the part is restored
+   struct CurveFrame
+   {
+      Vertex2D scale;
+      float rot;
+   };
+   CurveFrame GetCurveFrame() const { return { m_curveScale, m_curveRot }; }
+   void SetCurveFrame(const CurveFrame& frame) { m_curveScale = frame.scale; m_curveRot = frame.rot; }
+
    // Drag point edit mode: the editor sets the context while this part's curve is being edited
    void SetPointEditContext(DragPointEditContext* ctx) { m_pointEditCtx = ctx; }
 

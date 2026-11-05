@@ -63,6 +63,15 @@ public:
    // (part, true) right after a record was loaded back into it. The editor uses it to snapshot / restore the authored visibility instead of its display state
    void SetPartStateSync(const std::function<void(IEditable *, bool)> &sync) { m_partStateSync = sync; }
 
+   // Registers the editor frame hooks: capture is called with a part right before it is saved into a record (and for the redo snapshot of an undo) and returns
+   // an opaque value kept with the saved part; restore gets it back right after the record was loaded into the part. For editor state of a part that is not
+   // part of its saved data (e.g. the rotation & scale frame its gizmo reports for a curve part)
+   void SetPartFrameHooks(const std::function<std::any(IEditable *)> &capture, const std::function<void(IEditable *, const std::any &)> &restore)
+   {
+      m_partFrameCapture = capture;
+      m_partFrameRestore = restore;
+   }
+
    // Registers the callback told (name before, name restored, restored) when undoing or redoing restores the name of a part (the editor retargets what
    // refers to parts by name); restored is false when the name is used by another part now and the part keeps the name it had
    void SetPartRenamedHook(const std::function<void(const string &, const string &, bool)> &hook) { m_partRenamed = hook; }
@@ -83,5 +92,7 @@ private:
    size_t m_cleanpoint = 0; // Undo record at which table is in a non-dirty state (if bigger than undo records size, clean state can not be reached)
    std::function<std::any()> m_editorStateCapture;
    std::function<void(IEditable *, bool)> m_partStateSync;
+   std::function<std::any(IEditable *)> m_partFrameCapture;
+   std::function<void(IEditable *, const std::any &)> m_partFrameRestore;
    std::function<void(const string &, const string &, bool)> m_partRenamed;
 };
