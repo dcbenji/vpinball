@@ -350,13 +350,17 @@ void CameraPreviewPanel::HandleViewKeys(const float aspect)
       return;
    }
    if (!m_settings.freeOrbit)
+   {
+      if (e.IsNumpadPressed(5, false))
+         e.Report("This view follows the player camera: switch it to Free Orbit to change the projection");
       return;
+   }
    const auto setView = [this](const float yaw, const float pitch) {
       m_settings.yaw = yaw;
       m_settings.pitch = pitch;
       m_camMoved = true;
    };
-   if (e.IsNumpadPressed(5))
+   if (e.IsNumpadPressed(5, false)) // No key repeat
    {
       m_settings.ortho = !m_settings.ortho;
       m_camMoved = true;

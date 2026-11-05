@@ -751,8 +751,7 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::MenuItem("Perspective / Orthographic", "Numpad 5"))
          {
-            editor.m_camMode = ViewMode::EditorCam;
-            editor.m_perspectiveCam = !editor.m_perspectiveCam;
+            editor.TogglePerspectiveCam();
          }
          if (ImGui::MenuItem("Cycle Camera (Preview / Editor / Backdrop)", "Numpad 0"))
             editor.CycleCamera();

@@ -3375,11 +3375,8 @@ void EditorUI::RenderUI()
       }
       else if (IsNumpadPressed(0))
          CycleCamera();
-      else if (IsNumpadPressed(5))
-      {
-         m_camMode = ViewMode::EditorCam;
-         m_perspectiveCam = !m_perspectiveCam;
-      }
+      else if (IsNumpadPressed(5, false)) // No key repeat: holding the key would toggle every few frames
+         TogglePerspectiveCam();
       else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal) || (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift))
          FrameSelection(); // Blender's View Selected
       else if (ImGui::IsKeyPressed(ImGuiKey_Home))
@@ -4816,6 +4813,7 @@ void EditorUI::RenderNavCube()
    if (!m_showNavCube || !m_viewportVisible || m_flyMode || m_table->IsLocked() || m_inspectionModal.IsVisible() || m_camMode == ViewMode::DesktopBackdrop)
    {
       SDLInputHandler::SetMouseOverEditorWidget(false); // Hidden cube: nothing is filtered
+      m_navCubeFaceAnim = false;
       return;
    }
 
@@ -4871,7 +4869,10 @@ void EditorUI::RenderNavCube()
    SDLInputHandler::SetMouseOverEditorWidget(!gizmoBusy && ImGuizmo::IsViewManipulateHovered()); // The game must not get a press made on the cube
 
    if (memcmp(viewG, viewGIn, sizeof(viewG)) == 0)
+   {
+      m_navCubeFaceAnim = false;
       return;
+   }
    // ImGuizmo's drag orbit builds a look at with a fixed Y up: from an axis view (default Top) the first drag frame has a zero mouse delta, the view direction
    // is parallel to up and the look at degenerates (zero or NaN basis), which would poison the editor camera for good. Skip such frames, the next ones recover.
    for (int axis = 0; axis < 3; axis++)
@@ -4901,7 +4902,9 @@ void EditorUI::RenderNavCube()
       const Axis axes[6] = { { vec3(0.f, 0.f, -1.f), vec3(0.f, -1.f, 0.f), PredefinedView::Top }, { vec3(0.f, 0.f, 1.f), vec3(0.f, -1.f, 0.f), PredefinedView::Bottom },
          { vec3(0.f, 1.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Front }, { vec3(0.f, -1.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Back },
          { vec3(-1.f, 0.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Left }, { vec3(1.f, 0.f, 0.f), vec3(0.f, 0.f, -1.f), PredefinedView::Right } };
-      m_perspectiveCam = false;
+      if (!m_navCubeFaceAnim) // Once, when the click starts: a numpad 5 during the animation must stay
+         m_perspectiveCam = false;
+      m_navCubeFaceAnim = true;
       for (const Axis &a : axes)
          if (newDir.Dot(a.dir) > 0.9999f)
          {
@@ -4964,11 +4967,21 @@ void EditorUI::FrameBounds(const FRect3D &bounds)
 }
 
 // Numpad key, or the matching top row digit when numpad emulation is enabled (laptops without a numpad)
-bool EditorUI::IsNumpadPressed(int digit) const
+bool EditorUI::IsNumpadPressed(int digit, bool repeat) const
 {
-   if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit)))
+   if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_Keypad0 + digit), repeat))
       return true;
-   return IsDigitNavKey(digit) && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit));
+   return IsDigitNavKey(digit) && ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + digit), repeat);
+}
+
+void EditorUI::TogglePerspectiveCam()
+{
+   if (m_camMode == ViewMode::PreviewCam)
+      m_perspectiveCam = true; // The preview camera is a perspective view
+   else if (m_camMode == ViewMode::DesktopBackdrop)
+      m_perspectiveCam = false; // The desktop backdrop is always orthographic
+   m_camMode = ViewMode::EditorCam;
+   m_perspectiveCam = !m_perspectiveCam;
 }
 
 // The digits are game keys (start, coin...) while the game runs and text for widgets: emulate only with the 3D view focused and the game not running (edit mode, or inspect mode while paused)

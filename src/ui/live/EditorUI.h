@@ -106,6 +106,9 @@ public:
 
    // True if the top row digit (0..9) is a view navigation key (numpad emulation) rather than a game key: editor UI up and game not running (edit mode, or inspect mode while paused)
    bool IsDigitNavKey(int digit) const;
+   // Numpad 5: toggles between the perspective and the orthographic editor camera. From the preview camera (perspective) or the desktop backdrop (orthographic)
+   // the flag is stale, so it is first set to what the view showed, which makes the first press visibly change the view.
+   void TogglePerspectiveCam();
 
 private:
    // UI Context
@@ -560,13 +563,14 @@ private:
    void UpdateModalTransform();
    void EndModalTransform(bool confirm);
    void FrameBounds(const FRect3D &bounds); // Center the editor camera on the bounds and adjust the zoom to fit them
-   bool IsNumpadPressed(int digit) const;
+   bool IsNumpadPressed(int digit, bool repeat = true) const;
    bool GetNavPivot(vec3 &target) const; // Orbit / zoom pivot (selection center), false if none
    void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false, const Matrix3D *reference = nullptr); // reference: the transform the part selection was last set to, when the reported one does not carry it (see UpdateModalTransform)
 
    // Editor camera
    ViewMode m_camMode = ViewMode::PreviewCam;
    bool m_perspectiveCam = true;
+   bool m_navCubeFaceAnim = false; // The nav cube is animating the view toward a clicked face (orthographic is forced once, when it starts)
    Renderer::ShadeMode m_shadeMode = Renderer::ShadeMode::Default;
    ViewShadeOptions m_viewShade; // The 3D Viewport's view-only shading options (Viewport Shading popover), not saved
    enum class PredefinedView

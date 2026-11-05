@@ -141,7 +141,7 @@ void SearchPalette::BuildOperators()
    add("View" + sep + "Back", "Ctrl+Numpad 1", nullptr, [&ed]() { ed.SetView(PV::Back); });
    add("View" + sep + "Left", "Numpad 3", nullptr, [&ed]() { ed.SetView(PV::Left); });
    add("View" + sep + "Right", "Ctrl+Numpad 3", nullptr, [&ed]() { ed.SetView(PV::Right); });
-   add("View" + sep + "Perspective / Orthographic", "Numpad 5", nullptr, [&ed]() { ed.m_camMode = ViewMode::EditorCam; ed.m_perspectiveCam = !ed.m_perspectiveCam; });
+   add("View" + sep + "Perspective / Orthographic", "Numpad 5", nullptr, [&ed]() { ed.TogglePerspectiveCam(); });
    add("View" + sep + "Cycle Camera (Preview / Editor / Backdrop)", "Numpad 0", nullptr, [&ed]() { ed.CycleCamera(); });
    add("View" + sep + "Lock Orbit", "", nullptr, [&ed]() { ed.m_orbitLock = !ed.m_orbitLock; });
    add("View" + sep + "Orbit Left", "Numpad 4", nullptr, [&ed]() { ed.OrbitStep(true, 1.f); });
