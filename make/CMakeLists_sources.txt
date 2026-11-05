@@ -370,6 +370,8 @@ set(VPX_SOURCES
    src/ui/live/editor/RampUIPart.cpp
    src/ui/live/editor/ConvertToPBRModal.h
    src/ui/live/editor/ConvertToPBRModal.cpp
+   src/ui/live/editor/SelectRename.h
+   src/ui/live/editor/SelectRename.cpp
    src/ui/live/editor/SetOrigin.h
    src/ui/live/editor/SetOrigin.cpp
    src/ui/live/editor/RubberBetweenPosts.h

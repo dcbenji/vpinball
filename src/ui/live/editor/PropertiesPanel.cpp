@@ -1047,6 +1047,8 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          EndCuration(props, m_curation);
          // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
          editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
+         if (editable->GetName() != nameBefore)
+            editor.m_pinned.RenamePart(nameBefore, editable->GetName()); // Pinned fields and favorites of the renamed part
          if (props.GetModifiedField() > 0)
             editor.m_undo.SetFieldLabel(props.GetModifiedLabel());
          editor.m_undo.EndUndo();

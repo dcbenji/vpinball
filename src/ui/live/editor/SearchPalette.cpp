@@ -179,6 +179,8 @@ void SearchPalette::BuildOperators()
    add("Edit" + sep + "Select All", "A", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.SelectAllAction(); });
    add("Edit" + sep + "Deselect", "Alt+A", [&ed]() { return ed.CanSelect() && ed.m_selection.GetType() != Selection::S_NONE; }, [&ed]() { ed.ClearSelection(); });
    add("Edit" + sep + "Invert Selection", "Ctrl+I", [&ed]() { return ed.CanSelect(); }, [&ed]() { ed.InvertSelection(); });
+   add("Edit" + sep + "Select Similar...", "Shift+G", [&ed]() { return ed.m_selectRename.CanSelectSimilar(); }, [&ed]() { ed.m_selectRename.OpenSimilar(); });
+   add("Edit" + sep + "Batch Rename...", "Ctrl+F2", [&ed]() { return ed.m_selectRename.CanRename(); }, [&ed]() { ed.m_selectRename.OpenRename(); });
    add("Edit" + sep + "Adjust Last Operation...", "F9", [&ed]() { return ed.m_lastOp.type != EditorUI::LastOperation::Type::None; },
       [&ed]()
       {

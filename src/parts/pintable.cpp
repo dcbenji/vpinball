@@ -403,6 +403,16 @@ void PinTable::RenamePart(IEditable *const part, const string& newName)
    m_scriptableNames.insert(id);
    if (m_tableEditor)
       m_tableEditor->OnScriptableRenamed(scriptable, newName); // Before the rename, as the code view finds the item by its current name
+   if (part->GetItemType() == ItemTypeEnum::eItemLight && !m_lightMap.empty()) // The player's light lookup (lightmaps resolve their light through it)
+   {
+      const auto it = m_lightMap.find(scriptable->m_name);
+      if (it != m_lightMap.end())
+      {
+         Light *const light = it->second;
+         m_lightMap.erase(it);
+         m_lightMap[newName] = light;
+      }
+   }
    scriptable->m_name = newName;
 }
 
@@ -5924,6 +5934,28 @@ float PinTable::GetSurfaceHeight(const string& name, float x, float y) const
 
 void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &oldName, const std::function<void(IEditable *)> &beforeChange)
 {
+   if (surface->GetItemType() == eItemLight)
+   {
+      // Primitives and flashers name the light of their lightmap
+      const string &lightName = surface->GetIScriptable()->m_name;
+      if (lightName == oldName)
+         return;
+      for (IEditable *const pedit : m_vedit)
+      {
+         string *ref = nullptr;
+         if (pedit->GetItemType() == eItemPrimitive)
+            ref = &static_cast<Primitive *>(pedit)->m_d.m_szLightmap;
+         else if (pedit->GetItemType() == eItemFlasher)
+            ref = &static_cast<Flasher *>(pedit)->m_d.m_szLightmap;
+         if (ref != nullptr && StrCompareNoCase(*ref, oldName))
+         {
+            if (beforeChange)
+               beforeChange(pedit);
+            *ref = lightName;
+         }
+      }
+      return;
+   }
    if (surface->GetItemType() != eItemSurface && surface->GetItemType() != eItemRamp && surface->GetItemType() != eItemPrimitive)
       return;
    const string& newName = surface->GetIScriptable()->m_name;

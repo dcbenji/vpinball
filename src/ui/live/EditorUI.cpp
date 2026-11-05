@@ -84,6 +84,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_properties(*this)
    , m_inspectionModal(*this)
    , m_pbrConvertModal(*this)
+   , m_selectRename(*this)
    , m_partLibrary(*this)
    , m_cameraPreviews { CameraPreviewPanel(*this, 0), CameraPreviewPanel(*this, 1), CameraPreviewPanel(*this, 2) }
    , m_scriptPanel(*this)
@@ -99,6 +100,14 @@ EditorUI::EditorUI(LiveUI &liveUI)
 
    // Store the current selection in each undo record, so that undoing also restores it
    m_undo.SetEditorStateCapture([this]() { return std::any(CaptureUndoSelection()); });
+   m_undo.SetPartRenamedHook(
+      [this](const string &oldName, const string &newName, const bool restored)
+      {
+         if (restored)
+            m_pinned.RenamePart(oldName, newName);
+         else
+            Report("Could not restore the name " + newName + " of " + oldName + ": another part, collection or script name uses it now");
+      });
    // A part's m_d holds the editor display state (outliner hide, overlay) for the render visibility fields, the authored values live in the UI part: records hold
    // the authored values (written back to m_d before a save), and a loaded record becomes the new authored values
    m_undo.SetPartStateSync(
@@ -262,6 +271,7 @@ void EditorUI::Close()
    RestorePartsVisibility();
    m_inspectionModal.Close();
    m_pbrConvertModal.Close();
+   m_selectRename.Close();
    m_partLibrary.CancelPlacement(); // An armed library placement does not survive the editor closing
    m_partLibrary.OnEditorClosed(); // The library's lightbox and thumbnails do not survive the editor closing (view slot, scratch tables)
    m_renderer->DisableStaticPrePass(false);
@@ -300,6 +310,7 @@ void EditorUI::SetTable(PinTable *const table)
    m_addPartType = eItemInvalid;
    m_partLibrary.CancelPlacement();
    m_boxSelectActive = false;
+   m_selectRename.Close();
    EndLocalViews(); // They belong to the previous table's parts
 }
 
@@ -2445,6 +2456,8 @@ void EditorUI::RenderUI()
    m_chrome.RenderStatusBar(showFullUI);
    m_inspectionModal.Render();
    m_pbrConvertModal.Render();
+   if (showFullUI)
+      m_selectRename.Render();
    m_partLibrary.Update();
    m_scriptPanel.Update();
 
@@ -3614,6 +3627,10 @@ void EditorUI::RenderUI()
          // Gizmo tools, always available: W move, E rotate, T scale (repeat toggles world / local)
          SetGizmoOperation(ImGui::IsKeyPressed(ImGuiKey_W) ? ImGuizmo::TRANSLATE : ImGui::IsKeyPressed(ImGuiKey_E) ? ImGuizmo::ROTATE : ImGuizmo::SCALE);
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         m_selectRename.OpenRename(); // Blender's Batch Rename
+      else if (ImGui::IsKeyPressed(ImGuiKey_G, false) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt && m_navBlenderTransform && !m_pointEditPart)
+         m_selectRename.OpenSimilar(); // Blender's Select Similar (with the Blender transform keys; otherwise Shift+G is the modal grab)
       else if (ImGui::IsKeyPressed(ImGuiKey_G))
       {
          // Grab (translate)

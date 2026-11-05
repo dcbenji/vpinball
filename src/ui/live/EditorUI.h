@@ -21,6 +21,7 @@
 #include "editor/RendererInspectionModal.h"
 #include "editor/ConvertToPBRModal.h"
 #include "editor/ScriptPanel.h"
+#include "editor/SelectRename.h"
 #include "editor/SearchPalette.h"
 #include "math/matrix.h"
 #include "renderer/Renderer.h"
@@ -70,6 +71,7 @@ class EditorUI final
    friend class PinnedPanel;
    friend class SearchPalette;
    friend class SetOrigin;
+   friend class SelectRename;
    friend class RubberBetweenPosts;
    friend class PlasticFromAtlas;
 
@@ -134,6 +136,7 @@ private:
    PropertiesPanel m_properties;
    RendererInspectionModal m_inspectionModal;
    ConvertToPBRModal m_pbrConvertModal;
+   SelectRename m_selectRename; // Select Similar (Shift+G) and Batch Rename (Ctrl+F2)
    PartLibraryPanel m_partLibrary;
    CameraPreviewPanel m_cameraPreviews[AreaLayout::kMaxViewLeaves]; // Secondary 3D views, one per renderer view slot, bound to the Camera Preview leaves shown (see RenderAreas)
    bool IsSecondaryViewEditDrag() const; // An interactive edit runs: the secondary views render on their schedule (see RenderAreas)

@@ -397,9 +397,17 @@ void PinUndo::OverwritePart(IEditable *const pie, IObjectReader &reader)
       const string restoredName = scriptable->m_name;
       scriptable->m_name = nameBefore;
       if (lowerCase(restoredName) == lowerCase(nameBefore) || m_table->IsNameUnique(restoredName))
+      {
          m_table->RenamePart(pie, restoredName);
+         if (m_partRenamed)
+            m_partRenamed(nameBefore, restoredName, true);
+      }
       else
+      {
          PLOGW << "Undo could not restore the name '" << restoredName << "' of '" << nameBefore << "' as it is now used by another part";
+         if (m_partRenamed)
+            m_partRenamed(nameBefore, restoredName, false);
+      }
    }
    // The record holds the name of the part's group (empty when it had none, which is only valid for part groups)
    if (!pie->m_onLoadExpectedPartGroup.empty())

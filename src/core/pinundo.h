@@ -63,6 +63,10 @@ public:
    // (part, true) right after a record was loaded back into it. The editor uses it to snapshot / restore the authored visibility instead of its display state
    void SetPartStateSync(const std::function<void(IEditable *, bool)> &sync) { m_partStateSync = sync; }
 
+   // Registers the callback told (name before, name restored, restored) when undoing or redoing restores the name of a part (the editor retargets what
+   // refers to parts by name); restored is false when the name is used by another part now and the part keeps the name it had
+   void SetPartRenamedHook(const std::function<void(const string &, const string &, bool)> &hook) { m_partRenamed = hook; }
+
 private:
    static constexpr size_t NoCleanPoint = static_cast<size_t>(-1);
    std::any ApplyRecord(UndoRecord &record, bool buildInverse, std::unique_ptr<UndoRecord> &inverse);
@@ -79,4 +83,5 @@ private:
    size_t m_cleanpoint = 0; // Undo record at which table is in a non-dirty state (if bigger than undo records size, clean state can not be reached)
    std::function<std::any()> m_editorStateCapture;
    std::function<void(IEditable *, bool)> m_partStateSync;
+   std::function<void(const string &, const string &, bool)> m_partRenamed;
 };

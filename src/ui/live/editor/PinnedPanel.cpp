@@ -77,6 +77,32 @@ void PinnedPanel::Pin(const PinKey &key)
 
 void PinnedPanel::Unpin(const PinKey &key) { std::erase(m_pins, key); }
 
+void PinnedPanel::RenamePart(const string &oldName, const string &newName)
+{
+   if (oldName == newName)
+      return;
+   const auto retarget = [&](PinKey &key)
+   {
+      if (key.kind == PinKind::Part && key.name == oldName)
+         key.name = newName;
+   };
+   for (PinKey &key : m_pins)
+      retarget(key);
+   for (Workspace &workspace : m_workspaces)
+      for (PinKey &key : workspace.pins)
+         retarget(key);
+   for (auto &object : m_objects)
+      if (object.first == PinKind::Part && object.second == oldName)
+         object.second = newName;
+   // The definitions and harvest of the old name are not valid for the new one: they are made again when the object is drawn
+   const string objectId = ObjectId(PinKind::Part, oldName);
+   const string prefix = objectId + '\x1f';
+   for (auto it = m_defs.lower_bound(prefix); it != m_defs.end() && it->first.compare(0, prefix.size(), prefix) == 0;)
+      it = m_defs.erase(it);
+   m_harvested.erase(objectId);
+   m_harvestStamps.erase(objectId);
+}
+
 bool PinnedPanel::NeedsDef(const string &id, const void *owner) const
 {
    const auto it = m_defs.find(id);

@@ -817,6 +817,10 @@ void EditorChrome::RenderMenuBar()
             editor.ClearSelection();
          if (ImGui::MenuItem("Invert Selection", "Ctrl+I", false, editor.CanSelect()))
             editor.InvertSelection();
+         if (ImGui::MenuItem("Select Similar...", "Shift+G", false, editor.m_selectRename.CanSelectSimilar()))
+            editor.m_selectRename.OpenSimilar();
+         if (ImGui::MenuItem("Batch Rename...", "Ctrl+F2", false, editor.m_selectRename.CanRename()))
+            editor.m_selectRename.OpenRename();
          ImGui::EndMenu();
       }
       if (!editor.IsInspectMode() && ImGui::BeginMenu("Object"))

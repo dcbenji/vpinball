@@ -138,6 +138,7 @@ public:
 
    // Persistence: the pin list is stored on the (startup) table, written to its table.json
    void SaveTo(PinTable *table) const;
+   void RenamePart(const string &oldName, const string &newName); // A part was renamed (or a rename undone): its pins, favorites and cached definitions follow
 
    // Workspaces (Blender's top bar tabs): Layout, Look-dev and Wiring presets of the areas (the area layout tree: editor types, widths and
    // visibility of the areas; N-panel and its tab, outliner display mode and type filter) with their own Quick Favorites, saved with the table
