@@ -866,13 +866,16 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       if (lIdx.z > 0.0)
          lCol *= saturate(-dl.z * inversesqrt(max(dot(dl, dl), 1e-6)));
       // Flasher dome lamp: one soft band per flute (brightest through the thin wall at the groove roots, ~24 % banding as
-      // measured on a real dome) and the dome base cutting the light below its rim (8 deg soft edge)
+      // measured on a real dome) and the dome base cutting the light below its rim (8 deg soft edge, widened on the open side
+      // by the base ramp: -lIdx.z = cut + 100 x ramp, whole degrees)
       BRANCH if (lIdx.w > 0.0)
       {
          const float flutes = floor(lIdx.w);
          const float band = pow(0.5 + 0.5 * cos(flutes * (atan2(-dl.y, -dl.x) - fract(lIdx.w) * (2.0 * PI))), 10.0);
          const float elevation = degrees(asin(clamp(-dl.z * inversesqrt(max(dot(dl, dl), 1e-6)), -1.0, 1.0)));
-         lCol *= mix(0.76, 1.0, band) * smoothstep(lIdx.z - 4.0, lIdx.z + 4.0, elevation);
+         const float baseRamp = floor(-lIdx.z * 0.01);
+         const float negCut = lIdx.z + 100.0 * baseRamp;
+         lCol *= mix(0.76, 1.0, band) * smoothstep(negCut - 4.0, negCut + 4.0 + baseRamp, elevation);
       }
       // Thin surface translucency (printed plastics): a light behind the surface transmits through it, see below
       const float NdotLraw = dot(wN, l);

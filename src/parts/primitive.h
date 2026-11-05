@@ -101,6 +101,7 @@ public:
    float m_domeBoost = 1.f; // gain on the lamp level the dome layer sees (a ROM flash peaking below full reads hotter); the lamp's own light is unchanged
    float m_domeLens = 0.f; // see-through walls: each flute shows a mirrored, squeezed slice of what lies behind the dome (uses the part's refraction probe, else any screen space transparency probe of the table, else adds one; 0 = off)
    float m_domeFrost = 0.f; // clear plastic: the thick parts of the wall (ridge tips, cap, base, rim) scatter the room to a milky white, the thin flanks stay clearer, dark creases at the groove roots (0 = off)
+   float m_domeBaseRamp = 0.f; // degrees: the base lets the lamp's light out gradually over this angle above its cut, so the nearest light past the base's shadow on the table is no hot spot (0 = the base's sharp 8 deg edge)
    float m_domeGlintLights = 0.f; // what the OFF glints reflect: 0 = a fixed studio room, 1 = the table's own lights near the dome (GI bulbs, inserts, other flashers), live
    float m_domeGlint = 1.f; // OFF glints (facet glints, ridge glints, needles, the room seen in the plastic) scale (1 = as tuned)
 
@@ -395,7 +396,7 @@ public:
    // Table space position of the dome's bulb filament (where its burst light belongs), false if the mesh is not a dome
    bool GetFlasherDomeBulb(Vertex3Ds &pos);
    // The dome's light cookie: x flute count, y angle of a groove root around table z (rad), z where the dome base cuts the
-   // light below the filament horizon (deg)
+   // light below the filament horizon (deg), plus 100 x the base ramp (dome_base_ramp, whole degrees)
    bool GetFlasherDomeCookie(vec3 &cookie);
    // The table's light (PBR lights other than dome lamps) arriving at the dome's bulb, unshadowed irradiance (linear), set
    // each frame by the PBR light list build: the plastic scatters it (the dome layer's GI glow)

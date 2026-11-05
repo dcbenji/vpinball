@@ -1252,7 +1252,9 @@ bool Primitive::GetFlasherDomeCookie(vec3 &cookie)
    if (!d.valid)
       return false;
    const Vertex3Ds root = RecalculateMatrices().MultiplyVectorNoTranslate(Vertex3Ds(cosf(d.phase), sinf(d.phase), 0.f));
-   cookie = vec3((float)d.flutes, atan2f(root.y, root.x), RADTOANG(atan2f(FlasherDomeTune("fil=", 0.47f) * d.height, d.rootR)));
+   // z packs the cut (< 90 deg) and the base ramp in whole degrees (x 100), unpacked by fs_pbr
+   const float cut = RADTOANG(atan2f(FlasherDomeTune("fil=", 0.47f) * d.height, d.rootR));
+   cookie = vec3((float)d.flutes, atan2f(root.y, root.x), cut + 100.f * roundf(clamp(m_d.m_domeBaseRamp, 0.f, 60.f)));
    return true;
 }
 
@@ -2855,6 +2857,7 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(DMCD), m_d.m_domeCooldown);
    writer.WriteFloat(FID(DMOR), m_d.m_domeOrb);
    writer.WriteFloat(FID(DMBO), m_d.m_domeBoost);
+   writer.WriteFloat(FID(DMBR), m_d.m_domeBaseRamp);
 
    SaveSharedEditableFields(writer);
 
@@ -3162,6 +3165,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(DMCD): m_d.m_domeCooldown = reader.AsFloat(); break;
          case FID(DMOR): m_d.m_domeOrb = reader.AsFloat(); break;
          case FID(DMBO): m_d.m_domeBoost = reader.AsFloat(); break;
+         case FID(DMBR): m_d.m_domeBaseRamp = reader.AsFloat(); break;
          case FID(RNOI): m_d.m_refractionNoise = reader.AsFloat(); break;
          case FID(RNSC): m_d.m_refractionNoiseScale = reader.AsFloat(); break;
 
