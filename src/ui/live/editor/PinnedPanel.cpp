@@ -643,9 +643,12 @@ void PinnedPanel::CaptureWorkspace(Workspace &ws) const
    ws.sidebar = editor.m_showSidebar;
    ws.sidebarTab = static_cast<int>(editor.m_sidebarTab);
    ws.sidebarWidth = editor.m_sidebarWidth;
-   ws.outlinerMode = editor.m_outliner.GetDisplayMode();
-   ws.outlinerTypes = editor.m_outliner.GetTypeMask();
-   ws.layout = editor.m_areas;
+   // Each area's panel state goes with its leaf of the layout; the legacy outliner_mode / outliner_types keys (one per workspace, for the older
+   // builds) are the first Outliner area's
+   ws.layout = editor.GetAreaLayoutWithState();
+   const OutlinerPanel *const outliner = editor.GetOutlinerArea(editor.m_areas.FindLeaf(AreaType::Outliner));
+   ws.outlinerMode = outliner != nullptr ? outliner->GetDisplayMode() : 0;
+   ws.outlinerTypes = outliner != nullptr ? outliner->GetTypeMask() : OutlinerPanel::AllTypesMask;
    ws.presetSizes = false;
    ws.pins = m_pins;
 }
@@ -681,10 +684,6 @@ void PinnedPanel::ApplyWorkspace(int index)
    editor.m_sidebarTab = static_cast<EditorUI::SidebarTab>(clamp(ws.sidebarTab, 0, 2));
    if (ws.sidebarWidth > 0.f)
       editor.m_sidebarWidth = ws.sidebarWidth;
-   if (ws.outlinerMode >= 0)
-      editor.m_outliner.SetDisplayMode(ws.outlinerMode);
-   if (ws.outlinerTypes >= 0)
-      editor.m_outliner.SetTypeMask(static_cast<uint32_t>(ws.outlinerTypes));
    if (ws.presetSizes)
    {
       // A preset that was never visited keeps the sizes the user has now (widening Properties in Layout must not snap back in Look-dev): the
@@ -696,6 +695,32 @@ void PinnedPanel::ApplyWorkspace(int index)
       editor.m_areas.ToLegacy(curOutliner, curProperties, curOutlinerWidth, curPropertiesWidth, curLeft, curRight);
       m_workspaces[index].layout = AreaLayout::FromLegacy(outliner, properties, curOutlinerWidth, curPropertiesWidth, leftEditor, rightEditor);
       m_workspaces[index].presetSizes = false;
+   }
+   {
+      // Outliner display mode and type filter: saved with each Outliner area of the layout. A workspace saved before (one mode and filter for the
+      // workspace) or a preset never visited has no Outliner area with a state of its own: its Outliner areas get the workspace's legacy values,
+      // the current first Outliner's for the unset ones (-1, keep the current one). When a saved workspace's Outliners are all at their defaults,
+      // its legacy keys are those defaults too
+      AreaLayout &layout = m_workspaces[index].layout;
+      const auto &nodes = layout.Nodes();
+      const bool ownStates = std::ranges::any_of(nodes, [](const AreaNode &node) { return !node.isSplit && node.type == AreaType::Outliner && !node.state.empty(); });
+      if (!ownStates)
+      {
+         const OutlinerPanel *const current = editor.GetOutlinerArea(editor.m_areas.FindLeaf(AreaType::Outliner));
+         const int mode = ws.outlinerMode >= 0 ? ws.outlinerMode : current != nullptr ? current->GetDisplayMode() : 0;
+         const int64_t types = ws.outlinerTypes >= 0 ? ws.outlinerTypes : current != nullptr ? current->GetTypeMask() : static_cast<int64_t>(OutlinerPanel::AllTypesMask);
+         nlohmann::json state = nlohmann::json::object();
+         if (mode == 1)
+            state["display_mode"] = "table_data";
+         if ((types & OutlinerPanel::AllTypesMask) != OutlinerPanel::AllTypesMask)
+            state["types"] = types & OutlinerPanel::AllTypesMask;
+         vector<int> outliners;
+         for (const AreaNode &node : nodes)
+            if (!node.isSplit && node.type == AreaType::Outliner)
+               outliners.push_back(static_cast<int>(node.id));
+         for (const int id : outliners)
+            layout.SetState(id, state);
+      }
    }
    editor.SetAreaLayout(m_workspaces[index].layout); // A copy: the workspace keeps its own tree until it is captured again
 }
@@ -800,16 +825,12 @@ void PinnedPanel::SyncWithTable()
       return;
    m_sourceTable = base;
    m_pins.clear();
-   // The Properties editor's tab lists point into the definitions: drop them with the definitions
-   PropertiesPanel::Curation &curation = m_editor.m_properties.m_curation;
-   curation.active = false;
-   curation.stamp = 0;
-   for (auto &list : curation.tabs)
-      list.clear();
-   curation.look.clear();
-   curation.transform.clear();
-   curation.all.clear();
-   m_editor.m_properties.m_materialCuration = PropertiesPanel::Curation();
+   // The Properties editors' tab lists point into the definitions: drop them with the definitions
+   m_editor.m_properties.DropCuration();
+   for (const auto &[leafId, panel] : m_editor.m_propertiesAreas)
+      panel->DropCuration();
+   for (const auto &[leafId, panel] : m_editor.m_parkedProperties)
+      panel->DropCuration();
    m_defs.clear();
    m_harvested.clear();
    m_groupRequests.clear();
@@ -830,9 +851,7 @@ void PinnedPanel::SyncWithTable()
    m_editor.m_showSidebar = false;
    m_editor.m_sidebarTab = EditorUI::SidebarTab::Item;
    m_editor.m_sidebarWidth = 300.f;
-   m_editor.SetAreaLayout(AreaLayout::DefaultLayout());
-   m_editor.m_outliner.SetDisplayMode(0); // Outliner display mode and type filter of a table without saved workspaces: the defaults
-   m_editor.m_outliner.SetTypeMask(OutlinerPanel::AllTypesMask);
+   m_editor.SetAreaLayout(AreaLayout::DefaultLayout()); // Its areas' panels at their defaults (Outliner display mode and type filter, no pin)
    m_workspacesPristine = false;
    if (m_activeWorkspace == -1)
    {
@@ -1213,7 +1232,7 @@ void PinnedPanel::RenderItemTab(bool hovered)
 {
    // The selection's Transform fields (the Properties editor's Transform tab, drawn from the same definitions)
    EditorUI &editor = m_editor;
-   const PropertiesPanel &properties = editor.m_properties;
+   const PropertiesPanel &properties = editor.GetSelectionProperties(false); // Prepared by Render (or drawn in its area this frame)
    // Nothing selected: an empty tab (like Blender's Item tab), not a second copy of the table's Look fields shown in Properties
    const auto &defs = properties.m_curation.tabs[static_cast<int>(PropertiesPanel::Tab::Transform)];
    if (!properties.m_curation.active || defs.empty() || properties.m_curation.obj == nullptr)
@@ -1322,8 +1341,8 @@ void PinnedPanel::Render()
    if (!editor.m_showSidebar || !editor.IsViewportVisible())
       return; // The N-panel belongs to the viewport area: not with a panel maximized over it
    // The Item tab shows the Properties editor's Transform list: keep it current when the Properties editor is hidden
-   if (!editor.IsAreaEditorShown(EditorUI::AreaEditor::Properties) && editor.m_sidebarTab == EditorUI::SidebarTab::Item)
-      editor.m_properties.PrepareCuration();
+   if (editor.m_sidebarTab == EditorUI::SidebarTab::Item)
+      editor.GetSelectionProperties(); // Prepares the selection's curation unless a Properties area following the selection has just been drawn
 
    // N-panel: a fixed area along the right edge of the viewport area, resized by its splitter
    const float dpi = editor.m_liveUI.GetDPI();

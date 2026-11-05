@@ -151,7 +151,7 @@ void PropertiesPanel::PrepareCuration()
          m_tab = it->second;
       else
          m_tab = HasTab(Tab::Look) ? Tab::Look : Tab::Object; // First visit of this type: its look
-      if (PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == kind && PropertyPane::GetFocusKey().name == name)
+      if (m_jumpTarget && PropertyPane::IsFocusPending() && PropertyPane::GetFocusKey().kind == kind && PropertyPane::GetFocusKey().name == name)
       {
          m_tab = Tab::Advanced;
          for (int t = 0; t < static_cast<int>(Tab::Count); t++)
@@ -231,6 +231,7 @@ void PropertiesPanel::DrawTabStrip()
    {
       m_locked = !m_locked;
       m_lockedSel = m_editor.m_selection;
+      m_pendingPin = nullptr;
    }
    ImGui::SetItemTooltip(m_locked ? "Unpin: follow the selection again" : "Pin: keep showing this object while selecting others");
    ImGui::Dummy(ImVec2(0.f, 2.f * dpi)); // 10 px between the pin and the tabs (with the item spacings)
@@ -699,7 +700,140 @@ PropertiesPanel::PropertiesPanel(EditorUI &editor)
 {
 }
 
+void PropertiesPanel::CopyAreaState(const PropertiesPanel &other)
+{
+   m_locked = other.m_locked && IsSelectionAlive(other.m_lockedSel);
+   m_lockedSel = m_locked ? other.m_lockedSel : Selection(); // The same object, not one looked up by name
+   m_pendingPin = m_locked ? nlohmann::json() : other.m_pendingPin;
+   m_tab = other.m_tab;
+   m_tabMemory = other.m_tabMemory;
+   m_search = other.m_search;
+}
+
 PropertiesPanel::~PropertiesPanel() = default;
+
+void PropertiesPanel::BindArea(const int leafId, const nlohmann::json &state)
+{
+   m_leafId = leafId;
+   m_windowName = EditorUI::AreaWindowName("PROPERTIES", EditorUI::NewAreaPanelSerial());
+   m_locked = false;
+   m_lockedSel = Selection();
+   m_pendingPin = nullptr;
+   if (state.is_object())
+      if (const auto pin = state.find("pin"); pin != state.end() && pin->is_object())
+         m_pendingPin = *pin; // Resolved when the panel is drawn: the table's parts may not be listed yet
+}
+
+nlohmann::json PropertiesPanel::SaveAreaState() const
+{
+   nlohmann::json state = nlohmann::json::object();
+   if (!m_pendingPin.is_null())
+   {
+      state["pin"] = m_pendingPin; // Never drawn since it was loaded: kept as saved
+      return state;
+   }
+   // Also called while the area is not drawn (maximized away, fly mode): the pinned object may have been deleted since it was last drawn
+   if (!m_locked || !IsSelectionAlive(m_lockedSel))
+      return state;
+   nlohmann::json pin = nlohmann::json::object();
+   switch (m_lockedSel.GetType())
+   {
+   case Selection::S_NONE: pin["kind"] = "table"; break;
+   case Selection::S_CAMERA:
+      pin["kind"] = "camera";
+      pin["view"] = m_lockedSel.GetCamera();
+      break;
+   case Selection::S_MATERIAL: pin = { { "kind", "material" }, { "name", m_lockedSel.GetMaterial()->m_name } }; break;
+   case Selection::S_IMAGE: pin = { { "kind", "image" }, { "name", m_lockedSel.GetImage()->GetName() } }; break;
+   case Selection::S_EDITABLE: pin = { { "kind", "part" }, { "name", m_lockedSel.GetPart()->GetEditable()->GetName() } }; break;
+   case Selection::S_RENDERPROBE: pin = { { "kind", "probe" }, { "name", m_lockedSel.GetProbe()->GetName() } }; break;
+   case Selection::S_SOUND: pin = { { "kind", "sound" }, { "name", m_lockedSel.GetSound()->GetName() } }; break;
+   case Selection::S_COLLECTION: pin = { { "kind", "collection" }, { "name", m_lockedSel.GetCollection()->m_name } }; break;
+   }
+   state["pin"] = pin;
+   return state;
+}
+
+void PropertiesPanel::ResolvePendingPin()
+{
+   if (m_pendingPin.is_null())
+      return;
+   EditorUI &editor = m_editor;
+   const string kind = m_pendingPin.contains("kind") && m_pendingPin["kind"].is_string() ? m_pendingPin["kind"].get<string>() : string();
+   const string name = m_pendingPin.contains("name") && m_pendingPin["name"].is_string() ? m_pendingPin["name"].get<string>() : string();
+   if (kind == "part" && editor.m_editables.empty() && !editor.m_table->GetParts().empty())
+      return; // The table's parts are not listed yet: next frame (a table without parts: not found below)
+   const nlohmann::json pin = std::move(m_pendingPin);
+   m_pendingPin = nullptr;
+   PinTable *const table = editor.m_table;
+   Selection sel;
+   bool found = true;
+   if (kind == "table")
+      sel = Selection();
+   else if (kind == "camera")
+   {
+      const auto view = pin.find("view");
+      found = view != pin.end() && view->is_number_integer() && view->get<int>() >= 0 && view->get<int>() <= 2;
+      if (found)
+         sel = Selection::Camera(view->get<int>());
+   }
+   else if (kind == "part")
+   {
+      const auto it = std::ranges::find_if(editor.m_editables, [&name](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->GetName() == name; });
+      found = it != editor.m_editables.end();
+      if (found)
+         sel = Selection(*it);
+   }
+   else if (kind == "material")
+   {
+      Material *const material = table->GetMaterial(name);
+      found = material != nullptr && !table->IsDummyMaterial(material);
+      sel = Selection(material);
+   }
+   else if (kind == "image")
+   {
+      Texture *const image = table->GetImage(name);
+      found = image != nullptr;
+      sel = Selection(image);
+   }
+   else if (kind == "sound")
+   {
+      VPX::Sound *const sound = table->GetSound(name);
+      found = sound != nullptr;
+      sel = Selection(sound);
+   }
+   else if (kind == "probe")
+   {
+      RenderProbe *const probe = table->GetRenderProbe(name);
+      found = probe != nullptr;
+      sel = Selection(probe);
+   }
+   else if (kind == "collection")
+   {
+      const auto &collections = table->GetCollections();
+      const auto it = std::ranges::find_if(collections, [&name](const Collection *collection) { return collection->m_name == name; });
+      found = it != collections.end();
+      if (found)
+         sel = Selection(static_cast<Collection *>(*it));
+   }
+   else
+      found = false;
+   // An object that is gone (renamed, deleted, other table): the area follows the selection
+   m_locked = found;
+   m_lockedSel = found ? sel : Selection();
+}
+
+void PropertiesPanel::DropCuration()
+{
+   m_curation.active = false;
+   m_curation.stamp = 0;
+   for (auto &list : m_curation.tabs)
+      list.clear();
+   m_curation.look.clear();
+   m_curation.transform.clear();
+   m_curation.all.clear();
+   m_materialCuration = Curation();
+}
 
 void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
 {
@@ -713,8 +847,11 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
    // Pin ID: draw the locked object as if it were selected (the real selection is restored once the panel is drawn)
-   // A search jump goes to its object: unpin (the pinned object would hide it)
-   if (m_locked && PropertyPane::IsFocusPending())
+   ResolvePendingPin();
+   // A search jump goes to its object: unpin (the pinned object would hide it), unless another Properties area follows the selection and shows it
+   const bool jumpTarget = editor.GetJumpPropertiesPanel() == this;
+   m_jumpTarget = jumpTarget;
+   if (m_locked && PropertyPane::IsFocusPending() && jumpTarget)
       m_locked = false;
    const bool locked = m_locked && IsSelectionAlive(m_lockedSel);
    m_locked = locked;
@@ -736,18 +873,18 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    }
    m_mouseOver = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), false);
    PropertyPane::ConsumeEditCancel(); // A cancelled edit nobody handled last frame
-   if (PropertyPane::IsFocusPending()) // A jump to a field (search palette) needs the normal tabs
+   if (PropertyPane::IsFocusPending() && jumpTarget) // A jump to a field (search palette) needs the normal tabs
    {
       m_search.clear();
       m_searchTerms.clear();
    }
    PrepareCuration(); // May harvest the selection's pane in a hidden window: before the panel window is begun
-   ImGui::Begin("PROPERTIES", nullptr,
+   ImGui::Begin(m_windowName.c_str(), nullptr,
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
          | ImGuiWindowFlags_NoNavFocus);
 
    // Area header (Blender's editor type switcher), above the tab strip and the content
-   editor.RenderAreaTypeButton(EditorUI::AreaEditor::Properties);
+   editor.RenderAreaTypeButton(EditorUI::AreaEditor::Properties, m_leafId);
    DrawSearchField();
    ImGui::Separator();
 
@@ -784,6 +921,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       {
          m_locked = !m_locked;
          m_lockedSel = editor.m_selection;
+         m_pendingPin = nullptr;
       }
       ImGui::SetItemTooltip(m_locked ? "Unpin: follow the selection again" : "Pin: keep showing this object while selecting others");
    }
@@ -946,9 +1084,9 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             }
             // Another item took the interaction (Tab between components, a click on another field): a new edit
             const ImGuiID activeId = ImGui::GetActiveID();
-            if (activeId != m_prevActiveId)
+            if (activeId != s_prevActiveId)
                endChain();
-            m_prevActiveId = activeId;
+            s_prevActiveId = activeId;
          }
          if (props.GetModifiedField() > 0)
          {

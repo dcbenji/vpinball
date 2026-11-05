@@ -532,22 +532,25 @@ void PartLibraryPanel::Update()
    }
 }
 
-void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
+void PartLibraryPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size, const int leafId)
 {
-   if (m_rescanLibrary && !m_hookActive)
+   if (m_lastShownFrame != ImGui::GetFrameCount()) // Once per frame, however many Part Library areas are shown
    {
-      m_rescanLibrary = false;
-      RescanLibrary();
+      if (m_rescanLibrary && !m_hookActive)
+      {
+         m_rescanLibrary = false;
+         RescanLibrary();
+      }
+      m_lastShownFrame = ImGui::GetFrameCount();
+      if (!m_hookActive)
+         PumpThumbnails();
    }
-   m_lastShownFrame = ImGui::GetFrameCount();
-   if (!m_hookActive)
-      PumpThumbnails();
 
-   if (m_editor.BeginAreaWindow("PARTLIBRARY", pos, size))
+   if (m_editor.BeginAreaWindow(EditorUI::AreaWindowName("PARTLIBRARY", leafId).c_str(), pos, size))
    {
       const float dpi = m_editor.m_liveUI.GetDPI();
       // Header: editor type button, title, and the library menu (import options, pack file, library folders) at the right
-      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::PartLibrary);
+      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::PartLibrary, leafId);
       ImGui::SameLine();
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("Part Library");

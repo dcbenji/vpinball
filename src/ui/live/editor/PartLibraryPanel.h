@@ -56,7 +56,10 @@ public:
    void ClearPreview(); // Drops the preview parts, e.g. when the edited table is switched or the editor is closed
 
    void Update(); // Every frame, whether the editor is shown or not: applies the results of the asynchronous file dialogs
-   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
+   // Window filling the given area rect, header included; leafId: the area (its window and its editor type button). One instance draws every
+   // Part Library area (one library scan, one thumbnail renderer and one placement): the areas share the browsing state (folder, selected pack)
+   // and each has its own scroll
+   void RenderInArea(const ImVec2 &pos, const ImVec2 &size, int leafId);
 
 private:
    // A library folder, recursively scanned for importable VPZ packs

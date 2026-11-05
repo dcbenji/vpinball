@@ -318,6 +318,49 @@ void OutlinerPanel::RefreshFilterCache()
    }
 }
 
+OutlinerPanel::OutlinerPanel(EditorUI &editor)
+   : m_editor(editor)
+{
+}
+
+void OutlinerPanel::BindArea(const int leafId, const nlohmann::json &state)
+{
+   m_leafId = leafId;
+   m_windowName = EditorUI::AreaWindowName("OUTLINER", EditorUI::NewAreaPanelSerial());
+   // Keys of the area's leaf in the layout: "display_mode" ("view_layer" or "table_data") and "types" (the type filter mask); malformed or missing: the defaults
+   int mode = 0;
+   uint32_t mask = AllTypesMask;
+   if (state.is_object())
+   {
+      if (const auto it = state.find("display_mode"); it != state.end() && it->is_string() && it->get<string>() == "table_data")
+         mode = 1;
+      if (const auto it = state.find("types"); it != state.end() && it->is_number_integer() && it->get<int64_t>() >= 0)
+         mask = static_cast<uint32_t>(it->get<int64_t>());
+   }
+   SetDisplayMode(mode);
+   SetTypeMask(mask);
+   m_lastSeenSelection = m_editor.m_selection; // The loaded display mode stands until the selection changes
+}
+
+void OutlinerPanel::CopyAreaState(const OutlinerPanel &other)
+{
+   m_filter = other.m_filter;
+   m_syncToSelection = other.m_syncToSelection;
+   SetDisplayMode(other.m_displayMode);
+   SetTypeMask(other.m_typeMask);
+   SetSelectedOnly(other.m_selectedOnly);
+}
+
+nlohmann::json OutlinerPanel::SaveAreaState() const
+{
+   nlohmann::json state = nlohmann::json::object();
+   if (m_displayMode == 1)
+      state["display_mode"] = "table_data";
+   if (m_typeMask != AllTypesMask)
+      state["types"] = m_typeMask;
+   return state;
+}
+
 void OutlinerPanel::SelectViewSetup(int viewSetup)
 {
    EditorUI &editor = m_editor;
@@ -341,7 +384,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-   ImGui::Begin("OUTLINER", nullptr, window_flags);
+   ImGui::Begin(m_windowName.c_str(), nullptr, window_flags);
    const ImGuiStyle &style = ImGui::GetStyle();
 
    // Show the selection made elsewhere (viewport, property pane, search): resources live in Table Data and parts in View Layer
@@ -371,7 +414,7 @@ void OutlinerPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
    ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(EditorTheme::Rgb(51, 51, 55))); // The header sits on 40: the editor buttons stay at the old, subtler fill
    // Header, first row: editor type (Blender's editor type switcher), sync button and display mode (Blender's display mode combo)
    {
-      editor.RenderAreaTypeButton(EditorUI::AreaEditor::Outliner);
+      editor.RenderAreaTypeButton(EditorUI::AreaEditor::Outliner, m_leafId);
       ImGui::SameLine();
       const bool popStyle = m_syncToSelection;
       if (popStyle)

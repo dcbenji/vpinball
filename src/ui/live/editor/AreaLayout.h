@@ -85,6 +85,10 @@ struct AreaNode
    bool hidden = false;
    int previewView = -1; // CameraPreview leaf: view setup shown (-1 Auto, else 0 desktop / 1 cabinet / 2 fss); JSON key "preview_view", absent = Auto
    AreaViewSettings view; // CameraPreview leaf: camera, shading, live, orbit camera (see AreaViewSettings)
+   // Panel leaf (Outliner, Properties, Script, PartLibrary): the editor's own saved state (an object, empty for the defaults), e.g. the Properties pin
+   // or the Outliner display mode. Its keys are written in the leaf's JSON object next to "editor" (the reserved leaf keys are never state keys).
+   // The panel shown in the area is the live owner of the state: EditorUI writes it back here before the tree is saved, split or copied.
+   nlohmann::json state = nlohmann::json::object();
 };
 
 // Result of AreaLayout::Compute for one leaf. Hidden leaves, leaves of an invisible subtree and leaves not
@@ -121,7 +125,7 @@ public:
 
    static constexpr int kMaxDepth = 8;  // split levels from the root to a leaf
    static constexpr int kMaxLeaves = 6;
-   static constexpr int kMaxViewLeaves = 3; // CameraPreview leaves (secondary 3D views): the only type that may have more than one leaf
+   static constexpr int kMaxViewLeaves = 3; // CameraPreview leaves (secondary 3D views); the panel types have no cap of their own (any number of areas of a type, as in Blender)
 
    // Minimum sizes, logical px (multiplied by dpi in Compute)
    static constexpr float kPanelMinW = 140.f, kPanelMinH = 100.f;
@@ -158,7 +162,7 @@ public:
    nlohmann::json ToJson() const;
    const std::string& LastError() const { return m_lastError; }
 
-   // Exactly one Viewport; at most one leaf per other type, but up to kMaxViewLeaves CameraPreview leaves; depth <= kMaxDepth;
+   // Exactly one Viewport; any number of leaves of each panel type; up to kMaxViewLeaves CameraPreview leaves; depth <= kMaxDepth;
    // <= kMaxLeaves leaves; split sizes finite and > 0; consistent links; Viewport not hidden; no CameraPreview unless cameraPreviewEnabled.
    bool Validate() const;
    bool Validate(std::string& why) const;
@@ -173,7 +177,7 @@ public:
    int ParentId(int id) const;         // id of the parent split, -1 for the root or an unknown id
    int LeafCount() const;
    bool IsHosted(AreaType type) const { return FindLeaf(type) >= 0; }
-   // Structural equality (types, axes, sizes, hidden flags, view choices but not the orbit cameras), ignoring node ids
+   // Structural equality (types, axes, sizes, hidden flags, panel states, view choices but not the orbit cameras), ignoring node ids
    bool operator==(const AreaLayout& other) const;
    bool operator!=(const AreaLayout& other) const { return !(*this == other); }
 
@@ -189,13 +193,18 @@ public:
 
    // --- Mutations (tree is compacted afterwards, ids survive) ---
 
-   // At least one type not hosted (Outliner, Properties, Script, PartLibrary; never CameraPreview, which only SetType gives),
-   // the leaf exists, and the tree stays within kMaxDepth / kMaxLeaves.
+   // The leaf exists and the tree stays within kMaxDepth / kMaxLeaves.
    bool CanSplit(int leaf) const;
-   // Replaces the leaf by a split of the leaf (keeps its id) and a new leaf of the first free type. The new leaf is
-   // the split's fixed child: newSizePx (logical) is its extent along the axis. Returns false (no change) if !CanSplit.
+   // Editor type a split of the leaf gives the new leaf (Blender's split duplicates the area): a panel leaf's own editor; for the Viewport or a
+   // CameraPreview leaf another 3D view (a CameraPreview) while fewer than kMaxViewLeaves exist, else the first panel type not hosted (Outliner,
+   // Properties, Script, PartLibrary), else an Outliner
+   AreaType NewLeafType(int leaf) const;
+   // Replaces the leaf by a split of the leaf (keeps its id) and a new leaf of NewLeafType. A copy of a panel leaf gets the leaf's saved panel
+   // state (AreaNode::state: the Properties pin, the Outliner display mode and type filter), a copy of a CameraPreview leaf its view setup and
+   // view settings; a 3D view split from the Viewport starts with the default view settings. The new leaf is the split's fixed child: newSizePx
+   // (logical) is its extent along the axis; its id is put in *newLeafId. Returns false (no change) if !CanSplit.
    // [deviation from the spec text, see report: fixed = the new leaf, whichever side it is on]
-   bool Split(int leaf, SplitAxis axis, bool newOnSecondSide, float newSizePx);
+   bool Split(int leaf, SplitAxis axis, bool newOnSecondSide, float newSizePx, int *newLeafId = nullptr);
    // Siblings, both leaves, both visible (not hidden), and the consumed leaf is not the Viewport
    bool CanJoin(int keepLeaf, int consumeLeaf) const;
    // Replaces the parent split by keep (keeps its id); consume is removed. Returns false (no change) if !CanJoin.
@@ -205,9 +214,12 @@ public:
    bool Close(int leaf);
    // Swaps the children (whole subtrees) of a split and sets fixed = 1 - fixed, so each side keeps its size
    bool Swap(int split);
-   // Not for the Viewport leaf, nor to Viewport/Count/CameraPreview(disabled). If another leaf has the type, the two swap types (with their
-   // view settings); a leaf becomes a CameraPreview without a swap (default view settings) while fewer than kMaxViewLeaves exist.
-   bool SetType(int leaf, AreaType type);
+   // Not for the Viewport leaf, nor to Viewport/Count/CameraPreview(disabled). The leaf takes the type with the default panel state, whether or
+   // not other leaves show it (any number of areas of a panel type). A leaf becomes a CameraPreview (default view settings) while fewer than
+   // kMaxViewLeaves exist; at the cap it swaps types with the first CameraPreview leaf (with their view settings), whose id is then put in *swappedWith.
+   bool SetType(int leaf, AreaType type, int *swappedWith = nullptr);
+   // Saved state of a panel leaf (see AreaNode::state); refused for the Viewport and CameraPreview leaves and for a non object
+   bool SetState(int leaf, const nlohmann::json &state);
    // Not for the Viewport (refused)
    bool SetHidden(int leaf, bool hidden);
    // Camera preview view setup of a leaf (-1 Auto, 0..2); no-op for out of range values

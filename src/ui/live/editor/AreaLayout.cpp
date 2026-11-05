@@ -21,10 +21,15 @@ constexpr const char* kTypeNames[] = { "Outliner", "Properties", "Script", "Part
 static_assert(std::size(kTypeNames) == static_cast<size_t>(AreaType::Count));
 
 // Types a split may give to a new leaf, in order
-// A split never creates a CameraPreview: it is only chosen through the editor type menu (SetType), like the EditorUI split preview
+// Panel types a split of a 3D view gives once the secondary views are at their cap (NewLeafType), in order
 constexpr AreaType kNewLeafOrder[] = { AreaType::Outliner, AreaType::Properties, AreaType::Script, AreaType::PartLibrary };
 
 AreaRect Empty(const AreaRect& r) { return { r.x0, r.y0, r.x0, r.y0 }; }
+
+// Keys of a leaf's JSON object that belong to the layout (and to CameraPreview leaves): never read or written as a panel's state
+constexpr const char* kLeafKeys[] = { "editor", "hidden", "preview_view", "view_camera", "view_shading", "live", "view_shade", "orbit", "split", "fixed", "size", "children" };
+bool IsLeafKey(const std::string& key) { return std::any_of(std::begin(kLeafKeys), std::end(kLeafKeys), [&key](const char* k) { return key == k; }); }
+bool HasPanelState(const AreaType type) { return type != AreaType::Viewport && type != AreaType::CameraPreview && type < AreaType::Count; }
 }
 
 const char* AreaTypeJsonName(const AreaType type)
@@ -150,6 +155,8 @@ void AreaLayout::ToLegacy(bool& outliner, bool& properties, float& outlinerW, fl
    propertiesW = right ? right->rect.Width() : kDefaultPropertiesWidth;
    leftEditor = left ? static_cast<int>(left->type) : -1;
    rightEditor = right ? static_cast<int>(right->type) : -1;
+   if (leftEditor >= 0 && rightEditor == leftEditor)
+      rightEditor = -1; // Two areas of one editor: older builds want two different editors, the right side takes the first other one below
    if (leftEditor < 0)
    {
       for (const AreaType t : { AreaType::Outliner, AreaType::Properties, AreaType::Script, AreaType::PartLibrary })
@@ -291,6 +298,10 @@ nlohmann::json NodeToJson(const std::vector<AreaNode>& nodes, const int idx)
       j["editor"] = AreaTypeJsonName(n.type);
       if (n.hidden)
          j["hidden"] = true;
+      if (HasPanelState(n.type) && n.state.is_object())
+         for (const auto& [key, value] : n.state.items())
+            if (!IsLeafKey(key))
+               j[key] = value;
       if (n.type == AreaType::CameraPreview && n.previewView >= 0 && n.previewView < 3)
          j["preview_view"] = kPreviewViewNames[n.previewView];
       if (n.type == AreaType::CameraPreview)
@@ -385,6 +396,10 @@ bool AreaLayout::FromJson(const nlohmann::json& j)
          }
          tmp.m_nodes[idx].type = type;
          tmp.m_nodes[idx].hidden = n.value("hidden", false);
+         if (HasPanelState(type)) // The other keys are the panel's state (its own validation: unknown or malformed values mean its defaults)
+            for (const auto& [key, value] : n.items())
+               if (!IsLeafKey(key))
+                  tmp.m_nodes[idx].state[key] = value;
          tmp.m_nodes[idx].previewView = -1; // Unknown or missing names mean Auto
          if (type == AreaType::CameraPreview && n.contains("preview_view") && n["preview_view"].is_string())
             for (int v = 0; v < 3; v++)
@@ -470,7 +485,6 @@ bool AreaLayout::ValidateImpl(std::string& why) const
    }
    std::vector<uint8_t> seen(count, 0);
    int visited = 0, leaves = 0, viewports = 0, views = 0;
-   bool typeSeen[static_cast<size_t>(AreaType::Count)] = {};
 
    auto walk = [&](auto&& self, const int idx, const int depth) -> bool {
       if (depth > kMaxDepth)
@@ -524,22 +538,12 @@ bool AreaLayout::ValidateImpl(std::string& why) const
             return false;
          }
       }
-      if (n.type == AreaType::CameraPreview)
+      // Any number of areas of a panel type (as in Blender); the secondary 3D views have a cap (render targets)
+      if (n.type == AreaType::CameraPreview && ++views > kMaxViewLeaves)
       {
-         // The secondary 3D views are the only type with more than one leaf
-         if (++views > kMaxViewLeaves)
-         {
-            why = "more than " + std::to_string(kMaxViewLeaves) + " CameraPreview editors";
-            return false;
-         }
-         return true;
-      }
-      if (typeSeen[static_cast<size_t>(n.type)])
-      {
-         why = std::string("duplicate editor ") + AreaTypeJsonName(n.type);
+         why = "more than " + std::to_string(kMaxViewLeaves) + " CameraPreview editors";
          return false;
       }
-      typeSeen[static_cast<size_t>(n.type)] = true;
       return true;
    };
 
@@ -617,7 +621,8 @@ bool AreaLayout::operator==(const AreaLayout& other) const
       if (x.isSplit != y.isSplit)
          return false;
       if (!x.isSplit)
-         return x.type == y.type && x.hidden == y.hidden && (x.type != AreaType::CameraPreview || (x.previewView == y.previewView && x.view.SameChoices(y.view)));
+         return x.type == y.type && x.hidden == y.hidden && (x.type != AreaType::CameraPreview || (x.previewView == y.previewView && x.view.SameChoices(y.view)))
+            && (!HasPanelState(x.type) || x.state == y.state);
       return x.axis == y.axis && x.fixed == y.fixed && x.size == y.size && self(self, x.child[0], y.child[0]) && self(self, x.child[1], y.child[1]);
    };
    return eq(eq, m_root, other.m_root);
@@ -860,23 +865,41 @@ int AreaLayout::FirstFreeType() const
    return -1;
 }
 
+AreaType AreaLayout::NewLeafType(const int leaf) const
+{
+   const AreaNode* const n = Find(leaf);
+   if (n != nullptr && !n->isSplit && HasPanelState(n->type))
+      return n->type;
+   if (cameraPreviewEnabled && CountLeaves(AreaType::CameraPreview) < kMaxViewLeaves)
+      return AreaType::CameraPreview;
+   const int free = FirstFreeType();
+   return free >= 0 ? static_cast<AreaType>(free) : AreaType::Outliner;
+}
+
 bool AreaLayout::CanSplit(const int leaf) const
 {
    const int i = IndexOf(leaf);
    if (i < 0 || m_nodes[i].isSplit)
       return false;
-   return FirstFreeType() >= 0 && LeafCount() < kMaxLeaves && Depth(i) + 1 <= kMaxDepth;
+   return LeafCount() < kMaxLeaves && Depth(i) + 1 <= kMaxDepth;
 }
 
-bool AreaLayout::Split(const int leaf, const SplitAxis axis, const bool newOnSecondSide, float newSizePx)
+bool AreaLayout::Split(const int leaf, const SplitAxis axis, const bool newOnSecondSide, float newSizePx, int* const newLeafId)
 {
+   if (newLeafId != nullptr)
+      *newLeafId = -1;
    if (!CanSplit(leaf))
       return false;
    if (!std::isfinite(newSizePx) || newSizePx <= 0.f)
       newSizePx = 1.f;
    const int li = IndexOf(leaf);
    const int parent = m_nodes[li].parent;
-   const AreaType newType = static_cast<AreaType>(FirstFreeType());
+   const AreaType newType = NewLeafType(leaf);
+   // A copy of the split area's editor starts with its state (Blender's split duplicates the area)
+   const bool copy = newType == m_nodes[li].type;
+   const nlohmann::json newState = copy ? m_nodes[li].state : nlohmann::json::object();
+   const int newPreviewView = copy ? m_nodes[li].previewView : -1;
+   const AreaViewSettings newView = copy ? m_nodes[li].view : AreaViewSettings {};
 
    const int si = static_cast<int>(m_nodes.size());
    const int ni = si + 1;
@@ -895,6 +918,11 @@ bool AreaLayout::Split(const int leaf, const SplitAxis axis, const bool newOnSec
    n.id = NewNodeId();
    n.parent = si;
    n.type = newType;
+   n.state = newState;
+   n.previewView = newPreviewView;
+   n.view = newView;
+   if (newLeafId != nullptr)
+      *newLeafId = static_cast<int>(n.id);
    m_nodes[li].parent = si;
    if (parent >= 0)
    {
@@ -975,8 +1003,10 @@ bool AreaLayout::Swap(const int split)
    return true;
 }
 
-bool AreaLayout::SetType(const int leaf, const AreaType type)
+bool AreaLayout::SetType(const int leaf, const AreaType type, int* const swappedWith)
 {
+   if (swappedWith != nullptr)
+      *swappedWith = -1;
    const int i = IndexOf(leaf);
    if (i < 0 || m_nodes[i].isSplit || m_nodes[i].type == AreaType::Viewport)
       return false;
@@ -985,30 +1015,44 @@ bool AreaLayout::SetType(const int leaf, const AreaType type)
    AreaNode& n = m_nodes[i];
    if (n.type == type)
       return true;
-   // Up to kMaxViewLeaves secondary views: below the cap, a leaf becomes one without taking it from another leaf
-   const int o = type == AreaType::CameraPreview && CountLeaves(AreaType::CameraPreview) < kMaxViewLeaves ? -1 : IndexOf(FindLeaf(type));
+   // Any number of areas of a panel type; up to kMaxViewLeaves secondary views: at the cap, a leaf becomes one by taking it from the first one
+   const int o = type == AreaType::CameraPreview && CountLeaves(AreaType::CameraPreview) >= kMaxViewLeaves ? IndexOf(FindLeaf(type)) : -1;
    if (o >= 0)
    {
-      m_nodes[o].type = n.type; // each panel is a single instance: the other leaf takes the type this leaf leaves
+      m_nodes[o].type = n.type; // the other leaf takes the type this leaf leaves
       std::swap(m_nodes[o].previewView, n.previewView); // the preview's view setup and view settings follow the preview
       std::swap(m_nodes[o].view, n.view);
+      std::swap(m_nodes[o].state, n.state); // and the panel's state follows the panel
       if (m_nodes[o].type != AreaType::CameraPreview)
       {
          m_nodes[o].previewView = -1;
          m_nodes[o].view = AreaViewSettings {};
       }
+      if (swappedWith != nullptr)
+         *swappedWith = static_cast<int>(m_nodes[o].id);
    }
    else if (type == AreaType::CameraPreview)
    {
       n.previewView = -1; // a new view: the default settings
       n.view = AreaViewSettings {};
    }
+   if (o < 0)
+      n.state = nlohmann::json::object(); // a new editor in the area: its defaults
    n.type = type;
    if (n.type != AreaType::CameraPreview)
    {
       n.previewView = -1;
       n.view = AreaViewSettings {};
    }
+   return true;
+}
+
+bool AreaLayout::SetState(const int leaf, const nlohmann::json& state)
+{
+   const int i = IndexOf(leaf);
+   if (i < 0 || m_nodes[i].isSplit || !HasPanelState(m_nodes[i].type) || !state.is_object())
+      return false;
+   m_nodes[i].state = state;
    return true;
 }
 

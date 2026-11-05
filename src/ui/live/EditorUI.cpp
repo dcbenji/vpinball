@@ -52,6 +52,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <span>
 #include <unordered_set>
 
@@ -80,7 +81,6 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_player(g_pplayer)
    , m_renderer(m_player->m_renderer)
    , m_chrome(*this)
-   , m_outliner(*this)
    , m_properties(*this)
    , m_inspectionModal(*this)
    , m_pbrConvertModal(*this)
@@ -883,14 +883,160 @@ void EditorUI::SetAreaLayout(const AreaLayout &layout)
    m_raiseAreaWindows = true;
    if (m_areas.IsHosted(AreaEditor::PartLibrary))
       m_partLibrary.Show(); // Rescan the library folders
+   BindAreaPanels(); // The leaves have new ids: each area's panel loads the state saved with it
    ComputeAreaRects();
+}
+
+void EditorUI::BindAreaPanels()
+{
+   // Leaf ids of the areas another workspace holds (its saved tree): their panels are parked while that workspace is not shown, and come back
+   // with all their state (search, tab, tree expansion, scroll: the same ImGui window) when it is. Leaf ids are never reused, so a parked panel
+   // can only come back to its own area
+   std::set<int> otherWorkspaces;
+   for (int i = 0; i < PinnedPanel::WorkspaceCount; i++)
+      if (i != m_pinned.GetActiveWorkspace())
+         for (const AreaNode &node : m_pinned.GetWorkspace(i).layout.Nodes())
+            if (!node.isSplit)
+               otherWorkspaces.insert(static_cast<int>(node.id));
+   // The panel of an area that left the tree is parked if another workspace holds it, else dropped (closed); a re-typed area's panel is dropped.
+   // A new area gets its parked panel back, else a fresh one loading the state saved in its leaf
+   const auto bind = [this, &otherWorkspaces](auto &panels, auto &parked, const AreaType type)
+   {
+      for (auto it = panels.begin(); it != panels.end();)
+      {
+         const AreaNode *const node = m_areas.Find(it->first);
+         if (node != nullptr && !node->isSplit && node->type == type)
+            ++it;
+         else
+         {
+            if (node == nullptr && otherWorkspaces.contains(it->first))
+               parked[it->first] = std::move(it->second);
+            it = panels.erase(it);
+         }
+      }
+      for (const AreaNode &node : m_areas.Nodes())
+         if (!node.isSplit && node.type == type && !panels.contains(static_cast<int>(node.id)))
+         {
+            auto &panel = panels[static_cast<int>(node.id)];
+            if (const auto p = parked.find(static_cast<int>(node.id)); p != parked.end())
+            {
+               panel = std::move(p->second);
+               parked.erase(p);
+               continue;
+            }
+            panel = std::make_unique<typename std::decay_t<decltype(panel)>::element_type>(*this);
+            panel->BindArea(static_cast<int>(node.id), node.state);
+         }
+      // Then the parked panels no workspace holds any more are dropped (after the shown workspace took its own back)
+      std::erase_if(parked, [&otherWorkspaces](const auto &entry) { return !otherWorkspaces.contains(entry.first); });
+   };
+   bind(m_outliners, m_parkedOutliners, AreaType::Outliner);
+   bind(m_propertiesAreas, m_parkedProperties, AreaType::Properties);
+   // A split's new area: the split area's live state (search, filters, tab, the pinned object itself), beyond what its leaf's saved state gave it
+   for (const AreaCopy &copy : m_areaCopies)
+   {
+      if (OutlinerPanel *const to = GetOutlinerArea(copy.to))
+         if (const OutlinerPanel *const from = GetOutlinerArea(copy.from))
+            to->CopyAreaState(*from);
+      if (PropertiesPanel *const to = GetPropertiesArea(copy.to))
+         if (const PropertiesPanel *const from = GetPropertiesArea(copy.from))
+            to->CopyAreaState(*from);
+   }
+   m_areaCopies.clear();
+}
+
+OutlinerPanel *EditorUI::GetOutlinerArea(const int leafId) const
+{
+   const auto it = m_outliners.find(leafId);
+   return it != m_outliners.end() ? it->second.get() : nullptr;
+}
+
+PropertiesPanel *EditorUI::GetPropertiesArea(const int leafId) const
+{
+   const auto it = m_propertiesAreas.find(leafId);
+   return it != m_propertiesAreas.end() ? it->second.get() : nullptr;
+}
+
+void EditorUI::SyncAreaStates()
+{
+   for (const AreaNode &node : m_areas.Nodes())
+   {
+      if (node.isSplit)
+         continue;
+      if (node.type == AreaType::Outliner)
+      {
+         if (const OutlinerPanel *const panel = GetOutlinerArea(static_cast<int>(node.id)))
+            m_areas.SetState(static_cast<int>(node.id), panel->SaveAreaState());
+      }
+      else if (node.type == AreaType::Properties)
+      {
+         if (const PropertiesPanel *const panel = GetPropertiesArea(static_cast<int>(node.id)))
+            m_areas.SetState(static_cast<int>(node.id), panel->SaveAreaState());
+      }
+   }
+}
+
+AreaLayout EditorUI::GetAreaLayoutWithState() const
+{
+   AreaLayout layout = m_areas;
+   for (const AreaNode &node : m_areas.Nodes())
+   {
+      if (node.isSplit)
+         continue;
+      if (node.type == AreaType::Outliner)
+      {
+         if (const OutlinerPanel *const panel = GetOutlinerArea(static_cast<int>(node.id)))
+            layout.SetState(static_cast<int>(node.id), panel->SaveAreaState());
+      }
+      else if (node.type == AreaType::Properties)
+      {
+         if (const PropertiesPanel *const panel = GetPropertiesArea(static_cast<int>(node.id)))
+            layout.SetState(static_cast<int>(node.id), panel->SaveAreaState());
+      }
+   }
+   return layout;
+}
+
+const PropertiesPanel *EditorUI::GetJumpPropertiesPanel() const
+{
+   const PropertiesPanel *first = nullptr;
+   for (const LeafRect &leaf : m_leafRects)
+   {
+      if (!leaf.visible || leaf.type != AreaType::Properties)
+         continue;
+      const PropertiesPanel *const panel = GetPropertiesArea(leaf.id);
+      if (panel == nullptr)
+         continue;
+      if (!panel->IsPinned())
+         return panel;
+      if (first == nullptr)
+         first = panel;
+   }
+   return first;
+}
+
+PropertiesPanel &EditorUI::GetSelectionProperties(const bool prepare)
+{
+   // A shown Properties area that follows the selection has prepared its curation on it when it was drawn this frame (areas are drawn before the N-panel)
+   for (const LeafRect &leaf : m_leafRects)
+      if (leaf.visible && leaf.type == AreaType::Properties)
+         if (PropertiesPanel *const panel = GetPropertiesArea(leaf.id); panel != nullptr && !panel->IsPinned())
+         {
+            if (prepare && !panel->HasCuration())
+               panel->PrepareCuration(); // Not drawn yet (a new area after a table sync or a workspace switch): its Item tab would be blank for a frame
+            return *panel;
+         }
+   if (prepare)
+      m_properties.PrepareCuration();
+   return m_properties;
 }
 
 bool EditorUI::IsAreaEditorShown(const AreaEditor type) const
 {
-   const int id = m_areas.FindLeaf(type);
-   const AreaNode *const node = id >= 0 ? m_areas.Find(id) : nullptr;
-   return node != nullptr && !node->hidden && (m_maximizedLeafId < 0 || m_maximizedLeafId == id);
+   for (const AreaNode &node : m_areas.Nodes())
+      if (!node.isSplit && node.type == type && !node.hidden && (m_maximizedLeafId < 0 || m_maximizedLeafId == static_cast<int>(node.id)))
+         return true;
+   return false;
 }
 
 void EditorUI::ShowAreaEditor(const AreaEditor type)
@@ -998,27 +1144,15 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
       const AreaNode *const node = m_areas.Find(op.leaf);
       if (node == nullptr || node->isSplit || node->type == op.type)
          return false;
-      const int other = m_areas.FindLeaf(op.type);
-      const bool wasPreview = node->type == AreaType::CameraPreview;
-      if (!m_areas.SetType(op.leaf, op.type)) // Each panel is a single instance: the other area takes the type this area leaves
+      // Only this area changes, whether or not other areas show the type (Blender: any number of areas of a type). Only a secondary view
+      // picked at its cap takes the type from the first one (AreaLayout::SetType), which then shows the editor this area leaves
+      int other = -1;
+      if (!m_areas.SetType(op.leaf, op.type, &other))
          return false;
-      if (other >= 0 && wasPreview)
-      {
-         // The camera preview is dismissed by picking an editor shown elsewhere: the editor moves here and its old area (now the preview) closes.
-         // The widening runs on the rects of the layout without that area
-         if (m_maximizedLeafId == other)
-            m_maximizedLeafId = -1;
-         m_areas.Close(other);
-         ComputeAreaRects();
-         WidenArea(op.leaf, op.type);
-      }
-      else
-      {
-         WidenArea(op.leaf, op.type);
-         if (other >= 0)
-            if (const AreaNode *const swapped = m_areas.Find(other))
-               WidenArea(other, swapped->type);
-      }
+      WidenArea(op.leaf, op.type);
+      if (other >= 0)
+         if (const AreaNode *const swapped = m_areas.Find(other))
+            WidenArea(other, swapped->type);
       if (op.type == AreaEditor::PartLibrary)
          m_partLibrary.Show(); // Rescan the library folders
       return true;
@@ -1032,17 +1166,31 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
    case PendingAreaOp::Kind::Show:
    case PendingAreaOp::Kind::Toggle:
    {
-      int id = m_areas.FindLeaf(op.type);
-      if (id >= 0)
+      // The areas hosting the type (any number): Toggle hides them all when one is shown, else shows them all; Show reveals the first one unless one is shown
+      vector<int> hosting;
+      int shownId = -1;
+      for (const AreaNode &node : m_areas.Nodes())
+         if (!node.isSplit && node.type == op.type)
+         {
+            hosting.push_back(static_cast<int>(node.id));
+            if (!node.hidden && shownId < 0)
+               shownId = static_cast<int>(node.id);
+         }
+      if (!hosting.empty())
       {
-         const AreaNode *const node = m_areas.Find(id);
          if (op.kind == PendingAreaOp::Kind::Toggle)
          {
-            const bool hide = !node->hidden;
-            if (hide && m_maximizedLeafId == id)
-               m_maximizedLeafId = -1;
-            return m_areas.SetHidden(id, hide);
+            const bool hide = shownId >= 0;
+            bool changed = false;
+            for (const int id : hosting)
+            {
+               if (hide && m_maximizedLeafId == id)
+                  m_maximizedLeafId = -1;
+               changed |= m_areas.SetHidden(id, hide);
+            }
+            return changed;
          }
+         const int id = shownId >= 0 ? shownId : hosting.front();
          if (m_maximizedLeafId >= 0 && m_maximizedLeafId != id)
             m_maximizedLeafId = -1;
          return m_areas.SetHidden(id, false);
@@ -1097,8 +1245,10 @@ bool EditorUI::ApplyAreaOp(const PendingAreaOp &op)
    {
       m_maximizedLeafId = -1; // The new layout must be visible
       const bool hadPartLibrary = m_areas.IsHosted(AreaEditor::PartLibrary);
-      if (!m_areas.Split(op.leaf, op.axis, op.newOnSecondSide, op.size))
+      int newLeaf = -1;
+      if (!m_areas.Split(op.leaf, op.axis, op.newOnSecondSide, op.size, &newLeaf))
          return false;
+      m_areaCopies.push_back({ op.leaf, newLeaf }); // Its panel copies the split area's live state once bound (BindAreaPanels)
       if (!hadPartLibrary && m_areas.IsHosted(AreaEditor::PartLibrary))
          m_partLibrary.Show();
       return true;
@@ -1133,6 +1283,7 @@ void EditorUI::UpdateAreaLayout()
    {
       const vector<PendingAreaOp> ops = std::move(m_pendingAreaOps);
       m_pendingAreaOps.clear();
+      SyncAreaStates(); // A split copies the state of the area it splits
       ComputeAreaRects(); // Widths and sides are evaluated on the current rects
       for (const PendingAreaOp &op : ops)
       {
@@ -1143,6 +1294,7 @@ void EditorUI::UpdateAreaLayout()
          else if (!applied && op.kind == PendingAreaOp::Kind::Join)
             Report("Cannot join these areas");
       }
+      BindAreaPanels(); // New areas get their panels (with their saved state), the slots of the areas that are gone are freed
    }
    ComputeAreaRects();
    // Area under the mouse, for the maximize toggle: not while a popup (View menu, editor type) or the palette covers the areas
@@ -1256,17 +1408,7 @@ bool EditorUI::PlanAreaSplit(const int leafId, const SplitAxis axis, const bool 
    const float lo = vertical ? leaf->rect.x0 : leaf->rect.y0;
    const float hi = vertical ? leaf->rect.x1 : leaf->rect.y1;
    plan.line = clamp(roundf(vertical ? cursor.x : cursor.y), lo, hi);
-   for (int i = 0; i < kPanelTypeCount; ++i)
-      if (!m_areas.IsHosted(static_cast<AreaType>(i)))
-      {
-         plan.newType = static_cast<AreaType>(i); // Same order as AreaLayout::Split
-         break;
-      }
-   if (plan.newType == AreaType::Count)
-   {
-      plan.reason = "All editors are shown";
-      return false;
-   }
+   plan.newType = m_areas.NewLeafType(leafId); // What AreaLayout::Split gives the new area
    if (!m_areas.CanSplit(leafId))
    {
       plan.reason = "Cannot split this area";
@@ -1437,8 +1579,14 @@ void EditorUI::RenderAreaCorners()
          ImGuiWindow *const hw = ImGui::GetCurrentContext()->HoveredWindow;
          const char *const hwName = hw != nullptr ? hw->RootWindow->Name : "";
          const bool overStrip = strncmp(hwName, "##Split", 7) == 0;
-         const bool overArea = hw == nullptr || strcmp(hwName, "OUTLINER") == 0 || strcmp(hwName, "PROPERTIES") == 0 || strcmp(hwName, "SCRIPT") == 0
-            || strcmp(hwName, "PARTLIBRARY") == 0 || strncmp(hwName, "CAMERAPREVIEW", 13) == 0
+         // The area panels' windows: "<BASE>" for the first area of a type, "<BASE>##<slot>" for the others
+         const auto isAreaWindow = [hwName](const char *base)
+         {
+            const size_t n = strlen(base);
+            return strncmp(hwName, base, n) == 0 && (hwName[n] == '\0' || strncmp(hwName + n, "##", 2) == 0);
+         };
+         const bool overArea = hw == nullptr || isAreaWindow("OUTLINER") || isAreaWindow("PROPERTIES") || isAreaWindow("SCRIPT")
+            || isAreaWindow("PARTLIBRARY") || strncmp(hwName, "CAMERAPREVIEW", 13) == 0
             || strcmp(hwName, "SIDEBAR") == 0 || strcmp(hwName, "orbit lock toggle") == 0; // The N-panel and the orbit lock button belong to the viewport area
          // A floating window (popup, tooltip, palette, history, overlay) keeps all its clicks: no corner acts through it
          const bool overFloating = !overArea && !overStrip && strncmp(hwName, "##Corner", 8) != 0;
@@ -1619,10 +1767,7 @@ void EditorUI::RenderAreaEdgeMenu()
          const auto &nodes = m_areas.Nodes();
          const AreaNode &first = nodes[split->child[0]], &second = nodes[split->child[1]];
          const bool canJoin = !first.isSplit && !second.isSplit && !first.hidden && !second.hidden;
-         bool freeType = false;
-         for (int i = 0; i < kPanelTypeCount; ++i)
-            freeType |= !m_areas.IsHosted(static_cast<AreaType>(i));
-         const bool canSplit = freeType && m_areas.LeafCount() < AreaLayout::kMaxLeaves;
+         const bool canSplit = m_areas.LeafCount() < AreaLayout::kMaxLeaves; // Any editor can be shown twice: only the area count limits a split
          ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
          ImGui::TextUnformatted("Area Options");
          ImGui::PopStyleColor();
@@ -1790,16 +1935,19 @@ void EditorUI::RenderAreas()
 {
    if (m_table->IsLocked())
    {
-      m_properties.ClearMouseOver();
+      for (const auto &[leafId, panel] : m_propertiesAreas)
+         panel->ClearMouseOver();
       for (CameraPreviewPanel &view : m_cameraPreviews)
          view.NotHosted();
       return;
    }
-   // The leaves are read once: picking a type in the header of an area re-types them, which takes effect on the next frame. Each panel
-   // is a single instance (one leaf per type), so it is drawn at most once; the Camera Preview leaves (up to kMaxViewLeaves) each get
-   // one of the secondary view panels: the one bound to that leaf, else one not bound to a shown leaf (it reads the leaf's settings)
+   // The leaves are read once: picking a type in the header of an area re-types them, which takes effect on the next frame. Each area of
+   // a panel type has its slot (BindAreaPanels): the Outliner and Properties areas their own panel, the Script and Part Library areas their
+   // own window of the one panel; the Camera Preview leaves (up to kMaxViewLeaves) each get one of the secondary view panels: the one bound
+   // to that leaf, else one not bound to a shown leaf (it reads the leaf's settings)
    const vector<LeafRect> leaves = m_leafRects;
-   bool propertiesDrawn = false;
+   BindAreaPanels(); // Normally already bound (every change of the tree binds), cheap when nothing changed
+   vector<const PropertiesPanel *> propertiesDrawn;
    bool viewDrawn[AreaLayout::kMaxViewLeaves] = {};
    // Render schedule, one rule for every case: the shown views that want to render periodically this frame (Live on or an edit drag in progress, an image
    // shown, not refused by the 2 PBR view cap) are ranked within their class (PBR, wireframe) in leaf order; the rank sets the phase (CameraPreviewPanel).
@@ -1833,13 +1981,23 @@ void EditorUI::RenderAreas()
       const ImVec2 size(leaf.rect.Width(), leaf.rect.Height());
       switch (leaf.type)
       {
-      case AreaEditor::Outliner: m_outliner.RenderInArea(pos, size); break;
-      case AreaEditor::Properties:
-         m_properties.RenderInArea(pos, size);
-         propertiesDrawn = true;
+      case AreaEditor::Outliner:
+         if (OutlinerPanel *const panel = GetOutlinerArea(leaf.id))
+            panel->RenderInArea(pos, size);
          break;
-      case AreaEditor::Script: m_scriptPanel.RenderInArea(pos, size); break;
-      case AreaEditor::PartLibrary: m_partLibrary.RenderInArea(pos, size); break;
+      case AreaEditor::Properties:
+         if (PropertiesPanel *const panel = GetPropertiesArea(leaf.id))
+         {
+            panel->RenderInArea(pos, size);
+            propertiesDrawn.push_back(panel);
+         }
+         break;
+      case AreaEditor::Script:
+         m_scriptPanel.RenderInArea(pos, size, leaf.id);
+         break;
+      case AreaEditor::PartLibrary:
+         m_partLibrary.RenderInArea(pos, size, leaf.id);
+         break;
       case AreaEditor::Viewport: break; // The 3D view shows through
       case AreaEditor::CameraPreview:
          // The view settings are saved in the layout leaf: read when a panel is bound to it, written back by the panel on every change
@@ -1867,8 +2025,9 @@ void EditorUI::RenderAreas()
       case AreaEditor::Count: break;
       }
    }
-   if (!propertiesDrawn)
-      m_properties.ClearMouseOver(); // A panel that is not hosted this frame must not keep last frame's hover
+   for (const auto &[leafId, panel] : m_propertiesAreas)
+      if (std::ranges::find(propertiesDrawn, panel.get()) == propertiesDrawn.end())
+         panel->ClearMouseOver(); // A panel that is not hosted this frame must not keep last frame's hover
    for (int i = 0; i < AreaLayout::kMaxViewLeaves; i++)
       if (!viewDrawn[i])
          m_cameraPreviews[i].NotHosted(); // Zero cost when not shown: no render request, targets released
@@ -3101,23 +3260,36 @@ void EditorUI::RenderUI()
       if (m_maximizedLeafId >= 0 || AreaLayout::LeafAt(m_leafRects, mouse.x, mouse.y) >= 0) // Over an area (not the bars)
          ToggleMaximizeArea();
    }
-   // Ctrl+F: search field of the Properties area when the mouse is over it, otherwise the outliner filter. Not while a text field is being edited (script
-   // editor, fields,...), and an area is never re-typed from here: the one already hosting the outliner is revealed
+   // Ctrl+F: search field of the Properties area under the mouse, otherwise the filter of the Outliner under the mouse, else of the first shown
+   // Outliner (or the first hosted one, revealed). Not while a text field is being edited (script editor, fields,...), and an area is never re-typed from here
    if (panelsShown && !m_table->IsLocked() && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
       AreaEditor hovered = AreaEditor::Count;
       bool hoveredSidebar = false;
-      if (GetAreaUnderMouse(hovered, hoveredSidebar) && !hoveredSidebar && hovered == AreaEditor::Properties)
+      int hoveredLeaf = -1;
+      const bool overArea = GetAreaUnderMouse(hovered, hoveredSidebar, &hoveredLeaf) && !hoveredSidebar;
+      PropertiesPanel *const properties = overArea && hovered == AreaEditor::Properties ? GetPropertiesArea(hoveredLeaf) : nullptr;
+      OutlinerPanel *outliner = overArea && hovered == AreaEditor::Outliner ? GetOutlinerArea(hoveredLeaf) : nullptr;
+      if (outliner == nullptr && properties == nullptr)
       {
-         if (m_properties.CanSearch())
-            m_properties.FocusSearch();
+         for (const LeafRect &leaf : m_leafRects)
+            if (outliner == nullptr && leaf.visible && leaf.type == AreaEditor::Outliner)
+               outliner = GetOutlinerArea(leaf.id);
+         if (outliner == nullptr)
+            outliner = GetOutlinerArea(m_areas.FindLeaf(AreaEditor::Outliner));
+      }
+      if (properties != nullptr)
+      {
+         if (properties->CanSearch())
+            properties->FocusSearch();
          else
             Report("Search needs a single selection"); // The search is off for a multi selection: the next keys would otherwise be editor shortcuts
       }
-      else if (IsAreaEditorHosted(AreaEditor::Outliner))
+      else if (outliner != nullptr)
       {
-         ShowAreaEditor(AreaEditor::Outliner); // Reveals the area (next frame); never re-types one
-         m_outliner.FocusFilter();
+         if (FindLeafRect(outliner->GetLeaf()) == nullptr)
+            ShowAreaEditor(AreaEditor::Outliner); // Reveals the area (next frame); never re-types one
+         outliner->FocusFilter();
       }
       else
          Report("Outliner not shown");
@@ -3801,7 +3973,7 @@ void EditorUI::InvertSelection()
    m_outlinerAnchor.reset();
 }
 
-bool EditorUI::GetAreaUnderMouse(AreaEditor & type, bool &sidebar) const
+bool EditorUI::GetAreaUnderMouse(AreaEditor & type, bool &sidebar, int *const leafId) const
 {
    // Area geometry of RenderAreas / PinnedPanel::Render: the leaf rects of the layout tree, the N-panel being the right part of the viewport area
    sidebar = false;
@@ -3817,6 +3989,8 @@ bool EditorUI::GetAreaUnderMouse(AreaEditor & type, bool &sidebar) const
    if (node->type != AreaType::Viewport)
    {
       type = node->type;
+      if (leafId != nullptr)
+         *leafId = id;
       return true;
    }
    if (m_showSidebar && mouse.x >= m_viewportContentRect.x1)

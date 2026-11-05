@@ -30,7 +30,9 @@ AreaLayout FromLegacy(const Legacy& l) { return AreaLayout::FromLegacy(l.outline
 AreaLayout MakeWiring()
 {
    AreaLayout l = FromLegacy(kLayout);
-   REQUIRE(l.Split(l.FindLeaf(AreaType::Properties), SplitAxis::Horizontal, true, 380.f));
+   int script = -1;
+   REQUIRE(l.Split(l.FindLeaf(AreaType::Properties), SplitAxis::Horizontal, true, 380.f, &script)); // a second Properties ...
+   REQUIRE(l.SetType(script, AreaType::Script)); // ... made the Script
    return l;
 }
 
@@ -188,7 +190,7 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       CHECK(!(b == a));
    }
 
-   SUBCASE("the preview's view setup and settings follow the preview through SetType swaps and are dropped when it stops being one")
+   SUBCASE("the preview's view setup and settings are dropped when it stops being one")
    if (AreaLayout::cameraPreviewEnabled)
    {
       AreaLayout a = FromLegacy(kLayout);
@@ -199,17 +201,16 @@ TEST_CASE("AreaLayout legacy conversion and JSON round trip of the default works
       v.freeOrbit = true;
       v.wireframe = true;
       REQUIRE(a.SetViewSettings(outliner, v));
-      REQUIRE(a.SetType(outliner, AreaType::Properties)); // swap: the preview moves to the Properties leaf with its view and settings
-      CHECK(a.Find(props)->type == AreaType::CameraPreview);
-      CHECK(a.Find(props)->previewView == 1);
-      CHECK(a.Find(props)->view.freeOrbit);
-      CHECK(a.Find(props)->view.wireframe);
+      int swapped = 0;
+      REQUIRE(a.SetType(outliner, AreaType::Properties, &swapped)); // a second Properties: no swap, the other Properties leaf stays one
+      CHECK(swapped == -1);
+      CHECK(a.Find(props)->type == AreaType::Properties);
+      CHECK(a.Find(outliner)->type == AreaType::Properties);
       CHECK(a.Find(outliner)->previewView == -1);
       CHECK_FALSE(a.Find(outliner)->view.freeOrbit);
-      REQUIRE(a.SetType(props, AreaType::Script)); // not a preview any more
-      CHECK(a.Find(props)->previewView == -1);
-      CHECK_FALSE(a.Find(props)->view.wireframe);
-      CHECK_FALSE(a.SetViewSettings(props, v)); // only for previews
+      CHECK_FALSE(a.Find(outliner)->view.wireframe);
+      CHECK_FALSE(a.SetViewSettings(outliner, v)); // only for previews
+      CHECK(a.Validate());
    }
 
    SUBCASE("view settings round trip; the defaults write no key; malformed values load as the defaults")
@@ -490,47 +491,101 @@ TEST_CASE("AreaLayout split")
 {
    AreaLayout l = FromLegacy(kLayout);
 
-   SUBCASE("a split of the Viewport gives the first free type, on the requested side")
+   SUBCASE("a split of the Viewport gives another 3D view (a CameraPreview with the default settings), on the requested side")
+   if (AreaLayout::cameraPreviewEnabled)
    {
       const int vpId = l.FindLeaf(AreaType::Viewport);
       REQUIRE(l.CanSplit(vpId));
-      REQUIRE(l.Split(vpId, SplitAxis::Vertical, true, 300.f));
+      int viewId = -1;
+      REQUIRE(l.Split(vpId, SplitAxis::Vertical, true, 300.f, &viewId));
       CHECK(l.Validate());
       CHECK(l.FindLeaf(AreaType::Viewport) == vpId); // the split leaf keeps its id
-      const int scriptId = l.FindLeaf(AreaType::Script);
-      REQUIRE(scriptId >= 0);
+      REQUIRE(viewId >= 0);
+      CHECK(l.Find(viewId)->type == AreaType::CameraPreview);
+      CHECK(l.Find(viewId)->previewView == -1);
+      CHECK_FALSE(l.Find(viewId)->view.freeOrbit);
       const Computed c = Compute(l);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.Width() == 300.f);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.x1 == 1560.f);
+      CHECK(c.Leaf(l, AreaType::CameraPreview)->rect.Width() == 300.f);
+      CHECK(c.Leaf(l, AreaType::CameraPreview)->rect.x1 == 1560.f);
       CHECK(c.Leaf(l, AreaType::Viewport)->rect.x1 == 1260.f);
-      CHECK(l.ParentId(vpId) == l.ParentId(scriptId));
+      CHECK(l.ParentId(vpId) == l.ParentId(viewId));
    }
 
    SUBCASE("new leaf on the first (left/top) side keeps the given size")
    {
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, false, 250.f));
+      int id = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, false, 250.f, &id));
       const Computed c = Compute(l);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.y0 == 0.f);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.Height() == 250.f);
+      const LeafRect* const r = c.Leaf(l, l.Find(id)->type);
+      REQUIRE(r != nullptr);
+      CHECK(r->rect.y0 == 0.f);
+      CHECK(r->rect.Height() == 250.f);
       CHECK(c.Leaf(l, AreaType::Viewport)->rect.y0 == 250.f);
    }
 
-   SUBCASE("split of a panel leaf")
+   SUBCASE("split of a panel leaf: a copy of its editor and saved state")
    {
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Outliner), SplitAxis::Horizontal, true, 300.f));
+      const int out = l.FindLeaf(AreaType::Outliner);
+      REQUIRE(l.SetState(out, json { { "display_mode", "table_data" }, { "types", 5 } }));
+      int copy = -1;
+      REQUIRE(l.Split(out, SplitAxis::Horizontal, true, 300.f, &copy));
+      CHECK(l.Find(copy)->type == AreaType::Outliner);
+      CHECK(l.Find(copy)->state == l.Find(out)->state);
+      CHECK(l.CountLeaves(AreaType::Outliner) == 2);
       const Computed c = Compute(l);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.Height() == 300.f);
-      CHECK(c.Leaf(l, AreaType::Outliner)->rect.Height() == 780.f);
-      CHECK(c.Leaf(l, AreaType::Script)->rect.Width() == 200.f);
+      for (const LeafRect& r : c.leaves)
+         if (r.id == copy)
+         {
+            CHECK(r.rect.Height() == 300.f);
+            CHECK(r.rect.Width() == 200.f);
+         }
+         else if (r.id == out)
+            CHECK(r.rect.Height() == 780.f);
    }
 
-   SUBCASE("refused when all 4 panel types are hosted")
+   SUBCASE("a split of a secondary 3D view copies its view setup and settings; at the cap a 3D view split gives the first editor not shown")
+   if (AreaLayout::cameraPreviewEnabled)
    {
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, true, 300.f)); // Script
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, true, 200.f)); // PartLibrary
-      CHECK(l.FindLeaf(AreaType::PartLibrary) >= 0);
+      const int out = l.FindLeaf(AreaType::Outliner);
+      REQUIRE(l.SetType(out, AreaType::CameraPreview));
+      REQUIRE(l.SetPreviewView(out, 2));
+      AreaViewSettings v;
+      v.wireframe = true;
+      REQUIRE(l.SetViewSettings(out, v));
+      int copy = -1;
+      REQUIRE(l.Split(out, SplitAxis::Horizontal, true, 300.f, &copy));
+      CHECK(l.Find(copy)->type == AreaType::CameraPreview);
+      CHECK(l.Find(copy)->previewView == 2);
+      CHECK(l.Find(copy)->view.wireframe);
+      int third = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, true, 300.f, &third));
+      CHECK(l.Find(third)->type == AreaType::CameraPreview);
+      CHECK(l.CountLeaves(AreaType::CameraPreview) == AreaLayout::kMaxViewLeaves);
+      CHECK(l.NewLeafType(l.FindLeaf(AreaType::Viewport)) == AreaType::Outliner); // the first editor not shown
+      CHECK(l.NewLeafType(copy) == AreaType::Outliner);
+      CHECK(l.Validate());
+   }
+
+   SUBCASE("a split copies the split area's editor and state, whatever is shown; refused at kMaxLeaves")
+   {
+      int a = -1, b = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Outliner), SplitAxis::Vertical, true, 150.f, &a));
+      REQUIRE(l.SetType(a, AreaType::Script));
+      REQUIRE(l.Split(a, SplitAxis::Horizontal, true, 200.f, &b));
+      REQUIRE(l.SetType(b, AreaType::PartLibrary));
       CHECK(l.LeafCount() == 5);
       CHECK(l.Validate());
+      const int props = l.FindLeaf(AreaType::Properties);
+      REQUIRE(l.SetState(props, json { { "pin", { { "kind", "part" }, { "name", "Wall1" } } } }));
+      CHECK(l.NewLeafType(props) == AreaType::Properties);
+      REQUIRE(l.CanSplit(props));
+      REQUIRE(l.Split(props, SplitAxis::Horizontal, true, 300.f));
+      CHECK(l.CountLeaves(AreaType::Properties) == 2);
+      for (const AreaNode& n : l.Nodes())
+         if (!n.isSplit && n.type == AreaType::Properties)
+            CHECK(n.state["pin"]["name"] == "Wall1");
+      CHECK(l.Validate());
+      CHECK(l.LeafCount() == AreaLayout::kMaxLeaves);
       const AreaLayout before = l;
       for (const AreaNode& n : l.Nodes())
          if (!n.isSplit)
@@ -583,12 +638,12 @@ TEST_CASE("AreaLayout join")
    {
       AreaLayout l = original;
       const int vp = l.FindLeaf(AreaType::Viewport);
-      REQUIRE(l.Split(vp, SplitAxis::Vertical, true, 300.f));
-      const int script = l.FindLeaf(AreaType::Script);
+      int script = -1;
+      REQUIRE(l.Split(vp, SplitAxis::Vertical, true, 300.f, &script));
       CHECK_FALSE(l.CanJoin(script, vp));
       REQUIRE(l.CanJoin(vp, script));
       REQUIRE(l.Join(vp, script));
-      CHECK(l.FindLeaf(AreaType::Script) < 0);
+      CHECK(l.Find(script) == nullptr);
       CHECK(l.FindLeaf(AreaType::Viewport) == vp);
       CHECK(l.Validate());
       CHECK(l == original);
@@ -670,16 +725,27 @@ TEST_CASE("AreaLayout swap")
 
 TEST_CASE("AreaLayout set type and hidden")
 {
-   SUBCASE("a type another leaf shows swaps the two types")
+   SUBCASE("a type another leaf shows: both leaves show it (any number of areas of a type), the new one with the default state")
    {
       AreaLayout l = FromLegacy(kLayout);
       const int out = l.FindLeaf(AreaType::Outliner);
       const int props = l.FindLeaf(AreaType::Properties);
-      REQUIRE(l.SetType(out, AreaType::Properties));
+      REQUIRE(l.SetState(out, json { { "display_mode", "table_data" } }));
+      REQUIRE(l.SetState(props, json { { "pin", { { "kind", "table" } } } }));
+      int swapped = 0;
+      REQUIRE(l.SetType(out, AreaType::Properties, &swapped));
+      CHECK(swapped == -1);
       CHECK(l.Find(out)->type == AreaType::Properties);
-      CHECK(l.Find(props)->type == AreaType::Outliner);
+      CHECK(l.Find(props)->type == AreaType::Properties);
+      CHECK(l.Find(out)->state.empty()); // not the Outliner's state, not the other Properties' pin
+      CHECK(l.Find(props)->state["pin"]["kind"] == "table");
+      CHECK_FALSE(l.IsHosted(AreaType::Outliner));
+      CHECK(l.CountLeaves(AreaType::Properties) == 2);
       CHECK(l.Validate());
-      CHECK(l.FindLeaf(AreaType::Properties) == out);
+      REQUIRE(l.SetType(props, AreaType::Script));
+      CHECK(l.Find(props)->state.empty());
+      CHECK_FALSE(l.SetState(l.FindLeaf(AreaType::Viewport), json::object()));
+      CHECK_FALSE(l.SetState(out, json::array()));
    }
 
    SUBCASE("a free type is just taken; the hidden flag stays with the slot")
@@ -694,13 +760,14 @@ TEST_CASE("AreaLayout set type and hidden")
       CHECK(l.Validate());
    }
 
-   SUBCASE("swap keeps each slot's hidden flag")
+   SUBCASE("each area keeps its own hidden flag")
    {
       AreaLayout l = FromLegacy(kLookDev);
       const int out = l.FindLeaf(AreaType::Outliner);
       const int props = l.FindLeaf(AreaType::Properties);
       REQUIRE(l.SetType(props, AreaType::Outliner));
-      CHECK(l.Find(out)->type == AreaType::Properties);
+      CHECK(l.Find(out)->type == AreaType::Outliner);
+      CHECK(l.Find(props)->type == AreaType::Outliner);
       CHECK(l.Find(out)->hidden);
       CHECK_FALSE(l.Find(props)->hidden);
    }
@@ -740,20 +807,25 @@ TEST_CASE("AreaLayout set type and hidden")
       CHECK(l.CountLeaves(AreaType::CameraPreview) == 2);
       CHECK(l.Find(out)->type == AreaType::CameraPreview);
       CHECK(l.Validate());
-      // A third one (split of the Viewport), then a fourth request swaps with the first view instead
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, true, 200.f));
-      const int third = l.FindLeaf(AreaType::Outliner); // the split's new leaf: the first free type
-      REQUIRE(third >= 0);
-      REQUIRE(l.SetType(third, AreaType::CameraPreview));
+      // A third one (a split of the Viewport gives a 3D view), then a fourth request swaps with the first view instead
+      int third = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Horizontal, true, 200.f, &third));
+      CHECK(l.Find(third)->type == AreaType::CameraPreview);
       CHECK(l.CountLeaves(AreaType::CameraPreview) == AreaLayout::kMaxViewLeaves);
       CHECK(l.Validate());
-      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, true, 200.f));
-      const int fourth = l.FindLeaf(AreaType::Outliner);
-      REQUIRE(fourth >= 0);
-      REQUIRE(l.SetType(fourth, AreaType::CameraPreview));
+      int fourth = -1;
+      REQUIRE(l.Split(l.FindLeaf(AreaType::Viewport), SplitAxis::Vertical, true, 200.f, &fourth));
+      CHECK(l.Find(fourth)->type == AreaType::Outliner); // at the cap: the first editor not shown
+      REQUIRE(l.SetState(fourth, json { { "display_mode", "table_data" } }));
+      int swapped = -1;
+      REQUIRE(l.SetType(fourth, AreaType::CameraPreview, &swapped));
+      CHECK(swapped == out); // the first view
       CHECK(l.CountLeaves(AreaType::CameraPreview) == AreaLayout::kMaxViewLeaves);
       CHECK(l.Find(fourth)->type == AreaType::CameraPreview);
-      CHECK(l.CountLeaves(AreaType::Outliner) == 1); // one of the views took the type the fourth leaf left
+      CHECK(l.Find(fourth)->state.empty());
+      CHECK(l.Find(out)->type == AreaType::Outliner); // the view took the type the fourth leaf left, with its panel state
+      CHECK(l.Find(out)->state["display_mode"] == "table_data");
+      CHECK(l.CountLeaves(AreaType::Outliner) == 1);
       CHECK(l.Validate());
    }
 }
@@ -770,9 +842,46 @@ TEST_CASE("AreaLayout invalid JSON is rejected")
    {
       CheckRejected(Split("vertical", "first", 200, Leaf("Outliner"), Leaf("Properties")), "Viewport");
    }
-   SUBCASE("duplicate Outliner")
+   SUBCASE("duplicate editors are accepted and round trip with their own states")
    {
-      CheckRejected(Split("vertical", "first", 200, Leaf("Outliner"), Split("vertical", "second", 360, Leaf("Viewport"), Leaf("Outliner"))), "duplicate");
+      json two = Split("vertical", "first", 200, Leaf("Outliner"), Split("vertical", "second", 360, Leaf("Viewport"), Split("horizontal", "first", 300, Leaf("Properties"), Leaf("Properties"))));
+      two["children"][0]["display_mode"] = "table_data";
+      two["children"][1]["children"][1]["children"][0]["pin"] = { { "kind", "part" }, { "name", "Wall1" } };
+      AreaLayout l;
+      REQUIRE(l.FromJson(two));
+      CHECK(l.Validate());
+      CHECK(l.CountLeaves(AreaType::Properties) == 2);
+      const int first = l.FindLeaf(AreaType::Properties);
+      CHECK(l.Find(first)->state["pin"]["name"] == "Wall1");
+      AreaLayout b;
+      REQUIRE(b.FromJson(l.ToJson()));
+      CHECK(b == l);
+      CHECK(b.ToJson() == l.ToJson());
+      CHECK(l.ToJson()["children"][0]["display_mode"] == "table_data");
+      CHECK_FALSE(l.ToJson()["children"][1]["children"][1]["children"][1].contains("pin"));
+      // The layout's own keys are never state keys
+      json clash = Split("vertical", "first", 200, Leaf("Outliner"), Leaf("Viewport"));
+      clash["children"][0]["hidden"] = true;
+      clash["children"][0]["size"] = 12; // a split key on a leaf
+      clash["children"][0]["live"] = false; // a CameraPreview key
+      clash["children"][0]["display_mode"] = "table_data";
+      REQUIRE(l.FromJson(clash));
+      CHECK(l.Find(l.FindLeaf(AreaType::Outliner))->state == json { { "display_mode", "table_data" } });
+      AreaLayout round;
+      REQUIRE(round.FromJson(l.ToJson()));
+      CHECK(round == l);
+      CHECK_FALSE(l.ToJson()["children"][0].contains("size"));
+      // The legacy keys of a layout with two areas of one editor stay two different editors (what older builds accept)
+      json both = Split("vertical", "first", 200, Leaf("Properties"), Split("vertical", "second", 360, Leaf("Viewport"), Leaf("Properties")));
+      REQUIRE(l.FromJson(both));
+      bool outliner = false, properties = false;
+      float ow = 0.f, pw = 0.f;
+      int left = -1, right = -1;
+      l.ToLegacy(outliner, properties, ow, pw, left, right);
+      CHECK(left == static_cast<int>(AreaType::Properties));
+      CHECK(right != left);
+      CHECK(right >= 0);
+      CHECK(right < kPanelTypeCount);
    }
    SUBCASE("NaN, infinite, zero, negative and non numeric sizes")
    {
@@ -870,8 +979,8 @@ TEST_CASE("AreaLayout node ids are stable across compaction")
    };
    const int propsIdxBefore = indexOf(props);
 
-   REQUIRE(l.Split(vp, SplitAxis::Vertical, true, 300.f));
-   const int script = l.FindLeaf(AreaType::Script);
+   int script = -1;
+   REQUIRE(l.Split(vp, SplitAxis::Vertical, true, 300.f, &script));
    REQUIRE(script >= 0);
    const int splitId = l.ParentId(script);
    REQUIRE(l.Join(vp, script));

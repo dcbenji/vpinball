@@ -184,7 +184,7 @@ void ScriptPanel::Update()
    }
 }
 
-void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
+void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size, const int leafId)
 {
    if (!m_extCmdLoaded)
    {
@@ -192,10 +192,10 @@ void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       m_extEditorCmd = g_settingsService.GetAppSettings().GetEditor_ExternalScriptEditor();
    }
 
-   if (m_editor.BeginAreaWindow("SCRIPT", pos, size))
+   if (m_editor.BeginAreaWindow(EditorUI::AreaWindowName("SCRIPT", leafId).c_str(), pos, size))
    {
       // Header: editor type button and title
-      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::Script);
+      m_editor.RenderAreaTypeButton(EditorUI::AreaEditor::Script, leafId);
       ImGui::SameLine();
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("Table Script");
@@ -245,7 +245,10 @@ void ScriptPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
       // Long lines wrap instead of clipping, but wrapping relays out the whole buffer every frame (measured ~0.75 ms at 4800 lines vs 0.09 ms
       // unwrapped), so it is off for scripts of 6000+ lines. Decided only while the field is not being typed in: flipping the flag mid-edit
       // would jump the scroll position.
-      if (ImGui::GetActiveID() != ImGui::GetID("##script"))
+      // (m_wrap is shared by the Script areas: not decided while the script of any of them is being typed in)
+      const ImGuiWindow *const activeWindow = ImGui::GetCurrentContext()->ActiveIdWindow;
+      const bool scriptTyping = ImGui::GetActiveID() != 0 && activeWindow != nullptr && strncmp(activeWindow->RootWindow->Name, "SCRIPT", 6) == 0;
+      if (!scriptTyping)
       {
          const string &text = m_editor.m_table->m_script_text;
          m_wrap = std::count(text.begin(), text.end(), '\n') < 6000;

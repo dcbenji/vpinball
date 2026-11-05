@@ -110,6 +110,15 @@ public:
    // the flag is stale, so it is first set to what the view showed, which makes the first press visibly change the view.
    void TogglePerspectiveCam();
 
+   // ImGui window name of an area panel: "<base>##<id>", the id being the area's leaf id (Script, Part Library) or a serial number per panel created
+   // (Outliner, Properties: an area re-typed away and back keeps its leaf id, but gets a new panel), so ImGui state (scroll, tree open state) is not inherited
+   static string AreaWindowName(const char *base, int id) { return string(base) + "##" + std::to_string(id); }
+   static int NewAreaPanelSerial()
+   {
+      static int serial = 0;
+      return ++serial;
+   }
+
 private:
    // UI Context
    LiveUI &m_liveUI;
@@ -120,7 +129,8 @@ private:
 
    // Sub components (UI panels & modals)
    EditorChrome m_chrome;
-   OutlinerPanel m_outliner;
+   // Properties of the selection that no area shows: the N-panel's Item tab when no Properties area follows the selection, and the panes the
+   // field harvests draw. The Properties areas have their own instances (m_propertiesAreas)
    PropertiesPanel m_properties;
    RendererInspectionModal m_inspectionModal;
    ConvertToPBRModal m_pbrConvertModal;
@@ -736,9 +746,9 @@ private:
    void ToggleSidebar(); // N
    void RenderSplitters();
 
-   // Editor types of the areas (Blender's editor type switcher, the button at the left of each area header). An editor type is hosted by one
-   // area at most (each panel is a single instance): picking in one area a type shown by another area swaps the two. Saved per workspace
-   // by name in the "layout" tree (the legacy left_editor / right_editor ints keep the AreaType order).
+   // Editor types of the areas (Blender's editor type switcher, the button at the left of each area header). Any number of areas may show a
+   // type, as in Blender: picking a type re-types only that area. Saved per workspace by name in the "layout" tree, with each panel's own state
+   // (the legacy left_editor / right_editor ints keep the AreaType order).
    using AreaEditor = AreaType;
    static const char *AreaEditorName(AreaEditor type);
    static const char *AreaEditorIcon(AreaEditor type);
@@ -748,7 +758,7 @@ private:
    {
       enum class Kind
       {
-         SetType, // leaf, type: re-type the area (swap with the area hosting the type), widening it if too narrow for the new editor
+         SetType, // leaf, type: re-type the area, widening it if too narrow for the new editor
          Show, // type: reveal the editor, hosting it in its preferred area if needed
          Toggle, // type: hide / show the area hosting the editor, or host it
          Split, // leaf, axis, newOnSecondSide, size
@@ -769,10 +779,10 @@ private:
    void SetAreaEditor(int leafId, AreaEditor type); // Editor type of the area (leaf id) (queued)
    void SetAreaLayout(const AreaLayout &layout); // Workspace restore (immediate): clears the pending ops, the maximized area and the drags
    bool IsAreaEditorHosted(AreaEditor type) const { return m_areas.IsHosted(type); }
-   bool IsAreaEditorShown(AreaEditor type) const; // Hosted by a visible area
-   void ShowAreaEditor(AreaEditor type); // Make the type visible (queued): reveals the area hosting it, or hosts it in its preferred area (Script, Properties: rightmost, others: leftmost)
-   bool GetAreaUnderMouse(AreaEditor &type, bool &sidebar) const; // Area editor under the mouse (or the N-panel), false over the viewport
-   void ToggleAreaEditor(AreaEditor type); // View menu (queued): hide / show the area hosting the type, or host it
+   bool IsAreaEditorShown(AreaEditor type) const; // Hosted by a visible area (any of them)
+   void ShowAreaEditor(AreaEditor type); // Make the type visible (queued): nothing if an area shows it, else reveals the first area hosting it, or hosts it in its preferred area (Script, Properties: rightmost, others: leftmost)
+   bool GetAreaUnderMouse(AreaEditor &type, bool &sidebar, int *leafId = nullptr) const; // Area editor (and its leaf) under the mouse (or the N-panel), false over the viewport
+   void ToggleAreaEditor(AreaEditor type); // View menu (queued): hide every area of the type when one is shown, else show them all, or host it
    void ToggleMaximizeArea(); // Ctrl+Space and View menu (queued): maximize the area under the mouse (the last one hovered, for the menu), or restore
    ImVec2 GetViewportContentCenter() const; // Centre of the 3D view's visible part (paste position)
    void UpdateAreaLayout(); // Start of the UI frame: applies the pending ops, then computes the area rects
@@ -782,6 +792,29 @@ private:
    bool ApplyAreaOp(const PendingAreaOp &op);
    void WidenArea(int leafId, AreaType type); // Switching the editor of a too narrow area widens it (once, the splitter can shrink it again afterwards)
    AreaLayout m_areas;
+   // Any number of areas of a panel type (Blender). Each Outliner and Properties area has its own panel (display mode, filters, search, pin, tab),
+   // created when the area appears with the state saved in its leaf and dropped with the area (closed or re-typed): a new area always starts clean.
+   // A workspace not shown keeps its areas' panels (parked). A split's new area gets a copy of the split area's live panel state (m_areaCopies).
+   // Script and Part Library are one panel each drawn in every area of the type (one script, one library), each area being its own window
+   std::map<int, std::unique_ptr<OutlinerPanel>> m_outliners; // By leaf id
+   std::map<int, std::unique_ptr<PropertiesPanel>> m_propertiesAreas; // By leaf id
+   // Panels of the areas of the workspaces not shown, by leaf id: given back when their workspace is shown again (BindAreaPanels)
+   std::map<int, std::unique_ptr<OutlinerPanel>> m_parkedOutliners;
+   std::map<int, std::unique_ptr<PropertiesPanel>> m_parkedProperties;
+   struct AreaCopy
+   {
+      int from = -1, to = -1; // Leaf ids: split area, new area
+   };
+   vector<AreaCopy> m_areaCopies; // Splits applied this frame, copied once the new areas have their panels
+   void BindAreaPanels(); // Panels of the areas of the tree (after any change of m_areas)
+   void SyncAreaStates(); // The panels' states written to their leaves of m_areas (before a split copies one, a save or a workspace capture)
+   AreaLayout GetAreaLayoutWithState() const; // m_areas with the panels' current states
+   OutlinerPanel *GetOutlinerArea(int leafId) const;
+   PropertiesPanel *GetPropertiesArea(int leafId) const;
+   // The first shown Properties area following the selection, else m_properties (prepare: its curation is first prepared on the selection; it may harvest
+   // in a hidden window, so it is called before a window is begun)
+   PropertiesPanel &GetSelectionProperties(bool prepare = true);
+   const PropertiesPanel *GetJumpPropertiesPanel() const; // Properties area a search palette jump goes to: the first shown one following the selection, else the first shown one
    std::vector<PendingAreaOp> m_pendingAreaOps;
    int m_maximizedLeafId = -1; // Transient (not saved): only this leaf is laid out, on the whole tree rect
    // Rects of the last ComputeAreaRects (physical pixels): leaves, splitters, the viewport leaf and its content (the leaf without the N-panel).
@@ -806,7 +839,7 @@ private:
       AreaRect newRect; // Where the new area would be (ok only)
       float line = 0.f; // Divider coordinate (x for a Vertical split, y for a Horizontal one), whole pixels, inside the area
       float size = 0.f; // Logical extent of the new area (ok only)
-      AreaType newType = AreaType::Count; // First editor type not shown yet
+      AreaType newType = AreaType::Count; // Editor of the new area (AreaLayout::NewLeafType)
    };
    struct AreaDrag
    {

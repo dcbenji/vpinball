@@ -4,6 +4,8 @@
 
 #include "imgui/imgui.h"
 
+#include <nlohmann/json.hpp>
+
 #include "Selection.h"
 #include "unordered_dense.h"
 
@@ -18,15 +20,18 @@ class EditorUIPart;
 
 // Left side panel modelled on Blender's Outliner: a display mode (scene parts tree or table data), a search box
 // and a filter popover (object types, selected only), used to select the edited object.
+// One instance per Outliner area (any number of them, as in Blender): each has its own display mode, filters, search, tree expansion and scroll.
 class OutlinerPanel
 {
 public:
-   explicit OutlinerPanel(EditorUI &editor)
-      : m_editor(editor)
-   {
-   }
+   explicit OutlinerPanel(EditorUI &editor);
 
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (the area header holds the editor type button)
+   // The area (leaf id) the panel is shown in, and the state saved with that area in the layout (display mode, type filter; absent keys mean the defaults)
+   void BindArea(int leafId, const nlohmann::json &state);
+   nlohmann::json SaveAreaState() const; // Only what differs from the defaults
+   void CopyAreaState(const OutlinerPanel &other); // A split's new area: the split area's display mode, filters, search and sync
+   int GetLeaf() const { return m_leafId; }
    void FocusFilter() { m_focusFilter = true; } // Ctrl+F: type a filter right away
 
    // Default width of the panel in logical pixels (scaled by the UI DPI), the current one is stored in the area layout tree (EditorUI::m_areas)
@@ -64,6 +69,8 @@ private:
    void RenderResourceList(const char *label, bool asTree, vector<T *> &items, vector<T *> &multiSel, T *&anchor, const std::function<string(T *)> &nameOf);
 
    EditorUI &m_editor;
+   string m_windowName = "OUTLINER"; // "OUTLINER##<serial>" once bound to an area (a window of its own)
+   int m_leafId = -1;
    string m_filter;
    bool m_focusFilter = false;
    bool m_syncToSelection = false; // When enabled, the tree is expanded & scrolled to reveal the selected part on selection change

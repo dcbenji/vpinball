@@ -19,6 +19,9 @@ class EditorUI;
 // default. Alternatively, when an external editor command is configured, the script
 // can be written to a temporary file opened in that editor, and synchronized back to
 // the table whenever the file changes on disk.
+// There is one script (the table's) and one external editing session, so a single instance draws every Script area: each area is its own
+// ImGui window (own scroll; the text cursor is the one of the area being typed in), and each keystroke is applied to the table at once, so
+// the other Script areas show it on the next frame.
 class ScriptPanel
 {
 public:
@@ -26,7 +29,8 @@ public:
    ~ScriptPanel();
 
    void Update(); // Every frame, whether the editor is shown or not: external editing session housekeeping
-   void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect, header included
+   // Window filling the given area rect, header included; leafId: the area (its window and its editor type button)
+   void RenderInArea(const ImVec2 &pos, const ImVec2 &size, int leafId);
 
 private:
    void OpenInExternalEditor();

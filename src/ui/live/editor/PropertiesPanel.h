@@ -4,6 +4,8 @@
 
 #include "imgui/imgui.h"
 
+#include <nlohmann/json.hpp>
+
 #include <optional>
 
 #include "audio/AudioPlayer.h"
@@ -31,6 +33,9 @@ class PropertyPane;
 
 // Right side panel displaying the properties of the current selection (table,
 // camera view setup, image, material, render probe, sound or editable part).
+// One instance per Properties area (any number of them, as in Blender): each has its own pin, tab, search and scroll, so a pinned
+// Properties area stays on its object while another one follows the selection. EditorUI also keeps one instance that is never shown in
+// an area, for the N-panel's Item tab and the field harvests.
 class PropertiesPanel
 {
    friend class PinnedPanel; // Harvests the field definitions of pinned objects through the panes below
@@ -40,6 +45,18 @@ public:
    ~PropertiesPanel();
 
    void RenderInArea(const ImVec2 &pos, const ImVec2 &size); // Window filling the given area rect (header with the editor type button, then the content)
+   // The area (leaf id) the panel is shown in, and the state saved with that area in the layout: the pin, as { "pin": { "kind", "name" } }
+   // ("kind": "table", "part", "material", "image", "sound", "probe", "collection" or "camera" with a "view" number), resolved by name when first drawn
+   void BindArea(int leafId, const nlohmann::json &state);
+   nlohmann::json SaveAreaState() const; // Empty when not pinned (or pinned to an object that is gone)
+   void CopyAreaState(const PropertiesPanel &other); // A split's new area: the split area's pin (the same object), tab and search
+   int GetLeaf() const { return m_leafId; }
+   bool IsPinned() const { return m_locked || !m_pendingPin.is_null(); }
+   bool HasCuration() const { return m_curation.active; } // Its tab lists were prepared (by a draw or PrepareCuration)
+   // The tab lists point into the pinned panel's field definitions: dropped with the definitions (table switch)
+   void DropCuration();
+   // Curated tab lists of the selection (or of the pinned object while the panel is drawn); may harvest in a hidden window: call it before a window is begun
+   void PrepareCuration();
 
    // Search field of the header (Blender's Properties search): focuses it. Ctrl+F over the area calls this
    void FocusSearch() { m_focusSearch = true; }
@@ -121,7 +138,9 @@ private:
    vector<string> m_searchTerms; // Lower case words of m_search
    bool m_focusSearch = false;
    uint64_t m_editRecordId = 0; // Undo record kept for the field edit in progress (see TopRecordId)
-   ImGuiID m_prevActiveId = 0;
+   // Active item of the last drawn Properties panel: a new active item ends the undo chain of a field edit. Shared by the instances, so a second
+   // Properties area drawing the same frame does not end the chain of a drag in the first one
+   static inline ImGuiID s_prevActiveId = 0;
    bool m_mouseOver = false;
    void DrawTabStrip();
    void DrawTabContent(PropertyPane &props);
@@ -134,7 +153,11 @@ private:
    // Pin ID (Blender's Properties editor pin): the panel stays on the locked object while other objects get selected
    bool m_locked = false;
    Selection m_lockedSel;
-   void PrepareCuration();
+   nlohmann::json m_pendingPin; // Saved pin not resolved yet (null when none): looked up by name when the panel is first drawn with the table's parts
+   void ResolvePendingPin();
+   string m_windowName = "PROPERTIES"; // "PROPERTIES##<serial>" once bound to an area (a window of its own)
+   bool m_jumpTarget = true; // A search palette jump is for this panel (EditorUI::GetJumpPropertiesPanel; always for the panel no area shows)
+   int m_leafId = -1;
    void PrepareCurationFor(PinKind kind, const string &name, int itemType, bool enabled, Curation &cur);
    void DrawCuration(PropertyPane &props, Curation &cur);
    void EndCuration(PropertyPane &props, Curation &cur);
