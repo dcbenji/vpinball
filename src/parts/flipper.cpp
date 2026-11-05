@@ -612,6 +612,8 @@ void Flipper::Render(const unsigned int renderMask)
    {
       matTrafo = Matrix3D::MatrixRotateZ(m_phitflipper->m_flipperMover.m_angleCur) * matTrafo;
    }
+   else // No physics outside playfield space: drawn at its start angle
+      matTrafo = Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_StartAngle)) * matTrafo;
    RenderMeshDesc base;
    base.mesh = m_meshBuffer;
    base.indexCount = flipperBaseNumIndices;

@@ -806,9 +806,10 @@ void Plunger::Render(const unsigned int renderMask)
       return;
 
    // TODO: get rid of frame stuff
-   assert(m_phitplunger != nullptr);
-   const PlungerMoverObject& pa = m_phitplunger->m_plungerMover;
-   const int frame0 = (int)((pa.m_pos - pa.m_frameStart) / (pa.m_frameEnd - pa.m_frameStart) * (float)(m_cframes - 1) + 0.5f);
+   // A plunger in a part group outside playfield space has no physics (PhysicSetup skips it): it is drawn at its park position
+   const PlungerMoverObject* const pa = m_phitplunger ? &m_phitplunger->m_plungerMover : nullptr;
+   const float travel = pa ? (pa->m_pos - pa->m_frameStart) / (pa->m_frameEnd - pa->m_frameStart) : 1.f - m_d.m_parkPosition;
+   const int frame0 = (int)(travel * (float)(m_cframes - 1) + 0.5f);
    const int frame = (frame0 < 0 ? 0 : frame0 >= m_cframes ? m_cframes - 1 : frame0);
 
    RenderMeshDesc body;
@@ -822,14 +823,17 @@ void Plunger::Render(const unsigned int renderMask)
    // single object matrix cannot represent, so we only model the dominant stroke translation.
    // Residual error is limited to the spring part, bounded by the squash amplitude.
    Matrix3D matPrev = Matrix3D::MatrixIdentity();
-   if (m_prevFramePosValid && pa.m_frameEnd != pa.m_frameStart)
+   if (pa && m_prevFramePosValid && pa->m_frameEnd != pa->m_frameStart)
    {
-      const float strokeDy = m_d.m_stroke * (pa.m_pos - m_prevFramePos) / (pa.m_frameEnd - pa.m_frameStart);
+      const float strokeDy = m_d.m_stroke * (pa->m_pos - m_prevFramePos) / (pa->m_frameEnd - pa->m_frameStart);
       matPrev = Matrix3D::MatrixTranslate(0.f, strokeDy, 0.f);
       body.prevTransform = &matPrev;
    }
-   m_prevFramePos = pa.m_pos;
-   m_prevFramePosValid = true;
+   if (pa)
+   {
+      m_prevFramePos = pa->m_pos;
+      m_prevFramePosValid = true;
+   }
 
    // PBR shadow map pass: draw only the caster geometry with the light's view-projection (no material setup)
    if (renderMask & Renderer::SHADOW_MAP)
@@ -999,6 +1003,11 @@ return S_OK;
 // device was attached; scripts now observe the filtered, spring-chased virtual plunger instead.
 STDMETHODIMP Plunger::Position(float *pVal)
 {
+   if (m_phitplunger == nullptr) // No physics outside playfield space: the plunger stays at its park position
+   {
+      *pVal = 25.f * saturate(m_d.m_parkPosition);
+      return S_OK;
+   }
    const PlungerMoverObject &pa = m_phitplunger->m_plungerMover;
    const float frame = (pa.m_frameEnd - pa.m_pos) / (pa.m_frameEnd - pa.m_frameStart);
    *pVal = 25.f * saturate(frame);
@@ -1228,6 +1237,7 @@ STDMETHODIMP Plunger::put_SpringEndLoops(float newVal)
 
 STDMETHODIMP Plunger::CreateBall(IBall **pResult)
 {
+   *pResult = nullptr; // Nothing when the plunger has no physics (outside playfield space)
    if (m_phitplunger)
    {
       const float x = (m_phitplunger->m_plungerMover.m_x + m_phitplunger->m_plungerMover.m_x2) * 0.5f;

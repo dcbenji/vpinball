@@ -588,6 +588,7 @@ STDMETHODIMP Kicker::InterfaceSupportsErrorInfo(REFIID riid)
 
 STDMETHODIMP Kicker::CreateSizedBallWithMass(/*[in]*/ float radius, /*[in]*/ float mass, /*out, retval]*/ IBall **pResult)
 {
+   *pResult = nullptr; // Nothing when the kicker has no physics (outside playfield space)
    if (m_phitkickercircle)
    {
       const float height = m_ptable->GetSurfaceHeight(m_d.m_szSurface, m_d.m_vCenter.x, m_d.m_vCenter.y);

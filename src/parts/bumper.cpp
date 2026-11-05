@@ -337,7 +337,7 @@ void Bumper::Render(const unsigned int renderMask)
 
    if (m_d.m_ringVisible && !isStaticOnly)
    {
-      const float ringAnimOffset = m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+      const float ringAnimOffset = m_pbumperhitcircle ? m_pbumperhitcircle->m_bumperanim_ringAnimOffset : 0.f; // No physics outside playfield space
       const Matrix3D ringMatrix = Matrix3D::MatrixTranslate(0.f, 0.f, ringAnimOffset);
 
       RenderMeshDesc ring;
@@ -594,6 +594,10 @@ void Bumper::GenerateCapMesh(Vertex3D_NoTex2 *buf) const
 
 void Bumper::UpdateAnimation(const float diff_time_msec)
 {
+   // A bumper in a part group outside playfield space has no physics (PhysicSetup skips it): it is never hit and its ring stays up
+   if (m_pbumperhitcircle == nullptr)
+      return;
+
    if (m_pbumperhitcircle->m_bumperanim_hitEvent)
       g_pplayer->m_pininput.PlayBumperRumble();
 
@@ -856,7 +860,7 @@ STDMETHODIMP Bumper::put_RingDropOffset(float newVal)
 
 STDMETHODIMP Bumper::get_CurrentRingOffset(float *pVal)
 {
-   *pVal = m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+   *pVal = m_pbumperhitcircle ? m_pbumperhitcircle->m_bumperanim_ringAnimOffset : 0.f;
    return S_OK;
 }
 
