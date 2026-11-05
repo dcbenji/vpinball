@@ -17,7 +17,7 @@
 // [2] x glow gain, y glow spread, z IOR, w debug (1 = alignment view)
 // [3] x glint strength, y glint sharpness, z facet tilt, w colour fringe
 // [4] x glint keys, y glint turn (incl. the per-insert turn), z facet waviness, w waviness wavelength
-// [5] x per-insert seed, y has facets, z mm per table unit, w frost (0 clear top, saturating: 3 about two thirds, 10+ a fully frosted cap)
+// [5] x per-insert seed, y has facets, z mm per table unit, w frost (a sanded cap: 0 clear, 1 heavily sanded)
 // [6] rgb: room light glinting in the facets, lamp on or off, w: lamp-off look gain (0 = no lamp-off atlas)
 // [7] rgb: the plastic's colour, tinting the (neutral) lamp-off look by [11].y, w: facet blur for the glints in mips (hides a hard-edged facet map)
 // [8] x 1 = spill pass (the card scaled up about its centre), y spill size in card widths, z spill strength,
@@ -110,13 +110,13 @@ float tracedGlint(vec3 n, vec3 v, float turn, float sharp, float channel)
 	return sum * ((sharp + 2.0) / 602.0) * smoothstep(0.05, 0.25, length(v.xy));
 }
 
-// The lamp-off look at a card point: the four elevations of the atlas, each read at the mip the insert's screen size (and the
-// frost) asks for, half a texel of that mip in from its slice's edge so no slice bleeds into its neighbour
-vec3 tracedEnv(vec2 uv, vec4 weights, float lodBias)
+// The lamp-off look at a card point: the four elevations of the atlas, each read at the mip the insert's screen size asks for
+// (or the frost's blur, if wider), half a texel of that mip in from its slice's edge so no slice bleeds into its neighbour
+vec3 tracedEnv(vec2 uv, vec4 weights, float minLod)
 {
 	const vec2 slice = vec2(512.0, 512.0);
 	const vec2 dx = dFdx(uv) * slice, dy = dFdy(uv) * slice;
-	const float lod = clamp(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8)) + lodBias, 0.0, 8.0);
+	const float lod = clamp(max(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8)), minLod), 0.0, 8.0);
 	const vec2 margin = exp2(lod) / (2.0 * slice);
 	const vec2 q = clamp(uv, margin, 1.0 - margin) * 0.5;
 	return texture2DLod(tex_traced_env, q, lod).rgb * weights.x
@@ -190,33 +190,42 @@ void main()
 	const float steep = max(v.z, 0.05);
 	const float steepInside = max(-inside.z, 0.05);
 
-	// Frost: a frosted cap scatters what passes the top, so the light leaves from the top itself: the refraction shift
-	// fades, the view response flattens, and the light blurs and spreads over the whole outline. Saturating, no ceiling.
-	const float frost = 1.0 - exp(-max(tracedParams[5].w, 0.0) / 3.0);
+	// Frost: a sanded cap (0 clear, 1 heavily sanded). Its rough top scatters what passes it over a cone about the refracted
+	// ray (so the refraction itself stays): the light under it blurs over a disc up to ~1.2 mm across (in mm, whatever the view
+	// distance) and evens out a little toward the insert's mean glow, the view response flattens a little, the pocket wall's
+	// fade softens, and the glints and the hot spot go broad and soft. The print over the cap stays sharp.
+	const float frost = saturate(tracedParams[5].w);
+	const float blurMm = 1.2 * frost;
 
 	// The card point the cover shows here, its refraction through a slab undone
-	const vec2 card = uv - (1.0 - frost) * (tracedParams[1].x / size) * (v.xy / steep + inside.xy / steepInside);
+	const vec2 card = uv - (tracedParams[1].x / size) * (v.xy / steep + inside.xy / steepInside);
 
 	// The traced elevation weights, and how far the inside of the plastic slides against the traced direction
 	// (the bake looks up the table from the player's side: its eye is along +v)
 	const float elevation = degrees(acos(saturate(v.z)));
-	const vec4 weights = mix(tracedAngleWeights(elevation), vec4(0.25, 0.25, 0.25, 0.25), 0.6 * frost);
+	const vec4 weights = mix(tracedAngleWeights(elevation), vec4(0.25, 0.25, 0.25, 0.25), 0.3 * frost);
 	const vec3 tracedView = vec3(0.0, sin(radians(elevation)), cos(radians(elevation)));
 	const vec3 tracedInside = refract(-tracedView, vec3(0.0, 0.0, 1.0), 1.0 / eta);
-	const vec2 slide = (1.0 - frost) * (inside.xy / max(-inside.z, 0.25) - tracedInside.xy / max(-tracedInside.z, 0.25)) * (tracedParams[1].z / size);
+	const vec2 slide = (inside.xy / max(-inside.z, 0.25) - tracedInside.xy / max(-tracedInside.z, 0.25)) * (tracedParams[1].z / size);
 
 	const vec2 lightUv = card + slide;
 	float light;
 	if (frost > 0.0)
 	{
-		// Blurred by up to ~4 mm, then mixed toward a milky fill: the broad local glow and the insert's mean glow, spread
-		// evenly to the outline (the bake's mean over its square, over the share of the square the outline covers)
+		// Blurred over a disc blurMm across: 4 taps on a rotated grid, each at the mip half the disc wide (or the pixel's
+		// footprint, if wider; a mip alone is a box: blocky), then mixed a little toward a milky fill: the broad local glow and
+		// the insert's mean glow, spread evenly to the outline (the bake's mean over its square, over the share of the square
+		// the outline covers)
 		const float footprint = max(length(dFdx(lightUv)), length(dFdy(lightUv))) * 1024.0;
-		const float lod = log2(max(footprint, 1.0)) + 8.0 * frost;
-		const float blurred = dot(texture2DLod(tex_base_color, lightUv, lod), weights);
+		const float r = 0.5 * blurMm / size; // the disc's radius in UV
+		const float lod = log2(max(max(footprint, r * 1024.0), 1.0));
+		const vec2 disc[4] = { vec2(-0.25, -0.75), vec2(0.75, -0.25), vec2(0.25, 0.75), vec2(-0.75, 0.25) };
+		float blurred = 0.0;
+		for (int i = 0; i < 4; i++)
+			blurred += dot(texture2DLod(tex_base_color, lightUv + disc[i] * r, lod), weights);
 		const float broad = dot(texture2DLod(tex_base_color, lightUv, 8.0), weights);
 		const float mean = dot(texture2DLod(tex_base_color, vec2(0.5, 0.5), 10.0), weights) / max(tracedParams[1].w > 0.0 ? 0.62 : 1.0, 0.05);
-		light = mix(blurred, 0.5 * (broad + mean), 0.95 * frost);
+		light = mix(0.25 * blurred, 0.5 * (broad + mean), 0.3 * frost);
 	}
 	else
 		light = dot(texture2DGrad(tex_base_color, lightUv, dFdx(lightUv), dFdy(lightUv)), weights);
@@ -232,7 +241,7 @@ void main()
 		{
 			const float texel = size / 1024.0;
 			const float mip = log2(max(2.0 * tracedParams[1].w / texel, 1.0));
-			light *= mix(smoothstep(0.5, 0.95, texture2DLod(tex_base_normalmap, card, mip).a), 1.0, frost);
+			light *= mix(smoothstep(0.5, 0.95, texture2DLod(tex_base_normalmap, card, mip).a), 1.0, 0.5 * frost);
 		}
 
 		// The facets under the card, where the refracted eye ray meets them. The map's green is 'up the table', -v.
@@ -251,7 +260,7 @@ void main()
 		const float variance = max(dot(dFdx(filtered), dFdx(filtered)), dot(dFdy(filtered), dFdy(filtered)));
 		const float alpha2 = 2.0 / (max(tracedParams[3].y, 1.0) + 2.0) + min(variance, 0.25);
 		// ...and frost turns the sparkle into a soft sheen
-		const float sharp = max((2.0 / alpha2 - 2.0) * (1.0 - 0.9 * frost), 1.0);
+		const float sharp = max((2.0 / alpha2 - 2.0) * (1.0 - 0.6 * frost), 1.0);
 
 		// The highlights are sharp and the facet seams hard, so one sample per pixel switches whole pixels on and off along
 		// every seam (stair-stepped dashes, with no temporal AA to hide them): average 4 samples on a rotated grid inside
@@ -267,14 +276,14 @@ void main()
 			const vec3 wavy = normalize(vec3(nxy + lean, sqrt(saturate(1.0 - dot(nxy, nxy)))));
 			glint += vec3(tracedGlint(wavy, v, glintTurn, sharp, 0.0), tracedGlint(wavy, v, glintTurn, sharp, 1.0), tracedGlint(wavy, v, glintTurn, sharp, 2.0)) * f.a;
 		}
-		glint *= 0.25 * (1.0 - 0.95 * frost);
+		glint *= 0.25 * (1.0 - 0.5 * frost);
 	}
 
 	// The lamp-off look, always there under the lamp, at the same card point and weights as the traced light, filtered by
 	// the plastic's colour by plastictint: mix(1, colour, plastictint), written so that 1 gives exactly the colour
 	vec3 lampOff = vec3(0.0, 0.0, 0.0);
 	if (tracedParams[6].w > 0.0)
-		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * tracedEnv(lightUv, weights, 8.0 * frost);
+		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * tracedEnv(lightUv, weights, log2(max(0.5 * blurMm / size * 512.0, 1.0)));
 
 	// The lamp's glow and glints, plus the room glinting in the facets whatever the lamp does
 	// (the white share grows with the glow: the bake's peak (1) gets all of it, the dim body almost none)

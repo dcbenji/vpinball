@@ -65,6 +65,7 @@ constexpr TracedLookKey kLookKeys[] = {
    { "Plastic Tint", "plastictint", 1.f, 0.f, 1.f, 2, "How much the plastic's colour tints the baked lamp-off image: 1 = fully, 0 = the image keeps its own baked colour" },
    { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
    { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
+   { "Frost", "frost", 0.f, 0.f, 1.f, 2, "A sanded cap: 0 = clear, more = the light under the cap blurs and the glints go soft, so the print over it reads more easily" },
 };
 
 // The traced fields a slider marks as touched in Primitive::m_tracedTouched: one bit per field, the bulb fields then the look keys
