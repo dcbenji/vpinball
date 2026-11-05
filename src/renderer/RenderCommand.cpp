@@ -127,6 +127,11 @@ void RenderCommand::Execute(const int nInstances, const bool log)
    case RC_DRAW_QUAD_PNT:
    case RC_DRAW_MESH:
    {
+      // VPX_PERF_ABLATE 'notrans': no alpha blended mesh draws in the main scene target (overdraw / see-through cost)
+      if (m_command == RC_DRAW_MESH && (g_perfAblateMask.load() & PerfAblate::NOTRANS) && m_renderState.GetRenderState(RenderState::ALPHABLENDENABLE) == RenderState::RS_TRUE
+         && RenderTarget::GetCurrentRenderTarget() != nullptr && RenderTarget::GetCurrentRenderTarget()->m_name.rfind("BackBuffer", 0) == 0
+         && RenderTarget::GetCurrentRenderTarget()->m_name.size() == 11) // BackBuffer1 / BackBuffer2: the scene targets (not the output 'BackBuffer')
+         break;
       m_renderState.Apply(m_rd);
       m_shaderState->SetInt(ShaderUniform::layer, RenderTarget::GetCurrentRenderLayer() < 0 ? 0 : RenderTarget::GetCurrentRenderLayer());
       m_shader->m_state->CopyTo(false, m_shaderState);

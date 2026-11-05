@@ -5798,7 +5798,7 @@ std::atomic<float> g_perfAblateShadowOpts { -1.f }; // >= 0: overrides the shado
 const char* PerfAblateStepName(const int step)
 {
    static const char* const names[] = { "base", "nobloom", "noaa", "norefl", "norefr", "noshadow", "nolights", "noui", "nospec", "nomblur", "floor", "base2",
-      "sh_early", "sh_early_g05", "sh_tap4_g2", "mipreg", "refr_half", "copies" };
+      "sh_early", "sh_early_g05", "sh_tap4_g2", "notrans", "noaniso", "floor_notrans" };
    return (step >= 0 && step < (int)std::size(names)) ? names[step] : "";
 }
 void UpdatePerfAblation(Renderer* r)
@@ -5823,13 +5823,13 @@ void UpdatePerfAblation(Renderer* r)
    if (step == g_perfAblateStep.load())
       return;
    using namespace PerfAblate;
-   static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0, 0, 0, 0, 0, 0, 0 };
+   static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0, 0, 0, 0, NOTRANS, 0, BLOOM | AA | REFL | REFR | SHADOW | LIGHTS | UI | SPEC | MBLUR | NOTRANS };
    // Shadow filter option steps (pbrShadowParams.w, see BuildPBRLightList): early-out, early-out + gate 0.5, 4 taps + gate 2
    static constexpr float shadowOpts[nSteps] = { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, 1.f, 1.f + 10.f * 5000.f, 2.f + 10.f * 20000.f, -1.f, -1.f, -1.f };
    g_perfAblateShadowOpts = shadowOpts[step];
-   // Copy steps: mip 0 copies limited to the pass rect, half resolution refraction probe, both
-   RenderTarget::s_perfMipRegion = (step == 15 || step == 17) ? 1 : -1;
-   RenderTarget::s_perfRefrScale = (step == 16 || step == 17) ? 2 : 0;
+   // Anisotropic filtering off (step 16)
+   static const bool aniso = r->UseAnisoFiltering();
+   r->SetAnisoFiltering(step == 16 ? false : aniso);
    const int m = masks[step];
    r->m_bloomOff = bloomOff || (m & BLOOM);
    r->m_FXAA = (m & AA) ? 0 : fxaa;
