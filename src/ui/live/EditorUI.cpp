@@ -5687,12 +5687,12 @@ void EditorUI::BeginModalTransform(ModalOp op)
    if (op == ModalOp::Rotate)
    {
       // Drag points and parts that keep no tilt can not follow an X or Y rotation: their positions still orbit the pivot, their own rotation stays (UpdateModalTransform
-      // says so). What is left to do, so that the keys do not look broken: nothing can orbit (points in their plane, one part or Individual Origins) means table Z only, and
+      // says so). What is left to do, so that the keys do not look broken: nothing can orbit (points in their plane, one part about its own origin or Individual Origins) means table Z only, and
       // with no part able to tilt the free rotation is about the table Z, not the view axis
       bool anyTilt = false;
       for (const SelectionXform::Part &part : m_modal.xform.parts)
          anyTilt |= (part.mask & (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY)) == (EditorUIPart::TM_RotX | EditorUIPart::TM_RotY);
-      if (m_pointEditPart != nullptr || (!anyTilt && (m_modal.xform.parts.size() < 2 || m_modal.xform.individual)))
+      if (m_pointEditPart != nullptr || (!anyTilt && ((m_modal.xform.parts.size() < 2 && m_transformPivot != TransformPivot::Cursor) || m_modal.xform.individual)))
       {
          m_modal.axis = 2;
          m_modal.zOnly = true;
@@ -6603,6 +6603,8 @@ void EditorUI::SetTransformPivot(const TransformPivot pivot)
 
 vec3 EditorUI::GetTransformPivotPoint() const
 {
+   if (m_transformPivot == TransformPivot::Cursor && !(m_pointEditPart != nullptr && m_pointEditCenter)) // (a center point is its own pivot)
+      return m_cursor3D;
    vec3 sum(0.f, 0.f, 0.f), low(FLT_MAX, FLT_MAX, FLT_MAX), high(-FLT_MAX, -FLT_MAX, -FLT_MAX), active(0.f, 0.f, 0.f);
    int count = 0;
    const auto add = [&](const vec3 &p)
@@ -6653,7 +6655,7 @@ bool EditorUI::UsesGroupGizmo() const
       if (count >= needed)
          return true;
    }
-   return false;
+   return count == 1 && m_transformPivot == TransformPivot::Cursor; // One part orbits the 3D cursor too: the gizmo sits on it (as Blender's)
 }
 
 EditorUI::XformOp EditorUI::OrientedXform(const XformKind kind, const TransformOrientation orientation, const Matrix3D &viewFrame, const int axis, const bool plane, const float value,

@@ -528,6 +528,23 @@ void EditorChrome::DrawPivotIcon(ImDrawList *const dl, const ImVec2 &c, const fl
       dl->AddCircleFilled(a, dot, col);
       ring(b, towardsA, false, dim);
       break;
+   case EditorUI::TransformPivot::Cursor:
+   {
+      // The 3D cursor's own look: a ring of dashes (red and white) and four ticks
+      const float cr = 0.62f * s;
+      for (int i = 0; i < 12; i++)
+      {
+         const float a0 = 2.f * IM_PI * static_cast<float>(i) / 12.f;
+         dl->PathArcTo(c, cr, a0, a0 + 2.f * IM_PI / 12.f - 0.05f, 4);
+         dl->PathStroke(i % 2 == 0 ? IM_COL32(235, 35, 35, 255) : col, 0, th);
+      }
+      for (int k = 0; k < 4; k++)
+      {
+         const ImVec2 d(cosf(0.5f * IM_PI * static_cast<float>(k)), sinf(0.5f * IM_PI * static_cast<float>(k)));
+         dl->AddLine(ImVec2(c.x + d.x * 0.35f * s, c.y + d.y * 0.35f * s), ImVec2(c.x + d.x * 0.95f * s, c.y + d.y * 0.95f * s), col, th);
+      }
+      break;
+   }
    }
 }
 
@@ -601,6 +618,7 @@ void EditorChrome::TransformHeaderRow(const char *id, EditorUI &editor)
    };
    static constexpr PivotItem items[] = {
       { EditorUI::TransformPivot::BoundingBoxCenter, "Bounding Box Center", "Rotate and scale about the center of the box around the origins of the selected parts" },
+      { EditorUI::TransformPivot::Cursor, "3D Cursor", "Rotate and scale about the 3D cursor (Shift+right click places it)" },
       { EditorUI::TransformPivot::IndividualOrigins, "Individual Origins", "Each part rotates and scales about its own origin, staying where it is" },
       { EditorUI::TransformPivot::MedianPoint, "Median Point", "Rotate and scale about the average of the origins of the selected parts" },
       { EditorUI::TransformPivot::ActiveElement, "Active Element", "Rotate and scale about the origin of the active part" },

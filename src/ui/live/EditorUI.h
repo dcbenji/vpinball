@@ -600,7 +600,7 @@ private:
 
    // Transform Pivot Point (Blender's header dropdown): where R and S happen on the selection. All modes use the parts' origins (their reported transforms), never their
    // geometry, as Blender does in Object Mode; with one part they are all the part's origin. In point edit they use the selected points (Individual Origins = Median)
-   enum class TransformPivot { MedianPoint, ActiveElement, IndividualOrigins, BoundingBoxCenter };
+   enum class TransformPivot { MedianPoint, ActiveElement, IndividualOrigins, BoundingBoxCenter, Cursor }; // (the numbers are saved in the settings: new ones go last)
    TransformPivot m_transformPivot = TransformPivot::MedianPoint;
    void SetTransformPivot(TransformPivot pivot);
    vec3 GetTransformPivotPoint() const; // Table coordinates; the gizmo and the mouse of a modal transform work around it (with Individual Origins, the median)
