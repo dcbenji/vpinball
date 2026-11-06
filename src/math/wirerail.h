@@ -552,8 +552,23 @@ inline bool Grade(const std::vector<float>& plan, std::vector<float>& z, const i
 // Meshes
 
 // One wire: a tube along its centreline (parallel transported rings, as WireSweep), chamfered at both ends by one segment of 'bevel', closed by a disc
+// Options and a report for a tube that meets a fitting (phase 2b): an end left open is not capped and has no bevel (the fitting's tube continues from its ring), and the
+// ring orientation of the first ring can be seeded so that it lines up with the ring of the rail it meets. The defaults give the tube as before, byte for byte
+struct TubeOpts
+{
+   bool capStart = true, capEnd = true;
+   bool seeded = false;
+   V3 seed { 0.f, 0.f, 0.f }; // The side direction of the first ring (the mouth ring of the rail), made square to the first segment
+};
+struct TubeInfo
+{
+   int firstRing = -1, lastRing = -1; // Index of the first vertex of the first and of the last ring of the tube proper (the caps come after)
+   V3 firstSide { 0.f, 0.f, 0.f }, lastSide { 0.f, 0.f, 0.f }; // The side direction of those rings
+};
+
 template <class Vertex>
-bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides, float bevel, std::vector<Vertex>& verts, std::vector<unsigned>& idx)
+bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides, float bevel, std::vector<Vertex>& verts, std::vector<unsigned>& idx, const TubeOpts* opts = nullptr,
+   TubeInfo* info = nullptr)
 {
    using WireSweep::Norm;
    sides = std::clamp(sides, 3, 64);
@@ -570,10 +585,12 @@ bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides
    const float total = s[n - 1] > 0.f ? s[n - 1] : 1.f;
    bevel = std::clamp(bevel, 0.f, radius * 0.95f);
    bevel = std::min({ bevel, WireSweep::Len(p[1] - p[0]) * 0.49f, WireSweep::Len(p[n - 1] - p[n - 2]) * 0.49f });
+   const bool capS = opts == nullptr || opts->capStart, capE = opts == nullptr || opts->capEnd;
+   const float bevelS = capS ? bevel : 0.f, bevelE = capE ? bevel : 0.f;
    const V3 endS = p[0], endE = p[n - 1];
    const V3 tS = Norm(p[1] - p[0]), tE = Norm(p[n - 1] - p[n - 2]);
-   p[0] = endS + tS * bevel; // The chamfer starts this far in
-   p[n - 1] = endE - tE * bevel;
+   p[0] = endS + tS * bevelS; // The chamfer starts this far in
+   p[n - 1] = endE - tE * bevelE;
 
    const float twoPi = 6.28318530717958647692f;
    const auto ring = [&](const V3& c, const V3& nrm, const V3& bin, const float r, const V3& tiltBy, const float tilt, const float u)
@@ -614,7 +631,15 @@ bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides
       const V3 t = Norm(i == n - 1 ? p[i] - p[i - 1] : (i == 0 ? p[1] - p[0] : p[i + 1] - p[i - 1]));
       V3 nrm;
       if (i == 0)
+      {
          nrm = Norm(WireSweep::Cross(t, fabsf(t.z) > 0.999f ? V3 { 1.f, 0.f, 0.f } : V3 { 0.f, 0.f, 1.f }));
+         if (opts != nullptr && opts->seeded)
+         {
+            const V3 sq = opts->seed - t * WireSweep::Dot(opts->seed, t);
+            if (WireSweep::Len(sq) > 1e-4f)
+               nrm = Norm(sq);
+         }
+      }
       else
       {
          nrm = Norm(prevN - t * WireSweep::Dot(prevN, t));
@@ -633,26 +658,34 @@ bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides
       ring(p[i], nrm, bin, radius, t, 0.f, s[i] / total);
    }
    strip(base, n);
+   if (info != nullptr)
+   {
+      info->firstRing = (int)base;
+      info->lastRing = (int)(base + (unsigned)(n - 1) * (unsigned)sides);
+      info->firstSide = firstN;
+      info->lastSide = lastN;
+   }
 
    // The two ends. Vertices of their own: the chamfer and the disc are shaded flat. A ring carries its tilt as a blend towards the outward end direction
-   const auto capEnd = [&](const bool atEnd)
+   const auto endCap = [&](const bool atEnd)
    {
+      const float bv = atEnd ? bevelE : bevelS;
       const V3 tip = atEnd ? endE : endS;
       const V3 inner = atEnd ? p[n - 1] : p[0];
       const V3 out = atEnd ? tE : tS * -1.f;
       const V3 nrm = atEnd ? lastN : firstN, bin = atEnd ? lastB : firstB;
       const float u = atEnd ? 1.f : 0.f;
-      if (bevel > 1e-4f)
+      if (bv > 1e-4f)
       {
          const unsigned first = (unsigned)verts.size();
          if (atEnd) // Rings in the direction of travel, as the sweep: outward winding
          {
             ring(inner, nrm, bin, radius, out, 0.5f, u);
-            ring(tip, nrm, bin, radius - bevel, out, 0.5f, u);
+            ring(tip, nrm, bin, radius - bv, out, 0.5f, u);
          }
          else
          {
-            ring(tip, nrm, bin, radius - bevel, out, 0.5f, u);
+            ring(tip, nrm, bin, radius - bv, out, 0.5f, u);
             ring(inner, nrm, bin, radius, out, 0.5f, u);
          }
          strip(first, 2);
@@ -668,7 +701,7 @@ bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides
       cv.tu = u;
       cv.tv = 0.5f;
       verts.push_back(cv);
-      ring(tip, nrm, bin, radius - bevel, out, 2.f, u);
+      ring(tip, nrm, bin, radius - bv, out, 2.f, u);
       for (int j = 0; j < sides; j++)
       {
          const unsigned a0 = center + 1 + j, a1 = center + 1 + ((j + 1) % sides);
@@ -678,8 +711,10 @@ bool AppendTube(const std::vector<V3>& centerline, const float radius, int sides
             idx.insert(idx.end(), { center, a1, a0 });
       }
    };
-   capEnd(false);
-   capEnd(true);
+   if (capS)
+      endCap(false);
+   if (capE)
+      endCap(true);
    return true;
 }
 
@@ -706,18 +741,30 @@ bool BuildTubes(const std::vector<Frame>& frames, const std::vector<Wire>& wires
 // The profile swept along the route: rows of profile vertices, quads two sided as the ball can come from either side (a HitTriangle is one sided).
 // 'edges': the long edges (a ball rolling off a facet edge), as line colliders. As in VPE no edges across the route: they lie in the floor and would only give the ball
 // a seam to catch on, and at an entry a lip a little proud of what feeds the rail would kick the ball out (measured: 11 at speed 40).
+struct ChannelPiece
+{
+   unsigned firstVert = 0; // Index of the piece's first row vertex in Channel::verts
+   int rowSize = 0, rows = 0;
+};
+
 struct Channel
 {
    std::vector<V3> verts;
    std::vector<unsigned> tris;
    std::vector<std::pair<unsigned, unsigned>> edges;
-   int rowSize = 0, rows = 0;
+   int rowSize = 0, rows = 0; // Of the first piece
+   // Phase 2b: the route cut at every rail trim, a profile per piece (one piece without trims, built as before)
+   std::vector<ChannelPiece> pieces;
+   size_t quadIndices = 0; // The leading indices of 'tris' are quads of 12 (two sided pairs); what follows (a hairpin's box) are single triangles
+   // What is the physics of a hairpin's end loop only (Terminal Impact): flags per triangle (3 indices), edge and vertex, empty when nothing is
+   std::vector<unsigned char> triTerminal, edgeTerminal, vertTerminal;
 };
 
 // Exact compare: BuildChannel is deterministic from the same frames and profile
 inline bool SameChannel(const Channel& a, const Channel& b)
 {
-   return a.rowSize == b.rowSize && a.rows == b.rows && a.verts.size() == b.verts.size() && a.tris == b.tris && a.edges == b.edges
+   return a.rowSize == b.rowSize && a.rows == b.rows && a.verts.size() == b.verts.size() && a.tris == b.tris && a.edges == b.edges && a.quadIndices == b.quadIndices
+      && a.triTerminal == b.triTerminal && a.edgeTerminal == b.edgeTerminal && a.vertTerminal == b.vertTerminal && a.pieces.size() == b.pieces.size()
       && (a.verts.empty() || memcmp(a.verts.data(), b.verts.data(), a.verts.size() * sizeof(V3)) == 0);
 }
 
@@ -743,6 +790,8 @@ inline Channel BuildChannel(const std::vector<Frame>& frames, const Profile& pro
       for (int v = 0; v < c.rowSize; v++)
          c.edges.push_back({ row + v, next + v });
    }
+   c.pieces.push_back({ 0u, c.rowSize, c.rows });
+   c.quadIndices = c.tris.size();
    return c;
 }
 
@@ -751,8 +800,12 @@ inline Channel BuildChannel(const std::vector<Frame>& frames, const Profile& pro
 // are in the render mesh, never in the ball channel. Each is fitted to the wires at its Position, a distance along the route.
 
 inline constexpr int kFixtureRing = 0, kFixtureRung = 1, kFixtureCradle = 2, kFixtureStand = 3;
-inline constexpr int kFixtureTypeCount = 4; // 4 to 6 (Hairpin, Elbow, Rail Trim) are reserved for phase 2b
+// Phase 2b: the end fittings. Unlike the supports they change the ball channel: they trim rails in the collider, and the hairpin and the elbow add colliders of their own
+inline constexpr int kFixtureHairpin = 4, kFixtureElbow = 5, kFixtureTrim = 6;
+inline constexpr int kFixtureTypeCount = 7;
 inline constexpr size_t kMaxFixtures = 256;
+inline constexpr int kEndStart = 0, kEndEnd = 1;
+inline bool IsEndFitting(const int type) { return type >= kFixtureHairpin && type <= kFixtureTrim; }
 
 // One flat struct for every type (freezy has a class per type): only the fields of its type are used
 struct Fixture
@@ -781,6 +834,13 @@ struct Fixture
    V3 footRotation { 0.f, 0.f, 0.f };
    bool footClockwise = false;
    float footWidth = 30.f, footArm = 30.f, footConnectedArm = 30.f;
+   // End fittings (no Position: the endpoint is where they are, the stored position is the route start or end)
+   int endpoint = kEndEnd; // Hairpin, Elbow, Rail Trim
+   int railA = 0, railB = 1; // Hairpin, Elbow: the two rails taken over (indices, wire 1 is 0)
+   float loopDiameter = 60.f, leadLength = 40.f, tangentLength = 15.f; // Hairpin (density 24 and rotation are the shared fields)
+   float fitOffset = 0.f; // Hairpin and Elbow: how far the attachment sits back from the endpoint, along the rails (0 hairpin, 40 elbow)
+   float dropLength = 80.f, zAngle = 0.f; // Elbow
+   float cutoff[kMaxWires] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f }; // Rail Trim: per wire; Elbow: the other rails' cutoffs (render only). Six slots always, a Rails count change keeps them
 };
 
 inline const char* FixtureTypeName(const int type)
@@ -791,20 +851,51 @@ inline const char* FixtureTypeName(const int type)
    case kFixtureRung: return "Rung";
    case kFixtureCradle: return "Cradle";
    case kFixtureStand: return "Stand";
-   case 4: return "Hairpin";
-   case 5: return "Elbow";
-   case 6: return "Rail Trim";
+   case kFixtureHairpin: return "Hairpin";
+   case kFixtureElbow: return "Elbow";
+   case kFixtureTrim: return "Rail Trim";
    default: return "Fixture";
    }
 }
 inline std::string FixtureName(const Fixture& f, const int index) { return std::string(FixtureTypeName(f.type)) + " " + std::to_string(index + 1); }
 
-// A new fixture at 'position' with freezy's defaults (WireRailComponent.AddRingFixture and the others)
-inline Fixture DefaultFixture(const int type, const float position)
+// The first two active wires: an elbow's default pair (freezy's TryGetDefaultEndpointRailPair). False: fewer than two, the pair is 0 and 1
+inline bool DefaultRailPair(const std::vector<Wire>& wires, int& a, int& b)
+{
+   a = 0;
+   b = std::min(1, std::max(0, (int)wires.size() - 1));
+   int first = -1;
+   for (int i = 0; i < (int)wires.size(); i++)
+   {
+      if (!wires[i].active)
+         continue;
+      if (first < 0)
+      {
+         first = i;
+         continue;
+      }
+      a = first;
+      b = i;
+      return true;
+   }
+   return false;
+}
+
+// A new fixture at 'position' with freezy's defaults (WireRailComponent.AddRingFixture and the others). An end fitting is added at the End: its position is the route length
+// ('position' is that); a hairpin has density 24, an elbow its Offset 40 and the first two active of 'wires' as its pair (the hairpin takes wires 1 and 2, as freezy's)
+inline Fixture DefaultFixture(const int type, const float position, const std::vector<Wire>* wires = nullptr)
 {
    Fixture f;
    f.type = type;
    f.position = position;
+   if (type == kFixtureHairpin)
+      f.density = 24;
+   else if (type == kFixtureElbow)
+   {
+      f.fitOffset = 40.f;
+      if (wires != nullptr)
+         DefaultRailPair(*wires, f.railA, f.railB);
+   }
    return f;
 }
 
@@ -842,6 +933,14 @@ inline void ClampFixture(Fixture& f)
    fin(f.footWidth, def.footWidth);
    fin(f.footArm, def.footArm);
    fin(f.footConnectedArm, def.footConnectedArm);
+   fin(f.loopDiameter, def.loopDiameter);
+   fin(f.leadLength, def.leadLength);
+   fin(f.tangentLength, def.tangentLength);
+   fin(f.fitOffset, 0.f);
+   fin(f.dropLength, def.dropLength);
+   fin(f.zAngle, 0.f);
+   for (float& c : f.cutoff)
+      fin(c, 0.f);
    for (V3* v : { &f.startVector, &f.footPosition, &f.footRotation })
    {
       fin(v->x, 0.f);
@@ -849,7 +948,7 @@ inline void ClampFixture(Fixture& f)
       fin(v->z, 0.f);
    }
    f.position = std::max(0.f, f.position);
-   f.density = std::clamp(f.density, 3, 128);
+   f.density = std::clamp(f.density, f.type == kFixtureHairpin ? 4 : 3, 128);
    f.scale = std::max(0.1f, f.scale);
    f.cutoutStart = std::clamp(f.cutoutStart, 0.f, 360.f);
    f.cutoutEnd = std::clamp(f.cutoutEnd, 0.f, 360.f);
@@ -868,6 +967,16 @@ inline void ClampFixture(Fixture& f)
    f.footConnectedArm = std::max(0.f, f.footConnectedArm);
    f.solderThreshold = std::max(0.f, f.solderThreshold);
    f.solderSize = std::max(0.01f, f.solderSize);
+   f.endpoint = f.endpoint == kEndStart ? kEndStart : kEndEnd;
+   f.railA = std::clamp(f.railA, 0, kMaxWires - 1);
+   f.railB = std::clamp(f.railB, 0, kMaxWires - 1);
+   f.loopDiameter = std::max(0.1f, f.loopDiameter);
+   f.leadLength = std::max(0.f, f.leadLength);
+   f.tangentLength = std::max(0.f, f.tangentLength);
+   f.fitOffset = std::max(0.f, f.fitOffset);
+   f.dropLength = std::max(0.1f, f.dropLength);
+   for (float& c : f.cutoff)
+      c = std::max(0.f, c);
    if (WireSweep::Len(f.startVector) > 1e-4f)
       f.startVector = WireSweep::Norm(f.startVector);
    else
@@ -966,7 +1075,10 @@ inline void MirrorFixture(Fixture& f)
       plus(f.offsetX);
       return;
    }
-   default: return; // Reserved types (phase 2b) are left as they are
+   case kFixtureHairpin: f.rotation = wrap(360.f - f.rotation); plus(f.rotation); return; // The loop's diameter turned about the route turns the other way; the wires keep their numbers
+   case kFixtureElbow: f.zAngle = neg(f.zAngle); return; // The bend turns the other way about the route's up
+   case kFixtureTrim: return; // Wire numbers and distances do not change
+   default: return; // A type of a later version is left as it is
    }
    f.offsetX = neg(f.offsetX);
 }
@@ -1025,6 +1137,11 @@ struct FixtureShape
    std::vector<V3> centerline; // The tube's centreline, 3D (the overlay)
    std::vector<V2> section; // The same in the cross-section, x right and y up from the route
    int triangles = 0; // In the render mesh, blobs included
+   // End fittings (the position is the attachment, the anchor its route point)
+   std::string info; // freezy's note for a fitting that is built
+   std::vector<V3> centerline2; // An elbow: the second rail's path (the first is 'centerline')
+   int railA = -1, railB = -1;
+   unsigned trimmedMask = 0; // Bit i: wire i is trimmed away at the attachment (the preview greys it)
 };
 
 namespace Detail
@@ -1801,11 +1918,956 @@ namespace Detail
 
 inline constexpr int kTrianglesPerBlob = Detail::kBlobRadial * Detail::kBlobRings * 2;
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// End fittings (phase 2b): freezy's Hairpin, Elbow and Rail Trim (WireRailEndpointTrimUtility, TryEvaluateHairpinProfile / ElbowProfile, AppendHairpin / AppendElbow, the
+// collider of WireRailColliderGenerator). They sit at the start or the end of the route and change the ball channel: they trim rails, and the hairpin and the elbow add
+// colliders of their own. A rail is trimmed by distances inward from an endpoint, the largest over all the fittings at that end.
+
+// Distances inward from the route's start and end, per wire
+struct Trims
+{
+   float start[kMaxWires] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f };
+   float end[kMaxWires] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f };
+   bool Any() const
+   {
+      for (int i = 0; i < kMaxWires; i++)
+         if (start[i] > 1e-5f || end[i] > 1e-5f)
+            return true;
+      return false;
+   }
+};
+// The rails that end in a hairpin or an elbow: no cap there, the fitting's tube continues from the ring
+struct FittedEnds
+{
+   bool start[kMaxWires] = { false, false, false, false, false, false };
+   bool end[kMaxWires] = { false, false, false, false, false, false };
+   bool Any() const
+   {
+      for (int i = 0; i < kMaxWires; i++)
+         if (start[i] || end[i])
+            return true;
+      return false;
+   }
+};
+
+namespace Detail
+{
+   inline constexpr float kMinSpan = 1e-5f;
+   inline constexpr int kElbowBendSegments = 6; // max(2, ceil((pi / 2) / (pi / 12)))
+   inline constexpr int kHairpinColliderLeadSegments = 4, kHairpinColliderArcSegments = 12;
+
+   inline bool Attached(const Fixture& f, const int rail) { return rail == f.railA || rail == f.railB; }
+
+   // A fitting as freezy's Ensure*Initialized would store it, built from this copy; the stored values are left alone (an undo of a clamp would need a record of its own)
+   inline Fixture EffectiveFitting(const Fixture& in, const int railCount, const float total)
+   {
+      Fixture f = in;
+      f.endpoint = f.endpoint == kEndStart ? kEndStart : kEndEnd;
+      const float length = std::max(0.f, total);
+      const int top = std::max(0, railCount - 1); // Both fittings clamp Rail A and B to Rails - 1 (a hairpin was left to fail, S1)
+      f.railA = std::clamp(f.railA, 0, top);
+      f.railB = std::clamp(f.railB, 0, top);
+      f.fitOffset = std::clamp(f.fitOffset, 0.f, length);
+      for (float& c : f.cutoff)
+         c = std::clamp(c, 0.f, length);
+      if (f.type == kFixtureElbow)
+         for (int i = 0; i < kMaxWires; i++)
+            if (Attached(f, i))
+               f.cutoff[i] = 0.f; // The attached rails continue into the elbow: fixed at 0
+      return f;
+   }
+
+   // Where a hairpin or an elbow attaches: the offset back from its endpoint
+   inline float AttachDistance(const Fixture& f, const float total)
+   {
+      const float off = std::max(0.f, f.fitOffset);
+      return std::clamp(f.endpoint == kEndStart ? off : total - off, 0.f, std::max(0.f, total));
+   }
+
+   // IsHairpinGeneratable / IsElbowGeneratable: two different rails, the offset leaves some route, both rails on at the attachment
+   inline bool Generatable(const Fixture& f, const std::vector<Wire>& wires, const float total)
+   {
+      if (f.railA == f.railB || f.railA < 0 || f.railB < 0)
+         return false;
+      if (std::max(0.f, f.fitOffset) >= total - kMinSpan) // The offset uses up the route: clamping it would put the fitting at the other endpoint
+         return false;
+      const std::vector<Wire>& ws = WiresAt(wires, AttachDistance(f, total));
+      return f.railA < (int)ws.size() && f.railB < (int)ws.size() && ws[f.railA].active && ws[f.railB].active;
+   }
+
+   // HasRailTrimConflict: another fitting already shortens one of the two rails at this endpoint. 'self' is the fitting asking (-1: none), skipped. Only the fittings
+   // with use[j] count
+   inline bool HasTrimConflict(const std::vector<Fixture>& eff, const std::vector<unsigned char>& use, const std::vector<Wire>& wires, const float total, const int endpoint,
+      const int a, const int b, const int self)
+   {
+      if (a < 0 || b < 0)
+         return false;
+      const int n = (int)wires.size();
+      for (int j = 0; j < (int)eff.size(); j++)
+      {
+         if (!use[j] || j == self)
+            continue;
+         const Fixture& o = eff[j];
+         if (o.type == kFixtureElbow && !Generatable(o, wires, total))
+            continue; // An elbow that is not built contributes no trims and so no conflicts
+         if (o.type == kFixtureTrim && o.endpoint == endpoint)
+         {
+            if ((a < n && o.cutoff[a] > kMinSpan) || (b < n && o.cutoff[b] > kMinSpan))
+               return true;
+         }
+         else if (o.type == kFixtureElbow && o.endpoint == endpoint)
+         {
+            if (self >= 0 && o.fitOffset > kMinSpan && o.railA != o.railB && (Attached(o, a) || Attached(o, b)))
+               return true; // The other elbow's Offset shortens its two rails
+            if ((!Attached(o, a) && a < n && o.cutoff[a] > kMinSpan) || (!Attached(o, b) && b < n && o.cutoff[b] > kMinSpan))
+               return true;
+         }
+      }
+      return false;
+   }
+
+   inline V3 RotateAbout(const V3& axis, const float angle, const V3& v)
+   {
+      const float c = cosf(angle), s = sinf(angle);
+      return v * c + WireSweep::Cross(axis, v) * s + axis * (WireSweep::Dot(axis, v) * (1.f - c));
+   }
+   inline float DistSq(const V3& a, const V3& b)
+   {
+      const V3 d = a - b;
+      return WireSweep::Dot(d, d);
+   }
+}
+
+// What the fittings of a rail do, worked out once per rebuild: the fittings as built (clamped copies), which ones are built, why not, and the trims and fitted ends they cause.
+// 'onlyEnabled' = the render (a fitting that is switched off leaves the render mesh: no trim, no cap change, no tube; freezy builds the render mesh from the enabled ones);
+// off, the collider and the panel (everything counts)
+struct FittingPlan
+{
+   std::vector<Fixture> eff; // By fixture index
+   std::vector<unsigned char> use; // Counts in this plan
+   std::vector<unsigned char> ok; // A hairpin or elbow that is built
+   std::vector<std::string> why; // For one that is not
+   Trims trims; // With the elbows' own cutoffs (the render); ColliderTrims leaves them out
+   FittedEnds fitted;
+};
+
+inline FittingPlan PlanFittings(const std::vector<Fixture>& fixtures, const std::vector<Wire>& wires, const float total, const bool onlyEnabled)
+{
+   using namespace Detail;
+   FittingPlan p;
+   const int count = (int)fixtures.size();
+   const int n = (int)wires.size();
+   p.eff.resize(count);
+   p.use.assign(count, 0);
+   p.ok.assign(count, 0);
+   p.why.assign(count, std::string());
+   bool anyFitting = false;
+   for (int j = 0; j < count; j++)
+   {
+      p.eff[j] = IsEndFitting(fixtures[j].type) ? EffectiveFitting(fixtures[j], n, total) : fixtures[j];
+      p.use[j] = IsEndFitting(fixtures[j].type) && (!onlyEnabled || fixtures[j].enabled);
+      anyFitting |= p.use[j] != 0;
+   }
+   if (!anyFitting)
+      return p;
+   for (int j = 0; j < count; j++)
+   {
+      if (!p.use[j])
+         continue;
+      const Fixture& f = p.eff[j];
+      if (f.type == kFixtureTrim)
+      {
+         p.ok[j] = 1;
+         continue;
+      }
+      const char* name = f.type == kFixtureHairpin ? "Hairpin" : "Elbow";
+      std::string& why = p.why[j];
+      if (total <= kMinSpan)
+         why = "The route is too short.";
+      else if (f.railA == f.railB)
+         why = std::string("Select two different rails. Invalid ") + name + "s are not generated.";
+      else if (f.fitOffset >= total - kMinSpan)
+         why = f.type == kFixtureHairpin ? "The offset consumes the whole route. Move it back so the loop has rail to attach to; the Hairpin is not generated."
+                                         : "The offset consumes the whole route. Move it back so the elbow has rail to attach to; the Elbow is not generated.";
+      else if (!Generatable(f, wires, total))
+         why = std::string("Both selected rails must be active at this endpoint. Inactive ") + name + "s are not generated.";
+      else if (HasTrimConflict(p.eff, p.use, wires, total, f.endpoint, f.railA, f.railB, j))
+         why = f.type == kFixtureHairpin ? "A Rail Trim shortens an attached rail at this endpoint. Remove the conflict or select different rails; the Hairpin is not generated."
+                                         : "Another endpoint cutoff shortens an attached rail. Remove the conflict or select different rails; the Elbow is not generated.";
+      p.ok[j] = why.empty();
+   }
+   // WireRailEndpointTrimUtility.Collect and CollectFittedRailEnds
+   for (int j = 0; j < count; j++)
+   {
+      if (!p.use[j])
+         continue;
+      const Fixture& f = p.eff[j];
+      float* dest = f.endpoint == kEndStart ? p.trims.start : p.trims.end;
+      if (f.type == kFixtureTrim)
+      {
+         for (int i = 0; i < n && i < kMaxWires; i++)
+            dest[i] = std::max(dest[i], f.cutoff[i]);
+      }
+      else if (f.type == kFixtureElbow && p.ok[j])
+      {
+         for (int i = 0; i < n && i < kMaxWires; i++)
+            dest[i] = std::max(dest[i], Attached(f, i) ? std::max(0.f, f.fitOffset) : f.cutoff[i]);
+      }
+      else if (f.type == kFixtureHairpin && p.ok[j] && f.fitOffset > kMinSpan)
+      {
+         dest[f.railA] = std::max(dest[f.railA], f.fitOffset);
+         dest[f.railB] = std::max(dest[f.railB], f.fitOffset);
+      }
+      if ((f.type == kFixtureHairpin || f.type == kFixtureElbow) && p.ok[j])
+      {
+         bool* fit = f.endpoint == kEndStart ? p.fitted.start : p.fitted.end;
+         fit[f.railA] = true;
+         fit[f.railB] = true;
+      }
+   }
+   return p;
+}
+
+// The trims the collider uses: the same, except that an elbow contributes only its Offset on its two rails, never its Other Rail Cutoffs (includeElbow false, then
+// ShortenElbowAttachedRailColliders)
+inline Trims ColliderTrims(const std::vector<Fixture>& fixtures, const std::vector<Wire>& wires, const FittingPlan& all)
+{
+   using namespace Detail;
+   Trims t;
+   const int n = (int)wires.size();
+   for (int j = 0; j < (int)fixtures.size(); j++)
+   {
+      if (!all.use[j])
+         continue;
+      const Fixture& f = all.eff[j];
+      float* dest = f.endpoint == kEndStart ? t.start : t.end;
+      if (f.type == kFixtureTrim)
+         for (int i = 0; i < n && i < kMaxWires; i++)
+            dest[i] = std::max(dest[i], f.cutoff[i]);
+      else if ((f.type == kFixtureHairpin || f.type == kFixtureElbow) && all.ok[j] && f.fitOffset > kMinSpan)
+      {
+         dest[f.railA] = std::max(dest[f.railA], f.fitOffset);
+         dest[f.railB] = std::max(dest[f.railB], f.fitOffset);
+      }
+   }
+   return t;
+}
+
+// The tubes with the trims and the fitted ends (render). A wire's centreline is the frame at its start cut, the rows strictly between, and the frame at its end cut; a wire
+// that is not trimmed uses the rows as they are, so a rail without fittings is built byte for byte as BuildTubes does. 'rings' gets, per wire, the first and last ring of its
+// tube and their side direction: where a fitting's mouth meets it
+struct TubeRings
+{
+   int first[kMaxWires] = { -1, -1, -1, -1, -1, -1 };
+   int last[kMaxWires] = { -1, -1, -1, -1, -1, -1 };
+   V3 firstSide[kMaxWires] = {};
+   V3 lastSide[kMaxWires] = {};
+};
+
+// The centreline of a wire with its start and end cut by the distances inward (the frame at each cut, the rows strictly between); the rows as they are when it is not cut.
+// Empty: nothing of the wire is left
+inline std::vector<V3> TrimmedWireCenterline(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const Wire& w, const float trimStart, const float trimEnd)
+{
+   const float total = rowDist.empty() ? 0.f : rowDist.back();
+   if ((trimStart <= 1e-5f && trimEnd <= 1e-5f) || rowDist.size() != frames.size())
+      return WireCenterline(frames, w);
+   const float a = std::clamp(trimStart, 0.f, total), b = total - std::clamp(trimEnd, 0.f, total);
+   if (b - a <= 1e-4f)
+      return {};
+   const auto at = [&](const Frame& f) { return f.p + f.r * w.x + f.u * w.z; };
+   std::vector<V3> line;
+   line.push_back(at(a <= 1e-5f ? frames.front() : FrameAt(frames, rowDist, a)));
+   for (size_t i = 0; i < frames.size(); i++)
+      if (rowDist[i] > a + 1e-5f && rowDist[i] < b - 1e-5f)
+         line.push_back(at(frames[i]));
+   line.push_back(at(b >= total - 1e-5f ? frames.back() : FrameAt(frames, rowDist, b)));
+   return line;
+}
+
+template <class Vertex>
+bool BuildTubesTrimmed(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float radius, const int sides, const float bevel,
+   const Trims& trims, const FittedEnds& fitted, TubeRings* rings, std::vector<Vertex>& verts, std::vector<unsigned>& idx)
+{
+   bool any = false;
+   for (size_t w = 0; w < wires.size() && w < (size_t)kMaxWires; w++)
+   {
+      if (!wires[w].active)
+         continue;
+      const std::vector<V3> line = TrimmedWireCenterline(frames, rowDist, wires[w], trims.start[w], trims.end[w]);
+      if (line.size() < 2)
+         continue; // Nothing of this wire is left
+      TubeOpts opts;
+      opts.capStart = !fitted.start[w];
+      opts.capEnd = !fitted.end[w];
+      TubeInfo info;
+      if (AppendTube<Vertex>(line, radius, sides, bevel, verts, idx, &opts, &info))
+      {
+         any = true;
+         if (rings != nullptr)
+         {
+            rings->first[w] = info.firstRing;
+            rings->last[w] = info.lastRing;
+            rings->firstSide[w] = info.firstSide;
+            rings->lastSide[w] = info.lastSide;
+         }
+      }
+   }
+   return any;
+}
+
+// The path of a hairpin: a Bezier lead from each rail to its end of a half circle (the loop), as TryEvaluateHairpinProfile
+struct HairpinPath
+{
+   Frame frame {};
+   V3 outward {};
+   std::vector<V3> pts; // Lead A, the arc, lead B back
+   int terminalStartSpan = 0, terminalEndSpan = 0; // The spans of 'pts' that are the arc
+};
+
+namespace Detail
+{
+   inline std::vector<V3> BuildLead(const V3& attachment, const V3& arcPoint, const V3& outward, const float tangentLength, const int segments)
+   {
+      const float maxHandle = WireSweep::Len(attachment - arcPoint) * 0.49f;
+      const float handle = std::min(std::max(0.f, tangentLength), maxHandle);
+      const V3 c1 = attachment + outward * handle, c2 = arcPoint - outward * handle;
+      std::vector<V3> pts((size_t)segments + 1);
+      for (int i = 0; i <= segments; i++)
+      {
+         const float t = (float)i / (float)segments, inv = 1.f - t;
+         pts[i] = attachment * (inv * inv * inv) + c1 * (3.f * inv * inv * t) + c2 * (3.f * inv * t * t) + arcPoint * (t * t * t);
+      }
+      return pts;
+   }
+}
+
+inline bool HairpinPoints(const Fixture& f, const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float total, const int leadSegments,
+   const int arcSegments, HairpinPath& out)
+{
+   using namespace Detail;
+   out = HairpinPath {};
+   if (frames.size() < 2 || !Generatable(f, wires, total))
+      return false;
+   const float d = AttachDistance(f, total);
+   const Frame fr = FrameAt(frames, rowDist, d);
+   const std::vector<Wire>& ws = WiresAt(wires, d);
+   const auto railAt = [&](const int i) { return fr.p + fr.r * ws[i].x + fr.u * ws[i].z; };
+   const V3 a = railAt(f.railA), b = railAt(f.railB);
+   const V3 outward = f.endpoint == kEndStart ? fr.t * -1.f : fr.t;
+   V3 pairAxis = NormSafe(b - a, fr.r);
+   pairAxis = NormSafe(RotateAbout(fr.t, Rad(f.rotation), pairAxis), fr.r);
+   const V3 center = (a + b) * 0.5f + outward * f.leadLength;
+   const float radius = f.loopDiameter * 0.5f;
+   V3 arcA = center - pairAxis * radius, arcB = center + pairAxis * radius;
+   if (DistSq(a, arcA) > DistSq(a, arcB))
+   {
+      pairAxis = pairAxis * -1.f;
+      std::swap(arcA, arcB);
+   }
+   const std::vector<V3> leadA = BuildLead(a, arcA, outward, f.tangentLength, leadSegments);
+   std::vector<V3> leadB = BuildLead(b, arcB, outward, f.tangentLength, leadSegments);
+   std::reverse(leadB.begin(), leadB.end());
+   std::vector<V3> terminal((size_t)arcSegments + 1);
+   for (int i = 0; i <= arcSegments; i++)
+   {
+      const float angle = kPi * (float)i / (float)arcSegments;
+      terminal[i] = center - pairAxis * (cosf(angle) * radius) + outward * (sinf(angle) * radius);
+   }
+   std::vector<V3>& pts = out.pts;
+   for (const V3& p : leadA)
+      AddDistinct(pts, p);
+   out.terminalStartSpan = (int)pts.size() - 1;
+   for (size_t i = 1; i < terminal.size(); i++)
+      AddDistinct(pts, terminal[i]);
+   out.terminalEndSpan = (int)pts.size() - 1;
+   for (size_t i = 1; i < leadB.size(); i++)
+      AddDistinct(pts, leadB[i]);
+   out.frame = fr;
+   out.outward = outward;
+   return pts.size() >= 2;
+}
+
+// The two paths of an elbow: from each rail's attachment out along the route's direction, a quarter bend of the radius of the wire's diameter (as freezy has it, not the
+// radius) and straight down for the drop
+struct ElbowPath
+{
+   Frame frame {};
+   V3 outward {}, down {};
+   std::vector<V3> a, b;
+};
+
+inline bool ElbowPoints(const Fixture& f, const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float total,
+   const float wireDiameter, ElbowPath& out)
+{
+   using namespace Detail;
+   out = ElbowPath {};
+   if (frames.size() < 2 || !Generatable(f, wires, total))
+      return false;
+   const float d = AttachDistance(f, total);
+   const Frame fr = FrameAt(frames, rowDist, d);
+   const std::vector<Wire>& ws = WiresAt(wires, d);
+   V3 outward = f.endpoint == kEndStart ? fr.t * -1.f : fr.t;
+   outward = NormSafe(RotateAbout(fr.u, Rad(f.zAngle), outward), outward);
+   const V3 down = fr.u * -1.f;
+   const float drop = std::max(0.1f, f.dropLength);
+   const float bend = std::min(std::max(0.05f, wireDiameter), drop);
+   const V3 normal = NormSafe(WireSweep::Cross(outward, down), V3 { 0.f, 0.f, 0.f });
+   if (WireSweep::Dot(normal, normal) <= 1e-8f)
+      return false;
+   const auto path = [&](const V3& attachment)
+   {
+      std::vector<V3> pts;
+      AddDistinct(pts, attachment);
+      const V3 center = attachment + down * bend;
+      const V3 startRadius = down * -bend;
+      for (int i = 1; i <= kElbowBendSegments; i++)
+      {
+         const float angle = kPi * 0.5f * (float)i / (float)kElbowBendSegments;
+         AddDistinct(pts, center + RotateAbout(normal, angle, startRadius));
+      }
+      AddDistinct(pts, center + outward * bend + down * std::max(0.f, drop - bend));
+      return pts;
+   };
+   out.a = path(fr.p + fr.r * ws[f.railA].x + fr.u * ws[f.railA].z);
+   out.b = path(fr.p + fr.r * ws[f.railB].x + fr.u * ws[f.railB].z);
+   out.frame = fr;
+   out.outward = outward;
+   out.down = down;
+   return out.a.size() >= 2 && out.a.size() == out.b.size();
+}
+
+// BridgeRings: a band of triangles between a rail's last ring and its fitting's mouth ring, the vertices of both rings reused, their normals averaged. The rings are matched by
+// the rotation (and the reversal, a fitting at the start leaves the other way round) that moves the vertices least
+template <class Vertex>
+void BridgeRings(std::vector<Vertex>& verts, std::vector<unsigned>& idx, const int ringA, const int ringB, const int sides)
+{
+   using WireSweep::Cross;
+   using WireSweep::Dot;
+   if (ringA < 0 || ringB < 0 || (size_t)ringA + sides > verts.size() || (size_t)ringB + sides > verts.size())
+      return;
+   const auto pos = [&](const int k) { return V3 { verts[k].x, verts[k].y, verts[k].z }; };
+   const auto map = [&](const int i, const int offset, const bool reversed) { return reversed ? (offset - i + 2 * sides) % sides : (i + offset) % sides; };
+   V3 ca { 0.f, 0.f, 0.f }, cb { 0.f, 0.f, 0.f };
+   for (int i = 0; i < sides; i++)
+   {
+      ca = ca + pos(ringA + i);
+      cb = cb + pos(ringB + i);
+   }
+   const V3 axisCenter = (ca + cb) * (1.f / (float)(sides * 2));
+   int bestOffset = 0;
+   bool bestReversed = false;
+   float best = 1e30f;
+   for (int rev = 0; rev < 2; rev++)
+      for (int offset = 0; offset < sides; offset++)
+      {
+         float sum = 0.f;
+         for (int i = 0; i < sides; i++)
+         {
+            const V3 d = pos(ringA + i) - pos(ringB + map(i, offset, rev == 1));
+            sum += Dot(d, d);
+         }
+         if (sum < best)
+         {
+            best = sum;
+            bestOffset = offset;
+            bestReversed = rev == 1;
+         }
+      }
+   // One averaged normal for each welded pair, so the shading is continuous across the seam
+   for (int i = 0; i < sides; i++)
+   {
+      Vertex& va = verts[ringA + i];
+      Vertex& vb = verts[ringB + map(i, bestOffset, bestReversed)];
+      const V3 n { va.nx + vb.nx, va.ny + vb.ny, va.nz + vb.nz };
+      const float l = WireSweep::Len(n);
+      if (l > 1e-3f)
+      {
+         const V3 u = n * (1.f / l);
+         va.nx = vb.nx = u.x;
+         va.ny = vb.ny = u.y;
+         va.nz = vb.nz = u.z;
+      }
+   }
+   for (int i = 0; i < sides; i++)
+   {
+      const int next = (i + 1) % sides;
+      const int a0 = ringA + i, a1 = ringA + next;
+      const int b0 = ringB + map(i, bestOffset, bestReversed), b1 = ringB + map(next, bestOffset, bestReversed);
+      const V3 centroid = (pos(a0) + pos(a1) + pos(b0) + pos(b1)) * 0.25f;
+      const V3 normal = Cross(pos(b0) - pos(a0), pos(b1) - pos(a0));
+      if (Dot(normal, centroid - axisCenter) >= 0.f)
+         idx.insert(idx.end(), { (unsigned)a0, (unsigned)b0, (unsigned)b1, (unsigned)a0, (unsigned)b1, (unsigned)a1 });
+      else
+         idx.insert(idx.end(), { (unsigned)a0, (unsigned)b1, (unsigned)b0, (unsigned)a0, (unsigned)a1, (unsigned)b1 });
+   }
+}
+
+// Does the path turn back on itself at a point (freezy's tubes refuse such a path)
+inline bool PathReverses(const std::vector<V3>& p)
+{
+   for (size_t i = 1; i + 1 < p.size(); i++)
+   {
+      const V3 in = WireSweep::Norm(p[i] - p[i - 1]), out = WireSweep::Norm(p[i + 1] - p[i]);
+      if (WireSweep::Dot(in, in) > 1e-8f && WireSweep::Dot(out, out) > 1e-8f && WireSweep::Dot(in, out) <= -cosf(Detail::Rad(0.5f)))
+         return true;
+   }
+   return false;
+}
+
+// The hairpins and elbows: their shapes (built or not, why, the centreline for the overlay and the preview), and for those that are on in the render plan, the tubes, each mouth
+// welded to the rail it takes over. After the supports. 'all' is the plan with everything, 'render' the one with the enabled fittings only
+template <class Vertex>
+void BuildEndFittings(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float wireRadius, const int sides, const float bevel,
+   const std::vector<Fixture>& fixtures, const FittingPlan& all, const FittingPlan& render, const TubeRings& rings, std::vector<Vertex>& verts, std::vector<unsigned>& idx,
+   std::vector<FixtureShape>& shapes)
+{
+   using namespace Detail;
+   if (frames.size() < 2 || rowDist.size() != frames.size() || shapes.size() != fixtures.size())
+      return;
+   const float total = rowDist.back();
+   struct Seam
+   {
+      int endpoint, railA, railB, mouthA, mouthB;
+   };
+   std::vector<Seam> seams;
+   for (size_t k = 0; k < fixtures.size(); k++)
+   {
+      if (!IsEndFitting(fixtures[k].type))
+         continue;
+      const Fixture& f = all.eff[k];
+      FixtureShape& shape = shapes[k];
+      const bool rendered = fixtures[k].enabled && render.ok[k];
+      if (f.type == kFixtureTrim)
+      {
+         shape.built = true;
+         shape.position = f.endpoint == kEndStart ? 0.f : total;
+         shape.anchor = (f.endpoint == kEndStart ? frames.front() : frames.back()).p;
+         shape.info = "Zero leaves a rail unchanged. Multiple trims at one endpoint use the largest offset per rail.";
+         continue;
+      }
+      if (!all.ok[k])
+      {
+         shape.reason = all.why[k];
+         // Where it would attach, for the preview
+         shape.position = AttachDistance(f, total);
+         shape.anchor = FrameAt(frames, rowDist, shape.position).p;
+         continue;
+      }
+      shape.position = AttachDistance(f, total);
+      const Frame at = FrameAt(frames, rowDist, shape.position);
+      shape.anchor = at.p;
+      shape.railA = f.railA;
+      shape.railB = f.railB;
+      const int idx0 = (int)idx.size();
+      if (f.type == kFixtureHairpin)
+      {
+         const int leadSegs = std::max(2, (int)ceilf((float)f.density * 0.25f)), arcSegs = std::max(2, (int)ceilf((float)f.density * 0.5f));
+         HairpinPath path;
+         if (!HairpinPoints(f, frames, rowDist, wires, total, leadSegs, arcSegs, path))
+         {
+            shape.reason = "The loop has no path.";
+            continue;
+         }
+         shape.built = true;
+         shape.centerline = path.pts;
+         shape.info = "The terminal semicircle uses Terminal Impact physics when it is on; its leads use the rail's physics.";
+         if (rendered && !PathReverses(path.pts))
+         {
+            TubeOpts opts;
+            opts.capStart = opts.capEnd = false;
+            const int ring = f.endpoint == kEndStart ? rings.first[f.railA] : rings.last[f.railA];
+            if (ring >= 0)
+            {
+               opts.seeded = true;
+               opts.seed = f.endpoint == kEndStart ? rings.firstSide[f.railA] : rings.lastSide[f.railA];
+            }
+            TubeInfo info;
+            if (AppendTube<Vertex>(path.pts, wireRadius, sides, bevel, verts, idx, &opts, &info))
+               seams.push_back({ f.endpoint, f.railA, f.railB, info.firstRing, info.lastRing });
+         }
+      }
+      else
+      {
+         ElbowPath path;
+         if (!ElbowPoints(f, frames, rowDist, wires, total, wireRadius * 2.f, path))
+         {
+            shape.reason = "The elbow has no path.";
+            continue;
+         }
+         shape.built = true;
+         shape.centerline = path.a;
+         shape.centerline2 = path.b;
+         shape.info = "The offset shortens the two attached rails' colliders, and two vertical faces extend the floor down at the drop point. Other Rail Cutoffs change only the visible tubes.";
+         if (rendered && !PathReverses(path.a) && !PathReverses(path.b))
+         {
+            int mouth[2] = { -1, -1 };
+            for (int which = 0; which < 2; which++)
+            {
+               const int rail = which == 0 ? f.railA : f.railB;
+               TubeOpts opts;
+               opts.capStart = false; // Open at the rail, capped (bevelled) at the bottom
+               opts.capEnd = true;
+               if ((f.endpoint == kEndStart ? rings.first[rail] : rings.last[rail]) >= 0)
+               {
+                  opts.seeded = true;
+                  opts.seed = f.endpoint == kEndStart ? rings.firstSide[rail] : rings.lastSide[rail];
+               }
+               TubeInfo info;
+               if (AppendTube<Vertex>(which == 0 ? path.a : path.b, wireRadius, sides, bevel, verts, idx, &opts, &info))
+                  mouth[which] = info.firstRing;
+            }
+            if (mouth[0] >= 0 && mouth[1] >= 0)
+               seams.push_back({ f.endpoint, f.railA, f.railB, mouth[0], mouth[1] });
+         }
+      }
+      shape.triangles = (int)((idx.size() - (size_t)idx0) / 3);
+   }
+   for (const Seam& s : seams)
+   {
+      const int ringA = s.endpoint == kEndStart ? rings.first[s.railA] : rings.last[s.railA];
+      const int ringB = s.endpoint == kEndStart ? rings.first[s.railB] : rings.last[s.railB];
+      BridgeRings<Vertex>(verts, idx, ringA, s.mouthA, sides);
+      BridgeRings<Vertex>(verts, idx, ringB, s.mouthB, sides);
+   }
+}
+
+// The wires cut by the trims at a distance, as a bit mask (for the preview), using the plan with everything on
+inline unsigned TrimmedMaskAt(const Trims& trims, const int wireCount, const float total, const float d)
+{
+   unsigned mask = 0;
+   for (int i = 0; i < wireCount && i < kMaxWires; i++)
+      if (d < trims.start[i] - 1e-4f || d > total - trims.end[i] + 1e-4f)
+         mask |= 1u << i;
+   return mask;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// The ball channel with the fittings: the route cut at every trim distance and a profile fitted to the wires that are left in each piece (AppendTrimmedSegment), the hairpin's
+// box and the elbow's drop faces on top
+
+struct ChannelGap
+{
+   float from, to; // Along the route: no channel here, the remaining wires can't hold a ball
+};
+
+inline void AppendPiece(Channel& c, const Channel& part)
+{
+   const unsigned base = (unsigned)c.verts.size();
+   ChannelPiece piece;
+   piece.firstVert = base;
+   piece.rowSize = part.rowSize;
+   piece.rows = part.rows;
+   c.verts.insert(c.verts.end(), part.verts.begin(), part.verts.end());
+   for (const unsigned t : part.tris)
+      c.tris.push_back(t + base);
+   for (const auto& e : part.edges)
+      c.edges.push_back({ e.first + base, e.second + base });
+   if (c.pieces.empty())
+   {
+      c.rowSize = part.rowSize;
+      c.rows = part.rows;
+   }
+   c.pieces.push_back(piece);
+}
+
+inline Channel BuildTrimmedChannel(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float wireRadius, const float ballRadius,
+   const Profile& full, const Trims& trims, std::vector<ChannelGap>* gaps)
+{
+   if (gaps != nullptr)
+      gaps->clear();
+   if (!trims.Any() || frames.size() < 2 || rowDist.size() != frames.size())
+      return BuildChannel(frames, full); // No fitting that trims: one piece, built exactly as before
+   const float total = rowDist.back();
+   const int n = std::min((int)wires.size(), kMaxWires);
+   std::vector<float> cuts { 0.f, total };
+   for (int i = 0; i < n; i++)
+   {
+      if (!wires[i].active)
+         continue;
+      for (const float v : { trims.start[i], total - trims.end[i] })
+         if (v > 1e-5f && v < total - 1e-5f)
+            cuts.push_back(v);
+   }
+   std::sort(cuts.begin(), cuts.end());
+   for (int k = (int)cuts.size() - 1; k > 0; k--)
+      if (cuts[k] - cuts[k - 1] <= 1e-5f)
+         cuts.erase(cuts.begin() + k);
+   Channel c;
+   int authored = 0;
+   for (int i = 0; i < n; i++)
+      authored += wires[i].active ? 1 : 0;
+   for (size_t k = 0; k + 1 < cuts.size(); k++)
+   {
+      const float a = cuts[k], b = cuts[k + 1];
+      if (b - a <= 1e-5f)
+         continue;
+      const float mid = (a + b) * 0.5f;
+      std::vector<Wire> set = wires;
+      int present = 0;
+      for (int i = 0; i < n; i++)
+      {
+         const bool in = wires[i].active && mid + 1e-5f >= trims.start[i] && mid - 1e-5f <= total - trims.end[i];
+         set[i].active = in;
+         present += in ? 1 : 0;
+      }
+      if (present == 0)
+         continue; // No wire left here: the rail has ended, nothing to say
+      Profile local;
+      const Profile* profile = &full;
+      if (present < authored)
+      {
+         std::string error;
+         if (!FitProfile(set, wireRadius, ballRadius, local, error))
+         {
+            if (gaps != nullptr)
+            {
+               if (!gaps->empty() && fabsf(gaps->back().to - a) <= 1e-4f)
+                  gaps->back().to = b;
+               else
+                  gaps->push_back({ a, b });
+            }
+            continue;
+         }
+         profile = &local;
+      }
+      std::vector<Frame> rows;
+      rows.push_back(a <= 1e-5f ? frames.front() : FrameAt(frames, rowDist, a));
+      for (size_t r = 0; r < frames.size(); r++)
+         if (rowDist[r] > a + 1e-5f && rowDist[r] < b - 1e-5f)
+            rows.push_back(frames[r]);
+      rows.push_back(b >= total - 1e-5f ? frames.back() : FrameAt(frames, rowDist, b));
+      const Channel part = BuildChannel(rows, *profile);
+      if (!part.verts.empty())
+         AppendPiece(c, part);
+   }
+   c.quadIndices = c.tris.size();
+   return c;
+}
+
+// A floor span faces up toward the resting ball: those are what the elbow extends down
+inline bool IsFloorSpan(const Profile& p, const std::pair<int, int>& span)
+{
+   const V2 s = p.verts[span.first], e = p.verts[span.second];
+   const V2 edge = e - s;
+   if (Dot(edge, edge) <= 1e-8f)
+      return false;
+   V2 inward = Norm({ -edge.y, edge.x });
+   const V2 mid = (s + e) * 0.5f;
+   if (Dot(inward, p.ball - mid) < 0.f)
+      inward = inward * -1.f;
+   return inward.y > 1e-4f;
+}
+
+// The elbow's drop faces: at the attachment the channel is fitted from the wires that are still there, and of its floor spans the one or two meeting at the lowest vertex are
+// carried straight down by the Drop Length as two sided quads, with line colliders on their vertical edges and their bottom edge. The ball rolls to the shortened end and is guided
+// down rather than falling off a cliff. False: no faces (the wires left there can't hold a ball)
+inline bool AppendElbowDrop(Channel& c, const Fixture& f, const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float wireRadius,
+   const float ballRadius, const Trims& trims)
+{
+   using namespace Detail;
+   if (frames.size() < 2 || rowDist.size() != frames.size())
+      return false;
+   const float total = rowDist.back();
+   const float d = AttachDistance(f, total);
+   const Frame fr = FrameAt(frames, rowDist, d);
+   std::vector<Wire> set = wires;
+   int present = 0;
+   const int n = std::min((int)wires.size(), kMaxWires);
+   for (int i = 0; i < n; i++)
+   {
+      const bool in = wires[i].active && d >= trims.start[i] - 1e-4f && d <= total - trims.end[i] + 1e-4f;
+      set[i].active = in;
+      present += in ? 1 : 0;
+   }
+   Profile p;
+   std::string error;
+   if (present == 0 || !FitProfile(set, wireRadius, ballRadius, p, error) || p.spans.empty())
+      return false;
+   int lowest = -1;
+   float lowestY = 1e30f;
+   for (const auto& span : p.spans)
+   {
+      if (!IsFloorSpan(p, span))
+         continue;
+      for (const int v : { span.first, span.second })
+         if (p.verts[v].y < lowestY)
+         {
+            lowestY = p.verts[v].y;
+            lowest = v;
+         }
+   }
+   if (lowest < 0)
+      return false;
+   const V3 down = fr.u * -1.f;
+   bool any = false;
+   for (const auto& span : p.spans)
+   {
+      if (!IsFloorSpan(p, span) || (span.first != lowest && span.second != lowest))
+         continue;
+      const V3 top0 = fr.p + fr.r * p.verts[span.first].x + fr.u * p.verts[span.first].y;
+      const V3 top1 = fr.p + fr.r * p.verts[span.second].x + fr.u * p.verts[span.second].y;
+      const unsigned base = (unsigned)c.verts.size();
+      c.verts.push_back(top0);
+      c.verts.push_back(top0 + down * f.dropLength);
+      c.verts.push_back(top1);
+      c.verts.push_back(top1 + down * f.dropLength);
+      // The pattern of BuildChannel: a = row, b = next, d = row, e = next
+      const unsigned a = base, b = base + 1, dd = base + 2, e = base + 3;
+      c.tris.insert(c.tris.end(), { a, b, dd, b, e, dd, a, dd, b, b, dd, e });
+      c.edges.push_back({ a, b });
+      c.edges.push_back({ dd, e });
+      c.edges.push_back({ b, e });
+      any = true;
+   }
+   return any;
+}
+
+// The hairpin's collider: a square tube along the same path (4 lead and 12 arc segments), side = the wire diameter, its corners at 45 degrees. Outward facing triangles (a
+// HitTriangle is one sided and the ball is outside the tube), a line collider on each of the four long corner lines of a span and a point at each vertex. The spans of the arc are
+// recorded as terminal. The Channel keeps its quads first: these single triangles go last
+struct BoxTerminal
+{
+   std::vector<size_t> tris, edges, verts; // Indices (triangles counted by 3) that belong to the arc
+};
+
+inline bool AppendHairpinBox(Channel& c, const Fixture& f, const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float total,
+   const float wireDiameter, BoxTerminal& terminal)
+{
+   using namespace Detail;
+   HairpinPath path;
+   if (!HairpinPoints(f, frames, rowDist, wires, total, kHairpinColliderLeadSegments, kHairpinColliderArcSegments, path) || PathReverses(path.pts))
+      return false;
+   const std::vector<V3>& pts = path.pts;
+   const int np = (int)pts.size();
+   const float half = wireDiameter * 0.5f; // The side of the box is the wire diameter: its corners are half of it out along each of the two directions
+   // Frames along the path: transported from the route's frame at the attachment, as AppendPolylineSweep (the first ring's side is the path's start projected on the route's
+   // tangent, else the route's side)
+   std::vector<V3> right(np), up(np);
+   std::vector<V3> tan(np);
+   for (int i = 0; i < np; i++)
+   {
+      const V3 fallback = path.frame.u * -1.f;
+      V3 t;
+      if (i == 0)
+         t = NormSafe(pts[1] - pts[0], fallback);
+      else if (i == np - 1)
+         t = NormSafe(pts[i] - pts[i - 1], fallback);
+      else
+      {
+         const V3 in = NormSafe(pts[i] - pts[i - 1], fallback);
+         const V3 out = NormSafe(pts[i + 1] - pts[i], in);
+         t = NormSafe(in + out, in);
+      }
+      tan[i] = t;
+      V3 r;
+      if (i == 0)
+      {
+         r = path.frame.t - t * WireSweep::Dot(path.frame.t, t);
+         if (WireSweep::Dot(r, r) <= 1e-8f)
+            r = path.frame.r - t * WireSweep::Dot(path.frame.r, t);
+         r = NormSafe(r, path.frame.r);
+      }
+      else
+      {
+         // Rotate the previous side by the rotation that takes the previous tangent to this one
+         const V3 axis = WireSweep::Cross(tan[i - 1], t);
+         const float s = WireSweep::Len(axis), cs = std::clamp(WireSweep::Dot(tan[i - 1], t), -1.f, 1.f);
+         V3 tr = right[i - 1];
+         if (s > 1e-6f)
+            tr = RotateAbout(axis * (1.f / s), atan2f(s, cs), right[i - 1]);
+         tr = tr - t * WireSweep::Dot(tr, t);
+         r = NormSafe(tr, right[i - 1]);
+      }
+      const V3 u = NormSafe(WireSweep::Cross(r, t), path.frame.u);
+      right[i] = NormSafe(WireSweep::Cross(t, u), r);
+      up[i] = u;
+   }
+   const unsigned base = (unsigned)c.verts.size();
+   for (int i = 0; i < np; i++)
+      for (int k = 0; k < 4; k++)
+      {
+         // Corners at 45, 135, 225, 315 degrees
+         const float sr = (k == 0 || k == 3) ? 1.f : -1.f, su = (k == 0 || k == 1) ? 1.f : -1.f;
+         c.verts.push_back(pts[i] + right[i] * (sr * half) + up[i] * (su * half));
+      }
+   const auto vert = [&](const int ring, const int corner) { return base + (unsigned)(ring * 4 + corner); };
+   const int termA = path.terminalStartSpan, termB = path.terminalEndSpan;
+   for (int span = 0; span + 1 < np; span++)
+   {
+      const bool arc = span >= termA && span < termB;
+      const V3 centre = (pts[span] + pts[span + 1]) * 0.5f;
+      for (int face = 0; face < 4; face++)
+      {
+         const int next = (face + 1) % 4;
+         const unsigned va = vert(span, face), vb = vert(span, next), vc = vert(span + 1, next), vd = vert(span + 1, face);
+         const V3 pa = c.verts[va], pb = c.verts[vb], pc = c.verts[vc], pd = c.verts[vd];
+         const V3 outward = (pa + pb + pc + pd) * 0.25f - centre;
+         const bool flip = WireSweep::Dot(WireSweep::Cross(pb - pa, pc - pa), outward) < 0.f;
+         for (int tri = 0; tri < 2; tri++)
+         {
+            if (arc)
+               terminal.tris.push_back(c.tris.size() / 3);
+            const unsigned t1 = tri == 0 ? vb : vc, t2 = tri == 0 ? vc : vd;
+            c.tris.push_back(va);
+            c.tris.push_back(flip ? t2 : t1);
+            c.tris.push_back(flip ? t1 : t2);
+         }
+      }
+      for (int corner = 0; corner < 4; corner++)
+      {
+         if (arc)
+            terminal.edges.push_back(c.edges.size());
+         c.edges.push_back({ vert(span, corner), vert(span + 1, corner) });
+      }
+   }
+   for (int ring = 0; ring < np; ring++)
+      if (ring >= termA && ring <= termB)
+         for (int corner = 0; corner < 4; corner++)
+            terminal.verts.push_back(vert(ring, corner));
+   return true;
+}
+
+// The whole channel: the trimmed pieces, the elbows' drop faces, then the hairpins' boxes. Where the rail's own profile did not fit, there is nothing (the panel's red error)
+inline Channel BuildFittingChannel(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float wireRadius, const float ballRadius,
+   const Profile& full, const std::vector<Fixture>& fixtures, const FittingPlan& all, std::vector<ChannelGap>* gaps)
+{
+   const float total = rowDist.empty() ? 0.f : rowDist.back();
+   const Trims trims = ColliderTrims(fixtures, wires, all);
+   Channel c = BuildTrimmedChannel(frames, rowDist, wires, wireRadius, ballRadius, full, trims, gaps);
+   bool anyFitting = false;
+   for (size_t j = 0; j < fixtures.size(); j++)
+      anyFitting |= (fixtures[j].type == kFixtureHairpin || fixtures[j].type == kFixtureElbow) && all.ok[j];
+   if (!anyFitting)
+      return c;
+   for (size_t j = 0; j < fixtures.size(); j++)
+      if (fixtures[j].type == kFixtureElbow && all.ok[j])
+         AppendElbowDrop(c, all.eff[j], frames, rowDist, wires, wireRadius, ballRadius, trims);
+   c.quadIndices = c.tris.size();
+   BoxTerminal terminal;
+   for (size_t j = 0; j < fixtures.size(); j++)
+      if (fixtures[j].type == kFixtureHairpin && all.ok[j])
+         AppendHairpinBox(c, all.eff[j], frames, rowDist, wires, total, wireRadius * 2.f, terminal);
+   if (!terminal.tris.empty() || !terminal.edges.empty() || !terminal.verts.empty())
+   {
+      c.triTerminal.assign(c.tris.size() / 3, 0);
+      c.edgeTerminal.assign(c.edges.size(), 0);
+      c.vertTerminal.assign(c.verts.size(), 0);
+      for (const size_t i : terminal.tris)
+         c.triTerminal[i] = 1;
+      for (const size_t i : terminal.edges)
+         c.edgeTerminal[i] = 1;
+      for (const size_t i : terminal.verts)
+         c.vertTerminal[i] = 1;
+   }
+   return c;
+}
+
 // Every enabled fixture of the rail in list order, each followed by its blobs, appended to the mesh of the tubes. 'shapes' gets one entry per fixture (built or not, why not,
 // its centreline for the overlay and the cross-section). A fixture past the end of the route is built at the end.
 template <class Vertex>
 void BuildFixtures(const std::vector<Frame>& frames, const std::vector<float>& rowDist, const std::vector<Wire>& wires, const float wireRadius, const int sides, const float bevel,
-   const float ballRadius, const Profile& profile, const std::vector<Fixture>& fixtures, std::vector<Vertex>& verts, std::vector<unsigned>& idx, std::vector<FixtureShape>& shapes)
+   const float ballRadius, const Profile& profile, const std::vector<Fixture>& fixtures, std::vector<Vertex>& verts, std::vector<unsigned>& idx, std::vector<FixtureShape>& shapes,
+   const Trims* trims = nullptr)
 {
    using namespace Detail;
    shapes.assign(fixtures.size(), FixtureShape {});
@@ -1825,6 +2887,8 @@ void BuildFixtures(const std::vector<Frame>& frames, const std::vector<float>& r
          shape.reason = "made by a newer version";
          continue;
       }
+      if (IsEndFitting(fx.type))
+         continue; // BuildEndFittings, after the supports
       const float d = std::clamp(fx.position, 0.f, total);
       shape.position = d;
       const Frame fr = FrameAt(frames, rowDist, d);
@@ -1911,9 +2975,13 @@ void BuildFixtures(const std::vector<Frame>& frames, const std::vector<float>& r
       const float railR = wireRadius, pathR = wireRadius;
       const bool atStart = d <= 1e-4f, atEnd = d >= total - 1e-4f;
       const float span = std::max(8.f, railR + pathR + fx.solderThreshold) * 2.f;
-      for (const Wire& w : ws)
+      for (size_t wi = 0; wi < ws.size(); wi++)
       {
+         const Wire& w = ws[wi];
          if (!w.active)
+            continue;
+         // A wire a fitting has trimmed away at this Position is not there to solder to
+         if (trims != nullptr && wi < (size_t)kMaxWires && (d < trims->start[wi] - 1e-4f || d > total - trims->end[wi] + 1e-4f))
             continue;
          const V3 at = fr.p + fr.r * w.x + fr.u * w.z;
          const V3 railStart = atStart ? at : at - fr.t * span;

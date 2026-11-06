@@ -151,7 +151,10 @@ public:
    float m_railBallDiameter = WireRail::kDefaultBallDiameter; // The channel fit only
    int m_railCurvatureDetail = WireRail::kDefaultCurvatureDetail;
    bool m_railShowCollider = false;
-   vector<WireRail::Fixture> m_railFixtures; // Rings, rungs, cradles and stands, visual only, in the render mesh (RFIX sub objects, none saved when empty)
+   vector<WireRail::Fixture> m_railFixtures; // The supports (rings, rungs, cradles, stands: visual only, in the render mesh) and the end fittings (hairpin, elbow, rail trim: they trim rails and have colliders of their own), RFIX sub objects, none saved when empty
+   // Terminal Impact: the physics of a hairpin's end loop alone (freezy's Terminal Impact Material has no counterpart in VPX: a primitive has no physics material asset), off by default
+   bool m_railTerminal = false;
+   float m_railTerminalElasticity = 0.3f, m_railTerminalFalloff = 0.5f, m_railTerminalFriction = 0.15f, m_railTerminalScatter = 0.f;
    // Plastic from Atlas generator (editor operator): host = the print primitive (bottom cap, the atlas image), companions = top cap and bevel. Fields only saved when on
    bool m_plasticGen = false;
    float m_plasticHeight = 50.f; // underside above the playfield
@@ -495,6 +498,8 @@ public:
    const vector<float> &GetRailRowDist() const { return m_railRowDist; }
    float GetRailLength() const { return m_railRowDist.empty() ? 0.f : m_railRowDist.back(); }
    int GetRailFixtureTriangles() const { return m_railFixtureTriangles; }
+   const vector<WireRail::ChannelGap> &GetRailChannelGaps() const { return m_railChannelGaps; } // Stretches where a trim leaves wires that can't hold a ball: no collider there
+   const WireRail::Trims &GetRailTrims() const { return m_railRenderTrims; } // What the fittings cut off each wire, as rendered
 
    // Plastic from Atlas generator: outline (x, y, smooth = arc peak) and holes (x, y, z = diameter) in table coordinates, the mesh is built from them (PlasticMesh)
    DragPointCurve m_plasticCurve;
@@ -584,6 +589,8 @@ private:
    vector<float> m_railRowDist; // 3D length along the route to each frame
    vector<WireRail::FixtureShape> m_railFixtureShapes;
    int m_railFixtureTriangles = 0;
+   vector<WireRail::ChannelGap> m_railChannelGaps;
+   WireRail::Trims m_railRenderTrims;
    Matrix3D m_genDragMatrix; // Applied after m_fullMatrix while m_genDragMoved, a rebuild of the mesh drops it
    bool m_genDragMoved = false;
    bool m_skipRendering = false;

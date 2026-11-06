@@ -7617,7 +7617,13 @@ void EditorUI::RailFixtureHandle()
       const bool valid = rail != nullptr && rail == drag.rail && ui->GetRailFixture() == drag.index && drag.index < (int)rail->m_d.m_railFixtures.size();
       const bool cancel = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
       if (valid && cancel)
-         rail->m_d.m_railFixtures[drag.index].position = drag.startPosition; // Back where it was, and the record of the move dropped
+      {
+         WireRail::Fixture &back = rail->m_d.m_railFixtures[drag.index];
+         if (WireRail::IsEndFitting(back.type))
+            back.fitOffset = drag.startPosition; // An end fitting keeps its Offset from its endpoint, not a Position
+         else
+            back.position = drag.startPosition; // Back where it was, and the record of the move dropped
+      }
       if (valid && !cancel && ImGui::IsMouseDown(ImGuiMouseButton_Left))
       {
          const vector<float> &dist = rail->GetRailRowDist();
@@ -7632,7 +7638,18 @@ void EditorUI::RailFixtureHandle()
          {
             const float position = dist[seg] + t * (dist[seg + 1] - dist[seg]);
             WireRail::Fixture &fx = rail->m_d.m_railFixtures[drag.index];
-            if (fabsf(position - fx.position) > 1e-4f)
+            if (WireRail::IsEndFitting(fx.type))
+            {
+               // A hairpin or an elbow: the Offset is the distance of the nearest route point from its endpoint
+               const float offset = max(0.f, fx.endpoint == WireRail::kEndStart ? position : dist.back() - position);
+               if (fabsf(offset - fx.fitOffset) > 1e-4f)
+               {
+                  fx.fitOffset = offset;
+                  drag.moved = true;
+                  rail->UpdateRailFixtures(); // The render mesh live; the fitting changes the channel, so the colliders are refreshed once after the release (IsDragInProgress waits)
+               }
+            }
+            else if (fabsf(position - fx.position) > 1e-4f)
             {
                fx.position = position;
                drag.moved = true;
@@ -7659,7 +7676,7 @@ void EditorUI::RailFixtureHandle()
       return;
    const int index = ui->GetRailFixture();
    const vector<WireRail::FixtureShape> &shapes = rail->GetRailFixtureShapes();
-   if (index < 0 || index >= (int)shapes.size() || index >= (int)rail->m_d.m_railFixtures.size() || !shapes[index].built)
+   if (index < 0 || index >= (int)shapes.size() || index >= (int)rail->m_d.m_railFixtures.size() || !shapes[index].built || rail->m_d.m_railFixtures[index].type == WireRail::kFixtureTrim) // A rail trim has no handle
       return;
    const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
    const ImVec2 at = ctx.Project(Vertex3Ds(shapes[index].anchor.x, shapes[index].anchor.y, shapes[index].anchor.z));
@@ -7669,12 +7686,12 @@ void EditorUI::RailFixtureHandle()
       return;
    m_undo.BeginUndo();
    m_undo.MarkForUndo(rail);
-   m_undo.SetFieldLabel("Move Fixture");
+   m_undo.SetFieldLabel(rail->m_d.m_railFixtures[index].type == WireRail::kFixtureHairpin ? "Move Hairpin" : rail->m_d.m_railFixtures[index].type == WireRail::kFixtureElbow ? "Move Elbow" : "Move Fixture");
    m_undo.EndUndo();
    drag.active = true;
    drag.rail = rail;
    drag.index = index;
-   drag.startPosition = rail->m_d.m_railFixtures[index].position;
+   drag.startPosition = WireRail::IsEndFitting(rail->m_d.m_railFixtures[index].type) ? rail->m_d.m_railFixtures[index].fitOffset : rail->m_d.m_railFixtures[index].position;
    drag.moved = false;
    drag.recordId = m_undo.TopRecordId();
    m_pointDragPending = false; // The press is the handle's, not a point's or the box select's

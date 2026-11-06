@@ -24,25 +24,27 @@ string ProudLipWarning(const Primitive& rail)
 {
    const PinTable* const table = rail.GetPTable();
    const float dia = max(rail.m_d.m_railBallDiameter, 1.f);
-   // Plan position and lowest height (the floor) of a row of a channel
-   const auto endOf = [](const WireRail::Channel& c, const int row)
+   // Plan position and lowest height (the floor) of the first row (!last) of the first piece of a channel, or the last row of its last piece
+   const auto endOf = [](const WireRail::Channel& c, const bool last)
    {
+      const WireRail::ChannelPiece& piece = last ? c.pieces.back() : c.pieces.front();
+      const size_t row = piece.firstVert + (last ? (size_t)(piece.rows - 1) * piece.rowSize : 0);
       Vertex3Ds e(0.f, 0.f, 1e9f);
-      for (int k = 0; k < c.rowSize; k++)
+      for (int k = 0; k < piece.rowSize; k++)
       {
-         const WireRail::V3& v = c.verts[(size_t)row * c.rowSize + k];
-         e = Vertex3Ds(e.x + v.x / c.rowSize, e.y + v.y / c.rowSize, min(e.z, v.z));
+         const WireRail::V3& v = c.verts[row + k];
+         e = Vertex3Ds(e.x + v.x / piece.rowSize, e.y + v.y / piece.rowSize, min(e.z, v.z));
       }
       return e;
    };
-   const auto usable = [](const WireRail::Channel& c) { return c.rows >= 2 && c.rowSize >= 1 && c.verts.size() >= (size_t)(c.rows * c.rowSize); };
+   const auto usable = [](const WireRail::Channel& c) { return !c.pieces.empty() && c.pieces.front().rows >= 2 && c.pieces.back().rows >= 2 && c.pieces.front().rowSize >= 1 && c.pieces.back().rowSize >= 1; };
    string msg;
    if (table == nullptr || !usable(rail.GetRailChannel()))
       return msg;
-   for (const int row : { 0, rail.GetRailChannel().rows - 1 })
+   for (const bool lastRow : { false, true })
       for (IEditable* const part : table->GetParts())
       {
-         const Vertex3Ds e = endOf(rail.GetRailChannel(), row);
+         const Vertex3Ds e = endOf(rail.GetRailChannel(), lastRow);
          float feed = -1e9f; // The height of what feeds this end, if anything is within a ball diameter of it
          if (part->GetItemType() == eItemRamp && static_cast<Ramp*>(part)->m_d.m_type == RampTypeFlat)
          {
@@ -52,9 +54,9 @@ string ProudLipWarning(const Primitive& rail)
                feed = static_cast<Ramp*>(part)->GetSurfaceHeight(e.x, e.y);
          }
          else if (part != &rail && part->GetItemType() == eItemPrimitive && static_cast<Primitive*>(part)->m_d.m_wireRail && usable(static_cast<Primitive*>(part)->GetRailChannel()))
-            for (const int orow : { 0, static_cast<Primitive*>(part)->GetRailChannel().rows - 1 })
+            for (const bool otherLast : { false, true })
             {
-               const Vertex3Ds o = endOf(static_cast<Primitive*>(part)->GetRailChannel(), orow);
+               const Vertex3Ds o = endOf(static_cast<Primitive*>(part)->GetRailChannel(), otherLast);
                if (hypotf(o.x - e.x, o.y - e.y) < dia)
                   feed = o.z;
             }
@@ -87,7 +89,7 @@ void PrimitiveUIPart::RenderRailOverlay(const EditorRenderContext& ctx)
    if (m_part->m_d.m_railShowCollider)
    {
       const WireRail::Channel& c = m_part->GetRailChannel();
-      for (size_t i = 0; i + 11 < c.tris.size(); i += 12) // A quad is 12 indices, two sided (see BuildChannel)
+      for (size_t i = 0; i + 11 < std::min(c.tris.size(), c.quadIndices); i += 12) // A quad is 12 indices, two sided (see BuildChannel); a hairpin's box after them is single triangles
       {
          const ImVec2 a = project(c.verts[c.tris[i]]), b = project(c.verts[c.tris[i + 1]]), d = project(c.verts[c.tris[i + 2]]), e = project(c.verts[c.tris[i + 4]]);
          if (a.x != FLT_MAX && b.x != FLT_MAX && d.x != FLT_MAX && e.x != FLT_MAX)
@@ -105,7 +107,8 @@ void PrimitiveUIPart::RenderRailOverlay(const EditorRenderContext& ctx)
    {
       if (!wires[w].active)
          continue;
-      const vector<WireRail::V3> line = WireRail::WireCenterline(frames, wires[w]);
+      const WireRail::Trims& trims = m_part->GetRailTrims(); // What the end fittings cut off, as rendered
+      const vector<WireRail::V3> line = WireRail::TrimmedWireCenterline(frames, m_part->GetRailRowDist(), wires[w], trims.start[w], trims.end[w]);
       for (size_t i = 0; i + 1 < line.size(); i++)
       {
          const ImVec2 a = project(line[i]), b = project(line[i + 1]);
@@ -122,18 +125,20 @@ void PrimitiveUIPart::RenderRailOverlay(const EditorRenderContext& ctx)
          continue;
       const bool sel = (int)i == m_railFixture;
       const ImU32 color = list[i].enabled ? kAmber : kWireOff;
-      for (size_t k = 0; k + 1 < shapes[i].centerline.size(); k++)
-      {
-         const ImVec2 a = project(shapes[i].centerline[k]), b = project(shapes[i].centerline[k + 1]);
-         if (a.x != FLT_MAX && b.x != FLT_MAX)
-            draw->AddLine(a, b, color, sel ? 3.f : 1.5f);
-      }
+      for (const vector<WireRail::V3>* line : { &shapes[i].centerline, &shapes[i].centerline2 })
+         for (size_t k = 0; k + 1 < line->size(); k++)
+         {
+            const ImVec2 a = project((*line)[k]), b = project((*line)[k + 1]);
+            if (a.x != FLT_MAX && b.x != FLT_MAX)
+               draw->AddLine(a, b, color, sel ? 3.f : 1.5f);
+         }
       if (sel)
       {
          const ImVec2 at = project(shapes[i].anchor);
          if (at.x != FLT_MAX)
          {
-            draw->AddCircleFilled(at, 5.f * ImGui::GetFontSize() / 13.f, color, 16);
+            if (list[i].type != WireRail::kFixtureTrim) // A rail trim has no handle
+               draw->AddCircleFilled(at, 5.f * ImGui::GetFontSize() / 13.f, color, 16);
             draw->AddText(ImVec2(at.x + 8.f, at.y - 16.f), color, WireRail::FixtureName(list[i], (int)i).c_str());
          }
       }
@@ -161,6 +166,7 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
       m_railFixture = 0;
    const auto& shapes = edited->GetRailFixtureShapes();
 
+   const vector<WireRail::Wire> railWires = edited->GetRailWires();
    props.FlushRow();
    ImGui::TextDisabled("Supports sit at a Position along the route, independent of its points.");
    // Add: at half the route, freezy's defaults, last in the list, selected. Rung and Stand need two wires
@@ -181,6 +187,25 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
       }
       props.CustomField(add, "Add "s + kAdd[b].label);
    }
+   // End fittings (phase 2b): at the start or the end of the route, they trim rails and the hairpin and the elbow have colliders. Added at the End
+   props.FlushRow();
+   ImGui::TextDisabled("End Fittings sit at the start or the end of the route and reshape the rails there.");
+   static constexpr AddButton kAddEnd[3] = { { "Hairpin", WireRail::kFixtureHairpin, true }, { "Elbow", WireRail::kFixtureElbow, true }, { "Rail Trim", WireRail::kFixtureTrim, false } };
+   for (int b = 0; b < 3; b++)
+   {
+      if (b > 0)
+         ImGui::SameLine();
+      ImGui::BeginDisabled(routeLength <= 0.f || (kAddEnd[b].needsTwo && count < 2) || list.size() >= WireRail::kMaxFixtures);
+      const bool add = ImGui::Button(kAddEnd[b].label);
+      ImGui::EndDisabled();
+      if (add)
+      {
+         list.push_back(WireRail::DefaultFixture(kAddEnd[b].type, routeLength, &railWires));
+         m_railFixture = (int)list.size() - 1;
+         edited->UpdateRailFixtures();
+      }
+      props.CustomField(add, "Add "s + kAddEnd[b].label);
+   }
 
    // The list: enabled, name (select, drag onto another row to move), duplicate, delete
    bool changed = false;
@@ -196,7 +221,7 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
          changed = true;
          changeLabel = "Toggle Fixture";
       }
-      ImGui::SetItemTooltip("Enabled: off leaves it out of the render mesh");
+      ImGui::SetItemTooltip("Enabled: off leaves it out of the render mesh (an end fitting keeps its trims and colliders for the ball)");
       ImGui::SameLine();
       const bool built = i < (int)shapes.size() && shapes[i].built;
       string name = WireRail::FixtureName(list[i], i);
@@ -262,7 +287,7 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
    if (list.empty())
    {
       props.FlushRow();
-      ImGui::TextDisabled("No supports yet: Ring, Cradle, Rung and Stand add one at the middle of the route.");
+      ImGui::TextDisabled("No fixtures yet: Ring, Cradle, Rung and Stand add one at the middle of the route; Hairpin, Elbow and Rail Trim at its end.");
       props.EndSection();
       return;
    }
@@ -359,7 +384,56 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
    };
 
    props.Separator(WireRail::FixtureName(list[idx], idx));
-   position();
+   if (!WireRail::IsEndFitting(type)) // An end fitting is at the start or the end of the route: it has no Position
+      position();
+   // End fittings: the endpoint, the wire pair and the wires as combos
+   vector<string> wireNames;
+   for (int w = 0; w < count; w++)
+      wireNames.push_back("Wire "s + std::to_string(w + 1));
+   const auto endpoint = [&]()
+   {
+      props.Combo<Primitive>(
+         m_part, "Endpoint"s, vector<string> { "Start"s, "End"s }, //
+         [fxAt](const Primitive* p) { const Fixture* f = fxAt(p); return f ? f->endpoint : 1; }, //
+         [fxEdit](Primitive* p, int v)
+         {
+            fxEdit(p,
+               [&](Fixture& f)
+               {
+                  const bool changed = f.endpoint != v;
+                  f.endpoint = v;
+                  f.position = v == WireRail::kEndStart ? 0.f : p->GetRailLength();
+                  const vector<WireRail::Wire> ws = p->GetRailWires();
+                  // As freezy's elbow: moving to the other end re-picks the pair if the chosen one is not on there
+                  if (changed && f.type == WireRail::kFixtureElbow && !(f.railA != f.railB && f.railA < (int)ws.size() && f.railB < (int)ws.size() && ws[f.railA].active && ws[f.railB].active))
+                     WireRail::DefaultRailPair(ws, f.railA, f.railB);
+               });
+         },
+         "Route end where the fitting is attached");
+   };
+   const auto railCombo = [&](const char* label, int Fixture::* field, const char* tip)
+   {
+      props.Combo<Primitive>(
+         m_part, label, wireNames, //
+         [fxAt, field, count](const Primitive* p) { const Fixture* f = fxAt(p); return f ? clamp(f->*field, 0, count - 1) : 0; }, //
+         [fxEdit, field](Primitive* p, int v) { fxEdit(p, [&](Fixture& f) { f.*field = v; }); }, tip);
+   };
+   // One cutoff per wire. 'attached': the wire continues into the fitting and is not cut off (an elbow's own pair)
+   const auto cutoffs = [&](const bool elbow)
+   {
+      for (int w = 0; w < count; w++)
+      {
+         const Fixture* const cur = fxAt(edited);
+         const bool attached = elbow && cur != nullptr && (w == clamp(cur->railA, 0, count - 1) || w == clamp(cur->railB, 0, count - 1));
+         ImGui::BeginDisabled(attached);
+         props.InputFloat<Primitive>(
+            m_part, "Wire "s + std::to_string(w + 1) + (attached ? " (attached)" : ""), //
+            [fxAt, w, attached](const Primitive* p) { const Fixture* f = fxAt(p); return f && !attached ? f->cutoff[w] : 0.f; }, //
+            [fxEdit, w](Primitive* p, float v) { fxEdit(p, [&](Fixture& f) { f.cutoff[w] = v; }); }, PropertyPane::Unit::VPLength, 2,
+            attached ? "Attached rails continue into the elbow and are not cut off" : "Distance measured inward from the selected endpoint");
+         ImGui::EndDisabled();
+      }
+   };
    switch (type)
    {
    case WireRail::kFixtureRing:
@@ -422,6 +496,31 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
       number("Connected Arm Length", &Fixture::footConnectedArm, PropertyPane::Unit::VPLength, 2, nullptr);
       solder();
       break;
+   case WireRail::kFixtureHairpin:
+      endpoint();
+      railCombo("Rail A", &Fixture::railA, "First attached rail");
+      railCombo("Rail B", &Fixture::railB, "Second attached rail");
+      integer("Ring Density", &Fixture::density, "Longitudinal sampling density around the complete circular loop, 4 to 128");
+      number("Offset", &Fixture::fitOffset, PropertyPane::Unit::VPLength, 2, "How far the loop sits back from the endpoint along the rails. The two connected rails shorten to follow it, so the loop stays attached");
+      number("Loop Diameter", &Fixture::loopDiameter, PropertyPane::Unit::VPLength, 2, "Centerline diameter of the terminal semicircle");
+      number("Lead Length", &Fixture::leadLength, PropertyPane::Unit::VPLength, 2, "Distance the loop center extends beyond the route endpoint");
+      number("Tangent Length", &Fixture::tangentLength, PropertyPane::Unit::VPLength, 2, "Bezier handle length used to blend each rail into the loop");
+      number("Rotation", &Fixture::rotation, PropertyPane::Unit::Degree, 1, "Rotate the loop diameter around the route tangent");
+      break;
+   case WireRail::kFixtureElbow:
+      endpoint();
+      railCombo("Rail A", &Fixture::railA, "First rail that continues into the hole");
+      railCombo("Rail B", &Fixture::railB, "Second rail that continues into the hole");
+      number("Offset", &Fixture::fitOffset, PropertyPane::Unit::VPLength, 2, "Moves the elbow inward from the route endpoint, shortening the two rails. Zero bends at the endpoint");
+      number("Drop Length", &Fixture::dropLength, PropertyPane::Unit::VPLength, 2, "Vertical length from the bend down into the hole");
+      number("Z Angle", &Fixture::zAngle, PropertyPane::Unit::Degree, 1, "Rotate the horizontal leg around the route-local vertical axis");
+      props.Separator("Other Rail Cutoffs"s);
+      cutoffs(true);
+      break;
+   case WireRail::kFixtureTrim:
+      endpoint();
+      cutoffs(false);
+      break;
    default: break;
    }
 
@@ -432,6 +531,14 @@ void PrimitiveUIPart::UpdateRailFixturePanel(PropertyPane& props)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, kError);
          ImGui::TextWrapped("%s is not built: %s", WireRail::FixtureName(list[idx], idx).c_str(), shapes[idx].reason.c_str());
+         ImGui::PopStyleColor();
+      }
+      else if (idx < (int)shapes.size() && shapes[idx].built && !shapes[idx].info.empty())
+         ImGui::TextWrapped("%s", shapes[idx].info.c_str());
+      for (const WireRail::ChannelGap& gap : edited->GetRailChannelGaps()) // Where a trim leaves wires that can't hold a ball (freezy is silent here)
+      {
+         ImGui::PushStyleColor(ImGuiCol_Text, kAmber);
+         ImGui::TextWrapped("No ball channel from %.0f to %.0f: the remaining wires can't hold a ball", gap.from, gap.to);
          ImGui::PopStyleColor();
       }
       for (int k = 0; k < (int)list.size() && k < (int)shapes.size(); k++)
@@ -536,10 +643,15 @@ void PrimitiveUIPart::UpdateRailPanel(PropertyPane& props)
                const WireRail::V2 a = fxShapes[m_railFixture].section[k], b = fxShapes[m_railFixture].section[k + 1];
                draw->AddLine(toScreen(a.x, a.y), toScreen(b.x, b.y), kAmber, max(edited->m_d.m_wireThickness * 2.f * scale, 2.f));
             }
+         // An end fitting selected: the wires trimmed away at its attachment in grey, Rail A and B outlined in amber
+         const bool fitSel = m_railFixture >= 0 && m_railFixture < (int)fxShapes.size() && fxShapes[m_railFixture].built && WireRail::IsEndFitting(edited->m_d.m_railFixtures[m_railFixture].type);
          for (int i = 0; i < count; i++)
          {
             const ImVec2 at = toScreen(wires[i].x, wires[i].z);
-            draw->AddCircleFilled(at, max(edited->m_d.m_wireThickness * scale, 3.f), wires[i].active ? kWireColors[i % 5] : kWireOff, 16);
+            const bool trimmed = fitSel && (fxShapes[m_railFixture].trimmedMask >> i & 1u);
+            draw->AddCircleFilled(at, max(edited->m_d.m_wireThickness * scale, 3.f), wires[i].active && !trimmed ? kWireColors[i % 5] : kWireOff, 16);
+            if (fitSel && (i == fxShapes[m_railFixture].railA || i == fxShapes[m_railFixture].railB))
+               draw->AddCircle(at, max(edited->m_d.m_wireThickness * scale, 3.f) + 5.f, kAmber, 16, 2.f);
             if (i == m_railWire)
                draw->AddCircle(at, max(edited->m_d.m_wireThickness * scale, 3.f) + 3.f, IM_COL32(255, 200, 20, 255), 16, 2.f);
          }
@@ -662,6 +774,29 @@ void PrimitiveUIPart::UpdateRailPanel(PropertyPane& props)
          m_part, "Show Collider"s, //
          [](const Primitive* p) { return p->m_d.m_railShowCollider; }, //
          [](Primitive* p, bool v) { p->m_d.m_railShowCollider = v; }, "Draws the channel in green when the rail is selected");
+      props.Checkbox<Primitive>(
+         m_part, "Terminal Impact"s, //
+         [](const Primitive* p) { return p->m_d.m_railTerminal; }, //
+         [](Primitive* p, bool v) { p->m_d.m_railTerminal = v; p->m_plasticPickDirty = true; p->UpdateWire(); }, "Physics of a hairpin's end loop only, the last hit as the ball leaves the rail");
+      if (edited->m_d.m_railTerminal)
+      {
+         props.InputFloat<Primitive>(
+            m_part, "Terminal Elasticity"s, //
+            [](const Primitive* p) { return p->m_d.m_railTerminalElasticity; }, //
+            [](Primitive* p, float v) { p->m_d.m_railTerminalElasticity = clamp(v, 0.f, 1.f); p->UpdateWire(); }, PropertyPane::Unit::None, 3, "Elasticity of the hairpin's end loop");
+         props.InputFloat<Primitive>(
+            m_part, "Terminal Falloff"s, //
+            [](const Primitive* p) { return p->m_d.m_railTerminalFalloff; }, //
+            [](Primitive* p, float v) { p->m_d.m_railTerminalFalloff = clamp(v, 0.f, 1.f); p->UpdateWire(); }, PropertyPane::Unit::None, 3, "Elasticity falloff of the hairpin's end loop");
+         props.InputFloat<Primitive>(
+            m_part, "Terminal Friction"s, //
+            [](const Primitive* p) { return p->m_d.m_railTerminalFriction; }, //
+            [](Primitive* p, float v) { p->m_d.m_railTerminalFriction = clamp(v, 0.f, 1.f); p->UpdateWire(); }, PropertyPane::Unit::None, 3, "Friction of the hairpin's end loop");
+         props.InputFloat<Primitive>(
+            m_part, "Terminal Scatter"s, //
+            [](const Primitive* p) { return p->m_d.m_railTerminalScatter; }, //
+            [](Primitive* p, float v) { p->m_d.m_railTerminalScatter = clamp(v, 0.f, 90.f); p->UpdateWire(); }, PropertyPane::Unit::Degree, 1, "Scatter angle of the hairpin's end loop");
+      }
       props.InputFloat<Primitive>(
          m_part, "Ball Diameter"s, //
          [](const Primitive* p) { return p->m_d.m_railBallDiameter; }, //
@@ -672,7 +807,7 @@ void PrimitiveUIPart::UpdateRailPanel(PropertyPane& props)
          [](Primitive* p, int v) { p->m_d.m_railCurvatureDetail = clamp(v, 2, 32); p->UpdateWire(); }, "How densely the route is sampled: raise it if a tight bend shows flats");
       props.FlushRow();
       if (!props.IsHarvest())
-         ImGui::TextDisabled("%d rows, %d triangles", edited->GetRailChannel().rows, (int)edited->GetRailChannel().tris.size() / 3);
+         ImGui::TextDisabled("%d rows in %d pieces, %d triangles", edited->GetRailChannel().rows, (int)edited->GetRailChannel().pieces.size(), (int)edited->GetRailChannel().tris.size() / 3);
       props.EndSection();
    }
    done();

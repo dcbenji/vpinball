@@ -494,6 +494,9 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RLBD), "rail_ball_diameter" },
             { FID(RLCD), "rail_curvature_detail" },
             { FID(RLSC), "rail_show_collider" },
+            { FID(RLTE), "rail_terminal_impact" },
+            { FID(RLTM), "rail_terminal_physics" },
+            { FID(RLTS), "rail_terminal_scatter" },
             { FID(RFIX), "rail_fixtures" },
             { FID(GRPT), "dragpoints" }, // Route and outline points, saved skippable. Same name as the shared DPNT so packs read the same; this later entry wins the name on load
             { FID(RGRD), "rubber_guide_radius" },
@@ -921,6 +924,21 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(RFFW), "foot_width" },
          { FID(RFFL), "foot_arm_length" },
          { FID(RFFA), "foot_connected_arm_length" },
+         { FID(RFEP), "endpoint" },
+         { FID(RFRA), "rail_a" },
+         { FID(RFRB), "rail_b" },
+         { FID(RFOS), "fit_offset" },
+         { FID(RFLD), "loop_diameter" },
+         { FID(RFLL), "lead_length" },
+         { FID(RFTL), "tangent_length" },
+         { FID(RFDL), "drop_length" },
+         { FID(RFZA), "z_angle" },
+         { FID(RFC1), "cutoff_1" },
+         { FID(RFC2), "cutoff_2" },
+         { FID(RFC3), "cutoff_3" },
+         { FID(RFC4), "cutoff_4" },
+         { FID(RFC5), "cutoff_5" },
+         { FID(RFC6), "cutoff_6" },
       });
 
       m[JSONSerializer::kPlayfieldHoleNode] = MakeMap({
