@@ -183,6 +183,9 @@ private:
    void PinSelectionSeeThrough();
    // Selected parts (other than the source) that have the field the copy function handles
    void CollectCopyTargets(IEditable *source, const PinCopyFn &copy, vector<std::shared_ptr<EditorUIPart>> &out) const;
+   // A Clear Plastic field (source: the clear or bevel part of a plastic): the clear or bevel part, by the same role, of the other selected plastics. Never a print, never a part
+   // that is no plastic
+   void CollectCompanionTargets(IEditable *source, const PinCopyFn &copy, vector<Primitive *> &out) const;
    void ResetWorkspaces();
    void CaptureWorkspace(Workspace &ws) const;
    void LoadWorkspaces(const string &json);

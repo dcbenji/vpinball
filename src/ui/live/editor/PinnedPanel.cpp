@@ -179,6 +179,23 @@ void PinnedPanel::CollectCopyTargets(IEditable *source, const PinCopyFn &copy, v
    }
 }
 
+void PinnedPanel::CollectCompanionTargets(IEditable *source, const PinCopyFn &copy, vector<Primitive *> &out) const
+{
+   out.clear();
+   if (!PlasticFromAtlas::IsCompanion(source) || !copy || m_editor.IsInspectMode())
+      return;
+   const int role = static_cast<const Primitive *>(source)->m_d.m_plasticRole;
+   for (const std::shared_ptr<EditorUIPart> &part : m_editor.m_multiSel)
+   {
+      IEditable *const other = part->GetEditable();
+      if (other->GetItemType() != eItemPrimitive)
+         continue;
+      Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(other), role); // (null for a part that is no plastic host)
+      if (comp != nullptr && comp != source && std::ranges::find(out, comp) == out.end() && copy(static_cast<void *>(source), static_cast<void *>(static_cast<IEditable *>(comp)), false, nullptr)) // (the copy functions take the IEditable address)
+         out.push_back(comp);
+   }
+}
+
 bool PinnedPanel::CanCopyToSelected(const PinKey &key) const
 {
    if (key.kind != PinKind::Part || m_editor.m_multiSel.size() < 2)
@@ -188,6 +205,12 @@ bool PinnedPanel::CanCopyToSelected(const PinKey &key) const
    IEditable *const source = static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner));
    if (def == nullptr || !def->copy || source == nullptr)
       return false;
+   if (PlasticFromAtlas::IsCompanion(source))
+   {
+      vector<Primitive *> comps;
+      CollectCompanionTargets(source, def->copy, comps);
+      return !comps.empty();
+   }
    vector<std::shared_ptr<EditorUIPart>> targets;
    CollectCopyTargets(source, def->copy, targets);
    return !targets.empty();
@@ -499,6 +522,27 @@ void PinnedPanel::FlushPendingCopy()
    IEditable *const source = key.kind == PinKind::Part ? static_cast<IEditable *>(Resolve(PinKind::Part, key.name, &owner)) : nullptr;
    if (def == nullptr || !def->copy || source == nullptr)
       return;
+   if (PlasticFromAtlas::IsCompanion(source))
+   {
+      // A Clear Plastic field: each other selected plastic's clear (or bevel) part takes the value; the plastics themselves are not written (one undo step for all the parts)
+      vector<Primitive *> comps;
+      CollectCompanionTargets(source, def->copy, comps);
+      if (comps.empty())
+         return;
+      editor.m_undo.BeginUndo();
+      for (Primitive *const comp : comps)
+         editor.m_undo.MarkForUndo(comp);
+      for (Primitive *const comp : comps)
+         def->copy(static_cast<void *>(source), static_cast<void *>(static_cast<IEditable *>(comp)), true, nullptr);
+      editor.m_undo.SetFieldLabel("Copy to Selected: " + (def->label.empty() ? key.prop : def->label));
+      editor.m_undo.EndUndo();
+      editor.m_lastUndoPart = nullptr;
+      editor.m_lastUndoId = 0;
+      for (Primitive *const comp : comps)
+         editor.m_renderer->ReinitRenderable(comp->GetIRenderable());
+      editor.m_liveUI.PushNotification("Copied '"s + (def->label.empty() ? key.prop : def->label) + "' to " + std::to_string(comps.size()) + (comps.size() == 1 ? " plastic"s : " plastics"s), 2500);
+      return;
+   }
    vector<std::shared_ptr<EditorUIPart>> targets;
    CollectCopyTargets(source, def->copy, targets);
    if (targets.empty())
@@ -533,6 +577,17 @@ void PinnedPanel::ApplyToSelected(IEditable *source, const PinCopyFn &copy)
    EditorUI &editor = m_editor;
    if (!m_applyArmed || source == nullptr || !copy || editor.m_multiSel.size() < 2 || editor.IsInspectMode())
       return;
+   if (PlasticFromAtlas::IsCompanion(source)) // A Clear Plastic field: the other selected plastics' clear (or bevel) parts, snapshotted by the panel's record
+   {
+      vector<Primitive *> comps;
+      CollectCompanionTargets(source, copy, comps);
+      for (Primitive *const comp : comps)
+      {
+         copy(static_cast<void *>(source), static_cast<void *>(static_cast<IEditable *>(comp)), true, nullptr);
+         editor.m_renderer->ReinitRenderable(comp->GetIRenderable());
+      }
+      return;
+   }
    vector<std::shared_ptr<EditorUIPart>> targets;
    CollectCopyTargets(source, copy, targets);
    for (const std::shared_ptr<EditorUIPart> &part : targets)

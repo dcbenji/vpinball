@@ -382,12 +382,24 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
    // The clear and bevel parts are engine details of a plastic: their materials and refraction are edited here, on the plastic, in the same undo step
-   if (m_part->m_d.m_plasticGen && !props.IsMultiEdit())
+   if (m_part->m_d.m_plasticGen)
    {
       Primitive *const clear = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(m_part), 1);
       Primitive *const bevel = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(m_part), 2);
       if (clear != nullptr && bevel != nullptr && props.BeginSection("Clear Plastic"s))
       {
+         // Several plastics selected: a Clear field edits the clear part of each of them, a Bevel field the bevel part (never a print, never a part that is no
+         // plastic: those have no companion and are skipped). The other selected parts are swapped for those companions while the fields are drawn
+         const vector<IEditable *> selectedHosts = props.GetCoEditedParts();
+         const auto companionsOf = [&props, &selectedHosts](const int role)
+         {
+            vector<IEditable *> comps;
+            for (IEditable *const other : selectedHosts)
+               if (other->GetItemType() == eItemPrimitive)
+                  if (Primitive *const comp = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(static_cast<Primitive *>(other)), role); comp != nullptr)
+                     comps.push_back(comp);
+            return comps;
+         };
          const auto refraction = [&props](Primitive *const part, const string &prefix)
          {
             props.RenderProbeCombo<Primitive>(
@@ -423,16 +435,22 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
                [](const Primitive* p) { return p->m_d.m_refractionNoiseScale; }, //
                [](Primitive* p, float v) { p->m_d.m_refractionNoiseScale = max(v, 0.01f); }, 0.5f, 10.f, 2);
          };
-         props.MaterialCombo<Primitive>(
-            clear, "Clear Material"s, //
-            [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
-            [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the clear top");
-         refraction(clear, "Clear "s);
-         props.MaterialCombo<Primitive>(
-            bevel, "Bevel Material"s, //
-            [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
-            [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the walls and bevel");
-         refraction(bevel, "Bevel "s);
+         {
+            PropertyPane::CoEditScope scope(props, companionsOf(1));
+            props.MaterialCombo<Primitive>(
+               clear, "Clear Material"s, //
+               [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
+               [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the clear top");
+            refraction(clear, "Clear "s);
+         }
+         {
+            PropertyPane::CoEditScope scope(props, companionsOf(2));
+            props.MaterialCombo<Primitive>(
+               bevel, "Bevel Material"s, //
+               [](const Primitive* p) { return p->m_d.m_szMaterial; }, //
+               [](Primitive* p, const string& v) { p->m_d.m_szMaterial = v; }, "Material of the walls and bevel");
+            refraction(bevel, "Bevel "s);
+         }
          props.EndSection(); // (RefreshEditedParts reinitializes both parts after an edit)
       }
    }

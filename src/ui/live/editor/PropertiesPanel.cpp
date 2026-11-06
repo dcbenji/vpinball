@@ -1013,10 +1013,19 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
          }
          else
             editor.m_undo.MarkForUndo(editable);
-         if (editable->GetItemType() == eItemPrimitive && !props.IsMultiEdit()) // The Clear Plastic fields edit the clear and bevel parts: in the same step as the plastic
-            for (const int role : { 1, 2 })
-               if (Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(editable), role); comp != nullptr)
-                  editor.m_undo.MarkForUndo(comp, true, false);
+         // The Clear Plastic fields edit the clear and bevel parts: in the same step as the plastic (those of every selected plastic when several are edited)
+         const auto markCompanions = [&editor](IEditable *const part)
+         {
+            if (part->GetItemType() == eItemPrimitive)
+               for (const int role : { 1, 2 })
+                  if (Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part), role); comp != nullptr)
+                     editor.m_undo.MarkForUndo(comp, true, false);
+         };
+         if (props.IsMultiEdit())
+            for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
+               markCompanions(part->GetEditable());
+         else
+            markCompanions(editable);
          editor.MarkDependentsForUndo(); // Rubbers following an edited post (guided rubbers)
          // Alt held while editing: the fields also write to the other selected parts, snapshotted in the same record
          const bool areaActive = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
@@ -1025,7 +1034,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             && (ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive());
          if (altApply)
             for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
+            {
                editor.m_undo.MarkForUndo(part->GetEditable());
+               markCompanions(part->GetEditable());
+            }
          editor.m_pinned.ArmApplyToSelected(altApply);
          // The playfield mesh pane edits table fields, which the primitive's undo state does not hold
          if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())

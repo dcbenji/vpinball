@@ -94,6 +94,19 @@ public:
    // When set, fields show a mixed ("-") state for diverging values and edits apply to every part.
    void SetCoEditedParts(const vector<IEditable*>& parts) { m_coEdited = parts; }
    bool IsMultiEdit() const { return !m_coEdited.empty(); }
+   const vector<IEditable*>& GetCoEditedParts() const { return m_coEdited; }
+   // Replaces the co-edited parts for a run of fields (the Clear Plastic fields co-edit the clear / bevel parts of the other selected plastics), then restores them
+   class CoEditScope
+   {
+   public:
+      CoEditScope(PropertyPane& pane, vector<IEditable*> parts) : m_pane(pane), m_saved(std::move(pane.m_coEdited)) { pane.m_coEdited = std::move(parts); }
+      ~CoEditScope() { m_pane.m_coEdited = std::move(m_saved); }
+      CoEditScope(const CoEditScope&) = delete;
+      CoEditScope& operator=(const CoEditScope&) = delete;
+   private:
+      PropertyPane& m_pane;
+      vector<IEditable*> m_saved;
+   };
 
    // Field focus (search palette): the next panel row drawing this field scrolls to it, then flashes for a moment. While the
    // request is pending, the panel opens its sections and its Advanced header so that the field gets drawn
