@@ -393,11 +393,15 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          const vector<IEditable *> selectedHosts = props.GetCoEditedParts();
          const auto companionsOf = [&props, &selectedHosts](const int role)
          {
+            const PropertyPane::CompanionLookup &lookup = props.GetCompanionLookup();
             vector<IEditable *> comps;
             for (IEditable *const other : selectedHosts)
                if (other->GetItemType() == eItemPrimitive)
-                  if (Primitive *const comp = PlasticFromAtlas::CompanionOf(props.GetEditedPart<Primitive>(static_cast<Primitive *>(other)), role); comp != nullptr)
+               {
+                  const Primitive *const host = props.GetEditedPart<Primitive>(static_cast<Primitive *>(other));
+                  if (Primitive *const comp = lookup ? lookup(host, role) : PlasticFromAtlas::CompanionOf(host, role); comp != nullptr)
                      comps.push_back(comp);
+               }
             return comps;
          };
          const auto refraction = [&props](Primitive *const part, const string &prefix)

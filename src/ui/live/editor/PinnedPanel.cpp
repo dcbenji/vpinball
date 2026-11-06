@@ -185,12 +185,13 @@ void PinnedPanel::CollectCompanionTargets(IEditable *source, const PinCopyFn &co
    if (!PlasticFromAtlas::IsCompanion(source) || !copy || m_editor.IsInspectMode())
       return;
    const int role = static_cast<const Primitive *>(source)->m_d.m_plasticRole;
+   const PlasticFromAtlas::CompanionMap companions(m_editor.m_table); // One pass over the table, not one per selected part
    for (const std::shared_ptr<EditorUIPart> &part : m_editor.m_multiSel)
    {
       IEditable *const other = part->GetEditable();
       if (other->GetItemType() != eItemPrimitive)
          continue;
-      Primitive *const comp = PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(other), role); // (null for a part that is no plastic host)
+      Primitive *const comp = companions.Get(static_cast<Primitive *>(other), role); // (null for a part that is no plastic host)
       if (comp != nullptr && comp != source && std::ranges::find(out, comp) == out.end() && copy(static_cast<void *>(source), static_cast<void *>(static_cast<IEditable *>(comp)), false, nullptr)) // (the copy functions take the IEditable address)
          out.push_back(comp);
    }
@@ -453,6 +454,11 @@ void PinnedPanel::FlushPendingCopy()
                for (const std::shared_ptr<EditorUIPart> &o : others)
                   if (o->GetEditable() != part && !(o->GetEditable()->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(o->GetEditable())->IsPlayfield()))
                      parts.push_back(o->GetEditable());
+            // A Clear Plastic field (the part is a plastic's clear or bevel part): the same-role part of every other selected plastic is reset too
+            vector<Primitive *> otherCompanions;
+            CollectCompanionTargets(part, rdef->copy, otherCompanions);
+            for (Primitive *const comp : otherCompanions)
+               parts.push_back(comp);
             m_editor.m_undo.BeginUndo();
             for (IEditable *const p : parts)
                m_editor.m_undo.MarkForUndo(p);

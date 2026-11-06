@@ -95,6 +95,10 @@ public:
    void SetCoEditedParts(const vector<IEditable*>& parts) { m_coEdited = parts; }
    bool IsMultiEdit() const { return !m_coEdited.empty(); }
    const vector<IEditable*>& GetCoEditedParts() const { return m_coEdited; }
+   // Finds the clear / bevel part (role 1 / 2) of a plastic host without scanning the table per call (set by the properties panel while several parts are selected; empty: CompanionOf)
+   using CompanionLookup = std::function<Primitive*(const Primitive*, int)>;
+   void SetCompanionLookup(CompanionLookup lookup) { m_companionLookup = std::move(lookup); }
+   const CompanionLookup& GetCompanionLookup() const { return m_companionLookup; }
    // Replaces the co-edited parts for a run of fields (the Clear Plastic fields co-edit the clear / bevel parts of the other selected plastics), then restores them
    class CoEditScope
    {
@@ -449,6 +453,7 @@ private:
    Unit m_lengthUnit = Unit::None;
    bool m_showStartup = false;
    PinTable* const m_table;
+   CompanionLookup m_companionLookup;
    vector<IEditable*> m_coEdited; // Other parts of a uniform-type selection, co-edited with the pane's object
    bool m_inSection = false;
    bool m_sectionHasSync = false;

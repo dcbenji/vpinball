@@ -605,6 +605,47 @@ Primitive *PlasticFromAtlas::CompanionOf(const Primitive *host, const int role)
    return nullptr;
 }
 
+PlasticFromAtlas::CompanionMap::CompanionMap(const PinTable *const table)
+   : m_table(table)
+{
+   const auto key = [](string name)
+   {
+      for (char &c : name)
+         c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+      return name;
+   };
+   std::unordered_map<string, Primitive *> hosts;
+   const vector<IEditable *> &parts = table->GetParts();
+   for (IEditable *const part : parts)
+      if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_plasticGen && !part->GetName().empty())
+         hosts.emplace(key(part->GetName()), static_cast<Primitive *>(part));
+   for (IEditable *const part : parts)
+   {
+      if (part->GetItemType() != eItemPrimitive)
+         continue;
+      Primitive *const comp = static_cast<Primitive *>(part);
+      if (comp->m_d.m_plasticHost.empty() || (comp->m_d.m_plasticRole != 1 && comp->m_d.m_plasticRole != 2))
+         continue;
+      const auto host = hosts.find(key(comp->m_d.m_plasticHost));
+      if (host != hosts.end() && host->second != comp)
+      {
+         Primitive *&slot = m_map[host->second][comp->m_d.m_plasticRole - 1];
+         if (slot == nullptr)
+            slot = comp;
+      }
+   }
+}
+
+Primitive *PlasticFromAtlas::CompanionMap::Get(const Primitive *const host, const int role) const
+{
+   if (host == nullptr || (role != 1 && role != 2))
+      return nullptr;
+   if (host->GetPTable() != m_table) // A part of another table (the startup copy during a play test): looked up directly
+      return CompanionOf(host, role);
+   const auto it = m_map.find(host);
+   return it == m_map.end() ? nullptr : it->second[role - 1];
+}
+
 void PlasticFromAtlas::AddCompanions(vector<IEditable *> &parts)
 {
    const size_t n = parts.size();
