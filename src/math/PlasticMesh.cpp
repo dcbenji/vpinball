@@ -1,10 +1,12 @@
 // license:GPLv3+
 
 #include "PlasticMesh.h"
+#include "earcut.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace PlasticMesh
 {
@@ -137,6 +139,18 @@ double SegSegDist(P2 a, P2 b, P2 c, P2 d)
 // A hole as a polygon, clockwise (the material is on the left). A round hole: the circle; a pill: the capsule round both centres
 std::vector<P2> HoleLoop(const Hole& h, double tol)
 {
+   if (h.polygon.size() >= 3) // a polygon hole: clockwise, consecutive duplicates (and the closing one) removed
+   {
+      std::vector<P2> c;
+      for (const CurvePoint& v : h.polygon)
+         if (c.empty() || Len(P2 { v.x, v.y } - c.back()) > 1e-4)
+            c.push_back({ v.x, v.y });
+      while (c.size() > 1 && Len(c.front() - c.back()) <= 1e-4)
+         c.pop_back();
+      if (c.size() >= 3 && SignedArea(c) > 0.0)
+         std::reverse(c.begin(), c.end());
+      return c;
+   }
    const double r = 0.5 * h.diameter;
    const P2 a { h.x, h.y }, b { h.x2, h.y2 };
    std::vector<P2> c;
@@ -175,166 +189,37 @@ bool PointInPolygon(const std::vector<P2>& p, P2 v)
    return in;
 }
 
-// ---- triangulation: holes bridged into the outline (Eberly), then ear clipping ----
+// ---- triangulation (earcut: holes supported, near-linear on long contours) ----
 
 struct Tri
 {
    int a, b, c;
 };
 
-bool PointInTri(P2 p, P2 a, P2 b, P2 c)
-{
-   const double e = -1e-12;
-   return Cross(b - a, p - a) >= e && Cross(c - b, p - b) >= e && Cross(a - c, p - c) >= e;
-}
-
-// rings[0] outline (area > 0), others holes (area < 0). Triangles index the concatenated ring points.
+// rings[0] outline (area > 0), others holes (area < 0). Triangles index the concatenated ring points, all counter-clockwise.
 std::vector<Tri> Triangulate(const std::vector<std::vector<P2>>& rings)
 {
-   std::vector<int> base(rings.size() + 1, 0);
+   std::vector<std::vector<std::array<double, 2>>> poly(rings.size());
+   std::vector<P2> pos;
    for (size_t r = 0; r < rings.size(); r++)
-      base[r + 1] = base[r] + (int)rings[r].size();
-   std::vector<P2> pos(base.back());
-   for (size_t r = 0; r < rings.size(); r++)
-      for (size_t i = 0; i < rings[r].size(); i++)
-         pos[base[r] + i] = rings[r][i];
-
-   std::vector<int> poly(rings[0].size());
-   for (size_t i = 0; i < poly.size(); i++)
-      poly[i] = (int)i;
-
-   // holes by rightmost vertex, largest x first
-   struct HoleInfo
    {
-      int ring, vert;
-   };
-   std::vector<HoleInfo> holes;
-   for (size_t r = 1; r < rings.size(); r++)
-   {
-      int best = 0;
-      for (size_t i = 1; i < rings[r].size(); i++)
-         if (rings[r][i].x > rings[r][best].x)
-            best = (int)i;
-      holes.push_back({ (int)r, best });
-   }
-   std::sort(holes.begin(), holes.end(), [&](const HoleInfo& a, const HoleInfo& b) { return rings[a.ring][a.vert].x > rings[b.ring][b.vert].x; });
-
-   for (const HoleInfo& h : holes)
-   {
-      const P2 m = rings[h.ring][h.vert];
-      const int np = (int)poly.size();
-      // nearest intersection of the ray m + (t, 0) with the polygon edges
-      double bestX = 1e300;
-      int bestEdge = -1;
-      for (int i = 0; i < np; i++)
+      poly[r].reserve(rings[r].size());
+      for (const P2& v : rings[r])
       {
-         const P2 a = pos[poly[i]], b = pos[poly[(i + 1) % np]];
-         if ((a.y > m.y) == (b.y > m.y) && !(a.y == m.y && b.y == m.y))
-            continue;
-         if (a.y == b.y)
-            continue;
-         const double x = a.x + (m.y - a.y) * (b.x - a.x) / (b.y - a.y);
-         if (x >= m.x - 1e-9 && x < bestX)
-         {
-            bestX = x;
-            bestEdge = i;
-         }
+         poly[r].push_back({ v.x, v.y });
+         pos.push_back(v);
       }
-      if (bestEdge < 0)
-         continue; // hole not inside the outline; skipped
-      int pi = bestEdge, pj = (bestEdge + 1) % np;
-      int pick = pos[poly[pi]].x > pos[poly[pj]].x ? pi : pj; // endpoint with the larger x
-      const P2 I { bestX, m.y };
-      if (!(Len(pos[poly[pick]] - I) < 1e-9))
-      {
-         // reflex vertices inside triangle (m, I, P): take the one with the smallest angle to the ray
-         const P2 P = pos[poly[pick]];
-         double bestAng = 1e300, bestLen = 1e300;
-         int cand = pick;
-         for (int i = 0; i < np; i++)
-         {
-            const int pv = poly[i];
-            if (i == pick)
-               continue;
-            const P2 q = pos[pv];
-            const P2 prv = pos[poly[(i + np - 1) % np]], nxt = pos[poly[(i + 1) % np]];
-            const bool reflex = Cross(q - prv, nxt - q) < 0.0;
-            if (!reflex)
-               continue;
-            // triangle orientation must be consistent for the inclusion test
-            const double orient = Cross(I - m, P - m);
-            const bool inside = orient > 0.0 ? PointInTri(q, m, I, P) : PointInTri(q, m, P, I);
-            if (!inside)
-               continue;
-            const double ang = std::fabs(std::atan2(q.y - m.y, q.x - m.x));
-            const double len = Len(q - m);
-            if (ang < bestAng - 1e-12 || (std::fabs(ang - bestAng) <= 1e-12 && len < bestLen))
-            {
-               bestAng = ang;
-               bestLen = len;
-               cand = i;
-            }
-         }
-         pick = cand;
-      }
-      // splice: P, hole from m around, m, P
-      std::vector<int> np2;
-      np2.reserve(poly.size() + rings[h.ring].size() + 2);
-      for (int i = 0; i <= pick; i++)
-         np2.push_back(poly[i]);
-      const int hn = (int)rings[h.ring].size();
-      for (int k = 0; k <= hn; k++)
-         np2.push_back(base[h.ring] + (h.vert + k) % hn);
-      np2.push_back(poly[pick]);
-      for (int i = pick + 1; i < np; i++)
-         np2.push_back(poly[i]);
-      poly.swap(np2);
    }
-
-   // ear clipping
+   const std::vector<uint32_t> idx = mapbox::earcut<uint32_t>(poly);
    std::vector<Tri> tris;
-   std::vector<int> ps = poly;
-   int guard = 0;
-   while (ps.size() > 3 && guard++ < 100000)
+   tris.reserve(idx.size() / 3);
+   for (size_t i = 0; i + 2 < idx.size(); i += 3)
    {
-      const int n = (int)ps.size();
-      int ear = -1;
-      for (int pass = 0; pass < 2 && ear < 0; pass++)
-      {
-         for (int i = 0; i < n; i++)
-         {
-            const int ia = ps[(i + n - 1) % n], ib = ps[i], ic = ps[(i + 1) % n];
-            const P2 a = pos[ia], b = pos[ib], c = pos[ic];
-            const double cr = Cross(b - a, c - b);
-            if (pass == 0 ? cr <= 1e-12 : cr < -1e-12)
-               continue;
-            bool empty = true;
-            for (int k = 0; k < n && empty; k++)
-            {
-               const int q = ps[k];
-               if (q == ia || q == ib || q == ic)
-                  continue;
-               const P2 pq = pos[q];
-               if ((pq.x == a.x && pq.y == a.y) || (pq.x == b.x && pq.y == b.y) || (pq.x == c.x && pq.y == c.y))
-                  continue;
-               if (cr > 0.0 && PointInTri(pq, a, b, c))
-                  empty = false;
-            }
-            if (empty)
-            {
-               ear = i;
-               break;
-            }
-         }
-      }
-      if (ear < 0)
-         ear = 0; // stuck (self-intersecting input): clip anyway so it terminates
-      const int n1 = (int)ps.size();
-      tris.push_back({ ps[(ear + n1 - 1) % n1], ps[ear], ps[(ear + 1) % n1] });
-      ps.erase(ps.begin() + ear);
+      Tri t { (int)idx[i], (int)idx[i + 1], (int)idx[i + 2] };
+      if (Cross(pos[t.b] - pos[t.a], pos[t.c] - pos[t.a]) < 0.0) // keep the old orientation (counter-clockwise, up-facing) whatever earcut's output winding is
+         std::swap(t.b, t.c);
+      tris.push_back(t);
    }
-   if (ps.size() == 3)
-      tris.push_back({ ps[0], ps[1], ps[2] });
    return tris;
 }
 
@@ -499,7 +384,7 @@ std::vector<CurvePoint> FlattenOutline(const std::vector<CurvePoint>& outline, f
 std::vector<CurvePoint> HoleOutline(const Hole& hole, float tol)
 {
    std::vector<CurvePoint> res;
-   if (hole.diameter <= 2e-4f)
+   if (hole.polygon.size() < 3 && hole.diameter <= 2e-4f)
       return res;
    for (const P2& v : HoleLoop(hole, std::max(0.01, (double)tol)))
       res.push_back({ (float)v.x, (float)v.y, false });
@@ -523,6 +408,27 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    const double warnBevel = std::max(0.0, std::min((double)params.bevel, (double)params.thickness));
    for (const Hole& h : holes)
    {
+      if (h.polygon.size() >= 3)
+      {
+         const std::vector<P2> c = HoleLoop(h, tol);
+         bool inside = c.size() >= 3;
+         for (size_t i = 0; i < c.size() && inside; i++)
+            inside = PointInPolygon(ol, c[i]);
+         if (!inside)
+         {
+            res.skippedHoles++;
+            continue;
+         }
+         double edgeDist = 1e300; // polygon to outline, r = 0
+         for (size_t i = 0, k = c.size() - 1; i < c.size(); k = i++)
+            for (size_t j = 0, l = ol.size() - 1; j < ol.size(); l = j++)
+               edgeDist = std::min(edgeDist, SegSegDist(c[k], c[i], ol[l], ol[j]));
+         if (edgeDist < 2.0 * warnBevel)
+            res.crossingHoles++;
+         topGrow.push_back(std::max(0.0, std::min(warnBevel, edgeDist - warnBevel - 0.1)));
+         contours.push_back(c);
+         continue;
+      }
       const double r = 0.5 * h.diameter;
       if (r <= 1e-4)
          continue;
@@ -550,7 +456,8 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    const double z0 = params.height;
    const Ctx ctx { &params };
 
-   AddCap(ctx, contours, z0, res.bottom);
+   if (params.bottomCap)
+      AddCap(ctx, contours, z0, res.bottom);
    std::vector<std::vector<P2>> inset = contours;
    if (bevel > 0.0)
       for (size_t k = 0; k < inset.size(); k++)
@@ -565,7 +472,7 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    for (const auto& ring : contours)
       AddBevelWalls(ctx, ring, z0, segs, bevel, thick, res.bevel);
 
-   if (res.bottom.idx.empty() || res.top.idx.empty() || res.bevel.idx.empty())
+   if ((params.bottomCap && res.bottom.idx.empty()) || res.top.idx.empty() || res.bevel.idx.empty())
       return false;
    out = std::move(res);
    return true;

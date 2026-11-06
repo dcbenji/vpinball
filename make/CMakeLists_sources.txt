@@ -105,6 +105,7 @@ set(VPX_SOURCES
    src/math/wiresweep.h
    src/math/wirerail.h
    src/math/PlasticMesh.h
+   src/math/earcut.hpp
    src/math/PlasticMesh.cpp
    src/math/ImageDpi.h
    src/math/ImageDpi.cpp
