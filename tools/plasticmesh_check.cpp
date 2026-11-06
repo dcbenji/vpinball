@@ -284,7 +284,20 @@ int main(int argc,char**argv){ setbuf(stdout,0);
     for(auto&v:s.top.verts) cap[key(v)]++; for(auto&v:s.bevel.verts) if(v.z==zt) ring[key(v)]++;
     int missing=0,extra=0; for(auto&kv:cap) if(!ring.count(kv.first)) missing++; for(auto&kv:ring) if(!cap.count(kv.first)) extra++;
     printf("near-edge hole y %.1f: cap ring verts %zu, bevel top verts %zu, cap verts not on a ring %d, ring top verts not on the cap %d\n",hy,cap.size(),ring.size(),missing,extra);
-    CHECK(missing==0&&extra==0,"clamped hole: ring top vertices equal the cap ring (y %.1f)",hy); manifold(hy>6.f?"near-edge partly clamped":"near-edge clamped to 0",{&s.bottom,&s.top,&s.bevel},true); windingVsNormals("near-edge bevel",s.bevel); }
+    CHECK(missing==0&&extra==0,"clamped hole: ring top vertices equal the cap ring (y %.1f)",hy); manifold(hy>6.f?"near-edge partly clamped":"near-edge clamped to 0",{&s.bottom,&s.top,&s.bevel},true); windingVsNormals("near-edge bevel",s.bevel);
+    // Result: contours / topRings / effBevel / contourOfHole as Build used them. The top cap's vertices are the top rings, in order
+    CHECK(s.contours.size()==3&&s.topRings.size()==3&&s.effBevel.size()==3&&s.contourOfHole.size()==2&&s.contourOfHole[0]==1&&s.contourOfHole[1]==2,"result per contour");
+    size_t at=0; bool same=true; for(size_t k=0;k<s.topRings.size();k++){ same&=s.topRings[k].size()==s.contours[k].size(); for(auto&c:s.topRings[k]){ same&=at<s.top.verts.size()&&s.top.verts[at].x==c.x&&s.top.verts[at].y==c.y; at++; } }
+    CHECK(same&&at==s.top.verts.size(),"top cap vertices are the top rings in order (y %.1f)",hy);
+    printf("near-edge hole y %.1f: effBevel outline %.4f, near hole %.4f, far hole %.4f\n",hy,s.effBevel[0],s.effBevel[1],s.effBevel[2]);
+    CHECK(s.effBevel[0]==P.bevel&&s.effBevel[2]==P.bevel&&(hy>6.f?(s.effBevel[1]>0.f&&s.effBevel[1]<P.bevel):s.effBevel[1]==0.f),"effBevel clamps only the near hole"); }
+  // A hole's own bevel (>= 0): used as is (the caller clamped it), no topGrow; the outline's own (outlineBevel 0: never inset, the board)
+  { Params q=P; q.outlineBevel=0.f; Hole a{50,6.5f,6}; a.bevel=1.2f; Hole b{20,40,8}; b.bevel=0.f; Hole c{80,40,8}; Result s; CHECK(Build(ol,{a,b,c},q,s),"own bevel build");
+    printf("own bevels: outline %.4f, near-edge own 1.2 -> %.4f, own 0 -> %.4f, default -> %.4f\n",s.effBevel[0],s.effBevel[1],s.effBevel[2],s.effBevel[3]);
+    CHECK(s.effBevel[0]==0.f&&fabsf(s.effBevel[1]-1.2f)<1e-6f&&s.effBevel[2]==0.f&&s.effBevel[3]==P.bevel,"own bevels used as given");
+    bool olSame=s.topRings[0].size()==s.contours[0].size(); for(size_t i=0;olSame&&i<s.contours[0].size();i++) olSame=s.topRings[0][i].x==s.contours[0][i].x&&s.topRings[0][i].y==s.contours[0][i].y; CHECK(olSame,"outlineBevel 0: the outline is not inset");
+    manifold("own bevels",{&s.bottom,&s.top,&s.bevel},true); windingVsNormals("own bevels",s.bevel);
+    Hole d{50,40,8}; d.bevel=50.f; Result s2; Build(ol,{d},q,s2); CHECK(s2.effBevel[1]==q.thickness,"own bevel capped at the thickness"); }
 
   // degenerate
   { Result s; CHECK(!Build({{0,0,false},{1,1,false}},{},P,s),"2 pts"); }

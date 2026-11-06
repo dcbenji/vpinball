@@ -405,10 +405,18 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
 
    Result res;
    std::vector<std::vector<P2>> contours { ol };
-   std::vector<double> topGrow { 1e300 }; // per contour: the most its top ring may move toward the material (holes: grow), 1e300 = the full bevel
+   // Per contour: its bevel before the clamp (the outline: outlineBevel or bevel; a hole: its own when >= 0, else bevel), and the most its top ring may
+   // move toward the material (holes: grow), 1e300 = no clamp. A hole with its own bevel is not clamped here: the caller did it.
    const double warnBevel = std::max(0.0, std::min((double)params.bevel, (double)params.thickness));
-   for (const Hole& h : holes)
+   const double outlineB = params.outlineBevel >= 0.f ? std::max(0.0, std::min((double)params.outlineBevel, (double)params.thickness)) : warnBevel;
+   std::vector<double> want { outlineB };
+   std::vector<double> topGrow { 1e300 };
+   res.contourOfHole.assign(holes.size(), -1);
+   for (size_t hi = 0; hi < holes.size(); hi++)
    {
+      const Hole& h = holes[hi];
+      const bool own = h.bevel >= 0.f;
+      const double holeB = own ? std::max(0.0, std::min((double)h.bevel, (double)params.thickness)) : warnBevel;
       if (h.polygon.size() >= 3)
       {
          const std::vector<P2> c = HoleLoop(h, tol);
@@ -424,9 +432,11 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
          for (size_t i = 0, k = c.size() - 1; i < c.size(); k = i++)
             for (size_t j = 0, l = ol.size() - 1; j < ol.size(); l = j++)
                edgeDist = std::min(edgeDist, SegSegDist(c[k], c[i], ol[l], ol[j]));
-         if (edgeDist < 2.0 * warnBevel)
+         if (edgeDist < holeB + outlineB)
             res.crossingHoles++;
-         topGrow.push_back(std::max(0.0, std::min(warnBevel, edgeDist - warnBevel - 0.1)));
+         topGrow.push_back(own ? 1e300 : std::max(0.0, std::min(holeB, edgeDist - outlineB - 0.1)));
+         want.push_back(holeB);
+         res.contourOfHole[hi] = (int)contours.size();
          contours.push_back(c);
          continue;
       }
@@ -443,16 +453,17 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
       double edgeDist = 1e300; // centre (a pill: the segment between its centres) to the outline edge
       for (size_t i = 0, k = ol.size() - 1; i < ol.size(); k = i++)
          edgeDist = std::min(edgeDist, pill ? SegSegDist(ha, hb, ol[k], ol[i]) : PointSegDist(ha, ol[k], ol[i]));
-      if (edgeDist < r + 2.0 * warnBevel) // inside the band where the top rings (outline inset, hole grown by the bevel) overlap: warning only
+      if (edgeDist < r + (holeB + outlineB)) // inside the band where the top rings (outline inset, hole grown by the bevel) overlap: warning only
          res.crossingHoles++;
       // A hole near the edge: its top ring grows only as far as it stays clear of the outline's inset top ring (it would fold the top cap)
-      topGrow.push_back(std::max(0.0, std::min(warnBevel, edgeDist - warnBevel - r - 0.1)));
+      topGrow.push_back(own ? 1e300 : std::max(0.0, std::min(holeB, edgeDist - outlineB - r - 0.1)));
+      want.push_back(holeB);
       const std::vector<P2> c = HoleLoop(h, tol);
+      res.contourOfHole[hi] = (int)contours.size();
       contours.push_back(c);
    }
 
    const double thick = std::max(0.01, (double)params.thickness);
-   const double bevel = std::max(0.0, std::min((double)params.bevel, thick));
    const int segs = std::max(1, params.bevelSegments);
    const double z0 = params.height;
    const Ctx ctx { &params };
@@ -463,12 +474,12 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    std::vector<double> eff(contours.size());
    for (size_t k = 0; k < contours.size(); k++)
    {
-      const double d = std::min(bevel, topGrow[k]);
+      const double d = std::min(std::min(want[k], thick), topGrow[k]);
       eff[k] = d > 1e-4 ? d : 0.0; // A clamp that leaves rounding dust (edgeDist - bevel - r - 0.1 = 4e-16) builds a straight wall, not zero-height rings
    }
    std::vector<std::vector<P2>> inset = contours;
-   if (bevel > 0.0)
-      for (size_t k = 0; k < inset.size(); k++)
+   for (size_t k = 0; k < inset.size(); k++)
+      if (eff[k] > 0.0)
       {
          auto& ring = inset[k];
          const ContourInfo ci = Analyse(ring);
@@ -478,6 +489,20 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
    AddCap(ctx, inset, z0 + thick, res.top);
    for (size_t k = 0; k < contours.size(); k++)
       AddBevelWalls(ctx, contours[k], z0, segs, eff[k], thick, res.bevel);
+   const auto toCurve = [](const std::vector<P2>& ring)
+   {
+      std::vector<CurvePoint> c;
+      c.reserve(ring.size());
+      for (const P2& v : ring)
+         c.push_back({ (float)v.x, (float)v.y, false });
+      return c;
+   };
+   for (size_t k = 0; k < contours.size(); k++)
+   {
+      res.contours.push_back(toCurve(contours[k]));
+      res.topRings.push_back(toCurve(inset[k]));
+      res.effBevel.push_back((float)eff[k]);
+   }
 
    if ((params.bottomCap && res.bottom.idx.empty()) || res.top.idx.empty() || res.bevel.idx.empty())
       return false;

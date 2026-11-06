@@ -356,6 +356,7 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
       holes.push_back(std::move(h));
    }
    board->m_pfOverlap.clear();
+   board->m_pfBevelClamped.clear();
    char line[256];
    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
    const int found = static_cast<int>(res.holes.size()) - skipped;
@@ -450,6 +451,22 @@ struct AddSnapshot
 
 struct PlayfieldMaker::Impl
 {
+   // Bevel All Holes: every cut through-hole to Default (insert pockets are never bevelled). Remove All Bevels: every hole to Off. True if any changed
+   // (the caller makes it one undo step and rebuilds). The holes keep their From Mask bit: a bulk setting is not a hand edit
+   static bool SetAllBevels(Primitive *const board, const bool on)
+   {
+      bool changed = false;
+      for (PlayfieldHole &h : board->m_pfHoles)
+      {
+         if (on && (!(h.flags & PlayfieldHole::Cut) || (h.flags & PlayfieldHole::UnderInsert)))
+            continue;
+         const float b = on ? -1.f : 0.f;
+         changed |= h.bevel != b;
+         h.bevel = b;
+      }
+      return changed;
+   }
+
    static Primitive *SelectedBoard(const EditorUI &ed)
    {
       if (ed.m_selection.GetType() != Selection::S_EDITABLE || ed.m_selection.GetPart() == nullptr)
@@ -1422,6 +1439,37 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       board, "Curve Detail"s, //
       [](const Primitive *p) { return p->m_d.m_pfDetail; }, //
       [](Primitive *p, int v) { p->m_d.m_pfDetail = clamp(v, 1, 5); s.rebuildOnRelease = true; }, "How smooth the hole circles are (1 to 5, as plastics)");
+   props.InputFloat<Primitive>(
+      board, "Default Bevel"s, //
+      [](const Primitive *p) { return p->m_d.m_pfDefaultBevel; }, //
+      [](Primitive *p, float v) { p->m_d.m_pfDefaultBevel = clamp(v, 0.f, 200.f); s.rebuildOnRelease = true; }, PropertyPane::Unit::VPLength, 2,
+      "The rounded rim of the holes set to Default (0 = none; 1/32 in is the Jurassic Park rim). The Wood Mask is the cut at the wall, as a router "
+      "makes it: a bevelled hole is this much wider each side at the surface. Insert pockets never get one");
+   props.InputInt<Primitive>(
+      board, "Bevel Segments"s, //
+      [](const Primitive *p) { return p->m_d.m_pfBevelSegments; }, //
+      [](Primitive *p, int v) { p->m_d.m_pfBevelSegments = clamp(v, 1, 8); s.rebuildOnRelease = true; }, "Rings of the rounded bevel (1 = a chamfer)");
+   {
+      props.FlushRow();
+      bool bevelEdited = false;
+      const char *label = "";
+      if (ImGui::Button("Bevel All Holes"))
+      {
+         bevelEdited = Impl::SetAllBevels(board, true);
+         label = "Bevel All Holes";
+      }
+      ImGui::SetItemTooltip("Every cut through-hole to Default (Default Bevel), one undo step. Find Holes recreates traced holes at Default");
+      ImGui::SameLine();
+      if (ImGui::Button("Remove All Bevels"))
+      {
+         bevelEdited = Impl::SetAllBevels(board, false);
+         label = "Remove All Bevels";
+      }
+      ImGui::SetItemTooltip("Every hole to Off, one undo step. Find Holes recreates traced holes at Default");
+      if (bevelEdited)
+         board->UpdatePlayfield();
+      props.CustomField(bevelEdited, label);
+   }
 
    // Floor
    props.FlushRow();
@@ -1473,7 +1521,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
    props.FlushRow();
    bool holesEdited = findDone;
    vector<PlayfieldHole> &holes = board->m_pfHoles;
-   int cut = 0, falls = 0, narrow = 0, overlap = 0;
+   int cut = 0, falls = 0, narrow = 0, overlap = 0, clamped = 0;
    const bool keep = board->m_d.m_pfFloor == 1;
    for (size_t i = 0; i < holes.size(); i++)
    {
@@ -1482,16 +1530,24 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       cut += c;
       if (c && i < board->m_pfOverlap.size() && board->m_pfOverlap[i])
          overlap++;
+      if (c && i < board->m_pfBevelClamped.size() && board->m_pfBevelClamped[i] >= 0.f)
+         clamped++;
       if (c && (h.flags & PlayfieldHole::FallsThrough) && !keep)
       {
          falls++;
-         if (h.type != PlayfieldHole::Polygon && h.diameter < 50.f)
+         if (h.type != PlayfieldHole::Polygon && h.diameter < 50.f) // The wall (cut) diameter, not the wider bevel at the surface: the ball rests on the wall's rim
             narrow++;
       }
    }
    ImGui::Text("%d holes, %d cut, %d fall through", static_cast<int>(holes.size()), cut, falls);
    if (overlap > 0)
       ImGui::TextColored(ImVec4(1.f, 0.35f, 0.3f, 1.f), "%d holes overlap or leave the board: not cut until moved", overlap);
+   if (clamped > 0)
+   {
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.8f, 0.3f, 1.f));
+      ImGui::TextWrapped("%d bevels (*) are smaller than set: near the edge or another hole, too wide for the hole's shape, or over the thickness", clamped);
+      ImGui::PopStyleColor();
+   }
    if (falls > 0)
       ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "Make sure something below catches the ball");
    if (narrow > 0)
@@ -1545,56 +1601,145 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       }
    }
 
-   // The list
+   // The list: a table that fits the panel (hole, Cut, Falls Through, Bevel, delete)
    int sel = SelectedHole(board);
    int toDelete = -1;
-   if (!holes.empty() && ImGui::BeginChild("##holes", ImVec2(0.f, min(static_cast<float>(holes.size()), 8.f) * ImGui::GetFrameHeightWithSpacing() + 4.f * dpi), ImGuiChildFlags_Borders))
+   const ImGuiStyle &style = ImGui::GetStyle();
+   const float rowH = ImGui::GetFrameHeight() + style.CellPadding.y * 2.f;
+   if (!holes.empty()
+      && ImGui::BeginTable("##holes", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingFixedFit,
+         ImVec2(0.f, (min(static_cast<float>(holes.size()), 8.f) + 1.f) * rowH + 4.f * dpi)))
    {
+      const float box = ImGui::GetFrameHeight();
+      ImGui::TableSetupScrollFreeze(0, 1);
+      ImGui::TableSetupColumn("Hole", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Cut", ImGuiTableColumnFlags_WidthFixed, max(box, ImGui::CalcTextSize("Cut").x));
+      ImGui::TableSetupColumn("Falls", ImGuiTableColumnFlags_WidthFixed, max(box, ImGui::CalcTextSize("Falls").x));
+      ImGui::TableSetupColumn("Bevel", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00.00").x + style.FramePadding.x * 2.f);
+      ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("x").x + style.FramePadding.x * 2.f);
+      ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+      static constexpr const char *kHeaderTips[] = { "Click a hole to select it (G moves it in the viewport)", "Cut through the board", "Falls Through: the floor collider has the hole, the ball drops",
+         "Bevel of the hole's rim: Def = the board's Default Bevel, Off = none, a number = its own size (Hole Bevel Size)", nullptr };
+      for (int col = 0; col < 5; col++)
+      {
+         ImGui::TableSetColumnIndex(col);
+         ImGui::TableHeader(ImGui::TableGetColumnName(col));
+         if (kHeaderTips[col] != nullptr)
+            ImGui::SetItemTooltip("%s", kHeaderTips[col]);
+      }
       ImGuiListClipper clipper;
-      clipper.Begin(static_cast<int>(holes.size()));
+      clipper.Begin(static_cast<int>(holes.size()), rowH);
       while (clipper.Step())
          for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
          {
             PlayfieldHole &h = holes[i];
             ImGui::PushID(i);
+            ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
+            const bool pocket = (h.flags & PlayfieldHole::UnderInsert) != 0;
+            const float clampedTo = (h.flags & PlayfieldHole::Cut) && i < static_cast<int>(board->m_pfBevelClamped.size()) ? board->m_pfBevelClamped[i] : -1.f;
+
+            // Hole: "1 Round 0.580 in", ellipsis when the column is narrow, then a marker: * (amber) bevel clamped, ins = insert pocket
+            ImGui::TableSetColumnIndex(0);
             char label[96];
             const char *const type = h.type == PlayfieldHole::Slot ? "Slot" : h.type == PlayfieldHole::Polygon ? "Shape" : "Round";
-            const char *const under = (h.flags & PlayfieldHole::UnderInsert) ? " (under insert)" : "";
             if (h.type == PlayfieldHole::Slot) // Length (end to end) x width, as the preset
-               snprintf(label, sizeof(label), "%d %s %.2f x %.3f in%s", i + 1, type, (hypotf(h.end.x - h.centre.x, h.end.y - h.centre.y) + h.diameter) / kVPUPerInch, h.diameter / kVPUPerInch, under);
+               snprintf(label, sizeof(label), "%d %s %.2f x %.3f in", i + 1, type, (hypotf(h.end.x - h.centre.x, h.end.y - h.centre.y) + h.diameter) / kVPUPerInch, h.diameter / kVPUPerInch);
             else
-               snprintf(label, sizeof(label), "%d %s %.3f in%s", i + 1, type, h.diameter / kVPUPerInch, under);
-            if (ImGui::Selectable(label, i == sel, ImGuiSelectableFlags_AllowOverlap, ImVec2(170.f * dpi, 0.f)))
+               snprintf(label, sizeof(label), "%d %s %.3f in", i + 1, type, h.diameter / kVPUPerInch);
+            const char *const marker = pocket ? "ins" : clampedTo >= 0.f ? "*" : nullptr;
+            const float markerW = marker ? ImGui::CalcTextSize(marker).x + style.ItemSpacing.x : 0.f;
+            const float avail = max(ImGui::GetContentRegionAvail().x - markerW, 1.f);
+            string text = label;
+            if (ImGui::CalcTextSize(text.c_str()).x > avail)
+            {
+               while (!text.empty() && ImGui::CalcTextSize((text + "...").c_str()).x > avail)
+                  text.pop_back();
+               text += "...";
+            }
+            text += "##hole";
+            if (ImGui::Selectable(text.c_str(), i == sel, ImGuiSelectableFlags_AllowOverlap, ImVec2(avail, 0.f)))
             {
                SelectHole(board, i);
                sel = i;
             }
-            ImGui::SameLine();
+            const auto holeTip = [&]()
+            {
+               if (pocket)
+                  ImGui::SetItemTooltip("%s: an insert pocket (under an insert), never bevelled", label);
+               else if (clampedTo >= 0.f)
+                  ImGui::SetItemTooltip("%s: bevel clamped to %.3f in (%.2f VPU): near the edge or another hole, too wide for the hole's shape, or over the thickness", label,
+                     clampedTo / kVPUPerInch, clampedTo);
+               else
+                  ImGui::SetItemTooltip("%s", label);
+            };
+            holeTip();
+            if (marker)
+            {
+               ImGui::SameLine();
+               if (pocket)
+                  ImGui::TextDisabled("%s", marker);
+               else
+                  ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s", marker);
+               holeTip();
+            }
+
+            ImGui::TableSetColumnIndex(1);
             bool c = (h.flags & PlayfieldHole::Cut) != 0;
-            if (ImGui::Checkbox("Cut", &c))
+            if (ImGui::Checkbox("##cut", &c))
             {
                h.flags = (c ? (h.flags | PlayfieldHole::Cut) : (h.flags & ~PlayfieldHole::Cut)) & ~PlayfieldHole::FromMask;
                holesEdited = true;
             }
-            ImGui::SameLine();
+            ImGui::SetItemTooltip("Cut");
+
+            ImGui::TableSetColumnIndex(2);
             ImGui::BeginDisabled(keep);
             bool f = (h.flags & PlayfieldHole::FallsThrough) != 0;
-            if (ImGui::Checkbox("Falls Through", &f))
+            if (ImGui::Checkbox("##falls", &f))
             {
                h.flags = (f ? (h.flags | PlayfieldHole::FallsThrough) : (h.flags & ~PlayfieldHole::FallsThrough)) & ~PlayfieldHole::FromMask;
                holesEdited = true;
             }
-            if (keep)
-               DisabledTooltip("The existing floor decides where the ball falls");
+            DisabledTooltip(keep ? "The existing floor decides where the ball falls" : "Falls Through");
             ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Delete"))
+
+            // Bevel: Def / Off / its own size (set in the selected hole's fields)
+            ImGui::TableSetColumnIndex(3);
+            {
+               char preview[16];
+               if (pocket || h.bevel == 0.f)
+                  snprintf(preview, sizeof(preview), "Off");
+               else if (h.bevel < 0.f)
+                  snprintf(preview, sizeof(preview), "Def");
+               else
+                  snprintf(preview, sizeof(preview), "%.2f", h.bevel);
+               ImGui::SetNextItemWidth(-FLT_MIN);
+               ImGui::BeginDisabled(pocket);
+               if (ImGui::BeginCombo("##bevel", preview, ImGuiComboFlags_NoArrowButton))
+               {
+                  const int mode = h.bevel < 0.f ? 0 : h.bevel == 0.f ? 1 : 2;
+                  static constexpr const char *kModes[] = { "Default", "Off", "Custom" };
+                  for (int m = 0; m < 3; m++)
+                     if (ImGui::Selectable(kModes[m], m == mode) && m != mode)
+                     {
+                        h.bevel = m == 0 ? -1.f : m == 1 ? 0.f : (board->m_d.m_pfDefaultBevel > 0.f ? board->m_d.m_pfDefaultBevel : 1.47f);
+                        h.flags &= ~PlayfieldHole::FromMask;
+                        holesEdited = true;
+                     }
+                  ImGui::EndCombo();
+               }
+               DisabledTooltip(pocket ? "Insert pockets are built without a bevel (a real insert is sanded flush)" : "Bevel of the hole's rim: the board's Default Bevel, none, or its own (Hole Bevel Size, VPU)");
+               ImGui::EndDisabled();
+            }
+
+            ImGui::TableSetColumnIndex(4);
+            if (ImGui::SmallButton("x"))
                toDelete = i;
+            ImGui::SetItemTooltip("Delete the hole");
             ImGui::PopID();
          }
+      ImGui::EndTable();
    }
-   if (!holes.empty())
-      ImGui::EndChild(); // Paired with every BeginChild, whatever it returned: else, with the list scrolled out of view, the rest of the pane went into the hidden child
    if (toDelete >= 0)
    {
       holes.erase(holes.begin() + toDelete);
@@ -1632,6 +1777,22 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
          props.InputFloat<Primitive>(
             board, "Hole Diameter"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->diameter : 0.f; }, //
             [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { h.diameter = clamp(v, 1.f, 1000.f); }); }, PropertyPane::Unit::VPLength, 2);
+      if (h != nullptr && !(h->flags & PlayfieldHole::UnderInsert))
+      {
+         props.Combo<Primitive>(
+            board, "Hole Bevel"s, { "Default"s, "Off"s, "Custom"s }, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return !h || h->bevel < 0.f ? 0 : h->bevel == 0.f ? 1 : 2; }, //
+            [holeEdit](Primitive *p, int v)
+            {
+               const float def = p->m_d.m_pfDefaultBevel;
+               holeEdit(p, [v, def](PlayfieldHole &h) { h.bevel = v == 0 ? -1.f : v == 1 ? 0.f : (h.bevel > 0.f ? h.bevel : def > 0.f ? def : 1.47f); });
+            },
+            "Default: the board's Default Bevel. Off: none. Custom: the size below");
+         if (h->bevel > 0.f)
+            props.InputFloat<Primitive>(
+               board, "Hole Bevel Size"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? max(h->bevel, 0.f) : 0.f; }, //
+               [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { h.bevel = clamp(v, 0.f, 200.f); }); }, PropertyPane::Unit::VPLength, 2,
+               "The rounded rim at the top of this hole: the hole is this much wider each side at the surface than its cut");
+      }
       if (h != nullptr && h->type == PlayfieldHole::Slot)
       {
          props.InputFloat<Primitive>(

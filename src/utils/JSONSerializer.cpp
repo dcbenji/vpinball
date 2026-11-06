@@ -519,6 +519,8 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PFMM), "playfield_mask_mode" },
             { FID(PFMH), "playfield_min_hole" },
             { FID(PFDT), "playfield_detail" },
+            { FID(PFBV), "playfield_bevel" },
+            { FID(PFBS), "playfield_bevel_segments" },
             { FID(PFHL), "playfield_holes" },
          },
          {},
@@ -913,6 +915,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(PFHF), "flags" },
          { FID(PFHC), "centre" },
          { FID(PFHD), "diameter" },
+         { FID(PFHB), "bevel" },
          { FID(PFHE), "end" },
          { FID(PFHP), "points" },
       }, { FID(PFHP) });

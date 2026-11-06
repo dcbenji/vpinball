@@ -32,7 +32,7 @@ class MeshBuffer;
 inline constexpr int kRailChannelRole = 3; // m_plasticRole of a Wire Rail's channel part
 // Playfield Maker companions (4 is kept for the Ramp Collider's walls)
 inline constexpr int kPlayfieldWallsRole = 5; // The hole walls, the board's outer edge and the dark backing (the Plywood image)
-inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut
+inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut, with their walls
 inline constexpr int kMaxPlayfieldHoles = 4096; // Load caps
 inline constexpr int kMaxPlayfieldHolePoints = 4096;
 
@@ -47,6 +47,7 @@ struct PlayfieldHole
    float diameter = 27.3f;
    Vertex2D end { 0.f, 0.f }; // Slot: the second centre
    vector<Vertex2D> polygon; // Polygon: the outline (from the wood mask)
+   float bevel = -1.f; // The rounded rim at the top: -1 Default (the board's Default Bevel), 0 Off, > 0 Custom (VPU). Insert pockets are built with none
 };
 
 class PrimitiveData final : public BaseProperty
@@ -170,6 +171,8 @@ public:
    int m_pfMaskMode = 0; // 0 auto, 1 dark, 2 light, 3 transparent
    float m_pfMinHole = 2.35f; // 0.05 in
    int m_pfDetail = 1; // Curve Detail 1..5, as plastics
+   float m_pfDefaultBevel = 0.f; // The bevel of holes set to Default, VPU (new boards start with none)
+   int m_pfBevelSegments = 3; // Rings of the rounded bevel profile, 1 = a chamfer
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -493,6 +496,7 @@ public:
    vector<PlayfieldHole> m_pfHoles;
    bool m_pfDirty = false; // An edit: RenderSetup rebuilds the board and its companions (a file load keeps the saved meshes)
    vector<bool> m_pfOverlap; // Per hole at the last rebuild: a cut hole leaving the board or touching another cut hole (left out of the build)
+   vector<float> m_pfBevelClamped; // Per hole at the last rebuild: the bevel it was built with when smaller than set (near the edge or another hole, too wide for its shape, over the thickness), else -1
    float m_pfBuildMs = 0.f; // Time of the last rebuild
    void RegeneratePlayfield(); // Rebuilds the board, the walls and the floor collider meshes (mesh work only; no-op unless m_d.m_playfieldGen)
    void UpdatePlayfield(); // An edit: m_pfDirty, then the renderable reinit rebuilds it

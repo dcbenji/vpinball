@@ -156,6 +156,8 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_pfMaskMode = wireDefaults.m_pfMaskMode;
    m_d.m_pfMinHole = wireDefaults.m_pfMinHole;
    m_d.m_pfDetail = wireDefaults.m_pfDetail;
+   m_d.m_pfDefaultBevel = wireDefaults.m_pfDefaultBevel;
+   m_d.m_pfBevelSegments = wireDefaults.m_pfBevelSegments;
    m_pfHoles.clear();
    m_plasticEditHoles = false;
    m_wireCurve.ClearPoints();
@@ -2594,6 +2596,7 @@ PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOw
    b.diameter = h.diameter;
    b.ex = h.end.x;
    b.ey = h.end.y;
+   b.bevel = h.bevel; // Same sentinels (-1 Default, 0 Off); the board resolves and clamps it
    if (h.type == PlayfieldHole::Polygon)
       for (const Vertex2D &v : h.polygon)
       {
@@ -2643,6 +2646,8 @@ void Primitive::RegeneratePlayfield()
    params.outline = { t->m_left, t->m_top, t->m_right, t->m_top, t->m_right, t->m_bottom, t->m_left, t->m_bottom }; // The table rectangle
    params.thickness = thick;
    params.detail = m_d.m_pfDetail;
+   params.defaultBevel = m_d.m_pfDefaultBevel;
+   params.bevelSegments = m_d.m_pfBevelSegments;
    const float w = t->m_right - t->m_left, h = t->m_bottom - t->m_top;
    const float uvm[6] = { 1.f / w, 0.f, -t->m_left / w, 0.f, 1.f / h, -t->m_top / h };
    for (int i = 0; i < 6; i++)
@@ -2657,6 +2662,10 @@ void Primitive::RegeneratePlayfield()
    m_pfOverlap.assign(m_pfHoles.size(), false); // Per hole: left out of the build (red in the editor) until moved
    for (size_t i = 0; i < report.overlap.size(); i++)
       m_pfOverlap[i] = report.overlap[i] != 0;
+   m_pfBevelClamped.assign(m_pfHoles.size(), -1.f);
+   for (size_t i = 0; i < report.clamped.size() && i < report.bevel.size() && i < m_pfHoles.size(); i++)
+      if (report.clamped[i])
+         m_pfBevelClamped[i] = report.bevel[i];
    if (!ok)
    {
       m_pfDirty = false;
@@ -2884,6 +2893,9 @@ static WireRail::Fixture LoadRailFixture(IObjectReader &reader)
    return f;
 }
 
+// A float field read from a file: a NaN or infinity (exponent bits all set, a bit test that -ffast-math keeps) is replaced by its load default
+static float FiniteOr(const float v, const float def) { return (float_as_uint(v) & 0x7F800000u) == 0x7F800000u ? def : v; }
+
 // A Playfield Maker hole (PFHL, a skippable sub object)
 static void SavePlayfieldHole(IObjectWriter &writer, const PlayfieldHole &h)
 {
@@ -2892,6 +2904,8 @@ static void SavePlayfieldHole(IObjectWriter &writer, const PlayfieldHole &h)
    writer.WriteInt(FID(PFHF), h.flags);
    writer.WriteVector2(FID(PFHC), h.centre);
    writer.WriteFloat(FID(PFHD), h.diameter);
+   if (h.bevel != -1.f) // Only when not Default: phase 1 boards save as before
+      writer.WriteFloat(FID(PFHB), h.bevel);
    if (h.type == PlayfieldHole::Slot)
       writer.WriteVector2(FID(PFHE), h.end);
    if (h.type == PlayfieldHole::Polygon)
@@ -2914,6 +2928,7 @@ static PlayfieldHole LoadPlayfieldHole(IObjectReader &reader)
          case FID(PFHC): h.centre = r.AsVector2(); break;
          case FID(PFHD): h.diameter = clamp(r.AsFloat(), 0.f, 10000.f); break;
          case FID(PFHE): h.end = r.AsVector2(); break;
+         case FID(PFHB): { const float b = FiniteOr(r.AsFloat(), -1.f); h.bevel = b < 0.f ? -1.f : clamp(b, 0.f, 200.f); break; } // Absent or not finite: -1 (Default)
          case FID(PFHP):
          {
             const Vertex2D v = r.AsVector2();
@@ -3120,6 +3135,10 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       writer.WriteInt(FID(PFMM), m_d.m_pfMaskMode);
       writer.WriteFloat(FID(PFMH), m_d.m_pfMinHole);
       writer.WriteInt(FID(PFDT), m_d.m_pfDetail);
+      if (m_d.m_pfDefaultBevel != 0.f) // Only when not the load default: phase 1 boards save as before
+         writer.WriteFloat(FID(PFBV), m_d.m_pfDefaultBevel);
+      if (m_d.m_pfBevelSegments != 3)
+         writer.WriteInt(FID(PFBS), m_d.m_pfBevelSegments);
       for (const PlayfieldHole &h : m_pfHoles) // Skippable sub objects: older versions skip them
          SavePlayfieldHole(writer, h);
    }
@@ -3302,6 +3321,8 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PFMM): m_d.m_pfMaskMode = clamp(reader.AsInt(), 0, 3); break;
          case FID(PFMH): m_d.m_pfMinHole = clamp(reader.AsFloat(), 0.f, 1000.f); break;
          case FID(PFDT): m_d.m_pfDetail = clamp(reader.AsInt(), 1, 5); break;
+         case FID(PFBV): m_d.m_pfDefaultBevel = clamp(FiniteOr(reader.AsFloat(), 0.f), 0.f, 200.f); break;
+         case FID(PFBS): m_d.m_pfBevelSegments = clamp(reader.AsInt(), 1, 8); break;
          case FID(PFHL):
          {
             const PlayfieldHole h = LoadPlayfieldHole(reader);

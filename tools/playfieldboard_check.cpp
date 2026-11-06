@@ -3,12 +3,18 @@
 // Also build it with -O2 -ffast-math (the engine's flags).
 // Each fixture (tools/fixtures/*.pfboard.txt) was dumped by the editor's board build before it moved into PlayfieldBoard: the table rectangle, the board
 // settings, every hole and the meshes that build produced. The check rebuilds from the holes and compares with a 1e-5 tolerance (--exact: bit for bit; clang and gcc differ by ~1e-7 from float contraction, g++ -O2 -ffast-math gave 0) and reports the largest difference.
+// The fixtures have no bevels (phase 1): top, walls and backing must come out as they were. The floor collider gained the Falls Through holes' walls
+// (P2-2): its flat face must still be the fixture's floor, followed by those walls.
+// Then synthetic cases: overlaps, outlines, and the bevels (profile, default and insert pockets, the board edge and hole-to-hole clamps, the floor's chamfer).
 #include "math/PlayfieldBoard.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 using namespace PlayfieldBoard;
 static int fails = 0;
@@ -119,7 +125,25 @@ static double CheckFixture(const char* path)
    walls.verts.insert(walls.verts.end(), m.backing.verts.begin(), m.backing.verts.end());
    for (unsigned i : m.backing.idx)
       walls.idx.push_back(base + i);
-   const double dt = Compare(m.top, fx.board), dw = Compare(walls, fx.walls), df = Compare(m.floor, fx.floor);
+   // The floor: its flat face first (the fixture's floor), then the Falls Through holes' walls, each vertex one of the walls part's (same loops, bevel 0)
+   PlasticMesh::Mesh flatFloor;
+   const size_t nfv = std::min(fx.floor.verts.size(), m.floor.verts.size()), nfi = std::min(fx.floor.idx.size(), m.floor.idx.size());
+   flatFloor.verts.assign(m.floor.verts.begin(), m.floor.verts.begin() + nfv);
+   flatFloor.idx.assign(m.floor.idx.begin(), m.floor.idx.begin() + nfi);
+   {
+      std::set<std::tuple<float, float, float, float, float>> wallVerts;
+      for (const PlasticMesh::Vertex& v : m.walls.verts)
+         wallVerts.insert({ v.x, v.y, v.z, v.nx, v.ny });
+      size_t notInWalls = 0, fallsHoles = 0;
+      for (size_t i = nfv; i < m.floor.verts.size(); i++)
+         notInWalls += !wallVerts.count({ m.floor.verts[i].x, m.floor.verts[i].y, m.floor.verts[i].z, m.floor.verts[i].nx, m.floor.verts[i].ny });
+      for (size_t i = 0; i < holes.size(); i++)
+         fallsHoles += (holes[i].flags & kCut) && (holes[i].flags & kFallsThrough) && !r.overlap[i];
+      CHECK(notInWalls == 0 && (fallsHoles == 0) == (m.floor.verts.size() == nfv), "%s: floor walls: %zu vertices not in the walls part, %zu Falls Through holes, %zu wall vertices", path, notInWalls, fallsHoles,
+         m.floor.verts.size() - nfv);
+      CHECK(m.backing.idx == flatFloor.idx, "%s: the backing is the floor's flat face", path);
+   }
+   const double dt = Compare(m.top, fx.board), dw = Compare(walls, fx.walls), df = Compare(flatFloor, fx.floor);
    CHECK(dt >= 0., "%s: top differs in vertex or index counts (%zu/%zu verts, %zu/%zu idx)", path, m.top.verts.size(), fx.board.verts.size(), m.top.idx.size(), fx.board.idx.size());
    CHECK(dw >= 0., "%s: walls+backing differ in vertex or index counts (%zu/%zu verts)", path, walls.verts.size(), fx.walls.verts.size());
    CHECK(df >= 0., "%s: floor differs in vertex or index counts (%zu/%zu verts)", path, m.floor.verts.size(), fx.floor.verts.size());
@@ -158,7 +182,7 @@ static void Synthetic()
    CHECK(r.built == 1 && r.overlapping == 3, "built %d overlapping %d", r.built, r.overlapping);
    CHECK(!m.top.idx.empty() && !m.walls.idx.empty() && !m.backing.idx.empty() && !m.floor.idx.empty(), "meshes empty");
    CHECK(m.floor.idx.size() > 6, "the Falls Through hole is cut from the floor");
-   CHECK(m.backing.idx == m.floor.idx && m.backing.verts.size() == m.floor.verts.size(), "backing follows the floor");
+   CHECK(m.backing.idx.size() < m.floor.idx.size() && std::equal(m.backing.idx.begin(), m.backing.idx.end(), m.floor.idx.begin()), "backing: the floor's flat face (the floor adds the hole's walls)");
    for (const PlasticMesh::Vertex& v : m.backing.verts)
       CHECK(v.z == -p.thickness - 0.5f, "backing depth");
 
@@ -185,6 +209,429 @@ static void Synthetic()
    CHECK(bm.top.verts.empty(), "meshes untouched on failure");
 }
 
+// ---- bevels
+static double CapArea(const PlasticMesh::Mesh& m, int& inverted)
+{
+   double a = 0.;
+   inverted = 0;
+   for (size_t t = 0; t < m.idx.size(); t += 3)
+   {
+      const PlasticMesh::Vertex &p = m.verts[m.idx[t]], &q = m.verts[m.idx[t + 1]], &r = m.verts[m.idx[t + 2]];
+      const double ar = 0.5 * ((q.x - p.x) * (double)(r.y - p.y) - (q.y - p.y) * (double)(r.x - p.x));
+      a += ar;
+      inverted += ar < -1e-6;
+   }
+   return a;
+}
+static double CircleGrown(const double d, const double b) { return M_PI * (0.5 * d + b) * (0.5 * d + b); }
+struct WKey
+{
+   long x, y, z;
+   bool operator<(const WKey& o) const { return std::tie(x, y, z) < std::tie(o.x, o.y, o.z); }
+};
+static WKey Wk(const PlasticMesh::Vertex& v) { return { lround(v.x * 1000), lround(v.y * 1000), lround(v.z * 1000) }; }
+// Meshes welded by position: every directed edge has its reverse, once, except along the open rim at z = rimZ. Returns the breaks off the rim
+// With openEdge set, the edges at z = 0 along that rectangle's border are open too (the floor has no outline walls)
+static int ShellBreaks(const std::vector<const PlasticMesh::Mesh*>& ms, const float rimZ, int& rim, const float* openEdge = nullptr)
+{
+   std::map<std::pair<WKey, WKey>, int> e;
+   for (const PlasticMesh::Mesh* m : ms)
+      for (size_t t = 0; t < m->idx.size(); t += 3)
+         for (int i = 0; i < 3; i++)
+         {
+            const WKey a = Wk(m->verts[m->idx[t + i]]), b = Wk(m->verts[m->idx[t + (i + 1) % 3]]);
+            if (!(a < b) && !(b < a))
+               continue;
+            e[{ a, b }]++;
+         }
+   int bad = 0;
+   rim = 0;
+   const long rz = lround(rimZ * 1000);
+   for (const auto& kv : e)
+   {
+      if (kv.second > 1)
+         bad++;
+      if (!e.count({ kv.first.second, kv.first.first }))
+      {
+         const auto onEdge = [openEdge](const WKey& k)
+         { return openEdge && k.z == 0 && (k.x == lround(openEdge[0] * 1000) || k.x == lround(openEdge[2] * 1000) || k.y == lround(openEdge[1] * 1000) || k.y == lround(openEdge[3] * 1000)); };
+         if ((kv.first.first.z == rz && kv.first.second.z == rz) || (onEdge(kv.first.first) && onEdge(kv.first.second)))
+            rim++;
+         else
+            bad++;
+      }
+   }
+   return bad;
+}
+static int AgainstNormals(const PlasticMesh::Mesh& m)
+{
+   int bad = 0;
+   for (size_t t = 0; t < m.idx.size(); t += 3)
+   {
+      const PlasticMesh::Vertex &a = m.verts[m.idx[t]], &b = m.verts[m.idx[t + 1]], &c = m.verts[m.idx[t + 2]];
+      const double ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, wx = c.x - a.x, wy = c.y - a.y, wz = c.z - a.z;
+      const double cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx, l = sqrt(cx * cx + cy * cy + cz * cz);
+      if (l < 1e-9)
+         continue;
+      bad += (cx * (a.nx + b.nx + c.nx) + cy * (a.ny + b.ny + c.ny) + cz * (a.nz + b.nz + c.nz)) / l <= 0.;
+   }
+   return bad;
+}
+static bool BadBits(const float f) { unsigned u; memcpy(&u, &f, 4); return ((u >> 23) & 0xff) == 0xff; } // NaN / Inf by bit pattern (fast-math safe)
+
+// The grown top rings as BuildBoard built them (PlasticMesh::Build again with the reported bevels, as BuildTop does), then: every ring inside the
+// outline and at least 0.1 from it, the rings at least 0.1 apart (none crossing), none folded (an edge against its contour edge, or self-crossing)
+static double SegSeg(const PlasticMesh::CurvePoint& a, const PlasticMesh::CurvePoint& b, const PlasticMesh::CurvePoint& c, const PlasticMesh::CurvePoint& d)
+{
+   const auto orient = [](const PlasticMesh::CurvePoint& p, const PlasticMesh::CurvePoint& q, const PlasticMesh::CurvePoint& r) { return ((double)q.x - p.x) * ((double)r.y - p.y) - ((double)q.y - p.y) * ((double)r.x - p.x); };
+   const double d1 = orient(c, d, a), d2 = orient(c, d, b), d3 = orient(a, b, c), d4 = orient(a, b, d);
+   if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0)) && d1 != 0 && d2 != 0 && d3 != 0 && d4 != 0)
+      return 0.;
+   const auto ps = [](const PlasticMesh::CurvePoint& p, const PlasticMesh::CurvePoint& q, const PlasticMesh::CurvePoint& r)
+   {
+      const double ex = (double)r.x - q.x, ey = (double)r.y - q.y, l2 = ex * ex + ey * ey;
+      const double t = l2 > 0 ? std::clamp((((double)p.x - q.x) * ex + ((double)p.y - q.y) * ey) / l2, 0., 1.) : 0.;
+      return std::hypot(q.x + t * ex - p.x, q.y + t * ey - p.y);
+   };
+   return std::min(std::min(ps(a, c, d), ps(b, c, d)), std::min(ps(c, a, b), ps(d, a, b)));
+}
+static double LoopGap(const std::vector<PlasticMesh::CurvePoint>& a, const std::vector<PlasticMesh::CurvePoint>& b)
+{
+   double g = 1e300;
+   for (size_t i = 0; i < a.size(); i++)
+      for (size_t j = 0; j < b.size(); j++)
+         g = std::min(g, SegSeg(a[i], a[(i + 1) % a.size()], b[j], b[(j + 1) % b.size()]));
+   return g;
+}
+static int RingProblems(const BoardParams& bp, const std::vector<BoardHole>& holes, const BoardReport& r, std::string& what)
+{
+   std::vector<PlasticMesh::CurvePoint> ol;
+   for (size_t i = 0; i + 1 < bp.outline.size(); i += 2)
+      ol.push_back({ bp.outline[i], bp.outline[i + 1], false });
+   std::vector<PlasticMesh::Hole> mh;
+   for (size_t i = 0; i < holes.size(); i++)
+   {
+      if (!(holes[i].flags & kCut) || r.overlap[i])
+         continue;
+      PlasticMesh::Hole m;
+      m.x = holes[i].cx, m.y = holes[i].cy, m.diameter = holes[i].diameter, m.x2 = holes[i].ex, m.y2 = holes[i].ey, m.pill = holes[i].kind == kSlot;
+      if (holes[i].kind == kPolygon)
+         for (size_t k = 0; k + 1 < holes[i].polygon.size(); k += 2)
+            m.polygon.push_back({ holes[i].polygon[k], holes[i].polygon[k + 1], false });
+      m.bevel = r.bevel[i];
+      mh.push_back(m);
+   }
+   PlasticMesh::Params p;
+   p.bottomCap = false, p.height = -bp.thickness, p.thickness = bp.thickness, p.bevel = 0.f, p.outlineBevel = 0.f, p.bevelSegments = 1, p.flatten = PlasticMesh::FlattenTolerance(bp.detail);
+   PlasticMesh::Result res;
+   if (!PlasticMesh::Build(ol, mh, p, res))
+   {
+      what = "rebuild failed";
+      return 1;
+   }
+   int bad = 0;
+   char b[160];
+   for (size_t k = 1; k < res.topRings.size(); k++)
+   {
+      const auto &ring = res.topRings[k], &c = res.contours[k];
+      double edge = LoopGap(ring, ol);
+      bool inside = true;
+      for (const auto& v : ring)
+      {
+         bool in = false;
+         for (size_t i = 0, j = ol.size() - 1; i < ol.size(); j = i++)
+            if (((ol[i].y > v.y) != (ol[j].y > v.y)) && (v.x < (ol[j].x - ol[i].x) * (v.y - ol[i].y) / (ol[j].y - ol[i].y) + ol[i].x))
+               in = !in;
+         inside &= in;
+      }
+      if (!inside || edge < 0.1 - 2e-3)
+      {
+         bad++;
+         snprintf(b, sizeof(b), "ring %zu off the board or %.4f from the edge; ", k, edge);
+         what += b;
+      }
+      for (size_t i = 0; i < ring.size(); i++)
+      {
+         const size_t j = (i + 1) % ring.size();
+         if ((double)(c[j].x - c[i].x) * (ring[j].x - ring[i].x) + (double)(c[j].y - c[i].y) * (ring[j].y - ring[i].y) <= 0.)
+         {
+            bad++;
+            snprintf(b, sizeof(b), "ring %zu edge %zu reversed; ", k, i);
+            what += b;
+            break;
+         }
+      }
+      for (size_t i = 0; i < ring.size(); i++)
+         for (size_t j = i + 2; j < ring.size(); j++)
+            if (!(i == 0 && j == ring.size() - 1) && SegSeg(ring[i], ring[i + 1], ring[j], ring[(j + 1) % ring.size()]) == 0.)
+            {
+               bad++;
+               snprintf(b, sizeof(b), "ring %zu crosses itself; ", k);
+               what += b;
+               i = j = ring.size();
+            }
+      for (size_t l = k + 1; l < res.topRings.size(); l++)
+         if (const double g = LoopGap(ring, res.topRings[l]); g < 0.1 - 2e-3)
+         {
+            bad++;
+            snprintf(b, sizeof(b), "rings %zu and %zu %.4f apart; ", k, l, g);
+            what += b;
+         }
+   }
+   return bad;
+}
+static BoardHole Poly(std::vector<float> xy, float bevel = -1.f)
+{
+   BoardHole h;
+   h.kind = kPolygon;
+   h.polygon = std::move(xy);
+   h.bevel = bevel;
+   return h;
+}
+
+static void Bevels()
+{
+   constexpr float W = 400.f, H = 600.f, T = 23.5f;
+   BoardParams p;
+   p.outline = { 0, 0, W, 0, W, H, 0, H };
+   p.thickness = T;
+   p.uvm[0] = 1.f / W;
+   p.uvm[4] = 1.f / H;
+   p.detail = 2;
+
+   // One GI hole with a 2 VPU bevel, 3 segments: the top hole grows by 2, the walls carry the rounded profile, top and walls close (open only at -T)
+   {
+      BoardHole h = Round(200, 300, 27.3f);
+      h.bevel = 2.f;
+      BoardMeshes m;
+      BoardReport r;
+      CHECK(BuildBoard(p, { h }, m, r), "bevel build");
+      int inv = 0;
+      const double area = CapArea(m.top, inv), want = (double)W * H - CircleGrown(27.3, 2.0);
+      printf("bevel 2: top area %.2f, rectangle - hole grown by 2 %.2f, report bevel %.3f clamped %d\n", area, want, r.bevel[0], r.bevelClamped);
+      CHECK(fabs(area - want) < 0.01 * CircleGrown(27.3, 2.0) && inv == 0, "bevel: top hole grown by the bevel (%.2f vs %.2f, %d inverted)", area, want, inv);
+      CHECK(r.bevel[0] == 2.f && r.bevelClamped == 0, "bevel: report %.3f, clamped %d", r.bevel[0], r.bevelClamped);
+      int rim = 0;
+      const int breaks = ShellBreaks({ &m.top, &m.walls }, -T, rim);
+      printf("bevel 2: top + walls welded, breaks off the z = -T rim %d (rim edges %d)\n", breaks, rim);
+      CHECK(breaks == 0, "bevel: the top and the bevelled walls close (cap ring = bevel top ring)");
+      CHECK(AgainstNormals(m.walls) == 0, "bevel: walls wound against their normals");
+      // The profile: per hole edge one wall quad and 3 bevel quads; normals: the top ring points up, the wall top ring horizontal
+      int up = 0, flat = 0, bad = 0, vBad = 0;
+      float vMin = 1e9f, vMax = -1e9f;
+      for (const PlasticMesh::Vertex& v : m.walls.verts)
+      {
+         bad += BadBits(v.x) || BadBits(v.y) || BadBits(v.z) || BadBits(v.nx) || BadBits(v.ny) || BadBits(v.nz) || BadBits(v.tu) || BadBits(v.tv);
+         const bool hole = fabsf(v.x - 200.f) < 30.f && fabsf(v.y - 300.f) < 30.f;
+         if (!hole)
+            continue;
+         vMin = std::min(vMin, v.tv);
+         vMax = std::max(vMax, v.tv);
+         if (v.z == 0.f)
+         {
+            up += fabsf(v.nz - 1.f) < 1e-5f;
+            vBad += v.tv != 0.f;
+         }
+         if (v.z == -2.f && v.nz == 0.f)
+         {
+            flat++;
+            vBad += fabsf(v.tv - 2.f / T) > 1e-6f;
+         }
+      }
+      printf("bevel 2: hole wall vertices at the top %d (normal up), at the wall top (horizontal) %d; hole v %.4f..%.4f\n", up, flat, vMin, vMax);
+      CHECK(up > 0 && flat > 0 && vBad == 0 && vMin == 0.f && vMax == 1.f && bad == 0, "bevel profile normals / v (v 0 at the surface, bevel / thickness at the wall top, 1 at the bottom)");
+      // Same hole with bevel 0: 4 times fewer hole wall triangles than 1 + 3 rings
+      BoardHole h0 = h;
+      h0.bevel = 0.f;
+      BoardMeshes m0;
+      BoardReport r0;
+      BuildBoard(p, { h0 }, m0, r0);
+      const size_t edgeTris0 = m0.walls.idx.size() / 3, edgeTris = m.walls.idx.size() / 3;
+      CHECK(edgeTris - 8 == 4 * (edgeTris0 - 8), "segments: a wall and 3 rings per hole edge (%zu vs %zu triangles)", edgeTris, edgeTris0);
+      p.bevelSegments = 1;
+      BoardMeshes m1;
+      BuildBoard(p, { h }, m1, r0);
+      CHECK(m1.walls.idx.size() / 3 - 8 == 2 * (edgeTris0 - 8), "one segment: a wall and a chamfer");
+      int c45 = 0;
+      for (const PlasticMesh::Vertex& v : m1.walls.verts)
+         c45 += v.z > -2.f + 1e-4f || (v.z == -2.f && v.nz > 0.5f) ? fabsf(v.nz - 0.70710678f) < 1e-5f : 0;
+      CHECK(c45 > 0, "chamfer normal at 45 deg");
+      p.bevelSegments = 3;
+   }
+
+   // Sentinels: -1 = the board's default, 0 = off, > 0 custom; insert pockets always 0
+   {
+      p.defaultBevel = 1.47f;
+      BoardHole a = Round(100, 100, 27.3f), b = Round(300, 100, 27.3f), c = Round(100, 400, 27.3f), d = Round(300, 400, 27.3f, kCut | kUnderInsert);
+      b.bevel = 0.f;
+      c.bevel = 3.f;
+      d.bevel = 3.f;
+      BoardMeshes m;
+      BoardReport r;
+      BuildBoard(p, { a, b, c, d }, m, r);
+      printf("sentinels: default %.3f, off %.3f, custom %.3f, insert pocket %.3f\n", r.bevel[0], r.bevel[1], r.bevel[2], r.bevel[3]);
+      CHECK(r.bevel == std::vector<float>({ 1.47f, 0.f, 3.f, 0.f }) && r.bevelClamped == 0, "bevel sentinels");
+      p.defaultBevel = 0.f;
+   }
+
+   // The board edge clamp: the outline is never inset, the grown hole stays 0.1 clear of it (and a bevel over the thickness is capped)
+   {
+      BoardHole a = Round(20, 300, 27.3f), b = Round(200, 300, 27.3f);
+      a.bevel = 10.f; // its rim is 6.35 from the edge: 6.25 left
+      b.bevel = 40.f; // over the thickness
+      BoardMeshes m;
+      BoardReport r;
+      BuildBoard(p, { a, b }, m, r);
+      float xmin = 1e9f;
+      for (const PlasticMesh::Vertex& v : m.top.verts)
+         if (v.x > 0.f && fabsf(v.y - 300.f) < 40.f)
+            xmin = std::min(xmin, v.x);
+      printf("edge clamp: bevel 10 at 6.35 from the edge -> %.4f, nearest top ring x %.4f; bevel 40 -> %.3f (thickness %.1f); clamped %d\n", r.bevel[0], xmin, r.bevel[1], T, r.bevelClamped);
+      // The flattened circle's leftmost vertex is a little inside the true circle: the clamp uses the loop as built
+      // and the clamp allows for the mitre (the 12-gon's vertices move by bevel / cos 15 deg): below 6.35 - 0.1 by about that factor
+      CHECK(r.bevel[0] >= 6.25f / 1.04f && r.bevel[0] < 6.35f && xmin >= 0.1f - 1e-3f && r.bevel[1] == T && r.bevelClamped == 2 && r.clamped == std::vector<char>({ 1, 1 }), "edge clamp");
+      int rim = 0;
+      CHECK(ShellBreaks({ &m.top, &m.walls }, -T, rim) == 0, "edge clamp: top and walls close");
+      // A non-rectangular outline: the same clamp by segment distance
+      BoardParams hex = p;
+      hex.outline = { 200, 0, 400, 150, 400, 450, 200, 600, 0, 450, 0, 150 };
+      BoardHole e = Round(200, 300, 27.3f), f = Round(30, 300, 27.3f);
+      e.bevel = 30.f;
+      f.bevel = 20.f;
+      BoardMeshes hm;
+      BoardReport hr;
+      BuildBoard(hex, { e, f }, hm, hr);
+      printf("edge clamp, hexagon: far hole 30 -> %.3f (thickness), hole 16.35 from the edge 20 -> %.3f\n", hr.bevel[0], hr.bevel[1]);
+      CHECK(hr.bevel[0] == T && hr.bevel[1] >= 16.25f / 1.04f && hr.bevel[1] <= 16.25f, "edge clamp on a polygon outline");
+      int rim2 = 0;
+      CHECK(ShellBreaks({ &hm.top, &hm.walls }, -T, rim2) == 0, "hexagon: top and walls close (a bevel as deep as the wood: no straight wall)");
+   }
+
+   // Hole to hole: two holes 6 VPU apart, bevels 5 and 1: both to under half the gap (2.95), the far pair untouched
+   {
+      BoardHole a = Round(100, 100, 27.3f), b = Round(100 + 27.3f + 6.f, 100, 27.3f), c = Round(300, 400, 27.3f), d = Round(300 + 27.3f + 20.f, 400, 27.3f);
+      a.bevel = 5.f;
+      b.bevel = 1.f;
+      c.bevel = d.bevel = 5.f;
+      BoardMeshes m;
+      BoardReport r;
+      BuildBoard(p, { a, b, c, d }, m, r);
+      printf("hole clamp: gap 6, bevels 5 / 1 -> %.4f / %.4f; gap 20, 5 / 5 -> %.3f / %.3f; clamped %d\n", r.bevel[0], r.bevel[1], r.bevel[2], r.bevel[3], r.bevelClamped);
+      CHECK(r.bevel[0] < 3.f && r.bevel[0] > 2.9f && r.bevel[1] == 1.f && r.bevel[2] == 5.f && r.bevel[3] == 5.f && r.bevelClamped == 1, "hole-to-hole clamp");
+      int inv = 0, rim = 0;
+      CapArea(m.top, inv);
+      CHECK(inv == 0 && ShellBreaks({ &m.top, &m.walls }, -T, rim) == 0, "hole clamp: top not folded, shell closed");
+      // Both large: each to under half the gap
+      a.bevel = b.bevel = 5.f;
+      BuildBoard(p, { a, b }, m, r);
+      CHECK(r.bevel[0] == r.bevel[1] && r.bevel[0] < 3.f && r.bevel[0] > 2.9f && r.bevelClamped == 2, "hole clamp, both large: %.4f %.4f", r.bevel[0], r.bevel[1]);
+   }
+
+   // The review's failing cases (P2-2 geometry review B1, S1): the clamps must allow for the mitre (a grown vertex moves bevel x 1 / cos(half its turn),
+   // up to 2), and a concave hole whose grown ring would fold gets a smaller bevel. Board 1000 x 2000, Curve Detail 1
+   {
+      BoardParams q;
+      q.outline = { 0, 0, 1000, 0, 1000, 2000, 0, 2000 };
+      q.thickness = T;
+      q.defaultBevel = 1.47f;
+      struct Case
+      {
+         const char* name;
+         std::vector<BoardHole> holes;
+      };
+      BoardHole far = Round(975, 1000, 10.f);
+      far.bevel = 23.5f;
+      const float s = 21.77f;
+      const std::vector<Case> cases = {
+         { "two d 10 holes 13 apart, Default 1.47", { Round(500, 500, 10.f), Round(513, 500, 10.f) } },
+         { "squares corner to corner 2.5 apart, 1.47", { Poly({ 400, 400, 420, 400, 420, 420, 400, 420 }), Poly({ 400 + s, 400 + s, 420 + s, 400 + s, 420 + s, 420 + s, 400 + s, 420 + s }) } },
+         { "diamond tip 1.2 from the edge, 1.47", { Poly({ 998.8f, 500, 988.8f, 510, 978.8f, 500, 988.8f, 490 }) } },
+         { "d 10 hole 20 from the edge, bevel 23.5", { far } },
+         { "U-shaped hole, a tongue 2 wide, bevel 3", { Poly({ 400, 400, 440, 400, 440, 460, 421, 460, 421, 420, 419, 420, 419, 460, 400, 460 }, 3.f) } },
+      };
+      for (const Case& c : cases)
+      {
+         BoardMeshes m;
+         BoardReport r;
+         CHECK(BuildBoard(q, c.holes, m, r), "%s: build", c.name);
+         std::string what;
+         const int bad = RingProblems(q, c.holes, r, what);
+         int rim = 0, inv = 0;
+         const int breaks = ShellBreaks({ &m.top, &m.walls }, -T, rim, nullptr);
+         CapArea(m.top, inv);
+         std::string bevs;
+         for (const float b : r.bevel)
+            bevs += " " + std::to_string(b).substr(0, 6);
+         printf("review case \"%s\": bevels%s, clamped %d; ring problems %d, shell breaks %d, cap inverted %d, walls against normals %d\n", c.name, bevs.c_str(), r.bevelClamped, bad, breaks, inv,
+            AgainstNormals(m.walls));
+         CHECK(bad == 0 && breaks == 0 && inv == 0 && AgainstNormals(m.walls) == 0 && r.bevelClamped > 0, "%s: %s", c.name, what.c_str());
+      }
+      // The U hole with a bevel its tongue allows (0.5): kept as set, not folded
+      BoardMeshes m;
+      BoardReport r;
+      const std::vector<BoardHole> u = { Poly({ 400, 400, 440, 400, 440, 460, 421, 460, 421, 420, 419, 420, 419, 460, 400, 460 }, 0.5f) };
+      BuildBoard(q, u, m, r);
+      std::string what;
+      CHECK(r.bevel[0] == 0.5f && r.bevelClamped == 0 && RingProblems(q, u, r, what) == 0, "U hole, bevel 0.5 kept (%.3f) %s", r.bevel[0], what.c_str());
+   }
+
+   // The floor collider: a Falls Through hole with bevel 6 gets one chamfer (the board's 3 segments do not apply), one with 1.5 (< 2) a straight wall;
+   // the backing is the flat face with both at their cut size; no outline walls in the floor
+   {
+      BoardHole a = Round(150, 300, 60.f, kCut | kFallsThrough), b = Round(300, 300, 27.3f, kCut | kFallsThrough), c = Round(100, 100, 27.3f);
+      a.bevel = 6.f;
+      b.bevel = 1.5f;
+      c.bevel = 6.f;
+      BoardMeshes m;
+      BoardReport r;
+      CHECK(BuildBoard(p, { a, b, c }, m, r), "floor build");
+      int inv = 0;
+      const double floorArea = CapArea(m.floor, inv); // the walls are vertical or slanted: their xy area is only the chamfer's
+      int chamfer = 0, straight = 0, outline = 0;
+      double flatArea = 0.;
+      std::vector<unsigned> capIdx(m.backing.idx);
+      for (size_t t = 0; t < capIdx.size(); t += 3)
+      {
+         const PlasticMesh::Vertex &p0 = m.floor.verts[capIdx[t]], &p1 = m.floor.verts[capIdx[t + 1]], &p2 = m.floor.verts[capIdx[t + 2]];
+         flatArea += 0.5 * ((p1.x - p0.x) * (double)(p2.y - p0.y) - (p1.y - p0.y) * (double)(p2.x - p0.x));
+      }
+      const size_t capVerts = m.backing.verts.size();
+      (void)capVerts;
+      for (const PlasticMesh::Vertex& v : m.floor.verts)
+      {
+         if (v.nz == 1.f)
+            continue;
+         outline += v.x <= 0.f || v.x >= W || v.y <= 0.f || v.y >= H;
+         if (fabsf(v.x - 150.f) < 40.f)
+            chamfer += fabsf(v.nz - 0.70710678f) < 1e-5f;
+         else
+            straight += v.nz == 0.f;
+      }
+      const double flatWant = (double)W * H - CircleGrown(60.0, 6.0) - CircleGrown(27.3, 0.0);
+      int inv2 = 0;
+      const double backArea = CapArea(m.backing, inv2), backWant = (double)W * H - CircleGrown(60.0, 0.0) - CircleGrown(27.3, 0.0);
+      printf("floor: flat face %.1f (want %.1f: the bevel 6 hole grown, the 1.5 one at its cut), chamfer vertices %d, straight wall vertices %d, outline walls %d; backing %.1f (want %.1f)\n",
+         flatArea, flatWant, chamfer, straight, outline, backArea, backWant);
+      CHECK(fabs(flatArea - flatWant) < 30. && chamfer > 0 && straight > 0 && outline == 0, "floor: the chamfer only on the bevel >= 2 hole, no outline walls");
+      CHECK(fabs(backArea - backWant) < 30. && inv2 == 0, "backing: the holes at their cut size");
+      (void)floorArea;
+      // One chamfer segment: the floor's wall triangles for hole a are 2 quads per edge, and the floor closes as a shell open at -T
+      int rim = 0;
+      const float rectEdge[4] = { 0.f, 0.f, W, H };
+      CHECK(ShellBreaks({ &m.floor }, -T, rim, rectEdge) == 0, "floor: the flat face and the hole walls close");
+      CHECK(AgainstNormals(m.floor) == 0, "floor wound against its normals");
+      int intoHole = 0, away = 0;
+      for (const PlasticMesh::Vertex& v : m.floor.verts)
+         if (v.nz < 0.99f && fabsf(v.x - 300.f) < 20.f && fabsf(v.y - 300.f) < 20.f)
+            (v.nx * (300.f - v.x) + v.ny * (300.f - v.y) > 0.f ? intoHole : away)++;
+      CHECK(intoHole > 0 && away == 0, "floor walls face into the hole (%d / %d)", intoHole, away);
+      int segRing = 0;
+      for (const PlasticMesh::Vertex& v : m.floor.verts)
+         segRing += fabsf(v.x - 150.f) < 40.f && v.z < 0.f && v.z > -6.f + 1e-3f;
+      CHECK(segRing == 0, "floor chamfer is one segment (no intermediate ring), %d", segRing);
+   }
+}
+
 int main(int argc, char** argv)
 {
    std::vector<const char*> files;
@@ -204,6 +651,7 @@ int main(int argc, char** argv)
       worst = std::max(worst, CheckFixture(f));
    printf("largest difference over all fixtures: %.3g (tolerance %g)\n", worst, gTol);
    Synthetic();
+   Bevels();
    printf(fails ? "FAILED %d\n" : "ALL OK\n", fails);
    return fails ? 1 : 0;
 }

@@ -26,12 +26,15 @@ struct CurvePoint
 // or with any point outside the outline, is skipped and counted in skippedHoles. Plastics never set it.
 // Holes (round, pill or polygon) must neither overlap each other nor nest, and must stay clear of the outline; Build does not check that between holes
 // (crossingHoles only warns about the outline) and the cap of an overlapping or nested hole comes out wrong (partly filled). The caller drops those.
+// bevel: -1 = Params::bevel (plastics: Build clamps it near the outline, topGrow); >= 0 = this hole's own bevel, taken as already clamped by the
+// caller (the Playfield Maker board clamps between holes and against its outline itself) and used as is for the top inset and the bevel rings.
 struct Hole
 {
    float x = 0.f, y = 0.f, diameter = 0.f;
    float x2 = 0.f, y2 = 0.f;
    bool pill = false;
    std::vector<CurvePoint> polygon;
+   float bevel = -1.f;
 };
 
 struct Params
@@ -43,6 +46,7 @@ struct Params
    float uvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // u = a x + b y + c, v = d x + e y + f (table XY to UV)
    bool bottomCap = true; // false: Result.bottom stays empty (no bottom face is built); the top cap and the walls are unchanged
    float flatten = 0.25f; // max chord error of flattened arcs and holes, VPU (FlattenTolerance of the Curve Detail)
+   float outlineBevel = -1.f; // The outline's bevel: -1 = bevel (plastics), >= 0 its own (the board passes 0: its outline is never inset)
 };
 
 constexpr int kMaxArcSegments = 96; // Hard cap on the segments of any one arc or hole circle (a pill loop is 96 points at most)
@@ -72,6 +76,11 @@ struct Result
    Mesh bevel; // walls plus bevel rings
    int skippedHoles = 0; // holes whose centre lies outside the outline
    int crossingHoles = 0; // holes (kept as they are) whose circle reaches over the outline edge or into the band r + 2 * bevel of it: a warning only
+   // Per contour k (0 = the outline, then the built holes in input order), exactly as Build used them, so a caller never re-flattens or re-offsets:
+   std::vector<std::vector<CurvePoint>> contours; // the contour itself: the outline counter-clockwise, holes clockwise (z = height)
+   std::vector<std::vector<CurvePoint>> topRings; // the top cap's ring of it (the contour inset by effBevel[k]): same vertex count, order and start
+   std::vector<float> effBevel; // the bevel used for its top inset and bevel rings (after the topGrow clamp for bevel -1 holes)
+   std::vector<int> contourOfHole; // per input hole: its contour k, or -1 when it was skipped or empty
 };
 
 // The closed outline flattened to a polyline (no repeated first point). Arcs deviate from the true circle by at most `tol`.
