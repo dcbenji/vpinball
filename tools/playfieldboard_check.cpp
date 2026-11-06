@@ -7,6 +7,7 @@
 // (P2-2): its flat face must still be the fixture's floor, followed by those walls.
 // Then synthetic cases: overlaps, outlines, and the bevels (profile, default and insert pockets, the board edge and hole-to-hole clamps, the floor's chamfer).
 #include "math/PlayfieldBoard.h"
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -632,6 +633,138 @@ static void Bevels()
    }
 }
 
+// ---- P2-3: a traced outline (a rectangle with two edge notches): the board, walls and backing follow it, the floor collider stays its own rectangle,
+// a clockwise outline builds the same board, and the leaves-the-board test stays cheap with a 4096-point outline
+static bool InsidePoly(const std::vector<float>& xy, float x, float y)
+{
+   bool in = false;
+   const size_t n = xy.size() / 2;
+   for (size_t i = 0, j = n - 1; i < n; j = i++)
+   {
+      const float xi = xy[2 * i], yi = xy[2 * i + 1], xj = xy[2 * j], yj = xy[2 * j + 1];
+      if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
+         in = !in;
+   }
+   return in;
+}
+
+static void Outlines()
+{
+   const std::vector<float> notched = { 0, 0, 1000, 0, 1000, 2000, 800, 2000, 800, 1940, 700, 1940, 700, 2000, 0, 2000, 0, 420, 60, 420, 60, 300, 0, 300 };
+   const std::vector<float> rectOutline = { 0, 0, 1000, 0, 1000, 2000, 0, 2000 };
+   const double notchedArea = 2000000. - 60. * 120. - 100. * 60.;
+   BoardParams p;
+   p.outline = notched;
+   p.floorOutline = rectOutline;
+   p.thickness = 23.5f;
+   p.uvm[0] = 0.001f;
+   p.uvm[4] = 0.0005f;
+   std::vector<BoardHole> holes = { Round(500, 1000, 40), Round(30, 360, 40), Round(80, 360, 40), Round(200, 360, 40), Round(750, 1700, 60, kCut | kFallsThrough), Round(750, 1960, 40) };
+   BoardMeshes m;
+   BoardReport r;
+   CHECK(BuildBoard(p, holes, m, r), "notched build");
+   CHECK(r.overlap == std::vector<char>({ 0, 1, 1, 0, 0, 1 }), "notched overlap flags: in a notch, touching a notch wall, fine, fine, fine, over the notch edge");
+   CHECK(r.built == 3, "notched built %d", r.built);
+   int inv = 0;
+   const double circle40 = M_PI * 20. * 20., circle60 = M_PI * 30. * 30.;
+   const double top = CapArea(m.top, inv), back = CapArea(m.backing, inv), floor = CapArea(m.floor, inv);
+   printf("outline: top %.0f (want %.0f), backing %.0f (want %.0f), floor %.0f (want %.0f)\n", top, notchedArea - 2 * circle40 - circle60, back, notchedArea - circle60, floor, 2000000. - circle60);
+   CHECK(fabs(top - (notchedArea - 2 * circle40 - circle60)) < 100., "top follows the outline");
+   CHECK(fabs(back - (notchedArea - circle60)) < 40., "backing follows the outline");
+   CHECK(fabs(floor - (2000000. - circle60)) < 40., "the floor stays the rectangle");
+   for (const PlasticMesh::Vertex& v : m.floor.verts)
+      CHECK(v.x >= -1e-3f && v.x <= 1000.001f && v.y >= -1e-3f && v.y <= 2000.001f, "floor inside the rectangle");
+   int floorCorner = 0;
+   for (const PlasticMesh::Vertex& v : m.floor.verts)
+      floorCorner += v.z == 0.f && (v.x == 0.f && v.y == 0.f);
+   CHECK(floorCorner > 0, "the floor keeps the rectangle's corner");
+   int topInNotch = 0;
+   for (const PlasticMesh::Vertex& v : m.top.verts)
+      topInNotch += v.x < 59.f && v.y > 301.f && v.y < 419.f;
+   CHECK(topInNotch == 0, "no board in the notch");
+   // Walls on the outline: each triangle faces away from the wood (its geometric normal) and its vertex normals agree
+   const auto outlineWalls = [&](const BoardMeshes& bm2, const std::vector<float>& ol, int& n, int& bad)
+   {
+      n = bad = 0;
+      for (size_t t = 0; t < bm2.walls.idx.size(); t += 3)
+      {
+         const PlasticMesh::Vertex &a = bm2.walls.verts[bm2.walls.idx[t]], &b = bm2.walls.verts[bm2.walls.idx[t + 1]], &c = bm2.walls.verts[bm2.walls.idx[t + 2]];
+         const float cx = (a.x + b.x + c.x) / 3.f, cy = (a.y + b.y + c.y) / 3.f;
+         bool on = false;
+         for (size_t i = 0; i < ol.size() / 2 && !on; i++)
+         {
+            const size_t j = (i + 1) % (ol.size() / 2);
+            const float ax = ol[2 * i], ay = ol[2 * i + 1], bx = ol[2 * j], by = ol[2 * j + 1], dx = bx - ax, dy = by - ay;
+            const float u = std::clamp(((cx - ax) * dx + (cy - ay) * dy) / (dx * dx + dy * dy), 0.f, 1.f);
+            on = hypotf(ax + u * dx - cx, ay + u * dy - cy) < 1e-3f;
+         }
+         if (!on)
+            continue;
+         n++;
+         const float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+         const float gx = uy * vz - uz * vy, gy = uz * vx - ux * vz, gl = hypotf(gx, gy);
+         const bool geomOut = gl > 0.f && !InsidePoly(ol, cx + 0.5f * gx / gl, cy + 0.5f * gy / gl);
+         const bool normalsAgree = a.nx * gx + a.ny * gy > 0.f && b.nx * gx + b.ny * gy > 0.f && c.nx * gx + c.ny * gy > 0.f;
+         bad += !(geomOut && normalsAgree);
+      }
+   };
+   int wn, wbad;
+   outlineWalls(m, notched, wn, wbad);
+   CHECK(wn >= 12 && wbad == 0, "outline walls face away from the wood (%d of %d wrong)", wbad, wn);
+
+   // The same board from a clockwise outline: same counts, same areas, no inward normals
+   BoardParams cw = p;
+   cw.outline.clear();
+   for (size_t i = notched.size() / 2; i-- > 0;)
+   {
+      cw.outline.push_back(notched[2 * i]);
+      cw.outline.push_back(notched[2 * i + 1]);
+   }
+   cw.floorOutline = { 0, 0, 0, 2000, 1000, 2000, 1000, 0 }; // clockwise too
+   BoardMeshes cm;
+   BoardReport cr;
+   CHECK(BuildBoard(cw, holes, cm, cr), "clockwise build");
+   CHECK(cr.overlap == r.overlap && cr.built == r.built, "clockwise: same holes built");
+   CHECK(cm.top.idx.size() == m.top.idx.size() && cm.walls.idx.size() == m.walls.idx.size() && cm.backing.idx.size() == m.backing.idx.size() && cm.floor.idx.size() == m.floor.idx.size(), "clockwise: same triangle counts");
+   int inv2 = 0;
+   CHECK(fabs(CapArea(cm.top, inv2) - top) < 1e-2 && inv2 == 0 && fabs(CapArea(cm.backing, inv2) - back) < 1e-2 && fabs(CapArea(cm.floor, inv2) - floor) < 1e-2, "clockwise: same areas, nothing inverted");
+   outlineWalls(cm, notched, wn, wbad);
+   CHECK(wn >= 12 && wbad == 0, "clockwise outline: walls face away from the wood (%d of %d wrong)", wbad, wn);
+
+   // Empty floorOutline = the outline (the notch is then in the floor too)
+   BoardParams same = p;
+   same.floorOutline.clear();
+   BoardMeshes sm;
+   BoardReport sr;
+   CHECK(BuildBoard(same, holes, sm, sr), "same-outline build");
+   CHECK(fabs(CapArea(sm.floor, inv) - (notchedArea - circle60)) < 40., "empty floorOutline: the floor follows the outline");
+
+   // Cost of the leaves-the-board test: 4096 outline points, 400 holes
+   BoardParams big;
+   big.thickness = 23.5f;
+   big.uvm[0] = 0.001f;
+   big.uvm[4] = 0.0005f;
+   for (int i = 0; i < 4096; i++) // a jagged ellipse
+   {
+      const double a = 2. * M_PI * i / 4096., k = 1. + 0.004 * ((i % 7) - 3);
+      big.outline.push_back((float)(500. + 480. * cos(a) * k));
+      big.outline.push_back((float)(1000. + 980. * sin(a) * k));
+   }
+   std::vector<BoardHole> many;
+   for (int i = 0; i < 400; i++)
+      many.push_back(Round(40.f + 920.f * (float)((i * 37) % 50) / 50.f, 40.f + 1920.f * (float)((i * 11) % 80) / 80.f, 12.f));
+   BoardMeshes bm;
+   BoardReport br;
+   const auto t0 = std::chrono::steady_clock::now();
+   const bool ok = BuildBoard(big, many, bm, br);
+   const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+   int outside = 0;
+   for (size_t i = 0; i < many.size(); i++)
+      outside += !InsidePoly(big.outline, many[i].cx, many[i].cy) ? 1 : 0;
+   printf("outline 4096 points, 400 holes: %d built, %d overlapping (%d centres outside), %.1f ms\n", br.built, br.overlapping, outside, ms);
+   CHECK(ok && br.overlapping >= outside, "big outline build");
+}
+
 int main(int argc, char** argv)
 {
    std::vector<const char*> files;
@@ -652,6 +785,7 @@ int main(int argc, char** argv)
    printf("largest difference over all fixtures: %.3g (tolerance %g)\n", worst, gTol);
    Synthetic();
    Bevels();
+   Outlines();
    printf(fails ? "FAILED %d\n" : "ALL OK\n", fails);
    return fails ? 1 : 0;
 }

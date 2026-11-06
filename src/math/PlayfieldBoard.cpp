@@ -50,6 +50,20 @@ std::vector<CurvePoint> OutlinePoints(const std::vector<float>& xy)
    return res;
 }
 
+// The outline counter-clockwise (shoelace area > 0, the way the walls, the top and the clamps expect it; PlasticMesh::Build reverses a clockwise outline by
+// itself, AddWalls does not: a clockwise traced outline would give inward wall normals)
+void MakeCounterClockwise(std::vector<CurvePoint>& p)
+{
+   double a = 0.0;
+   for (size_t i = 0; i < p.size(); i++)
+   {
+      const CurvePoint &u = p[i], &v = p[(i + 1) % p.size()];
+      a += (double)u.x * v.y - (double)v.x * u.y;
+   }
+   if (a < 0.0)
+      std::reverse(p.begin(), p.end());
+}
+
 // Two edges cross, or come within 0.01 VPU of each other: holes that touch, share an edge or lie on each other count as overlapping
 bool SegmentsTouch(const CurvePoint& a, const CurvePoint& b, const CurvePoint& c, const CurvePoint& d)
 {
@@ -293,19 +307,26 @@ bool IsAxisRect(const std::vector<CurvePoint>& o)
    return true;
 }
 
-// A hole loop reaches the board edge or leaves the board. A rectangular outline: its box is touched or passed (the edge is part of the cut). Any other: a point outside, or an edge touching the outline.
+// A hole loop reaches the board edge or leaves the board. A rectangular outline: its box is touched or passed (the edge is part of the cut). Any other: a point
+// outside, or an edge touching the outline. Cheap enough for every hole drag (a traced outline has up to 4096 points): the hole's box is rejected against the
+// outline's box first, only the outline edges near the hole's box meet the hole's edges, and with no edge touching, one point of the loop decides inside or out
 bool LeavesBoard(const std::vector<CurvePoint>& loop, const Box& b, const std::vector<CurvePoint>& outline, const bool rect, const Box& ob)
 {
    if (rect)
       return b.left <= ob.left || b.right >= ob.right || b.top <= ob.top || b.bottom >= ob.bottom;
-   for (const CurvePoint& p : loop)
-      if (!InsideLoop(outline, p.x, p.y))
-         return true;
-   for (size_t i = 0; i < loop.size(); i++)
-      for (size_t j = 0; j < outline.size(); j++)
-         if (SegmentsTouch(loop[i], loop[(i + 1) % loop.size()], outline[j], outline[(j + 1) % outline.size()]))
+   if (b.left < ob.left || b.right > ob.right || b.top < ob.top || b.bottom > ob.bottom)
+      return true; // some of the loop is outside the outline's box
+   constexpr float g = 0.01f; // SegmentsTouch's distance
+   for (size_t j = 0; j < outline.size(); j++)
+   {
+      const CurvePoint &c = outline[j], &d = outline[(j + 1) % outline.size()];
+      if (std::max(c.x, d.x) < b.left - g || std::min(c.x, d.x) > b.right + g || std::max(c.y, d.y) < b.top - g || std::min(c.y, d.y) > b.bottom + g)
+         continue;
+      for (size_t i = 0; i < loop.size(); i++)
+         if (SegmentsTouch(loop[i], loop[(i + 1) % loop.size()], c, d))
             return true;
-   return false;
+   }
+   return !InsideLoop(outline, loop[0].x, loop[0].y); // No edge touches: the whole loop is on one side
 }
 // A hole's grown top ring folded: an edge runs against its contour edge (a strip of wood between two parts of a concave hole narrower than about twice
 // the bevel), or two of its edges cross. Convex holes never fold
@@ -358,7 +379,15 @@ double MaxMitre(const std::vector<CurvePoint>& p)
 bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, BoardMeshes& meshes, BoardReport& report)
 {
    report = BoardReport();
-   const std::vector<CurvePoint> outline = OutlinePoints(params.outline);
+   std::vector<CurvePoint> outline = OutlinePoints(params.outline);
+   if (outline.size() >= 3)
+      MakeCounterClockwise(outline);
+   std::vector<CurvePoint> floorOutline = OutlinePoints(params.floorOutline);
+   if (floorOutline.size() >= 3)
+      MakeCounterClockwise(floorOutline);
+   else
+      floorOutline.clear(); // empty (or unusable) = the board's outline
+   const bool ownFloorOutline = !floorOutline.empty();
    const float tol = PlasticMesh::FlattenTolerance(params.detail);
    const bool haveOutline = outline.size() >= 3;
    const bool rect = haveOutline && IsAxisRect(outline);
@@ -533,7 +562,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
 
    BoardMeshes out;
    PlasticMesh::Result floorRes;
-   if (!BuildTop(outline, falls, fallsBevel, params, floorRes))
+   if (!BuildTop(ownFloorOutline ? floorOutline : outline, falls, fallsBevel, params, floorRes))
       return false;
    report.built = static_cast<int>(cut.size());
    out.top = std::move(topRes.top);
@@ -549,7 +578,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
    // rows of the plywood image
    out.floor = std::move(floorRes.top);
    const bool anyFloorBevel = std::ranges::any_of(fallsBevel, [](const float b) { return b > 0.f; });
-   if (anyFloorBevel)
+   if (anyFloorBevel || ownFloorOutline) // The backing follows the board's outline, the floor its own
    {
       PlasticMesh::Result flat;
       if (!BuildTop(outline, falls, fallsFlat, params, flat))

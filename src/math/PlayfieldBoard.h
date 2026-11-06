@@ -36,7 +36,8 @@ struct BoardHole
 
 struct BoardParams
 {
-   std::vector<float> outline; // x0, y0, x1, y1, ... the board edge as the editor's counter-clockwise rectangle (left top, right top, right bottom, left bottom)
+   std::vector<float> outline; // x0, y0, x1, y1, ... the board edge (the editor's rectangle: left top, right top, right bottom, left bottom, or a traced outline); either winding, the builder makes it counter-clockwise
+   std::vector<float> floorOutline; // The floor collider's edge, same layout; empty = the outline. The table rectangle when the board follows a traced outline: the ball still rolls over an edge cut
    float thickness = 23.5f;
    float uvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // u = a x + b y + c, v = d x + e y + f (table XY to UV)
    int detail = 1; // Curve Detail 1..5
@@ -48,7 +49,7 @@ struct BoardMeshes
 {
    PlasticMesh::Mesh top; // The board face at z = 0 with every built hole cut
    PlasticMesh::Mesh walls; // The board edge and the walls of every built hole, with their bevels
-   PlasticMesh::Mesh backing; // The floor face lowered below the wood, on the dark rows of the plywood image (the editor appends it to the walls part)
+   PlasticMesh::Mesh backing; // The face lowered below the wood (on the board's outline), on the dark rows of the plywood image (the editor appends it to the walls part)
    PlasticMesh::Mesh floor; // The flat collider face with only the kFallsThrough holes cut, then their walls down to -thickness (a chamfer when the bevel >= 2)
 };
 
