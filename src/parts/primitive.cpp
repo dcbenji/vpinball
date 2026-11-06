@@ -2573,8 +2573,12 @@ void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool>
 
 namespace
 {
-static_assert(PlayfieldHole::Round == PlayfieldBoard::kRound && PlayfieldHole::Slot == PlayfieldBoard::kSlot && PlayfieldHole::Polygon == PlayfieldBoard::kPolygon, "PlayfieldHole::Type must match PlayfieldBoard::HoleKind");
-static_assert(PlayfieldHole::Cut == PlayfieldBoard::kCut && PlayfieldHole::FallsThrough == PlayfieldBoard::kFallsThrough && PlayfieldHole::UnderInsert == PlayfieldBoard::kUnderInsert && PlayfieldHole::FromMask == PlayfieldBoard::kFromMask,
+// Cast to int: comparing enumerators of two different enums warns (g++ -Wenum-compare, C++20 deprecated)
+static_assert(static_cast<int>(PlayfieldHole::Round) == static_cast<int>(PlayfieldBoard::kRound) && static_cast<int>(PlayfieldHole::Slot) == static_cast<int>(PlayfieldBoard::kSlot)
+      && static_cast<int>(PlayfieldHole::Polygon) == static_cast<int>(PlayfieldBoard::kPolygon),
+   "PlayfieldHole::Type must match PlayfieldBoard::HoleKind");
+static_assert(static_cast<int>(PlayfieldHole::Cut) == static_cast<int>(PlayfieldBoard::kCut) && static_cast<int>(PlayfieldHole::FallsThrough) == static_cast<int>(PlayfieldBoard::kFallsThrough)
+      && static_cast<int>(PlayfieldHole::UnderInsert) == static_cast<int>(PlayfieldBoard::kUnderInsert) && static_cast<int>(PlayfieldHole::FromMask) == static_cast<int>(PlayfieldBoard::kFromMask),
    "PlayfieldHole::Flags must match PlayfieldBoard::HoleFlags");
 
 // The board builder's hole (the one place the editor's hole types map to PlayfieldBoard)
