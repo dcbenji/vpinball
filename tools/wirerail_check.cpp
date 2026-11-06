@@ -32,6 +32,91 @@ static void CheckProfile(const Profile& p, const float ballR, const int minTouch
 
 static std::vector<Frame> Route(const std::vector<PathPoint>& fine, const std::vector<float>& rolls = {}, const int detail = 8) { return BuildFrames(BuildRows(fine, rolls, detail)); }
 
+
+// Shading of a built mesh: every normal of unit length and finite, UVs finite, every triangle wound as its vertex normals face, and on the tube surface (a vertex at the
+// tube radius from 'centerline') the normal along the radial direction from the nearest centreline point. Returns the faults found, printing the first few with 'what'
+static bool BitsFinite(const float v)
+{
+   uint32_t b;
+   memcpy(&b, &v, sizeof b);
+   return (b & 0x7F800000u) != 0x7F800000u; // -ffast-math drops std::isfinite
+}
+static int CheckShading(const char* what, const std::vector<Vx>& v, const std::vector<unsigned>& idx, const size_t v0, const size_t i0, const std::vector<V3>& centerline, const float radius, size_t tubeEnd = 0)
+{
+   int bad = 0, badUnit = 0, badOut = 0, badRadial = 0, badWind = 0, tubeVerts = 0;
+   const auto report = [&](const char* kind, const size_t k, const float val)
+   {
+      if (bad++ < 6)
+         printf("  %s: %s at vertex %d (%.2f, %.2f, %.2f) n (%.3f, %.3f, %.3f): %.4f\n", what, kind, (int)k, v[k].x, v[k].y, v[k].z, v[k].nx, v[k].ny, v[k].nz, val);
+   };
+   for (size_t k = v0; k < v.size(); k++)
+   {
+      const Vx& x = v[k];
+      if (!BitsFinite(x.x) || !BitsFinite(x.y) || !BitsFinite(x.z) || !BitsFinite(x.nx) || !BitsFinite(x.ny) || !BitsFinite(x.nz) || !BitsFinite(x.tu) || !BitsFinite(x.tv))
+      {
+         report("not finite", k, 0.f);
+         badUnit++;
+         continue;
+      }
+      const V3 n { x.nx, x.ny, x.nz }, p { x.x, x.y, x.z };
+      const float l = WireSweep::Len(n);
+      if (fabsf(l - 1.f) > 1e-3f)
+      {
+         report("normal not unit", k, l);
+         badUnit++;
+      }
+      if (centerline.size() < 2 || (tubeEnd && k >= tubeEnd))
+         continue; // The blobs after the tube: normals and winding only
+      // The nearest point of the centreline polyline
+      float best = 1e30f;
+      V3 near {};
+      for (size_t s = 0; s + 1 < centerline.size(); s++)
+      {
+         const V3 a = centerline[s], d = centerline[s + 1] - a;
+         const float l2 = WireSweep::Dot(d, d);
+         const float t = l2 > 0.f ? std::clamp(WireSweep::Dot(p - a, d) / l2, 0.f, 1.f) : 0.f;
+         const V3 q = a + d * t;
+         const float dist = WireSweep::Len(p - q);
+         if (dist < best)
+         {
+            best = dist;
+            near = q;
+         }
+      }
+      if (fabsf(best - radius) > radius * 0.05f)
+         continue; // Not on the tube surface: a cap, a chamfer or a blob
+      tubeVerts++;
+      const V3 radial = (p - near) * (1.f / best);
+      const float d = WireSweep::Dot(n, radial);
+      if (d <= 0.f)
+      {
+         report("normal points into the tube", k, d);
+         badOut++;
+      }
+      else if (d < 0.7f) // A chamfer ring at the tube radius is blended half way (cos 45 degrees)
+      {
+         report("normal off the radial", k, d);
+         badRadial++;
+      }
+   }
+   for (size_t t = i0; t + 2 < idx.size(); t += 3)
+   {
+      const Vx &a = v[idx[t]], &b = v[idx[t + 1]], &c = v[idx[t + 2]];
+      const V3 face = WireSweep::Cross(V3 { b.x - a.x, b.y - a.y, b.z - a.z }, V3 { c.x - a.x, c.y - a.y, c.z - a.z });
+      if (WireSweep::Len(face) < 1e-8f)
+         continue;
+      const V3 vn { a.nx + b.nx + c.nx, a.ny + b.ny + c.ny, a.nz + b.nz + c.nz };
+      const float d = WireSweep::Dot(WireSweep::Norm(face), WireSweep::Norm(vn));
+      if (d <= 0.f)
+      {
+         report("winding against the normals", idx[t], d);
+         badWind++;
+      }
+   }
+   printf("shading %s: %d verts (%d on the tube), %d tris: unit/finite %d, inward %d, off radial %d, winding %d\n", what, (int)(v.size() - v0), tubeVerts, (int)(idx.size() - i0) / 3, badUnit, badOut, badRadial, badWind);
+   return bad;
+}
+
 int main()
 {
    const float wireR = kDefaultWireDiameter * 0.5f, ballR = kDefaultBallDiameter * 0.5f;
@@ -557,6 +642,40 @@ int main()
          for (const FixtureShape& s : sh)
             assert(s.built);
          printf("fixtures: 8 on a bent route, %d triangles\n", (int)ii.size() / 3);
+      }
+      // Shading: each fixture type at its defaults, the stand with a non-default foot too, and the rail tubes' own caps
+      {
+         int faults = 0;
+         std::vector<Fixture> kinds { DefaultFixture(kFixtureRing, 250.f), DefaultFixture(kFixtureRung, 250.f), DefaultFixture(kFixtureCradle, 250.f), DefaultFixture(kFixtureStand, 250.f) };
+         Fixture foot = DefaultFixture(kFixtureStand, 250.f);
+         foot.legLeft = true;
+         foot.startVector = WireSweep::Norm(V3 { 0.3f, 0.2f, -1.f });
+         foot.startLength = 25.f;
+         foot.footPosition = { -10.f, 5.f, -70.f };
+         foot.footRotation = { 20.f, 35.f, 60.f };
+         foot.footClockwise = true;
+         foot.footWidth = 22.f;
+         foot.footArm = 18.f;
+         foot.footConnectedArm = 40.f;
+         kinds.push_back(foot);
+         const char* names[] = { "ring", "rung", "cradle", "stand", "stand (foot moved)" };
+         for (size_t k = 0; k < kinds.size(); k++)
+         {
+            build({ kinds[k] }, v, idx, sh);
+            assert(sh[0].built);
+            std::vector<Vx> tube;
+            std::vector<unsigned> tubeIdx;
+            if (kinds[k].type == kFixtureRing)
+               AppendClosedTube<Vx>(std::vector<V3>(sh[0].centerline.begin(), sh[0].centerline.end() - 1), wireR, kDefaultSides, tube, tubeIdx);
+            else
+               AppendTube<Vx>(sh[0].centerline, wireR, kDefaultSides, kDefaultCapBevel, tube, tubeIdx);
+            faults += CheckShading(names[k], v, idx, 0, 0, sh[0].centerline, wireR, tube.size());
+         }
+         std::vector<Vx> tv;
+         std::vector<unsigned> ti;
+         assert(BuildTubes<Vx>(frames, wires, wireR, kDefaultSides, kDefaultCapBevel, tv, ti));
+         faults += CheckShading("rail tubes", tv, ti, 0, 0, WireCenterline(frames, wires[0]), -1.f); // Normals and winding only (the radial test needs one centreline)
+         assert(faults == 0);
       }
       printf("fixtures OK\n");
    }
