@@ -738,6 +738,34 @@ float pbr_aa_roughness(const vec3 n, const float roughness)
 // fragment coords. The previous axis-aligned 3x3 grid quantized the penumbra into ~10 visibly banded
 // levels; the rotated disk spreads the taps so the residual quantization reads as fine noise instead.
 // (elementwise init: shaderc has no array literals, same pattern as the SMAA offset[] declarations)
+// PBR_SLIM_LIGHTLOOP (perf POC, default off): the shadow filter taps run as real loops instead of being unrolled, and the
+// disk comes from one constant table (dynamic indexing). Same taps, same order, same result. Unrolled, the two 16 tap
+// filters (ortho + cube) inside the per-light loop made the Metal fragment shader ~2x larger (94 texture reads vs 38),
+// which costs occupancy on Apple GPUs (PBR_PERF_NOLIGHTLOOP A/B: the light loop cost 6.4 ms at 1080p with no light lit).
+#if defined(PBR_SLIM_LIGHTLOOP) && !BGFX_SHADER_LANGUAGE_GLSL
+#define PBR_TAP_LOOP LOOP
+static const vec2 g_pbrVsmDisk[16] = {
+   vec2(-0.94201624, -0.39906216),
+   vec2(0.94558609, -0.76890725),
+   vec2(0.97484398, 0.75648379),
+   vec2(-0.81409955, 0.91437590),
+   vec2(-0.91588581, 0.45771432),
+   vec2(-0.81544232, -0.87912464),
+   vec2(-0.38277543, 0.27676845),
+   vec2(-0.09418410, -0.92938870),
+   vec2(0.44323325, -0.97511554),
+   vec2(0.53742981, -0.47373420),
+   vec2(-0.26496911, -0.41893023),
+   vec2(0.79197514, 0.19090188),
+   vec2(-0.24188840, 0.99706507),
+   vec2(0.34495938, 0.29387760),
+   vec2(0.19984126, 0.78641367),
+   vec2(0.14383161, -0.14100790)
+};
+#define PBR_VSM_DISK(d)
+#define vsmDisk g_pbrVsmDisk
+#else
+#define PBR_TAP_LOOP UNROLL
 // 16 tap Poisson disk; the first 4 are the outer corners (the early-out set of pbrShadowParams.w)
 #define PBR_VSM_DISK(d) \
    vec2 d[16]; \
@@ -757,6 +785,7 @@ float pbr_aa_roughness(const vec3 n, const float roughness)
    d[13] = vec2(0.34495938, 0.29387760); \
    d[14] = vec2(0.19984126, 0.78641367); \
    d[15] = vec2(0.14383161, -0.14100790);
+#endif
 
 // Cube virtual shadow map lookup of one light at a receiver: the soft (PCSS-lite, 16 tap Poisson disk rotated by vsmRot) opaque shadow times the
 // translucent casters' tint, 1 = lit. Shared by the live path (pbr_direct_light) and the shadow cache bake (SHADOW_BAKE below),
@@ -801,7 +830,7 @@ vec3 pbr_cube_shadow(const vec4 vsmP, const vec4 lPos, const float lightRadius, 
       const float cmpWin = max(0.25, dist * 2.0 * invFaceRes) / max(NdotLs, 0.3);
       PBR_VSM_DISK(vsmDisk);
       float shadowAcc = 0.0;
-      UNROLL for (int t = 0; t < 4; t++)
+      PBR_TAP_LOOP for (int t = 0; t < 4; t++)
       {
          const vec2 toff = pbr_vsm_rot(vsmDisk[t], vsmRot);
          const vec3 tdir = normalize(ldir + (toff.x * tX + toff.y * tY) * filterRadius);
@@ -815,7 +844,7 @@ vec3 pbr_cube_shadow(const vec4 vsmP, const vec4 lPos, const float lightRadius, 
       // Early-out (pbr_shadow_tap_mode, VPX_SHADOW_EARLY): the 4 corner taps agreeing (fully lit or fully shadowed) stand for all 16
       BRANCH if (pbr_shadow_tap_mode() < 0.5 || (pbr_shadow_tap_mode() < 1.5 && shadowAcc > 0.001 && shadowAcc < 3.999))
       {
-         UNROLL for (int t = 4; t < 16; t++)
+         PBR_TAP_LOOP for (int t = 4; t < 16; t++)
          {
             const vec2 toff = pbr_vsm_rot(vsmDisk[t], vsmRot);
             const vec3 tdir = normalize(ldir + (toff.x * tX + toff.y * tY) * filterRadius);
@@ -1015,7 +1044,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
                // incidence like the bias) instead of a binary step, so the penumbra comes out continuous
                const float cmpWin = 1.5 * max(1.0 / (vsmB.x * grid.x), 1.0 / (vsmB.y * grid.y)) / (max(NdotLs, 0.3) * 128.0);
                float shadowAcc = 0.0;
-               UNROLL for (int t = 0; t < 4; t++)
+               PBR_TAP_LOOP for (int t = 0; t < 4; t++)
                {
                   const vec2 tuv = suv + pbr_vsm_rot(vsmDisk[t], vsmRot) * filterRadius;
                   const float d = pbr_vsm_depth(vsmP.x, grid, tuv);
@@ -1024,7 +1053,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
                // Early-out (pbr_shadow_tap_mode, VPX_SHADOW_EARLY): the 4 corner taps agreeing (fully lit or fully shadowed) stand for all 16
                BRANCH if (pbr_shadow_tap_mode() < 0.5 || (pbr_shadow_tap_mode() < 1.5 && shadowAcc > 0.001 && shadowAcc < 3.999))
                {
-                  UNROLL for (int t = 4; t < 16; t++)
+                  PBR_TAP_LOOP for (int t = 4; t < 16; t++)
                   {
                      const vec2 tuv = suv + pbr_vsm_rot(vsmDisk[t], vsmRot) * filterRadius;
                      const float d = pbr_vsm_depth(vsmP.x, grid, tuv);
