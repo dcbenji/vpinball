@@ -80,6 +80,7 @@ class EditorUI final
    friend class RubberBetweenPosts;
    friend class PlasticFromAtlas;
    friend class PlayfieldMaker;
+   friend class RampColliderTool;
    friend class ReferenceImage;
    friend class MeasureTool;
 

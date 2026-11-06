@@ -23,7 +23,7 @@ public:
    {
       if (m_part->m_d.m_plasticGen)
          return m_part->m_plasticEditHoles ? &m_part->m_plasticHoles : &m_part->m_plasticCurve;
-      return m_part->m_d.m_wireGen ? &m_part->m_wireCurve : nullptr;
+      return m_part->IsCurveHost() ? &m_part->m_wireCurve : nullptr;
    }
    float GetDragPointZ(const DragPoint* point) const override
    {
@@ -50,6 +50,9 @@ public:
    static void CopyTouchedTraced(const Primitive* source, Primitive* target);
 
 private:
+   void UpdateRampColliderPanel(PropertyPane& props); // RampColliderPanel.cpp
+   void RenderRampColliderOverlay(const EditorRenderContext& ctx);
+   string m_rampMessage; // The outcome of the last Snap Heights to Reference
    void UpdateRailPanel(PropertyPane& props); // WireRailPanel.cpp
    void UpdateRailFixturePanel(PropertyPane& props);
    void RenderRailOverlay(const EditorRenderContext& ctx);

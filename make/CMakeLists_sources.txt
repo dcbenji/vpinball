@@ -104,6 +104,7 @@ set(VPX_SOURCES
    src/math/MeshUtils.h
    src/math/wiresweep.h
    src/math/wirerail.h
+   src/math/rampcollider.h
    src/math/PlasticMesh.h
    src/math/earcut.hpp
    src/math/PlasticMesh.cpp
@@ -389,6 +390,8 @@ set(VPX_SOURCES
    src/ui/live/editor/PlasticFromAtlas.cpp
    src/ui/live/editor/PlayfieldMaker.h
    src/ui/live/editor/PlayfieldMaker.cpp
+   src/ui/live/editor/RampColliderPanel.h
+   src/ui/live/editor/RampColliderPanel.cpp
    src/ui/live/editor/ReferenceImage.h
    src/ui/live/editor/ReferenceImage.cpp
    src/ui/live/editor/WireRailPanel.cpp

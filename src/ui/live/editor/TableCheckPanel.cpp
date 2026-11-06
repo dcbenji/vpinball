@@ -243,7 +243,7 @@ const DragPointCurve *DataCurve(const ScanContext &ctx, IEditable *part)
    case eItemPrimitive:
    {
       Primitive *const prim = static_cast<Primitive *>(part);
-      return prim->m_d.m_plasticGen ? &prim->m_plasticCurve : prim->m_d.m_wireGen ? &prim->m_wireCurve : nullptr;
+      return prim->m_d.m_plasticGen ? &prim->m_plasticCurve : prim->IsCurveHost() ? &prim->m_wireCurve : nullptr;
    }
    case eItemLight:
    {

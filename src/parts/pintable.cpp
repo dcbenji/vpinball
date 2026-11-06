@@ -3390,7 +3390,7 @@ vector<IEditable *> PinTable::ImportParts(PinTable *const source, PartGroup *con
             --lastNonDigit;
          part->SetName(GetUniqueName(input.substr(0, lastNonDigit)));
       }
-      if (part->GetItemType() == eItemPrimitive && (static_cast<Primitive *>(part)->m_d.m_plasticGen || static_cast<Primitive *>(part)->m_d.m_wireRail || static_cast<Primitive *>(part)->m_d.m_playfieldGen))
+      if (part->GetItemType() == eItemPrimitive && (static_cast<Primitive *>(part)->m_d.m_plasticGen || static_cast<Primitive *>(part)->m_d.m_wireRail || static_cast<Primitive *>(part)->m_d.m_playfieldGen || static_cast<Primitive *>(part)->m_d.m_rampCollider))
          packHosts.emplace_back(oldName, part->GetName());
       if (part->GetPartGroup() == nullptr)
          part->SetPartGroup(targetGroup);
@@ -6002,6 +6002,12 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
                if (beforeChange)
                   beforeChange(pedit);
                companion->m_d.m_plasticHost = newName;
+            }
+            if (StrCompareNoCase(companion->m_d.m_rampReference, oldName)) // A Ramp Collider names the part whose look it follows
+            {
+               if (beforeChange)
+                  beforeChange(pedit);
+               companion->m_d.m_rampReference = newName;
             }
          }
       return;

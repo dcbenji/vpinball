@@ -7,6 +7,7 @@
 #include "math/MeshUtils.h"
 #include "math/dragpoint.h"
 #include "math/wirerail.h"
+#include "math/rampcollider.h"
 #include "math/matrix.h"
 #include "parts/pintable.h"
 #include "physics/hitable.h"
@@ -30,7 +31,8 @@ class MeshBuffer;
 //  ObjRotY = 7
 //  ObjRotZ = 8
 inline constexpr int kRailChannelRole = 3; // m_plasticRole of a Wire Rail's channel part
-// Playfield Maker companions (4 is kept for the Ramp Collider's walls)
+inline constexpr int kRampWallsRole = 4; // m_plasticRole of a Ramp Collider's walls part (m_plasticHost = the collider)
+// Playfield Maker companions
 inline constexpr int kPlayfieldWallsRole = 5; // The hole walls, the board's outer edge and the dark backing (the Plywood image)
 inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut, with their walls
 inline constexpr int kMaxPlayfieldHoles = 4096; // Load caps
@@ -161,7 +163,7 @@ public:
    float m_plasticDpi = 150.f; // atlas scale: 47.06 VPU per inch
    float m_plasticUvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to UV: u = a x + b y + c, v = d x + e y + f
    string m_plasticHost; // companions: name of the host primitive (empty = not a companion)
-   int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel, kRailChannelRole = the ball channel of a Wire Rail (m_plasticHost = the rail)
+   int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel, kRailChannelRole = the ball channel of a Wire Rail, kRampWallsRole = the walls of a Ramp Collider (m_plasticHost = the host)
    // Playfield Maker (editor operator): the board named playfield_mesh is the host, its companions are the walls and the floor collider. Fields only saved when on
    bool m_playfieldGen = false;
    float m_pfThickness = 23.5f; // 0.5 in
@@ -173,6 +175,13 @@ public:
    int m_pfDetail = 1; // Curve Detail 1..5, as plastics
    float m_pfDefaultBevel = 0.f; // The bevel of holes set to Default, VPU (new boards start with none)
    int m_pfBevelSegments = 3; // Rings of the rounded bevel profile, 1 = a chamfer
+   // Ramp Collider (editor operator): the host is the floor, the companion <name>_Walls (role kRampWallsRole) the walls. The route is m_wireCurve (not m_wireGen:
+   // the wire builders must not touch the mesh). Fields only saved when on
+   bool m_rampCollider = false;
+   string m_rampReference; // Name of the primitive whose look the collider follows (the Blender ramp), may be empty
+   bool m_rampFlushEntry = true; // The floor leaves the playfield flat (z 0), eased to the route's height over m_rampEntryLength
+   float m_rampEntryLength = RampCollider::kDefaultEntryLength;
+   int m_rampCurvatureDetail = RampCollider::kDefaultCurvatureDetail;
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -453,6 +462,20 @@ public:
    // Wire Rail generator
    void InitWireRail(const Vertex2D &pos); // Turns this (new) primitive into a Wire Rail: 2 points, 500 long, four wire habitrail, VPE defaults
    void RegenerateRail(); // RegenerateWire of a rail: the tubes, the ball channel, the mesh of its hidden channel part
+   // The Metal Wire Guide, Wire Rail and Ramp Collider share one route (m_wireCurve) edited with the same tools: IsCurveHost = the route and the gizmo transform,
+   // IsRailRoute = the route has a 3D height and a roll per point. Rail-only things (fixtures, wires, the channel) stay on m_wireRail
+   bool IsCurveHost() const { return m_d.m_wireGen || m_d.m_rampCollider; }
+   bool IsRailRoute() const { return m_d.m_wireRail || m_d.m_rampCollider; }
+   bool IsRampWalls() const { return m_d.m_plasticRole == kRampWallsRole && IsPlasticCompanion(); }
+   void InitRampCollider(const vector<Vertex3Ds> &route); // Turns this (new) primitive into a Ramp Collider host: the points (x, y, height), default width and walls, Ramp physics
+   void RegenerateRampCollider(); // Rebuilds the floor (this mesh) and every walls part found in the table. No fit: they keep their last meshes (no-op unless m_d.m_rampCollider)
+   void UpdateRampCollider(); // RegenerateRampCollider + renderable and physics refresh of the host and its walls (after any edit of it)
+   const RampCollider::Result &GetRampResult() const { return m_rampResult; }
+   const string &GetRampError() const { return m_rampError; } // Why there is no fit, empty when it fits
+   RampCollider::Params GetRampParams() const;
+   vector<RampCollider::ControlPoint> GetRampControlPoints() const;
+   Primitive *GetRampWalls() const; // The walls part, else null
+   void GetWorldMesh(vector<RampCollider::V3> &verts, vector<unsigned> &indices); // The mesh through its full matrix (a reference for the Ramp Collider's fit)
    bool IsRailChannel() const; // The hidden part holding the channel of a rail: a real collider for older engines, in this one the rail itself collides
    void SetRailWires(const vector<WireRail::Wire> &wires);
    vector<WireRail::Wire> GetRailWires() const;
@@ -547,6 +570,8 @@ private:
    bool m_prevFullMatrixValid = false;
    Matrix3D m_physicMatrix;
    WireRail::Channel m_railChannel;
+   RampCollider::Result m_rampResult; // The last build of the Ramp Collider (the editor's overlay and readouts)
+   string m_rampError;
    vector<WireRail::Frame> m_railFrames;
    WireRail::Profile m_railProfile;
    string m_railError;

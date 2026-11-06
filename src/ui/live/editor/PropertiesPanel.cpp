@@ -1000,6 +1000,9 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                            for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
                               if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                                  editor.m_liveEditedParts.insert(comp);
+                        if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_rampCollider) // The walls part
+                           for (Primitive *const comp : static_cast<Primitive *>(part)->GetPlasticCompanions())
+                              editor.m_liveEditedParts.insert(comp);
                         if (part->GetItemType() == eItemPrimitive)
                            for (const int role : { 1, 2 })
                               if (Primitive *const comp = companionMap ? companionMap->Get(static_cast<Primitive *>(part), role) : PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part), role); comp != nullptr)
@@ -1047,6 +1050,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
                   if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                      editor.m_undo.MarkForUndo(comp, true, false);
+            // The Ramp Collider's Walls fields write the walls part (its physics): in the collider's step
+            if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_rampCollider)
+               for (Primitive *const comp : static_cast<Primitive *>(part)->GetPlasticCompanions())
+                  editor.m_undo.MarkForUndo(comp, true, false);
          };
          if (props.IsMultiEdit())
             for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
@@ -1204,6 +1211,9 @@ void PropertiesPanel::RefreshEditedParts(PropertyPane &props)
    {
       editor.m_renderer->ReinitRenderable(part->GetEditable()->GetIRenderable());
       editor.m_player->m_physics->Update(part->GetEditable());
+      if (part->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part->GetEditable())->m_d.m_rampCollider) // The walls part: its physics values are edited here too
+         for (Primitive *const comp : static_cast<Primitive *>(part->GetEditable())->GetPlasticCompanions())
+            editor.m_player->m_physics->Update(comp);
       if (part->GetEditable()->GetItemType() == eItemPrimitive) // The Clear Plastic fields edit the clear and bevel parts of a plastic
          for (const int role : { 1, 2 })
             if (Primitive *const comp = lookup ? lookup(static_cast<Primitive *>(part->GetEditable()), role) : PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part->GetEditable()), role); comp != nullptr)

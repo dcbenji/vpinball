@@ -130,14 +130,14 @@ PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform
       return TM_None; // Derived from its host (the Playfield Maker board: from the table): not moved, and not picked by a box select
    if (m_part->m_d.m_plasticGen)
       return GetCurveTransform(transform, m_part->m_d.m_plasticHeight + m_part->m_d.m_plasticThickness);
-   if (m_part->m_d.m_wireGen)
+   if (m_part->IsCurveHost())
    {
-      // Metal Wire Guide: the wire points are in table coordinates, the gizmo works on them like on a ramp curve
+      // Metal Wire Guide: the wire points are in table coordinates, the gizmo works on them like on a ramp curve (a Ramp Collider's heights are absolute)
       const auto& pts = m_part->m_wireCurve.GetPoints();
       float z = 0.f;
       for (const auto& pt : pts)
          z += pt->GetZ();
-      return GetCurveTransform(transform, (pts.empty() ? 0.f : z / (float)pts.size()) + m_part->m_d.m_wireHeight);
+      return GetCurveTransform(transform, (pts.empty() ? 0.f : z / (float)pts.size()) + (m_part->m_d.m_wireGen ? m_part->m_d.m_wireHeight : 0.f));
    }
    const Matrix3D Smatrix = Matrix3D::MatrixScale(m_part->m_d.m_vSize.x, m_part->m_d.m_vSize.y, m_part->m_d.m_vSize.z);
    const Matrix3D Tmatrix = Matrix3D::MatrixTranslate(m_part->m_d.m_vPosition);
@@ -164,13 +164,13 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
       }
       return;
    }
-   if (m_part->m_d.m_wireGen)
+   if (m_part->IsCurveHost())
    {
       const auto& pts = m_part->m_wireCurve.GetPoints();
       float z = 0.f;
       for (const auto& pt : pts)
          z += pt->GetZ();
-      z = (pts.empty() ? 0.f : z / (float)pts.size()) + m_part->m_d.m_wireHeight;
+      z = (pts.empty() ? 0.f : z / (float)pts.size()) + (m_part->m_d.m_wireGen ? m_part->m_d.m_wireHeight : 0.f);
       SetCurveTransform(pos, scale, rot);
       if (fabsf(pos.z - z) > 1e-4f)
       {
@@ -189,11 +189,13 @@ void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec
 
 void PrimitiveUIPart::RenderOverlay(const EditorRenderContext& ctx)
 {
-   if (m_part->IsRailChannel())
+   if (m_part->IsRailChannel() || m_part->IsRampWalls()) // (the walls are drawn with their collider)
       return;
    ctx.DrawWireframe(m_part);
    if (m_part->m_d.m_wireRail)
       RenderRailOverlay(ctx);
+   if (m_part->m_d.m_rampCollider)
+      RenderRampColliderOverlay(ctx);
 }
 
 void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
@@ -249,15 +251,23 @@ void PrimitiveUIPart::InsertPointOnCurve(const Vertex2D& pos)
    const float len2 = dx * dx + dy * dy;
    const float t = len2 > 0.f ? clamp(((out.x - vv[seg].x) * dx + (out.y - vv[seg].y) * dy) / len2, 0.f, 1.f) : 0.f;
    curve->InsertPoint(icp, std::make_unique<DragPoint>(curve, out.x, out.y, vv[seg].z + t * (vv[seg + 1].z - vv[seg].z), true));
-   if (m_part->m_d.m_wireRail && icp > 0 && icp + 1 < (int)curve->GetPoints().size())
+   if (m_part->IsRailRoute() && icp > 0 && icp + 1 < (int)curve->GetPoints().size())
    {
-      // On a banked rail the new point takes the roll between its neighbours, by plan distance
+      // On a banked rail the new point takes the roll between its neighbours, by plan distance (a Ramp Collider's width and walls too)
       const auto &pts = curve->GetPoints();
       const DragPoint *const a = pts[icp - 1].get();
       const DragPoint *const b = pts[icp + 1].get();
       const float da = sqrtf((out.x - a->GetX()) * (out.x - a->GetX()) + (out.y - a->GetY()) * (out.y - a->GetY()));
       const float db = sqrtf((out.x - b->GetX()) * (out.x - b->GetX()) + (out.y - b->GetY()) * (out.y - b->GetY()));
-      pts[icp]->m_roll = da + db > 0.f ? a->m_roll + (b->m_roll - a->m_roll) * da / (da + db) : a->m_roll;
+      const float f = da + db > 0.f ? da / (da + db) : 0.f;
+      pts[icp]->m_roll = a->m_roll + (b->m_roll - a->m_roll) * f;
+      if (m_part->m_d.m_rampCollider) // Unset (0, -1) stays unset when both neighbours are
+      {
+         const auto lerp = [f](const float x, const float y, const float unset) { return x == unset && y == unset ? unset : (x == unset ? RampCollider::kDefaultWall : x) + ((y == unset ? RampCollider::kDefaultWall : y) - (x == unset ? RampCollider::kDefaultWall : x)) * f; };
+         pts[icp]->m_width = a->m_width <= 0.f && b->m_width <= 0.f ? 0.f : (a->m_width > 0.f ? a->m_width : RampCollider::kDefaultWidth) + ((b->m_width > 0.f ? b->m_width : RampCollider::kDefaultWidth) - (a->m_width > 0.f ? a->m_width : RampCollider::kDefaultWidth)) * f;
+         pts[icp]->m_wallLeft = lerp(a->m_wallLeft, b->m_wallLeft, -1.f);
+         pts[icp]->m_wallRight = lerp(a->m_wallRight, b->m_wallRight, -1.f);
+      }
    }
 }
 
@@ -270,6 +280,33 @@ void PrimitiveUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
             point, "Diameter"s, //
             [](const DragPoint* p) { return p->GetZ(); }, //
             [](DragPoint* p, float v) { static_cast<Primitive*>(p->GetIEditable())->SetPlasticHoleDiameter(p, v); }, PropertyPane::Unit::VPLength, 2, "Diameter of this hole (both ends of a pill)");
+      return;
+   }
+   if (m_part->m_d.m_rampCollider)
+   {
+      const bool first = GetDragPointCurve()->GetPointIndex(point) == 0 && props.GetEditedPart<Primitive>(m_part)->m_d.m_rampFlushEntry;
+      ImGui::BeginDisabled(first); // Flush Entry holds the first point at the playfield
+      props.InputFloat<DragPoint>(
+         point, first ? "Height (Flush Entry)"s : "Height"s, //
+         [first](const DragPoint* p) { return first ? 0.f : p->GetZ(); }, //
+         [](DragPoint* p, float v) { p->SetZ(v); }, PropertyPane::Unit::VPLength, 1, "Height of the floor at this point (the Z handle of the gizmo moves it too). The first point is held at 0 by Flush Entry");
+      ImGui::EndDisabled();
+      props.InputFloat<DragPoint>(
+         point, "Width"s, //
+         [](const DragPoint* p) { return p->m_width > 0.f ? p->m_width : RampCollider::kDefaultWidth; }, //
+         [](DragPoint* p, float v) { p->m_width = clamp(v, 1.f, 1000.f); }, PropertyPane::Unit::VPLength, 1, "Floor width at this point; it runs linear by length to the next");
+      props.InputFloat<DragPoint>(
+         point, "Left Wall"s, //
+         [](const DragPoint* p) { return p->m_wallLeft >= 0.f ? p->m_wallLeft : RampCollider::kDefaultWall; }, //
+         [](DragPoint* p, float v) { p->m_wallLeft = clamp(v, 0.f, 500.f); }, PropertyPane::Unit::VPLength, 1, "Height of the left wall at this point (the ball's left, seen from above, going along the route); 0 at both ends of a span leaves it open, 0 at one end tapers it");
+      props.InputFloat<DragPoint>(
+         point, "Right Wall"s, //
+         [](const DragPoint* p) { return p->m_wallRight >= 0.f ? p->m_wallRight : RampCollider::kDefaultWall; }, //
+         [](DragPoint* p, float v) { p->m_wallRight = clamp(v, 0.f, 500.f); }, PropertyPane::Unit::VPLength, 1, "Height of the right wall at this point (the ball's right, seen from above)");
+      props.InputFloat<DragPoint>(
+         point, "Roll"s, //
+         [](const DragPoint* p) { return p->m_roll; }, //
+         [](DragPoint* p, float v) { p->m_roll = clamp(v, -180.f, 180.f); }, PropertyPane::Unit::Degree, 1, "Banks the floor about the route at this point, positive raises the left side (the ball's left, seen from above)");
       return;
    }
    if (m_part->m_d.m_wireRail)
@@ -311,10 +348,17 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
                p.EndSection();
             }
          });
-   props.EditableHeader(m_part->m_d.m_playfieldGen ? "Playfield"s : m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireRail ? "Wire Rail"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part,
+   if (m_part->m_d.m_rampCollider) // The collider is made here: above the tabs
+      props.PrependAfterHeader(
+         [this](PropertyPane& p)
+         {
+            UpdateCurveSection(p);
+            UpdateRampColliderPanel(p);
+         });
+   props.EditableHeader(m_part->m_d.m_rampCollider ? "Ramp Collider"s : m_part->IsRampWalls() ? "Ramp Collider Walls"s : m_part->m_d.m_playfieldGen ? "Playfield"s : m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireRail ? "Wire Rail"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part,
       m_part->m_d.m_playfieldGen ? "The playfield is the part named playfield_mesh: the board keeps that name" : nullptr);
 
-   if (!m_part->m_d.m_wireRail)
+   if (!m_part->m_d.m_wireRail && !m_part->m_d.m_rampCollider)
       UpdateCurveSection(props);
 
    if (m_part->m_d.m_wireGen && !m_part->m_d.m_wireRail && props.BeginSection("Metal Wire Guide"s))
@@ -389,6 +433,11 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             m_part, "Edit"s, vector<string> { "Outline"s, "Holes"s }, //
             [](const Primitive* p) { return p->m_plasticEditHoles ? 1 : 0; }, //
             [](Primitive* p, int v) { p->m_plasticEditHoles = v == 1; }, "H switches while editing points");
+      props.EndSection();
+   }
+   else if (m_part->IsRampWalls() && props.BeginSection("Ramp Collider"s))
+   {
+      ImGui::TextDisabled("Part of %s: edited on the ramp collider", m_part->m_d.m_plasticHost.c_str());
       props.EndSection();
    }
    else if (m_part->IsPlasticCompanion() && props.BeginSection("Plastic from Atlas"s))
@@ -895,7 +944,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && !m_part->m_d.m_playfieldGen && !m_part->IsPlasticCompanion() && props.BeginSection("Position"s))
+   if (!props.GetEditedPart<Primitive>(m_part)->IsCurveHost() && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && !m_part->m_d.m_playfieldGen && !m_part->IsPlasticCompanion() && props.BeginSection("Position"s))
    {
       props.Separator("Position, Rotation & Size"s);
       props.InputFloat3<Primitive>(
@@ -978,7 +1027,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Collidable"s, //
          [](const Primitive* surf) { return surf->m_d.m_collidable; }, //
          [](Primitive* surf, bool v) { surf->m_d.m_collidable = v; });
-      if (!m_part->m_d.m_wireRail) // A rail's collider is its ball channel
+      if (!m_part->m_d.m_wireRail && !m_part->m_d.m_rampCollider) // A rail's collider is its ball channel; a ramp collider collides, whole
       {
       props.Checkbox<Primitive>(
          m_part, "Toy"s, //
@@ -993,7 +1042,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (!m_part->m_d.m_wireGen && props.BeginSection("Rubber Guide"s))
+   if (!m_part->IsCurveHost() && !m_part->IsRampWalls() && props.BeginSection("Rubber Guide"s))
    {
       props.InputFloat<Primitive>(
          m_part, "Rubber Guide Radius"s, //

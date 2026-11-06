@@ -39,6 +39,9 @@ Primitive *Primitive::CopyForPlay() const
    {
       dst->m_wireCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_wireCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
       dst->m_wireCurve.GetPoints().back()->m_roll = dpt->m_roll; // Wire Rail bank
+      dst->m_wireCurve.GetPoints().back()->m_width = dpt->m_width; // Ramp Collider
+      dst->m_wireCurve.GetPoints().back()->m_wallLeft = dpt->m_wallLeft;
+      dst->m_wireCurve.GetPoints().back()->m_wallRight = dpt->m_wallRight;
    }
    for (const auto &dpt : m_plasticCurve.GetPoints())
       dst->m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
@@ -158,6 +161,11 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_pfDetail = wireDefaults.m_pfDetail;
    m_d.m_pfDefaultBevel = wireDefaults.m_pfDefaultBevel;
    m_d.m_pfBevelSegments = wireDefaults.m_pfBevelSegments;
+   m_d.m_rampCollider = wireDefaults.m_rampCollider;
+   m_d.m_rampReference = wireDefaults.m_rampReference;
+   m_d.m_rampFlushEntry = wireDefaults.m_rampFlushEntry;
+   m_d.m_rampEntryLength = wireDefaults.m_rampEntryLength;
+   m_d.m_rampCurvatureDetail = wireDefaults.m_rampCurvatureDetail;
    m_pfHoles.clear();
    m_plasticEditHoles = false;
    m_wireCurve.ClearPoints();
@@ -255,6 +263,15 @@ void Primitive::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    if (IsRailChannel()) // Not picked, and the rail itself collides (below)
       return;
+
+   if (!isUI && IsRampWalls() && m_ptable != nullptr) // The walls follow their collider's Collidable and Toy
+      for (const IEditable *const part : m_ptable->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_rampCollider && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+         {
+            if (!static_cast<const Primitive *>(part)->m_d.m_collidable || static_cast<const Primitive *>(part)->m_d.m_toy)
+               return;
+            break;
+         }
 
    if (!isUI && m_d.m_toy && !m_d.m_wireRail)
       return;
@@ -848,6 +865,7 @@ void Primitive::RenderSetup(Renderer *renderer)
 
    RegenerateWire(); // Wireform: every editor point edit reinitializes the renderable, so the mesh follows the points
    RegeneratePlastic(); // Plastic from Atlas host: same, and the companions' meshes
+   RegenerateRampCollider(); // Ramp Collider host: same (a no-op for any other part)
    if (m_d.m_playfieldGen && (m_pfDirty || m_mesh.NumIndices() == 0))
       RegeneratePlayfield(); // Playfield Maker board: after an edit (or without a mesh) only, a reinit for any other reason keeps the meshes
 
@@ -2028,7 +2046,7 @@ bool Primitive::CanDeferGenMesh() const
 {
    if (m_renderer == nullptr || m_groupdRendering || m_skipRendering)
       return false;
-   if (m_d.m_plasticGen)
+   if (m_d.m_plasticGen || m_d.m_rampCollider)
       for (const Primitive *const comp : GetPlasticCompanions())
          if (comp->m_renderer == nullptr || comp->m_groupdRendering || comp->m_skipRendering)
             return false;
@@ -2043,6 +2061,7 @@ void Primitive::OnGenPointsMoved(const Matrix3D &t)
    {
       RegenerateWire();
       RegeneratePlastic();
+      RegenerateRampCollider();
       return;
    }
    const auto move = [&t](Primitive *const p)
@@ -2051,7 +2070,7 @@ void Primitive::OnGenPointsMoved(const Matrix3D &t)
       p->m_genDragMoved = true;
    };
    move(this);
-   if (m_d.m_plasticGen)
+   if (m_d.m_plasticGen || m_d.m_rampCollider)
       for (Primitive *const comp : GetPlasticCompanions())
          move(comp);
 }
@@ -2062,6 +2081,7 @@ void Primitive::FlushGenDrag()
       return;
    RegenerateWire();
    RegeneratePlastic();
+   RegenerateRampCollider();
    if (m_renderer)
       m_renderer->ReinitRenderable(this);
 }
@@ -2080,7 +2100,7 @@ void Primitive::Translate(const Vertex2D &offset)
       OnGenPointsMoved(Matrix3D::MatrixTranslate(offset.x, offset.y, 0.f));
       return;
    }
-   if (m_d.m_wireGen)
+   if (IsCurveHost())
    {
       // The callers (SetSelectionTransform) reinit the renderable and update the collider themselves
       m_wireCurve.TranslatePoints(offset);
@@ -2106,7 +2126,7 @@ void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool use
       OnGenPointsMoved(GenAffine(cs, -sn, c.x - cs * c.x + sn * c.y, sn, cs, c.y - sn * c.x - cs * c.y));
       return;
    }
-   if (!m_d.m_wireGen)
+   if (!IsCurveHost())
       return IEditable::Rotate(ang, pvCenter, useElementCenter);
    const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
    const float sn = sinf(ANGTORAD(ang)), cs = cosf(ANGTORAD(ang));
@@ -2129,7 +2149,7 @@ void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pv
       OnGenPointsMoved(GenAffine(scalex, 0.f, c.x * (1.f - scalex), 0.f, scaley, c.y * (1.f - scaley)));
       return;
    }
-   if (!m_d.m_wireGen)
+   if (!IsCurveHost())
       return IEditable::Scale(scalex, scaley, pvCenter, useElementCenter);
    const Vertex2D c = useElementCenter ? GetCenter() : pvCenter;
    m_wireCurve.ScalePoints(scalex, scaley, c);
@@ -2142,7 +2162,7 @@ Vertex2D Primitive::GetCenter() const
       return { 0.5f * (m_ptable->m_left + m_ptable->m_right), 0.5f * (m_ptable->m_top + m_ptable->m_bottom) };
    if (m_d.m_plasticGen)
       return m_plasticCurve.GetCenter();
-   if (m_d.m_wireGen)
+   if (IsCurveHost())
       return m_wireCurve.GetCenter();
    return {m_d.m_vPosition.x, m_d.m_vPosition.y};
 }
@@ -2388,7 +2408,7 @@ bool Primitive::IsPlasticCompanion() const
    if (m_ptable == nullptr) // Loading: the host may come later
       return true;
    for (const IEditable *const part : m_ptable->GetParts())
-      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail || static_cast<const Primitive *>(part)->m_d.m_playfieldGen) && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail || static_cast<const Primitive *>(part)->m_d.m_playfieldGen || static_cast<const Primitive *>(part)->m_d.m_rampCollider) && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
          return true;
    return false;
 }
@@ -2396,7 +2416,7 @@ bool Primitive::IsPlasticCompanion() const
 vector<Primitive *> Primitive::GetPlasticCompanions() const
 {
    vector<Primitive *> res;
-   if (m_ptable == nullptr || (!m_d.m_plasticGen && !m_d.m_wireRail && !m_d.m_playfieldGen) || GetName().empty())
+   if (m_ptable == nullptr || (!m_d.m_plasticGen && !m_d.m_wireRail && !m_d.m_playfieldGen && !m_d.m_rampCollider) || GetName().empty())
       return res;
    const string name = GetName();
    for (IEditable *const part : m_ptable->GetParts())
@@ -2949,6 +2969,14 @@ static PlayfieldHole LoadPlayfieldHole(IObjectReader &reader)
 
 void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
 {
+   if (!saveForUndo && m_ptable != nullptr && m_d.m_plasticRole == kRampWallsRole) // Older engines collide with the walls part alone: it agrees with its collider on Collidable and Toy
+      for (const IEditable *const part : m_ptable->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_rampCollider && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+         {
+            m_d.m_collidable = static_cast<const Primitive *>(part)->m_d.m_collidable;
+            m_d.m_toy = static_cast<const Primitive *>(part)->m_d.m_toy;
+            break;
+         }
    if (!saveForUndo && m_ptable != nullptr && m_d.m_plasticRole == kRailChannelRole) // The channel part collides in older engines: with the physics of its rail
       for (const IEditable *const part : m_ptable->GetParts())
          if (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_wireRail && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
@@ -3108,6 +3136,16 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
             SaveRailFixture(writer, f);
       }
       m_wireCurve.SavePoints(writer, FID(GRPT), true); // Skippable (not DPNT, which older versions don't know in a primitive and would read the point's fields as the primitive's own)
+   }
+   if (m_d.m_rampCollider) // Optional fields: only written for a Ramp Collider, so other primitives save byte-identical. The route is skippable like the rail's
+   {
+      writer.WriteBool(FID(RCOL), true);
+      if (!m_d.m_rampReference.empty())
+         writer.WriteString(FID(RCRF), m_d.m_rampReference);
+      writer.WriteBool(FID(RCFE), m_d.m_rampFlushEntry);
+      writer.WriteFloat(FID(RCEL), m_d.m_rampEntryLength);
+      writer.WriteInt(FID(RCCD), m_d.m_rampCurvatureDetail);
+      m_wireCurve.SavePoints(writer, FID(GRPT), true);
    }
    if (m_d.m_plasticGen) // Optional fields: only written for plastic hosts and companions, so other primitives save byte-identical
    {
@@ -3299,6 +3337,11 @@ void Primitive::Load(IObjectReader& reader)
          // Route and outline points: GRPT (skippable), DPNT as saved by earlier builds. The outline is moved to the plastic curve after the load if this is a plastic host
          case FID(GRPT): m_wireCurve.LoadPointToken(reader, true); break;
          case FID(DPNT): m_wireCurve.LoadPointToken(reader); break;
+         case FID(RCOL): m_d.m_rampCollider = reader.AsBool(); break;
+         case FID(RCRF): m_d.m_rampReference = reader.AsString(); break;
+         case FID(RCFE): m_d.m_rampFlushEntry = reader.AsBool(); break;
+         case FID(RCEL): m_d.m_rampEntryLength = clamp(reader.AsFloat(), 0.f, 2000.f); break;
+         case FID(RCCD): m_d.m_rampCurvatureDetail = clamp(reader.AsInt(), 2, 32); break;
          case FID(PGEN): m_d.m_plasticGen = reader.AsBool(); break;
          case FID(PHGT): m_d.m_plasticHeight = reader.AsFloat(); break;
          case FID(PTHK): m_d.m_plasticThickness = reader.AsFloat(); break;
@@ -3560,6 +3603,18 @@ void Primitive::Load(IObjectReader& reader)
       else
          RegeneratePlastic();
    }
+   // Ramp Collider: the meshes are derived from the route. Live (an undo or redo: the records skip meshes) the reinit rebuilds them with the walls' renderables; a
+   // file load has no renderer (the saved walls part stands: the table is not set yet)
+   if (m_d.m_rampCollider)
+   {
+      if (m_renderer)
+         m_renderer->ReinitRenderable(this);
+   }
+   else if (m_d.m_plasticRole == kRampWallsRole && m_renderer && m_ptable != nullptr) // Undo can restore the walls after the host
+      for (IEditable *const part : m_ptable->GetParts())
+         if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_rampCollider && static_cast<Primitive *>(part)->m_renderer
+            && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+            static_cast<Primitive *>(part)->m_renderer->ReinitRenderable(static_cast<Primitive *>(part));
    // Playfield Maker board, live (an undo or redo: the records skip meshes, and OverwritePart keeps the edited one): rebuild it. A file load keeps the saved meshes
    if (m_d.m_playfieldGen && m_renderer)
    {
@@ -4468,4 +4523,154 @@ STDMETHODIMP Primitive::put_RefractionProbe(BSTR newVal)
 {
    m_d.m_szRefractionProbe = MakeString(newVal);
    return S_OK;
+}
+
+//////////////////////////////
+// Ramp Collider
+//////////////////////////////
+
+RampCollider::Params Primitive::GetRampParams() const
+{
+   RampCollider::Params prm;
+   prm.flushEntry = m_d.m_rampFlushEntry;
+   prm.entryLength = m_d.m_rampEntryLength;
+   prm.curvatureDetail = m_d.m_rampCurvatureDetail;
+   prm.ballDiameter = WireRail::kDefaultBallDiameter;
+   if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr) // Up is against gravity, so the player's physics override sets count
+   {
+      const Vertex3Ds &g = g_pplayer->m_physics->GetGravity();
+      const float len = g.Length();
+      if (len > 1e-9f)
+         prm.up = { -g.x / len, -g.y / len, -g.z / len };
+   }
+   return prm;
+}
+
+vector<RampCollider::ControlPoint> Primitive::GetRampControlPoints() const
+{
+   vector<RampCollider::ControlPoint> res;
+   for (const auto &pt : m_wireCurve.GetPoints())
+   {
+      RampCollider::ControlPoint c;
+      c.x = pt->GetX();
+      c.y = pt->GetY();
+      c.roll = pt->m_roll;
+      c.width = pt->m_width;
+      c.wallLeft = pt->m_wallLeft;
+      c.wallRight = pt->m_wallRight;
+      res.push_back(c);
+   }
+   return res;
+}
+
+Primitive *Primitive::GetRampWalls() const
+{
+   for (Primitive *const comp : GetPlasticCompanions())
+      if (comp->m_d.m_plasticRole == kRampWallsRole)
+         return comp;
+   return nullptr;
+}
+
+void Primitive::InitRampCollider(const vector<Vertex3Ds> &route)
+{
+   m_d.m_rampCollider = true;
+   m_d.m_collidable = true;
+   m_d.m_toy = false;
+   m_d.m_visible = false;
+   m_d.m_reflectionEnabled = false;
+   m_d.m_collision_reductionFactor = 0.f;
+   m_d.m_overwritePhysics = true;
+   m_d.m_elasticity = 0.3f; // A native Ramp's floor (the _Default values, not the user's settings)
+   m_d.m_friction = 0.3f;
+   m_d.m_scatter = 0.f;
+   m_d.m_elasticityFalloff = 0.f;
+   m_d.m_rampFlushEntry = true;
+   m_d.m_rampEntryLength = RampCollider::kDefaultEntryLength;
+   m_d.m_rampCurvatureDetail = RampCollider::kDefaultCurvatureDetail;
+   m_wireCurve.ClearPoints();
+   for (const Vertex3Ds &v : route)
+   {
+      m_wireCurve.PushPoint(std::make_unique<DragPoint>(&m_wireCurve, v.x, v.y, v.z, true));
+      DragPoint *const pt = m_wireCurve.GetPoints().back().get();
+      pt->m_width = RampCollider::kDefaultWidth;
+      pt->m_wallLeft = RampCollider::kDefaultWall;
+      pt->m_wallRight = RampCollider::kDefaultWall;
+   }
+   RegenerateRampCollider();
+}
+
+void Primitive::RegenerateRampCollider()
+{
+   if (!m_d.m_rampCollider)
+      return;
+   vector<RenderVertex3D> fine;
+   m_wireCurve.GetRgVertex(fine, false, 0.05f);
+   vector<WireRail::PathPoint> path;
+   path.reserve(fine.size());
+   for (const RenderVertex3D &v : fine)
+      path.push_back({ v.x, v.y, v.z, v.controlPoint });
+   m_rampResult = RampCollider::Build(path, GetRampControlPoints(), GetRampParams());
+   m_rampError = m_rampResult.fits ? string() : m_rampResult.reason;
+   if (!m_rampResult.fits)
+      return; // Both parts keep their last good meshes
+   // The meshes are in table coordinates: identity transform (a local copy of RegenerateRail's helper: the two generators stay apart)
+   const auto identity = [](Primitive *const p)
+   {
+      p->m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f);
+      p->m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
+      for (float &v : p->m_d.m_aRotAndTra)
+         v = 0.f;
+      p->m_d.m_use3DMesh = true;
+      p->m_genDragMoved = false;
+      p->OnMeshVerticesChanged();
+      p->m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate the collider (the transform itself did not change)
+   };
+   const auto fill = [](Primitive *const p, const RampCollider::Mesh &m)
+   {
+      p->m_mesh.Clear();
+      RampCollider::ToVertices(m, p->m_mesh.m_vertices, p->m_mesh.m_indices);
+   };
+   fill(this, m_rampResult.floor);
+   identity(this);
+   m_plasticPickDirty = true;
+   // Every walls part is filled each time (a cheap copy): one created after the first build, or restored by an undo or a paste, has no mesh of its own yet
+   for (Primitive *const comp : GetPlasticCompanions())
+   {
+      if (comp->m_d.m_plasticRole != kRampWallsRole)
+         continue;
+      fill(comp, m_rampResult.walls);
+      identity(comp);
+      comp->m_plasticPickDirty = true;
+      if (comp->m_renderer) // Its own flag was cleared above: its drag flush would find nothing to do and leave a stale buffer
+         comp->m_renderer->ReinitRenderable(comp);
+   }
+}
+
+void Primitive::UpdateRampCollider()
+{
+   if (!m_d.m_rampCollider)
+      return;
+   RegenerateRampCollider();
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this); // RenderSetup regenerates again, the same mesh
+   if (g_pplayer != nullptr && g_pplayer->m_physics != nullptr) // Hit objects bake their physics values at PhysicSetup
+   {
+      g_pplayer->m_physics->Update(this);
+      for (Primitive *const comp : GetPlasticCompanions())
+         g_pplayer->m_physics->Update(comp);
+   }
+}
+
+void Primitive::GetWorldMesh(vector<RampCollider::V3> &verts, vector<unsigned> &indices)
+{
+   Matrix3D fullMatrix = RecalculateMatrices();
+   if (GetPartGroup() != nullptr && m_ptable != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
+      fullMatrix = fullMatrix * m_ptable->GetDefaultPlayfieldToCabMatrix();
+   verts.resize(m_mesh.NumVertices());
+   for (size_t i = 0; i < m_mesh.NumVertices(); i++)
+   {
+      const Vertex3Ds w = fullMatrix * m_mesh.m_vertices[i];
+      verts[i] = { w.x, w.y, w.z };
+   }
+   indices = m_mesh.m_indices;
 }

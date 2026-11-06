@@ -260,6 +260,12 @@ void DragPointCurve::SavePoints(IObjectWriter &writer, const int tag, const bool
       writer.WriteBool(FID(LVIS), pdp->m_uiVisible);
       if (pdp->m_roll != 0.f) // Optional field, points of other parts save byte-identical
          writer.WriteFloat(FID(ROLL), pdp->m_roll);
+      if (pdp->m_width > 0.f) // Ramp Collider fields, optional as ROLL is
+         writer.WriteFloat(FID(RCWD), pdp->m_width);
+      if (pdp->m_wallLeft >= 0.f)
+         writer.WriteFloat(FID(RCWL), pdp->m_wallLeft);
+      if (pdp->m_wallRight >= 0.f)
+         writer.WriteFloat(FID(RCWR), pdp->m_wallRight);
       writer.EndObject();
    }
 }
@@ -287,6 +293,9 @@ void DragPointCurve::LoadPointToken(IObjectReader &reader, const bool skippable)
          case FID(LOCK): pdp->m_uiLocked = reader.AsBool(); break;
          case FID(LVIS): pdp->m_uiVisible = reader.AsBool(); break;
          case FID(ROLL): pdp->m_roll = reader.AsFloat(); break;
+         case FID(RCWD): pdp->m_width = reader.AsFloat(); break;
+         case FID(RCWL): pdp->m_wallLeft = reader.AsFloat(); break;
+         case FID(RCWR): pdp->m_wallRight = reader.AsFloat(); break;
          // Old save would wrongly save these fields which do not apply to dragpoint
          case FID(LAYR): reader.AsInt(); break;
          case FID(LANR): reader.AsString(); break;

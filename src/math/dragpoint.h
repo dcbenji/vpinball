@@ -63,6 +63,8 @@ public:
 
    bool m_slingshot = false;
    float m_roll = 0.f; // Wire Rail: degrees about the route, positive raises the right side. Only saved when set
+   float m_width = 0.f; // Ramp Collider: floor width at this point, 0 = not set. Only saved when set
+   float m_wallLeft = -1.f, m_wallRight = -1.f; // Ramp Collider: wall heights at this point (to the left and right of the route), -1 = not set. Only saved when set
    bool m_uiLocked = false; // Can not be dragged in the editor
    bool m_uiVisible = true; // UI visibility (not the same as rendering visibility which is a member of part data)
 

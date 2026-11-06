@@ -410,6 +410,7 @@ struct PathPoint
 {
    float x, y, z;
    bool control; // A control point of the route, carrying a roll
+   bool force = false; // BuildRows keeps this sample as a row (the Ramp Collider: its control points and the end of its entry ease). The rail never sets it
 };
 
 struct Sample
@@ -433,6 +434,7 @@ inline std::vector<Sample> BuildRows(const std::vector<PathPoint>& fine, const s
    const float maxRoll = 45.f / (float)detail;
    const float maxDev = 4.f / (float)detail;
    std::vector<Sample> all;
+   std::vector<char> allForce; // Parallel to 'all': the sample came from a fine sample with PathPoint::force
    // Spans between control points
    std::vector<size_t> spanStart;
    for (size_t i = 0; i < fine.size(); i++)
@@ -462,6 +464,7 @@ inline std::vector<Sample> BuildRows(const std::vector<PathPoint>& fine, const s
             const float u = total > 0.f ? (done + len * f) / total : 0.f;
             const float e = u * u * (3.f - 2.f * u);
             all.push_back({ pa + (pb - pa) * f, r0 + (r1 - r0) * e });
+            allForce.push_back(k == 0 && fine[i].force ? 1 : 0);
          }
          done += len;
       }
@@ -469,6 +472,7 @@ inline std::vector<Sample> BuildRows(const std::vector<PathPoint>& fine, const s
    if (fine.empty())
       return {};
    all.push_back({ V3 { fine.back().x, fine.back().y, fine.back().z }, rolls.empty() ? 0.f : rolls.back() });
+   allForce.push_back(1);
 
    std::vector<Sample> rows;
    rows.push_back(all.front());
@@ -476,7 +480,7 @@ inline std::vector<Sample> BuildRows(const std::vector<PathPoint>& fine, const s
    const auto dirAt = [&](const size_t i) { return WireSweep::Norm(all[i + 1].p - all[i].p); };
    for (size_t i = 1; i + 1 < all.size(); i++)
    {
-      bool keep = fabsf(all[i + 1].roll - all[anchor].roll) > maxRoll;
+      bool keep = allForce[i] != 0 || fabsf(all[i + 1].roll - all[anchor].roll) > maxRoll;
       const V3 dirA = dirAt(anchor), dirI = dirAt(i);
       keep |= acosf(std::clamp(WireSweep::Dot(dirA, dirI), -1.f, 1.f)) > maxAngle;
       const V3 chord = all[i + 1].p - all[anchor].p;

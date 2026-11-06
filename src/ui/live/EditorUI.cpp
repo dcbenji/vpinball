@@ -73,6 +73,15 @@ namespace VPX::EditorUI
 
 namespace
 {
+// A Ramp Collider's walls are a part of their own: their physics follows an edit of the host
+void UpdateRampWallsPhysics(Player *const player, IEditable *const edit)
+{
+   if (edit == nullptr || edit->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(edit)->m_d.m_rampCollider)
+      return;
+   for (Primitive *const comp : static_cast<Primitive *>(edit)->GetPlasticCompanions())
+      player->m_physics->Update(comp);
+}
+
    float YawOfRotation(const Matrix3D &l, float &step); // Defined with the transform helpers below
    constexpr float kMaxLastOpAngle = 36000.f; // Adjust Last Operation's Rotate Angle: a hundred turns either way
 }
@@ -2761,7 +2770,7 @@ void EditorUI::RenderUI()
       ImGuizmo::OPERATION gizmoOperation = m_gizmoOperation;
       // A Wire Rail's route is 3D: its points keep the Z handle (the predefined views still restrict to their plane, below)
       const bool railPoints = m_pointEditPart && !m_pointEditCenter && gizmoOperation == ImGuizmo::TRANSLATE && m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive
-         && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
+         && static_cast<Primitive *>(m_pointEditPart->GetEditable())->IsRailRoute();
       if ((m_pointEditPart && !railPoints) || m_camMode == ViewMode::DesktopBackdrop || PlasticFromAtlas::ZLocked(*this))
       {
          // Drag point curves are 2D in the table XY plane, and backdrop parts are 2D in the backdrop XY plane: restrict gizmo operations to this plane
@@ -3416,6 +3425,7 @@ void EditorUI::RenderUI()
                m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
                m_renderer->InvalidateShadowContent();
                m_player->m_physics->Update(m_pointEditPart->GetEditable());
+               UpdateRampWallsPhysics(m_player, m_pointEditPart->GetEditable());
             }
             m_pointDragPos = pos;
          }
@@ -4366,7 +4376,7 @@ void EditorUI::MirrorSelection(const int axisIndex, const bool aboutMedian, cons
       MirrorParts::Apply(edit, axis, coord);
       part->OnMirrored();
       const Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<const Primitive *>(edit) : nullptr;
-      if (prim == nullptr || !(prim->m_d.m_plasticGen || prim->m_d.m_wireGen)) // A wire or a plastic refreshed itself
+      if (prim == nullptr || !(prim->m_d.m_plasticGen || prim->IsCurveHost())) // A wire, a plastic or a ramp collider refreshed itself
          if (edit->GetIRenderable() != nullptr)
             m_renderer->ReinitRenderable(edit->GetIRenderable());
       m_player->m_physics->Update(edit);
@@ -7130,7 +7140,7 @@ void EditorUI::BeginSelectionXform(SelectionXform &xform) const
    if (m_pointEditPart != nullptr)
    {
       xform.centerEdit = m_pointEditCenter;
-      xform.rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
+      xform.rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->IsRailRoute();
       if (!m_pointEditCenter)
          for (DragPoint *point : m_pointSel)
             xform.points.push_back({ point, point->GetX(), point->GetY(), point->GetZ(), m_pointEditPart->GetDragPointZ(point) });
@@ -7198,6 +7208,7 @@ void EditorUI::ApplySelectionXform(const SelectionXform &xform, const XformOp &o
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
       m_renderer->InvalidateShadowContent();
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
+      UpdateRampWallsPhysics(m_player, m_pointEditPart->GetEditable());
       return;
    }
    const bool turns = memcmp(op.linear.m, Matrix3D::MatrixIdentity().m, sizeof(op.linear.m)) != 0;
@@ -7279,7 +7290,7 @@ void EditorUI::ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec
 {
    IEditable *const edit = part->GetEditable();
    Primitive *const prim = edit->GetItemType() == eItemPrimitive ? static_cast<Primitive *>(edit) : nullptr;
-   const bool generated = prim != nullptr && (prim->m_d.m_plasticGen || prim->m_d.m_wireGen);
+   const bool generated = prim != nullptr && (prim->m_d.m_plasticGen || prim->IsCurveHost());
    // In a drag, a wire or a plastic is drawn under a matrix too (with its companions), its mesh is rebuilt at the drag end (FlushDrag)
    const bool deferred = generated && (m_modal.active || m_gizmoDragActive) && prim->CanDeferGenMesh();
    if (generated)
@@ -7302,11 +7313,16 @@ void EditorUI::ApplyPartTRS(const std::shared_ptr<EditorUIPart> &part, const vec
          m_player->m_physics->UpdateUI(edit);
       if (std::ranges::find(m_drag.pendingPhysics, edit) == m_drag.pendingPhysics.end())
          m_drag.pendingPhysics.push_back(edit);
+      if (prim != nullptr && prim->m_d.m_rampCollider) // The walls part: its drag flush and physics update at the drag end (not added in FlushDrag, which iterates this list)
+         for (Primitive *const comp : prim->GetPlasticCompanions())
+            if (std::ranges::find(m_drag.pendingPhysics, static_cast<IEditable *>(comp)) == m_drag.pendingPhysics.end())
+               m_drag.pendingPhysics.push_back(comp);
    }
    else
    {
       m_renderer->InvalidateShadowContent(); // Cached (static) shadow pages and light maps follow the move
       m_player->m_physics->Update(edit);
+      UpdateRampWallsPhysics(m_player, edit);
    }
 }
 
@@ -7362,7 +7378,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
          Matrix3D invOldTransform(oldTransform);
          invOldTransform.Invert();
          const Matrix3D delta = invOldTransform * newTransform;
-         const bool rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail;
+         const bool rail = m_pointEditPart->GetEditable()->GetItemType() == eItemPrimitive && static_cast<Primitive *>(m_pointEditPart->GetEditable())->IsRailRoute();
          for (DragPoint *point : m_pointSel)
          {
             const Vertex3Ds v = delta * point->GetVertex();
@@ -7377,6 +7393,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
       m_renderer->InvalidateShadowContent();
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
+      UpdateRampWallsPhysics(m_player, m_pointEditPart->GetEditable());
       return;
    }
 
@@ -7512,6 +7529,7 @@ void EditorUI::EndPointEdit()
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
+   UpdateRampWallsPhysics(m_player, m_pointEditPart->GetEditable());
 }
 
 // The point of a polyline nearest the mouse on the screen, within maxPx: its segment and how far along it. False: none (or all behind the camera)
@@ -7541,7 +7559,7 @@ static bool NearestOnPolyline(const LiveRenderContext &ctx, const vector<Point> 
 // Wire Rail, as VPE: double-click the route to insert a point there, double-click a point to delete it. False: not a rail, or nothing near the mouse
 bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
 {
-   if (m_table->IsLocked() || m_pointEditPart->GetEditable()->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(m_pointEditPart->GetEditable())->m_d.m_wireRail)
+   if (m_table->IsLocked() || m_pointEditPart->GetEditable()->GetItemType() != eItemPrimitive || !static_cast<Primitive *>(m_pointEditPart->GetEditable())->IsRailRoute())
       return false;
    Primitive *const rail = static_cast<Primitive *>(m_pointEditPart->GetEditable());
    if (hitPoint != nullptr)
@@ -7574,6 +7592,7 @@ bool EditorUI::RailPointDoubleClick(DragPoint *hitPoint, const ImVec2 &mousePos)
    m_renderer->ReinitRenderable(rail->GetIRenderable());
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(rail);
+   UpdateRampWallsPhysics(m_player, rail);
    return true;
 }
 
@@ -7692,6 +7711,7 @@ void EditorUI::AddPointOnNearestSegment()
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
    m_renderer->InvalidateShadowContent();
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
+   UpdateRampWallsPhysics(m_player, m_pointEditPart->GetEditable());
 }
 
 Vertex2D EditorUI::UnprojectToPlane(const ImVec2 &mousePos, float z) const

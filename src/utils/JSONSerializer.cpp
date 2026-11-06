@@ -522,6 +522,11 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PFBV), "playfield_bevel" },
             { FID(PFBS), "playfield_bevel_segments" },
             { FID(PFHL), "playfield_holes" },
+            { FID(RCOL), "ramp_collider" },
+            { FID(RCRF), "ramp_reference" },
+            { FID(RCFE), "ramp_flush_entry" },
+            { FID(RCEL), "ramp_entry_length" },
+            { FID(RCCD), "ramp_curvature_detail" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
@@ -877,6 +882,9 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(LOCK), "ui_locked" },
          { FID(LVIS), "ui_visible" },
          { FID(ROLL), "roll" },
+         { FID(RCWD), "width" },
+         { FID(RCWL), "wall_left" },
+         { FID(RCWR), "wall_right" },
          { FID(LAYR), "legacy_layer" },
          { FID(LANR), "named_layer" },
       });

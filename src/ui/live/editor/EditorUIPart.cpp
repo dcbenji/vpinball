@@ -183,6 +183,7 @@ void EditorUIPart::FlipSelectedPoints(bool flipX)
       else
          point->SetY(2.f * center.y - point->GetY());
       point->m_roll = -point->m_roll; // Wire Rail bank: a mirror swaps the right side (0 on every other part)
+      std::swap(point->m_wallLeft, point->m_wallRight); // Ramp Collider walls: likewise (-1 on both for every other part)
    }
    m_pointEditCtx->EndPointEdit();
 }

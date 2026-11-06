@@ -85,6 +85,7 @@ void MirrorCurve(DragPointCurve &curve, const Axis axis, const float coord, cons
       else
          point->SetY(Reflect(point->GetY(), coord));
       point->m_roll = Neg(point->m_roll); // Wire Rail bank: positive raises the right side of the route
+      std::swap(point->m_wallLeft, point->m_wallRight); // Ramp Collider: what was right of the route is left of it now (-1 on both for every other part)
    }
    if (reverse)
       curve.ReverseOrder();
@@ -112,6 +113,12 @@ void MirrorPrimitive(Primitive &prim, const Axis axis, const float coord)
       else
          prim.PlasticMapTransform({ 1.f, 0.f, 0.f, 0.f, -1.f, 2.f * coord });
       prim.UpdatePlastic();
+      return;
+   }
+   if (d.m_rampCollider) // The route and its walls; the floor and the walls parts are rebuilt from it
+   {
+      MirrorCurve(prim.m_wireCurve, axis, coord, false);
+      prim.UpdateRampCollider();
       return;
    }
    if (d.m_wireGen)
@@ -218,7 +225,7 @@ bool HasMeshToFlip(const IEditable *const part)
    if (part->GetItemType() != eItemPrimitive)
       return false;
    const Primitive *const prim = static_cast<const Primitive *>(part);
-   return prim->m_d.m_use3DMesh && !prim->m_d.m_plasticGen && !prim->m_d.m_wireGen && prim->m_mesh.NumVertices() > 0;
+   return prim->m_d.m_use3DMesh && !prim->m_d.m_plasticGen && !prim->IsCurveHost() && prim->m_mesh.NumVertices() > 0;
 }
 
 struct MeshState
