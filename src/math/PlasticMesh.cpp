@@ -321,7 +321,8 @@ void AddBevelWalls(const Ctx& c, const std::vector<P2>& p, double z0, int segs, 
       {
          const double th = 0.5 * kPi * k / segs;
          const double nth = segs == 1 ? 0.25 * kPi : th;
-         bev.push_back({ bevel * (1.0 - std::cos(th)), zb + bevel * std::sin(th), std::cos(nth), std::sin(nth) });
+         // The last ring is the top cap's ring exactly (the same inset, 1 - cos(90 deg) is not exactly 1 in double)
+         bev.push_back({ k == segs ? bevel : bevel * (1.0 - std::cos(th)), zb + bevel * std::sin(th), std::cos(nth), std::sin(nth) });
       }
    }
 
@@ -458,19 +459,25 @@ bool Build(const std::vector<CurvePoint>& outline, const std::vector<Hole>& hole
 
    if (params.bottomCap)
       AddCap(ctx, contours, z0, res.bottom);
+   // One bevel per contour, used by both the top inset and the bevel rings, so they meet (a hole near the edge grows less: topGrow)
+   std::vector<double> eff(contours.size());
+   for (size_t k = 0; k < contours.size(); k++)
+   {
+      const double d = std::min(bevel, topGrow[k]);
+      eff[k] = d > 1e-4 ? d : 0.0; // A clamp that leaves rounding dust (edgeDist - bevel - r - 0.1 = 4e-16) builds a straight wall, not zero-height rings
+   }
    std::vector<std::vector<P2>> inset = contours;
    if (bevel > 0.0)
       for (size_t k = 0; k < inset.size(); k++)
       {
          auto& ring = inset[k];
          const ContourInfo ci = Analyse(ring);
-         const double d = std::min(bevel, topGrow[k]);
          for (size_t i = 0; i < ring.size(); i++)
-            ring[i] = ring[i] + ci.mitre[i] * d;
+            ring[i] = ring[i] + ci.mitre[i] * eff[k];
       }
    AddCap(ctx, inset, z0 + thick, res.top);
-   for (const auto& ring : contours)
-      AddBevelWalls(ctx, ring, z0, segs, bevel, thick, res.bevel);
+   for (size_t k = 0; k < contours.size(); k++)
+      AddBevelWalls(ctx, contours[k], z0, segs, eff[k], thick, res.bevel);
 
    if ((params.bottomCap && res.bottom.idx.empty()) || res.top.idx.empty() || res.bevel.idx.empty())
       return false;
