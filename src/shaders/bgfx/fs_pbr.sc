@@ -121,6 +121,9 @@ uniform vec4 pbrDomeSpillN;      // x: dome spill count (0 = none), y: height wi
 
 uniform vec4 pbrLightGrid;  // xy: cluster grid origin (table pos), z: inverse cell size, w: cell count x
 uniform vec4 pbrLightGrid2; // x: cell count y, y: light count, z: specular AA strength (VPX_SPEC_AA, 1 = default, 0 = off)
+#ifdef PBR_LIGHTS_UNIFORM
+uniform vec4 pbrLightRecs[512]; // perf POC (default off): the tex_pbr_lights light records [0,512) as a uniform array, see pbr_light_record
+#endif
 
 uniform vec4 pbrProbes0; // reflection plane of the first bound probe (dot(n,p) + w = 0)
 uniform vec4 pbrProbes1; // reflection plane of the second bound probe
@@ -724,6 +727,16 @@ vec4 pbr_light_texel(const int idx)
    return texelFetch(tex_pbr_lights, ivec2(idx & 255, idx >> 8), 0);
 }
 
+// Light record texel idx (light li: li * 2 = (pos.xyz, range), li * 2 + 1 = (radiance.rgb, mode)): every light record read goes
+// through here. PBR_LIGHTS_UNIFORM (perf POC, never defined by the build) reads them from the pbrLightRecs uniform array (a
+// constant buffer) instead of tex_pbr_lights, the grid cells and the index list staying in the texture: tests whether the
+// per-light texel fetches (memory bound on Apple GPUs) cost the light loop. A macro, so the default build's code is unchanged.
+#ifdef PBR_LIGHTS_UNIFORM
+#define pbr_light_record(idx) pbrLightRecs[idx]
+#else
+#define pbr_light_record(idx) pbr_light_texel(idx)
+#endif
+
 // Main pass pbrShadowParams.w packs the shadow filter options (VPX_SHADOW_EARLY / VPX_SHADOW_GATE): units = tap mode
 // (0 = 16 taps, 1 = 4 corner taps first and the other 12 only in a penumbra, 2 = the 4 corner taps only), tens = the
 // importance gate in 1e-4 steps (a light whose unshadowed radiance at the pixel is under it gets no shadow lookup)
@@ -911,8 +924,8 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       const vec4 lIdx = pbr_light_texel(1024 + start + i);
       const int li = int(lIdx.x);
       const float sphereRadius = lIdx.y;
-      const vec4 lPos = pbr_light_texel(li * 2);
-      const vec4 lRad = pbr_light_texel(li * 2 + 1);
+      const vec4 lPos = pbr_light_record(li * 2);
+      const vec4 lRad = pbr_light_record(li * 2 + 1);
       vec3 lCol = lRad.rgb;
       const vec3 dl = lPos.xyz - wPos;
       // Clamp the distance to ~1 VPU (~0.5mm), or to the light source sphere: a light embedded in
@@ -1147,8 +1160,8 @@ vec3 pbr_scatter_light(const vec3 wPos, const vec3 wN, const float loc)
    {
       const vec4 lIdx = pbr_light_texel(1024 + start + i);
       const int li = int(lIdx.x);
-      const vec4 lPos = pbr_light_texel(li * 2);
-      const vec4 lRad = pbr_light_texel(li * 2 + 1);
+      const vec4 lPos = pbr_light_record(li * 2);
+      const vec4 lRad = pbr_light_record(li * 2 + 1);
       const vec3 dl = lPos.xyz - wPos;
       const float dist2 = max(dot(dl, dl), max(lIdx.y * lIdx.y, 1.0));
       const float rangeRatio = dist2 / (lPos.w * lPos.w);

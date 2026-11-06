@@ -628,6 +628,9 @@ private:
    bool NoTableLights() const { return IsSolidPass() || !m_viewShade.tableLights; } // No table lights (nor shadows) in the view being drawn
    void ApplyPBRLightGrid2(); // Binds the light list uniform, with no lights in a Solid pass
    vec4 m_pbrLightGrid2 = vec4(0.f, 0.f, 1.f, 0.f);
+   // fs_pbr PBR_LIGHTS_UNIFORM (perf POC, default off): the light records of a light list (its first 512 texels) also bound as the pbrLightRecs uniform, when the shaders use it
+   void SetPBRLightRecs(const vector<float>& recs);
+   vector<float> m_pbrLightRecs, m_lookdevLightRecs; // ... the main list's (filled only when the shaders use it) and the part library previews' key lights'
    // Lamp Test (ViewShadeOptions::lampTest): while a view is recorded the lamps' intensities are overridden, and put back after it. Never saved, never the table's
    struct LampTestSaved
    {

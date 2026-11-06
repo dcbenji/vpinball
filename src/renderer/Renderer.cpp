@@ -299,6 +299,7 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
          keyData[(1024 + i) * 4] = static_cast<float>(i);
          keyData[(1024 + i) * 4 + 1] = keyDistance * tanf(ANGTORAD(keys[i].z));
       }
+      m_lookdevLightRecs.assign(keyData.begin(), keyData.begin() + 512 * 4);
       const bgfx::TextureHandle keyTex = bgfx::createTexture2D(256, 5, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE, bgfx::copy(keyData.data(), static_cast<uint32_t>(keyData.size() * sizeof(float))));
       bgfx::setName(keyTex, "Lookdev Light List");
       m_lookdevLightList = std::make_shared<Sampler>(m_renderDevice, "Lookdev Light List"s, SurfaceType::RT_DEFAULT, keyTex, bgfx::TextureFormat::RGBA32F, 256, 5, true);
@@ -3914,6 +3915,13 @@ void Renderer::ApplyPBRLightGrid2()
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightGrid2, m_pbrLightGrid2.x, NoTableLights() ? 0.f : m_pbrLightGrid2.y, m_pbrLightGrid2.z, m_pbrLightGrid2.w);
 }
 
+void Renderer::SetPBRLightRecs(const vector<float>& recs)
+{
+   // The default shaders do not declare pbrLightRecs: nothing to set (the shader state has no slot for it)
+   if (recs.size() >= 512 * 4 && m_renderDevice->m_basicShader->HasUniform(ShaderUniform::pbrLightRecs))
+      m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrLightRecs, reinterpret_cast<const vec4*>(recs.data()), 512);
+}
+
 void Renderer::BuildPBRLightList(const int altSlot)
 {
    constexpr int texW = 256, texH = 32;
@@ -4331,6 +4339,12 @@ void Renderer::BuildPBRLightList(const int altSlot)
       }
       listTex = m_altLightListTex[altSlot];
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_altLightList[altSlot]);
+   }
+   if (m_renderDevice->m_basicShader->HasUniform(ShaderUniform::pbrLightRecs)) // fs_pbr PBR_LIGHTS_UNIFORM perf POC
+   {
+      if (altSlot < 0)
+         m_pbrLightRecs.assign(texData.begin(), texData.begin() + gridBase * 4);
+      SetPBRLightRecs(texData);
    }
    m_renderDevice->AddBeginOfFrameCmd([listTex, data = std::move(texData)]()
       { bgfx::updateTexture2D(listTex, 0, 0, 0, 0, 256, 32, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
@@ -6646,6 +6660,7 @@ void Renderer::RenderEditorView(const int slot)
          basicShader->SetVector(ShaderUniform::pbrDomeSpillN, 0.f, 0.f, 0.f, 0.f); // no table dome spill in the lookdev scene
          basicShader->SetVector(ShaderUniform::pbrLightGrid2, 1.f, static_cast<float>(m_lookdevLightCount), mainLightGrid2.z, mainLightGrid2.w);
          basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_lookdevLightList);
+         SetPBRLightRecs(m_lookdevLightRecs);
       }
       m_shadowCacheOn = false;
 #endif
@@ -6694,6 +6709,7 @@ void Renderer::RenderEditorView(const int slot)
          basicShader->SetVector(ShaderUniform::pbrLightGrid2, &mainLightGrid2);
          basicShader->SetVector(ShaderUniform::pbrDomeSpillN, &mainDomeSpillN);
          basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
+         SetPBRLightRecs(m_pbrLightRecs);
       }
       m_shadowCacheOn = mainShadowCacheOn;
 #endif
@@ -6768,6 +6784,7 @@ void Renderer::RenderEditorView(const int slot)
       m_lampTestDomeSaved.clear();
       m_pbrLightGrid2 = mainLightGrid2Saved;
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_pbr_lights, m_renderDevice->m_pbrLightList);
+      SetPBRLightRecs(m_pbrLightRecs);
       ApplyPBRLightGrid2();
    }
 #endif
