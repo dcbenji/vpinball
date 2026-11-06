@@ -22,6 +22,7 @@
 #include "miniz/miniz.h"
 #include "math/wiresweep.h"
 #include "math/PlasticMesh.h"
+#include "math/PlayfieldBoard.h"
 #include <chrono>
 
 
@@ -2572,117 +2573,30 @@ void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool>
 
 namespace
 {
-// The mesh builder's hole (the one place the hole types map to PlasticMesh)
-PlasticMesh::Hole ToMeshHole(const PlayfieldHole &h)
+static_assert(PlayfieldHole::Round == PlayfieldBoard::kRound && PlayfieldHole::Slot == PlayfieldBoard::kSlot && PlayfieldHole::Polygon == PlayfieldBoard::kPolygon, "PlayfieldHole::Type must match PlayfieldBoard::HoleKind");
+static_assert(PlayfieldHole::Cut == PlayfieldBoard::kCut && PlayfieldHole::FallsThrough == PlayfieldBoard::kFallsThrough && PlayfieldHole::UnderInsert == PlayfieldBoard::kUnderInsert && PlayfieldHole::FromMask == PlayfieldBoard::kFromMask,
+   "PlayfieldHole::Flags must match PlayfieldBoard::HoleFlags");
+
+// The board builder's hole (the one place the editor's hole types map to PlayfieldBoard)
+PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOwn)
 {
-   PlasticMesh::Hole m { h.centre.x, h.centre.y, h.diameter, h.end.x, h.end.y, h.type == PlayfieldHole::Slot };
+   PlayfieldBoard::BoardHole b;
+   b.kind = h.type == PlayfieldHole::Slot ? PlayfieldBoard::kSlot : h.type == PlayfieldHole::Polygon ? PlayfieldBoard::kPolygon : PlayfieldBoard::kRound;
+   b.flags = h.flags;
+   if (!floorOwn) // Keep Existing: the existing floor decides where the ball falls
+      b.flags &= ~PlayfieldBoard::kFallsThrough;
+   b.cx = h.centre.x;
+   b.cy = h.centre.y;
+   b.diameter = h.diameter;
+   b.ex = h.end.x;
+   b.ey = h.end.y;
    if (h.type == PlayfieldHole::Polygon)
       for (const Vertex2D &v : h.polygon)
-         m.polygon.push_back({ v.x, v.y, false });
-   return m;
-}
-
-// The hole as the closed loop it is cut as (clockwise), flattened to the chord error tol
-vector<PlasticMesh::CurvePoint> PlayfieldHoleLoop(const PlayfieldHole &h, const float tol) { return PlasticMesh::HoleOutline(ToMeshHole(h), tol); }
-
-// Two edges cross, or come within 0.01 VPU of each other: holes that touch, share an edge or lie on each other count as overlapping
-bool SegmentsTouch(const PlasticMesh::CurvePoint &a, const PlasticMesh::CurvePoint &b, const PlasticMesh::CurvePoint &c, const PlasticMesh::CurvePoint &d)
-{
-   const auto orient = [](const PlasticMesh::CurvePoint &p, const PlasticMesh::CurvePoint &q, const PlasticMesh::CurvePoint &r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
-   const float d1 = orient(c, d, a), d2 = orient(c, d, b), d3 = orient(a, b, c), d4 = orient(a, b, d);
-   if (((d1 > 0.f) != (d2 > 0.f)) && ((d3 > 0.f) != (d4 > 0.f)))
-      return true;
-   const auto dist2 = [](const PlasticMesh::CurvePoint &p, const PlasticMesh::CurvePoint &q, const PlasticMesh::CurvePoint &r) // p to the segment q r
-   {
-      const float ex = r.x - q.x, ey = r.y - q.y, l2 = ex * ex + ey * ey;
-      const float t = l2 > 1e-12f ? clamp(((p.x - q.x) * ex + (p.y - q.y) * ey) / l2, 0.f, 1.f) : 0.f;
-      const float dx = q.x + t * ex - p.x, dy = q.y + t * ey - p.y;
-      return dx * dx + dy * dy;
-   };
-   constexpr float eps2 = 0.01f * 0.01f;
-   return dist2(a, c, d) <= eps2 || dist2(b, c, d) <= eps2 || dist2(c, a, b) <= eps2 || dist2(d, a, b) <= eps2;
-}
-
-bool InsideLoop(const vector<PlasticMesh::CurvePoint> &loop, const float x, const float y)
-{
-   bool in = false;
-   for (size_t i = 0, j = loop.size() - 1; i < loop.size(); j = i++)
-      if (((loop[i].y > y) != (loop[j].y > y)) && (x < (loop[j].x - loop[i].x) * (y - loop[i].y) / (loop[j].y - loop[i].y) + loop[i].x))
-         in = !in;
-   return in;
-}
-
-// The one place the board meshes are built (PlasticMesh): the top face at z = 0 of the table rectangle with these holes cut
-bool BuildPlayfieldTop(const PinTable *const t, const vector<const PlayfieldHole *> &holes, const float thickness, const int detail, PlasticMesh::Mesh &top)
-{
-   const float w = t->m_right - t->m_left, h = t->m_bottom - t->m_top;
-   if (w <= 0.f || h <= 0.f)
-      return false;
-   const vector<PlasticMesh::CurvePoint> outline { { t->m_left, t->m_top, false }, { t->m_right, t->m_top, false }, { t->m_right, t->m_bottom, false }, { t->m_left, t->m_bottom, false } };
-   vector<PlasticMesh::Hole> cut;
-   for (const PlayfieldHole *const hole : holes)
-      cut.push_back(ToMeshHole(*hole));
-   PlasticMesh::Params params;
-   params.bottomCap = false; // Its bottom cap would face up into the wood and is never seen
-   params.height = -thickness;
-   params.thickness = thickness;
-   params.bevel = 0.f;
-   params.bevelSegments = 1;
-   params.flatten = PlasticMesh::FlattenTolerance(detail);
-   const float uvm[6] = { 1.f / w, 0.f, -t->m_left / w, 0.f, 1.f / h, -t->m_top / h };
-   for (int i = 0; i < 6; i++)
-      params.uvm[i] = uvm[i];
-   PlasticMesh::Result res;
-   if (!PlasticMesh::Build(outline, cut, params, res))
-      return false;
-   top = std::move(res.top);
-   return true;
-}
-
-// Straight walls from z = 0 down to -thickness along a closed loop. outward: the loop runs counter-clockwise (the board edge), else clockwise (a hole).
-// The right-hand normal of each edge points away from the wood either way. u = running length / (4 thickness), v = depth / thickness
-void AddPlayfieldWalls(const vector<PlasticMesh::CurvePoint> &loop, const float thickness, PlasticMesh::Mesh &m)
-{
-   const size_t n = loop.size();
-   if (n < 3)
-      return;
-   vector<Vertex2D> en(n); // right normal of edge i -> i+1
-   for (size_t i = 0; i < n; i++)
-   {
-      const PlasticMesh::CurvePoint &a = loop[i], &b = loop[(i + 1) % n];
-      const float dx = b.x - a.x, dy = b.y - a.y, l = sqrtf(dx * dx + dy * dy);
-      en[i] = l > 1e-6f ? Vertex2D(dy / l, -dx / l) : Vertex2D(0.f, 0.f);
-   }
-   const auto vertexNormal = [&](const size_t i, const size_t edge) // smooth across shallow turns (circles), sharp at corners
-   {
-      const Vertex2D &p = en[(i + n - 1) % n], &q = en[i % n];
-      if (p.x * q.x + p.y * q.y > 0.866f)
       {
-         Vertex2D s(p.x + q.x, p.y + q.y);
-         const float l = sqrtf(s.x * s.x + s.y * s.y);
-         return l > 1e-6f ? Vertex2D(s.x / l, s.y / l) : en[edge];
+         b.polygon.push_back(v.x);
+         b.polygon.push_back(v.y);
       }
-      return en[edge];
-   };
-   float along = 0.f;
-   const float uScale = 1.f / (4.f * thickness);
-   for (size_t i = 0; i < n; i++)
-   {
-      const size_t j = (i + 1) % n;
-      const PlasticMesh::CurvePoint &a = loop[i], &b = loop[j];
-      const float l = sqrtf((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
-      if (l <= 1e-6f)
-         continue;
-      const Vertex2D na = vertexNormal(i, i), nb = vertexNormal(j, i);
-      const unsigned base = static_cast<unsigned>(m.verts.size());
-      const float u0 = along * uScale, u1 = (along + l) * uScale;
-      m.verts.push_back({ a.x, a.y, -thickness, na.x, na.y, 0.f, u0, 1.f });
-      m.verts.push_back({ b.x, b.y, -thickness, nb.x, nb.y, 0.f, u1, 1.f });
-      m.verts.push_back({ b.x, b.y, 0.f, nb.x, nb.y, 0.f, u1, 0.f });
-      m.verts.push_back({ a.x, a.y, 0.f, na.x, na.y, 0.f, u0, 0.f });
-      m.idx.insert(m.idx.end(), { base, base + 1, base + 2, base, base + 2, base + 3 }); // As PlasticMesh's walls: (a0, a1, b1), (a0, b1, b0)
-      along += l;
-   }
+   return b;
 }
 }
 
@@ -2719,81 +2633,36 @@ void Primitive::RegeneratePlayfield()
    const auto t0 = std::chrono::steady_clock::now();
    const PinTable *const t = m_ptable;
    const float thick = m_d.m_pfThickness;
-   const float tol = PlasticMesh::FlattenTolerance(m_d.m_pfDetail);
 
-   // Cut holes that leave the board or touch another cut hole are left out (red in the editor) until moved
-   const size_t n = m_pfHoles.size();
-   vector<vector<PlasticMesh::CurvePoint>> loops(n);
-   vector<FRect> box(n);
-   m_pfOverlap.assign(n, false);
-   vector<size_t> order;
-   for (size_t i = 0; i < n; i++)
-   {
-      if (!(m_pfHoles[i].flags & PlayfieldHole::Cut))
-         continue;
-      loops[i] = PlayfieldHoleLoop(m_pfHoles[i], tol);
-      if (loops[i].size() < 3)
-         continue;
-      FRect &b = box[i];
-      b.left = b.top = FLT_MAX;
-      b.right = b.bottom = -FLT_MAX;
-      for (const PlasticMesh::CurvePoint &p : loops[i])
-      {
-         b.left = min(b.left, p.x);
-         b.right = max(b.right, p.x);
-         b.top = min(b.top, p.y);
-         b.bottom = max(b.bottom, p.y);
-      }
-      if (b.left <= t->m_left || b.right >= t->m_right || b.top <= t->m_top || b.bottom >= t->m_bottom)
-         m_pfOverlap[i] = true;
-      order.push_back(i);
-   }
-   std::ranges::sort(order, [&box](const size_t a, const size_t b) { return box[a].left < box[b].left; });
-   for (size_t oi = 0; oi < order.size(); oi++) // ponytail: sweep on x, then every edge pair; a grid if PF-scale masks make this slow
-      for (size_t oj = oi + 1; oj < order.size() && box[order[oj]].left <= box[order[oi]].right; oj++)
-      {
-         const size_t i = order[oi], j = order[oj];
-         if (box[j].top > box[i].bottom || box[j].bottom < box[i].top)
-            continue;
-         const auto &a = loops[i], &b = loops[j];
-         bool touch = InsideLoop(a, b[0].x, b[0].y) || InsideLoop(b, a[0].x, a[0].y);
-         for (size_t p = 0; p < a.size() && !touch; p++)
-            for (size_t q = 0; q < b.size() && !touch; q++)
-               touch = SegmentsTouch(a[p], a[(p + 1) % a.size()], b[q], b[(q + 1) % b.size()]);
-         if (touch)
-            m_pfOverlap[i] = m_pfOverlap[j] = true;
-      }
-   vector<const PlayfieldHole *> cut, falls;
-   for (size_t i = 0; i < n; i++)
-      if ((m_pfHoles[i].flags & PlayfieldHole::Cut) && loops[i].size() >= 3 && !m_pfOverlap[i])
-      {
-         cut.push_back(&m_pfHoles[i]);
-         if ((m_pfHoles[i].flags & PlayfieldHole::FallsThrough) && m_d.m_pfFloor == 0) // Keep Existing: the existing floor decides where the ball falls
-            falls.push_back(&m_pfHoles[i]);
-      }
-
-   PlasticMesh::Mesh board, floor, walls;
-   if (!BuildPlayfieldTop(t, cut, thick, m_d.m_pfDetail, board) || !BuildPlayfieldTop(t, falls, thick, m_d.m_pfDetail, floor))
+   // The board, its walls, the backing and the floor collider come from PlayfieldBoard (math/PlayfieldBoard.h); this only converts and copies
+   PlayfieldBoard::BoardParams params;
+   params.outline = { t->m_left, t->m_top, t->m_right, t->m_top, t->m_right, t->m_bottom, t->m_left, t->m_bottom }; // The table rectangle
+   params.thickness = thick;
+   params.detail = m_d.m_pfDetail;
+   const float w = t->m_right - t->m_left, h = t->m_bottom - t->m_top;
+   const float uvm[6] = { 1.f / w, 0.f, -t->m_left / w, 0.f, 1.f / h, -t->m_top / h };
+   for (int i = 0; i < 6; i++)
+      params.uvm[i] = uvm[i];
+   vector<PlayfieldBoard::BoardHole> holes;
+   holes.reserve(m_pfHoles.size());
+   for (const PlayfieldHole &hole : m_pfHoles)
+      holes.push_back(ToBoardHole(hole, m_d.m_pfFloor == 0));
+   PlayfieldBoard::BoardMeshes built;
+   PlayfieldBoard::BoardReport report;
+   const bool ok = PlayfieldBoard::BuildBoard(params, holes, built, report) && w > 0.f && h > 0.f;
+   m_pfOverlap.assign(m_pfHoles.size(), false); // Per hole: left out of the build (red in the editor) until moved
+   for (size_t i = 0; i < report.overlap.size(); i++)
+      m_pfOverlap[i] = report.overlap[i] != 0;
+   if (!ok)
    {
       m_pfDirty = false;
       return; // Degenerate table rectangle: the meshes stay as they are
    }
-   // Walls: the board edge and every cut hole, then the backing (the floor face lowered, all on the dark rows of the plywood image)
+   PlasticMesh::Mesh &board = built.top, &floor = built.floor, &walls = built.walls;
    {
-      const vector<PlasticMesh::CurvePoint> edge { { t->m_left, t->m_top, false }, { t->m_right, t->m_top, false }, { t->m_right, t->m_bottom, false }, { t->m_left, t->m_bottom, false } }; // Counter-clockwise, as the board's outline
-      AddPlayfieldWalls(edge, thick, walls);
-      for (size_t i = 0; i < n; i++)
-         if ((m_pfHoles[i].flags & PlayfieldHole::Cut) && loops[i].size() >= 3 && !m_pfOverlap[i])
-            AddPlayfieldWalls(loops[i], thick, walls);
-      const unsigned base = static_cast<unsigned>(walls.verts.size());
-      for (PlasticMesh::Vertex v : floor.verts)
-      {
-         v.z = -thick - 0.5f;
-         v.tu = 0.5f;
-         v.tv = 0.995f;
-         walls.verts.push_back(v);
-      }
-      for (const unsigned i : floor.idx)
+      const unsigned base = static_cast<unsigned>(walls.verts.size()); // The backing goes into the walls part
+      walls.verts.insert(walls.verts.end(), built.backing.verts.begin(), built.backing.verts.end());
+      for (const unsigned i : built.backing.idx)
          walls.idx.push_back(base + i);
    }
 

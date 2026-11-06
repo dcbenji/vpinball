@@ -107,6 +107,8 @@ set(VPX_SOURCES
    src/math/PlasticMesh.h
    src/math/earcut.hpp
    src/math/PlasticMesh.cpp
+   src/math/PlayfieldBoard.h
+   src/math/PlayfieldBoard.cpp
    src/math/ImageDpi.h
    src/math/ImageDpi.cpp
    src/math/ModelViewProj.h
