@@ -1,11 +1,16 @@
 // Standalone check of src/math/MaskTrace.h: clang++ -std=c++20 -I src tools/masktrace_check.cpp -o /tmp/mtc && /tmp/mtc  (also with -O2 -ffast-math, as the engine builds)
 // argv[1] = "bench": also times a real-size synthetic mask (3072 x 6781) on top of the checks.
+// argv[1] = "real <file.raw> [holes round slots polygons]": Find Holes on a real mask (identity test: phase 1 gave 85 / 48 / 12 / 25 on PF_woodmask.png), and the outline trace on it.
+// argv[1] = "strip <holes.raw> <expect: - | L | R | LR> [print.raw printMode]": the Fit Table to Paint strip warning on a real Holes mask (with the Print mask when given:
+//   PF_inkmask is mode 3, WW_Print mode 2; without one the weaker one-sided hint rule runs) must fire on exactly the expected sides.
+//   .raw = "w h channels\n" then the 8-bit pixels, row 0 first. python3: Image.open(png) -> np.asarray -> write f"{w} {h} {c}\n" + a.tobytes() (L = 1, RGB = 3, RGBA = 4 channels).
 #include "math/MaskTrace.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <string>
 using namespace MaskTrace;
 static int fails = 0;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("FAIL line %d %s: ", __LINE__, #c); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -285,13 +290,286 @@ static void bench()
    printf("bench RGBA: %.3f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
 }
 
+// ---- Phase 2: outline from the mask, strip detection, fit height ----
+
+static bool outlineSimple(const OutlineResult& o) { return simple(o.polygon); }
+
+static void outlineChecks()
+{
+   const double sx = 0.5;
+   // A 400 x 600 px image: wood board from x 20..380, y 0..600 (reaches the top and bottom edges), plain background (hole) left and right of it.
+   // On the board: a notch cut into the top-left edge of the board (touches the image's top), a notch in the right side (rectangle 40 x 100 from x 340), round holes.
+   const auto build = [&](bool aa) {
+      Canvas c(400, 600);
+      c.draw([](double x, double y) { return inRect(x, y, 0, 0, 20, 600) || inRect(x, y, 380, 0, 400, 600); }, false);
+      c.draw([](double x, double y) { return inRect(x, y, 100, 0, 160, 50); }, false);   // notch touching the top edge: a 60 x 50 bite
+      c.draw([](double x, double y) { return inRect(x, y, 340, 200, 380, 300); }, false); // notch off the right side of the board: 40 x 100
+      c.draw([](double x, double y) { return inDisc(x, y, 200, 300, 30); }, aa);          // interior holes must not change the outline
+      c.draw([](double x, double y) { return inDisc(x, y, 250, 450, 20); }, aa);
+      return c;
+   };
+   const Canvas c = build(false);
+   const Params p = P(c, sx);
+   Result hr;
+   CHECK(Trace(Img(c.g, c.w, c.h, 1), p, hr), "trace");
+   OutlineResult o;
+   Params po = p;
+   po.mode = hr.usedMode;
+   CHECK(TraceOutline(Img(c.g, c.w, c.h, 1), po, o), "outline failed");
+   // wood = board 360 x 600 minus bites: 60 x 50 + 40 x 100 px (interior holes are not subtracted: outer boundary only)
+   const double want = (360. * 600 - 60 * 50 - 40 * 100) * sx * sx;
+   printf("outline: %zu points, raw %zu, area %.1f want %.1f, wood components %d\n", o.polygon.size(), o.rawPoints, o.area, want, o.woodComponents);
+   CHECK(std::fabs(o.area - want) < 0.003 * want, "outline area %g want %g", o.area, want);
+   CHECK(area(o.polygon) > 0, "outline orientation: shoelace must be > 0");
+   CHECK(outlineSimple(o), "outline self-intersects");
+   CHECK(o.woodComponents == 1 && o.usedMode == Mode::Dark, "components %d mode %d", o.woodComponents, (int)o.usedMode);
+   // 4 corners + the top notch (4 more) + the right notch (4 more) = 12 corners (the top notch cuts the straight top edge, the right one the straight right side)
+   CHECK(o.polygon.size() == 12, "outline points %zu want 12", o.polygon.size());
+   CHECK(std::fabs(o.minX - (100 + 20 * sx)) < 1e-3 && std::fabs(o.maxX - (100 + 380 * sx)) < 1e-3, "x bounds %g %g", o.minX, o.maxX);
+   CHECK(std::fabs(o.minY - 50) < 1e-3 && std::fabs(o.maxY - (50 + 600 * sx)) < 1e-3, "contour must run along the image border: y %g %g", o.minY, o.maxY);
+   for (const Pt& q : o.polygon) CHECK(!bad(q.x) && !bad(q.y), "NaN in outline");
+   CHECK(!bad(o.area) && !bad(o.minX) && !bad(o.maxY), "NaN in outline fields");
+   bool notch = false; // a vertex at the notch corner (x 160, y 50 px -> table 180, 75)
+   for (const Pt& q : o.polygon) notch |= std::fabs(q.x - (100 + 160 * sx)) < 0.5 && std::fabs(q.y - (50 + 50 * sx)) < 0.5;
+   CHECK(notch, "no vertex at the top notch's inner corner");
+   // same board, anti-aliased holes: same polygon topology and area
+   const Canvas ca = build(true);
+   OutlineResult oa;
+   CHECK(TraceOutline(Img(ca.g, ca.w, ca.h, 1), po, oa) && oa.polygon.size() == 12 && std::fabs(oa.area - o.area) < 0.003 * want, "aa outline differs");
+   // Auto resolves like Trace; Light and Transparent versions of the same mask give the identical outline
+   OutlineResult oauto;
+   Params pa = p; pa.mode = Mode::Auto;
+   CHECK(TraceOutline(Img(c.g, c.w, c.h, 1), pa, oauto) && oauto.polygon.size() == o.polygon.size() && oauto.area == o.area, "auto outline");
+   std::vector<uint8_t> inv(c.g.size());
+   for (size_t i = 0; i < inv.size(); i++) inv[i] = 255 - c.g[i];
+   OutlineResult oi;
+   Params pl = p; pl.mode = Mode::Light;
+   CHECK(TraceOutline(Img(inv, c.w, c.h, 1), pl, oi) && oi.polygon.size() == o.polygon.size() && memcmp(oi.polygon.data(), o.polygon.data(), o.polygon.size() * sizeof(Pt)) == 0, "light outline");
+   std::vector<uint8_t> rgba((size_t)c.w * c.h * 4, 255);
+   for (size_t i = 0; i < c.g.size(); i++) rgba[4 * i + 3] = c.g[i] < 128 ? 0 : 255; // holes transparent
+   OutlineResult ot;
+   Params pt = p; pt.mode = Mode::Transparent;
+   CHECK(TraceOutline(Img(rgba, c.w, c.h, 4), pt, ot) && ot.polygon.size() == o.polygon.size() && memcmp(ot.polygon.data(), o.polygon.data(), o.polygon.size() * sizeof(Pt)) == 0, "transparent outline");
+   // stride and 3-channel input
+   std::vector<uint8_t> padded((size_t)(c.w + 7) * c.h, 128);
+   for (int y = 0; y < c.h; y++) memcpy(&padded[(size_t)y * (c.w + 7)], &c.g[(size_t)y * c.w], c.w);
+   Image ip = Img(padded, c.w, c.h, 1); ip.stride = (size_t)c.w + 7;
+   OutlineResult os;
+   CHECK(TraceOutline(ip, po, os) && os.area == o.area && os.polygon.size() == o.polygon.size(), "strided outline");
+   // the board touching no image edge: the contour is inside the image and a plain rectangle (4 points)
+   Canvas m(300, 300);
+   m.draw([](double x, double y) { return !inRect(x, y, 50, 40, 250, 260); }, false);
+   OutlineResult om;
+   Params pm2 = P(m, sx); pm2.mode = Mode::Dark;
+   CHECK(TraceOutline(Img(m.g, m.w, m.h, 1), pm2, om) && om.polygon.size() == 4 && std::fabs(om.area - 200 * 220 * sx * sx) < 0.012 * 200 * 220 * sx * sx, "inset board outline %zu pts area %g", om.polygon.size(), om.area);
+   // a fully wood image: the image rectangle; a fully hole image: false
+   Canvas w(50, 40);
+   OutlineResult ow;
+   Params pw = P(w, sx); pw.mode = Mode::Dark;
+   CHECK(TraceOutline(Img(w.g, w.w, w.h, 1), pw, ow) && ow.polygon.size() == 4 && std::fabs(ow.area - 50 * 40 * sx * sx) < 1e-3 * 50 * 40 * sx * sx && std::fabs(ow.minX - 100.f) < 1e-3f && std::fabs(ow.minY - 50.f) < 1e-3f && std::fabs(ow.maxX - 125.f) < 1e-3 && std::fabs(ow.maxY - 70.f) < 1e-3, "all wood: %zu pts area %g", ow.polygon.size(), ow.area);
+   Canvas k(50, 40);
+   k.draw([](double, double) { return true; }, false);
+   OutlineResult ok2;
+   CHECK(!TraceOutline(Img(k.g, k.w, k.h, 1), pw, ok2) && ok2.polygon.empty(), "all holes must fail");
+   OutlineResult ob;
+   CHECK(!TraceOutline(Image(), pw, ob), "null image");
+   Params bp = pw; bp.right = bp.left;
+   CHECK(!TraceOutline(Img(w.g, w.w, w.h, 1), bp, ob), "bad rect");
+   // two wood components: the larger one wins
+   Canvas t(200, 100);
+   t.draw([](double x, double y) { return !(inRect(x, y, 10, 10, 60, 90) || inRect(x, y, 100, 10, 190, 90)); }, false);
+   OutlineResult o2;
+   Params p2 = P(t, sx); p2.mode = Mode::Dark;
+   CHECK(TraceOutline(Img(t.g, t.w, t.h, 1), p2, o2) && o2.woodComponents == 2 && std::fabs(o2.area - 90 * 80 * sx * sx) < 0.02 * 90 * 80 * sx * sx, "largest wood component: %d comps, area %g", o2.woodComponents, o2.area);
+   // Trace on the same image is unaffected by running the outline first (no shared state)
+   Result h2;
+   CHECK(Trace(Img(c.g, c.w, c.h, 1), p, h2) && same(hr, h2), "Trace changed");
+}
+
+// N2: the seam corner survives RDP (the ring used to start at the first raw point, 0.5 px from the corner)
+static void cornerChecks()
+{
+   for (int n : { 1, 3, 10, 100 })
+   {
+      Canvas c(n, n);
+      OutlineResult o;
+      Params p = P(c, 1.0); p.mode = Mode::Dark;
+      CHECK(TraceOutline(Img(c.g, n, n, 1), p, o), "%d x %d all wood", n, n);
+      CHECK(o.polygon.size() == 4 && std::fabs(o.area - (double)n * n) < 1e-3 && o.minX == 100.f && o.minY == 50.f && o.maxX == 100.f + n && o.maxY == 50.f + n, "%d x %d all wood: %zu pts area %g (want %d)", n, n, o.polygon.size(), o.area, n * n);
+      printf("corner check: %d x %d all wood -> %zu points, area %g\n", n, n, o.polygon.size(), o.area);
+   }
+   // a board that fills the image apart from a notch at the bottom right: the top-left seam corner is still exact
+   Canvas c(100, 100);
+   c.draw([](double x, double y) { return inRect(x, y, 60, 70, 100, 100); }, false);
+   OutlineResult o;
+   Params p = P(c, 1.0); p.mode = Mode::Dark;
+   CHECK(TraceOutline(Img(c.g, 100, 100, 1), p, o) && o.polygon.size() == 6 && std::fabs(o.area - (10000. - 40 * 30)) < 0.002 * 10000. && o.minX == 100.f && o.minY == 50.f, "notched: %zu pts area %g", o.polygon.size(), o.area);
+}
+
+// S2/S3: a jagged board edge is capped at the load path's 4096 points
+static void capChecks()
+{
+   const int W = 700, H = 4200;
+   Canvas c(W, H);
+   unsigned s = 12345;
+   const auto rnd = [&] { s = s * 1664525u + 1013904223u; return (int)((s >> 16) % 7) - 3; }; // -3 .. +3
+   std::vector<int> lx((size_t)H), rx((size_t)H);
+   for (int y = 0; y < H; y++) lx[(size_t)y] = 40 + rnd(), rx[(size_t)y] = W - 40 + rnd();
+   c.draw([&](double x, double y) { return x < lx[(size_t)y] || x >= rx[(size_t)y]; }, false);
+   Params p = P(c, 1.0); p.mode = Mode::Dark;
+   OutlineResult big, o;
+   CHECK(TraceOutline(Img(c.g, W, H, 1), p, big, 1000000), "uncapped");
+   CHECK(TraceOutline(Img(c.g, W, H, 1), p, o), "capped");
+   printf("cap check: jagged edge, uncapped %zu points, capped %zu (tolerance doubled %d times), area %.0f vs %.0f\n", big.polygon.size(), o.polygon.size(), o.toleranceDoubled, big.area, o.area);
+   CHECK(big.polygon.size() > 4096, "the test edge must exceed the cap uncapped (%zu)", big.polygon.size());
+   CHECK(o.polygon.size() <= 4096 && o.polygon.size() >= 4 && o.toleranceDoubled >= 1 && !o.boundingBoxFallback, "capped: %zu points, doubled %d", o.polygon.size(), o.toleranceDoubled);
+   CHECK(area(o.polygon) > 0 && outlineSimple(o), "capped outline orientation / simplicity");
+   CHECK(std::fabs(o.area - big.area) < 0.01 * big.area, "capped area %g vs %g", o.area, big.area);
+   CHECK(big.toleranceDoubled == 0, "no doubling when under the cap");
+   OutlineResult tiny;
+   CHECK(TraceOutline(Img(c.g, W, H, 1), p, tiny, 64) && tiny.polygon.size() <= 64 && area(tiny.polygon) > 0 && outlineSimple(tiny), "cap 64: %zu points", tiny.polygon.size());
+}
+
+static void stripChecks()
+{
+   // w x h wood board (white) with a full-height hole column of 3 px, a px from the left edge and b px from the right edge, and a disc in the middle
+   // of each side, so Auto sees holes as the minority and the wood margins left and right are exactly a and b columns wide.
+   const auto make = [](int w, int h, int a, int b) {
+      Canvas c(w, h);
+      if (a > 0) c.draw([&](double x, double y) { (void)y; return x >= a && x < a + 3; }, false);
+      if (b > 0) c.draw([&](double x, double y) { (void)y; return x >= w - b - 3 && x < w - b; }, false);
+      return c;
+   };
+   StripParams sp;
+   StripScan s;
+   Canvas c = make(400, 400, 12, 1); // 12 px = 3% of the width: a baked-in strip; 1 px (0.25%): the other side has no margin to speak of
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s), "strip");
+   printf("strip check: wood band 12 px left, 1 px right: L%d R%d fires %d hint %d\n", s.leftCols, s.rightCols, (int)s.fires, (int)s.hint);
+   CHECK(s.fires && s.hint && s.leftCols == 12 && !s.leftIsHole && s.rightCols == 0 && s.usedMode == Mode::Dark, "wood band L%d R%d", s.leftCols, s.rightCols);
+   c = make(400, 400, 6, 6); // 1.5%: a margin
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s) && !s.fires && s.leftCols == 0 && s.rightCols == 0, "6 px margins must not fire");
+   c = make(400, 400, 0, 20); // right wood band, left column 0 is a hole column right away (a = 0 draws nothing: column 0 stays wood)
+   c.draw([](double x, double y) { (void)y; return x < 1; }, false); // hole column on the left edge: 1 px (0.25%, under the 0.5% opposite limit)
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s) && s.fires && s.rightCols == 20 && !s.rightIsHole && s.leftCols == 0, "mixed: L%d R%d", s.leftCols, s.rightCols);
+   // a margin on both sides: the mask alone cannot tell, and a two-sided pair of bands is a real margin, so the hint rule stays quiet
+   c = make(400, 400, 12, 12);
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s) && !s.fires && s.leftCols == 0 && s.rightCols == 0 && s.leftMaskCols == 12 && s.rightMaskCols == 12, "two-sided: L%d R%d", s.leftCols, s.rightCols);
+   // an all-hole band: 12 px on the right edge (and a wood margin on the left): needs the Print mask to say so
+   c = make(400, 400, 30, 0);
+   c.draw([](double x, double y) { (void)y; return x >= 388; }, false);
+   c.draw([](double x, double y) { return inDisc(x, y, 150, 200, 40); }, false);
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s) && !s.fires, "mask only, bands on both sides: no fire");
+   {
+      const Canvas c2 = c;
+      // Print masks (ink = dark with mode 2): `artFrom`..`artTo` columns carry art (a dotted pattern, never a uniform column), the rest is blank
+      const auto printMask = [&](int pw, int ph, int artFrom, int artTo) {
+         std::vector<uint8_t> d((size_t)pw * ph, 255);
+         for (int y = 0; y < ph; y++) for (int x = artFrom; x < artTo; x++) if ((x * 7 + y * 13) % 5 == 0) d[(size_t)y * pw + x] = 0;
+         return d;
+      };
+      const std::vector<uint8_t> blankRight = printMask(800, 800, 0, 770), artRight = printMask(800, 800, 0, 800), blankLeft = printMask(800, 800, 40, 800);
+      Image pr = Img(blankRight, 800, 800, 1);
+      CHECK(DetectStrip(Img(c2.g, c2.w, c2.h, 1), sp, s, &pr, 2) && s.fires && !s.hint && s.rightCols == 12 && s.rightIsHole && s.leftCols == 0, "hole band, blank print right: L%d R%d", s.leftCols, s.rightCols);
+      pr = Img(artRight, 800, 800, 1); // a different size from the mask (fractions are compared)
+      CHECK(DetectStrip(Img(c2.g, c2.w, c2.h, 1), sp, s, &pr, 2) && !s.fires && s.rightMaskCols == 12, "art to the edge: a real margin");
+      pr = Img(blankLeft, 800, 800, 1);
+      CHECK(DetectStrip(Img(c2.g, c2.w, c2.h, 1), sp, s, &pr, 2) && s.fires && s.leftCols == 30 && s.rightCols == 0 && !s.hint, "wood band 30 left, blank print left only: L%d R%d", s.leftCols, s.rightCols);
+      // the print's own band must also be >= 2% of ITS width: 12 blank columns of 800 is 1.5%
+      const std::vector<uint8_t> narrow = printMask(800, 800, 12, 800);
+      pr = Img(narrow, 800, 800, 1);
+      CHECK(DetectStrip(Img(c2.g, c2.w, c2.h, 1), sp, s, &pr, 2) && !s.fires, "blank print band under 2%% must not fire");
+      // alpha source (mode 1/3): RGBA print, alpha = ink; PF's inkmask is alpha + invert
+      std::vector<uint8_t> rgba(800 * 800 * 4, 255);
+      for (int y = 0; y < 800; y++) for (int x = 0; x < 800; x++) rgba[((size_t)y * 800 + x) * 4 + 3] = (x >= 40 && (x * 7 + y * 13) % 5 == 0) ? 0 : 255; // alpha 1 where clear (PF convention)
+      pr = Img(rgba, 800, 800, 4);
+      CHECK(DetectStrip(Img(c2.g, c2.w, c2.h, 1), sp, s, &pr, 3) && s.fires && s.leftCols == 30, "alpha + invert print: L%d R%d fires %d", s.leftCols, s.rightCols, (int)s.fires);
+   }
+   // a band as wide as half the image or more is not a strip (nothing to scan against)
+   Canvas blank(100, 100);
+   CHECK(DetectStrip(Img(blank.g, blank.w, blank.h, 1), sp, s) && !s.fires && s.leftCols == 0 && s.rightCols == 0, "blank image must not fire");
+   CHECK(!DetectStrip(Image(), sp, s), "null image");
+   // 0.995 uniformity: a stray pixel per band column (1 of 400 rows = 0.25%) still counts as the band
+   c = make(400, 400, 12, 1);
+   for (int x = 0; x < 12; x++) c.g[(size_t)(x * 31 % 400) * c.w + x] = 0;
+   CHECK(DetectStrip(Img(c.g, c.w, c.h, 1), sp, s) && s.fires && s.leftCols == 12, "stray pixels: L%d", s.leftCols);
+   // the strip warning follows the resolved mode: a Light-mode mask (holes white) of the same board
+   c = make(400, 400, 12, 1);
+   std::vector<uint8_t> inv(c.g.size());
+   for (size_t i = 0; i < inv.size(); i++) inv[i] = 255 - c.g[i];
+   StripParams spl; spl.mode = Mode::Light;
+   CHECK(DetectStrip(Img(inv, c.w, c.h, 1), spl, s) && s.fires && s.leftCols == 12 && !s.leftIsHole, "light mode: L%d", s.leftCols);
+   CHECK(FitTableHeight(952.94f, 2992, 6575) > 2094.0f && FitTableHeight(952.94f, 2992, 6575) < 2094.3f, "fit height %g", FitTableHeight(952.94f, 2992, 6575));
+   CHECK(FitTableHeight(100.f, 100, 200) == 200.f && FitTableHeight(0.f, 100, 200) == 0.f && FitTableHeight(100.f, 0, 200) == 0.f && FitTableHeight(100.f, 100, -1) == 0.f, "fit height edge cases");
+}
+
+// ---- real masks (raw dumps, see the header) ----
+
+static bool loadRaw(const char* path, std::vector<uint8_t>& d, Image& im)
+{
+   FILE* f = fopen(path, "rb");
+   if (!f) { printf("cannot open %s\n", path); return false; }
+   int w = 0, h = 0, c = 0;
+   if (fscanf(f, "%d %d %d\n", &w, &h, &c) != 3) { fclose(f); return false; }
+   d.resize((size_t)w * h * c);
+   const bool ok = fread(d.data(), 1, d.size(), f) == d.size();
+   fclose(f);
+   im = Img(d, w, h, c);
+   return ok;
+}
+
+static void realChecks(int argc, char** argv)
+{
+   std::vector<uint8_t> d;
+   Image im;
+   if (!loadRaw(argv[2], d, im)) { fails++; return; }
+   Params p; p.left = 0.f, p.top = 0.f, p.right = 952.94f, p.bottom = FitTableHeight(952.94f, im.w, im.h);
+   Result r;
+   CHECK(Trace(im, p, r), "trace");
+   int round = 0, slot = 0, poly = 0;
+   for (const Hole& h : r.holes) { round += h.type == HoleType::Round; slot += h.type == HoleType::Slot; poly += h.type == HoleType::Polygon; }
+   printf("%s (%d x %d): holes %zu (round %d, slot %d, polygon %d), edge cuts %zu, components %d, dropped small %d, mode %d, rdp retried %d / unsimplified %d\n", argv[2], im.w, im.h, r.holes.size(), round, slot, poly, r.outlineCuts.size(), r.components, r.droppedSmall, (int)r.usedMode, r.rdpRetried, r.rdpUnsimplified);
+   if (argc >= 7)
+      CHECK(r.holes.size() == (size_t)atoi(argv[3]) && round == atoi(argv[4]) && slot == atoi(argv[5]) && poly == atoi(argv[6]), "identity: want %s / %s / %s / %s", argv[3], argv[4], argv[5], argv[6]);
+   Params po = p;
+   po.mode = r.usedMode;
+   OutlineResult o;
+   const auto t0 = std::chrono::steady_clock::now();
+   CHECK(TraceOutline(im, po, o), "outline");
+   const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+   printf("outline: %zu points (raw contour %zu), area %.0f of %.0f VPU^2 (%.1f%%), bounds %.1f %.1f - %.1f %.1f, wood components %d, simplify retried %d / unsimplified %d, %.3f s\n", o.polygon.size(), o.rawPoints, o.area, (double)p.right * p.bottom, 100. * o.area / ((double)p.right * p.bottom), o.minX, o.minY, o.maxX, o.maxY, o.woodComponents, o.rdpRetried, o.rdpUnsimplified, dt);
+   CHECK(area(o.polygon) > 0 && outlineSimple(o), "outline orientation / simplicity");
+   for (const Pt& q : o.polygon) CHECK(!bad(q.x) && !bad(q.y), "NaN in outline");
+}
+
+static void stripReal(int argc, char** argv)
+{
+   std::vector<uint8_t> d1, d2;
+   Image a, b;
+   if (!loadRaw(argv[2], d1, a)) { fails++; return; }
+   const bool withPrint = argc > 5;
+   if (withPrint && !loadRaw(argv[4], d2, b)) { fails++; return; }
+   StripScan sa;
+   DetectStrip(a, StripParams(), sa, withPrint ? &b : nullptr, withPrint ? (unsigned)atoi(argv[5]) : 0u);
+   const std::string want = argv[3];
+   printf("strip scan: %s%s%s -> mask bands left %d right %d, fired left %d right %d, fires %d hint %d (want %s)\n", argv[2], withPrint ? " + " : "", withPrint ? argv[4] : "", sa.leftMaskCols, sa.rightMaskCols, sa.leftCols, sa.rightCols, (int)sa.fires, (int)sa.hint, want.c_str());
+   CHECK((sa.leftCols > 0) == (want.find('L') != std::string::npos), "left side: fired %d want %s", sa.leftCols, want.c_str());
+   CHECK((sa.rightCols > 0) == (want.find('R') != std::string::npos), "right side: fired %d want %s", sa.rightCols, want.c_str());
+   CHECK(sa.fires == (want != "-") && (!withPrint || !sa.hint), "fires %d hint %d", (int)sa.fires, (int)sa.hint);
+}
+
 int main(int argc, char** argv)
 {
    scene(false);
    scene(true);
    misc();
    smallShapes();
+   outlineChecks();
+   cornerChecks();
+   capChecks();
+   stripChecks();
    if (argc > 1 && !strcmp(argv[1], "bench")) bench();
+   if (argc > 2 && !strcmp(argv[1], "real")) realChecks(argc, argv);
+   if (argc > 3 && !strcmp(argv[1], "strip")) stripReal(argc, argv);
    printf(fails ? "FAILED: %d\n" : "all checks passed\n", fails);
    return fails ? 1 : 0;
 }
