@@ -449,6 +449,7 @@ private:
    int m_vsmPoolPages = 1024; // physical pool size in pages (Player_PBRShadowPoolPages)
    int m_vsmVirtRes = 8192; // ortho virtual map edge in texels (Player_PBRShadowMapSize)
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
+   bool m_pbrShadowFast = true; // shadow filter early-out + importance gate (Player_PBRShadowFastFilter)
    unsigned int m_vsmContentSerial = 0, m_vsmLastContentSerial = 0; // Bumped when shadow caster content changed (editor moves), forces a rebuild of the cached shadow pages
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame
    int m_vsmPageBudget = 32; // dirty pages rendered per frame (Player_PBRShadowPagesPerFrame)

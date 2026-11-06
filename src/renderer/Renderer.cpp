@@ -3107,6 +3107,7 @@ void Renderer::UpdateVirtualShadowMaps()
    m_vsmPoolPages = m_table->GetSettings().GetPlayer_PBRShadowPoolPages();
    m_vsmVirtRes = m_table->GetSettings().GetPlayer_PBRShadowMapSize();
    m_vsmMaxLights = std::clamp(m_table->GetSettings().GetPlayer_PBRShadowMaxLights(), 1, VSM::MAX_LIGHTS);
+   m_pbrShadowFast = m_table->GetSettings().GetPlayer_PBRShadowFastFilter();
    m_vsmPageBudget = m_table->GetSettings().GetPlayer_PBRShadowPagesPerFrame();
    CreateVSMPagePoolTargets();
    m_vsmTouchedRTs.clear();
@@ -3603,10 +3604,13 @@ void Renderer::UpdateVirtualShadowMaps()
    m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
-   // w: shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate): VPX_SHADOW_EARLY=1 (4 corner taps first, the other 12 only
-   // in a penumbra) or 2 (4 taps only); VPX_SHADOW_GATE=<radiance> no shadow lookup for a light under it at the pixel (1e-4 steps)
-   static const float shadowEarly = (std::getenv("VPX_SHADOW_EARLY") ? (float)atoi(std::getenv("VPX_SHADOW_EARLY")) : 0.f)
-      + 10.f * (std::getenv("VPX_SHADOW_GATE") ? floorf((float)atof(std::getenv("VPX_SHADOW_GATE")) * 10000.f + 0.5f) : 0.f);
+   // w: shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate). The PBRShadowFastFilter setting (default on) = tap mode 1
+   // (4 corner taps first, the other 12 only in a penumbra) + importance gate 0.5 (no shadow lookup for a light whose unshadowed
+   // radiance at the pixel is under it, 1e-4 steps). VPX_SHADOW_EARLY=0|1|2 (2 = 4 taps only) / VPX_SHADOW_GATE=<radiance> override it (A/B)
+   static const char* const envEarly = std::getenv("VPX_SHADOW_EARLY");
+   static const char* const envGate = std::getenv("VPX_SHADOW_GATE");
+   const float shadowEarly = (envEarly ? (float)atoi(envEarly) : m_pbrShadowFast ? 1.f : 0.f)
+      + 10.f * floorf((envGate ? (float)atof(envGate) : m_pbrShadowFast ? 0.5f : 0.f) * 10000.f + 0.5f);
    // VPX_SHADOW_AB=1 (diagnostic): the options above on odd frames only, so consecutive captured frames are an A/B pair
    static const bool shadowAB = std::getenv("VPX_SHADOW_AB") != nullptr;
    const float ablateOpts = g_perfAblateShadowOpts.load();
