@@ -887,7 +887,6 @@ void PlayfieldMaker::Add(EditorUI &ed)
          keepExisting = true; // A shaped floor collider (pockets, ramps into the floor): the board is look only
 
    // The board and its companions
-   PartGroup *const group = Impl::BoardGroup(ed, old);
    const auto unique = [t](const string &name)
    {
       string res = name;
@@ -895,8 +894,20 @@ void PlayfieldMaker::Add(EditorUI &ed)
          res = name + std::to_string(n);
       return res;
    };
+   PartGroup *group = Impl::BoardGroup(ed, old);
+   PartGroup *madeGroup = nullptr; // A table without a part group: parts with no group are live runtime objects to the editor (not listed, not selectable)
+   if (group == nullptr)
+   {
+      if (IEditable *const pie = EditableRegistry::CreateAndInit(eItemPartGroup, t, 0.f, 0.f); pie != nullptr)
+      {
+         pie->GetIScriptable()->m_name = unique("Playfield"s);
+         t->AddPart(pie);
+         pie->SetPartGroup(nullptr); // A root group, playfield reference space (the default)
+         madeGroup = group = static_cast<PartGroup *>(pie);
+      }
+   }
    const string boardName = "playfield_mesh"s;
-   Primitive *const board = Impl::NewPart(ed, boardName, group);
+   Primitive *const board = group != nullptr ? Impl::NewPart(ed, boardName, group) : nullptr; // No group to put it in (the root group could not be created): the failure path below
    Primitive *const walls = board != nullptr ? Impl::NewPart(ed, unique(boardName + "_Walls"), group) : nullptr;
    Primitive *const floor = walls != nullptr ? Impl::NewPart(ed, unique(boardName + "_Floor"), group) : nullptr;
    if (floor == nullptr)
@@ -907,6 +918,11 @@ void PlayfieldMaker::Add(EditorUI &ed)
             t->RemovePart(made);
             made->Release(); // The creation reference
          }
+      if (madeGroup != nullptr)
+      {
+         t->RemovePart(madeGroup);
+         madeGroup->Release();
+      }
       Impl::Restore(*ctx, before); // The names, the physics fields, the visibility and the plane as before
       ed.m_undo.EndUndo();
       ed.m_undo.Discard(); // Nothing was recorded
@@ -975,6 +991,8 @@ void PlayfieldMaker::Add(EditorUI &ed)
    if (quad)
       ed.m_player->m_physics->SetImplicitPlayfieldMesh(false); // The ground plane: the board's floor (or the existing one) takes over
 
+   if (madeGroup != nullptr)
+      ed.m_undo.MarkForCreate(madeGroup); // The same step: the undo takes the group out with the parts
    for (Primitive *const prim : { board, walls, floor })
       ed.m_undo.MarkForCreate(prim);
    ed.m_undo.MarkForAction([ctx, before]() { Impl::Restore(*ctx, before); },
