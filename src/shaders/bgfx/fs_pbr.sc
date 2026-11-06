@@ -1350,6 +1350,9 @@ void main() {
       #endif
 
       // Forward+ clustered direct lighting (world space: the light grid is built over the table XY plane)
+      // PBR_PERF_NOLIGHTLOOP (perf diagnostic, never defined by the build): compiles the light loop out, to measure what its mere
+      // presence costs (register allocation / occupancy) against a run with no lights
+      #ifndef PBR_PERF_NOLIGHTLOOP
       BRANCH if (pbrLightGrid2.y > 0.0)
       {
          const vec3 wN = mul(vec4(N, 0.0), mView).xyz; // trafo back to world (orthonormal, no renormalize needed)
@@ -1359,6 +1362,7 @@ void main() {
          const float vsmPhase = hash22(gl_FragCoord.xy).x * (2.0 * PI);
          color += pbr_direct_light(wN, wNc, mul(vec4(Ng, 0.0), mView).xyz, wV, v_tablePos, diffuse, F0, roughness, base.a * staticColor_Alpha.a, pbrTransmission * orm.w, vec2(cos(vsmPhase), sin(vsmPhase)), directSpec);
       }
+      #endif
       // Flasher dome spill: lights the surface's diffuse; a see-through sheet also glows with it (the light trapped in the
       // clear plastic), unmodulated by its coverage. Off with the table's lights (editor views without them)
       BRANCH if (pbrDomeSpillN.x > 0.0 && pbrLightGrid2.y > 0.0)
