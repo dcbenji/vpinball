@@ -30,6 +30,24 @@ class MeshBuffer;
 //  ObjRotY = 7
 //  ObjRotZ = 8
 inline constexpr int kRailChannelRole = 3; // m_plasticRole of a Wire Rail's channel part
+// Playfield Maker companions (4 is kept for the Ramp Collider's walls)
+inline constexpr int kPlayfieldWallsRole = 5; // The hole walls, the board's outer edge and the dark backing (the Plywood image)
+inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut
+inline constexpr int kMaxPlayfieldHoles = 4096; // Load caps
+inline constexpr int kMaxPlayfieldHolePoints = 4096;
+
+// A hole of the Playfield Maker board, in table coordinates
+struct PlayfieldHole
+{
+   enum Type { Round = 0, Slot = 1, Polygon = 2 };
+   enum Flags { Cut = 1, FallsThrough = 2, UnderInsert = 4, FromMask = 8 };
+   int type = Round;
+   int flags = Cut;
+   Vertex2D centre { 0.f, 0.f };
+   float diameter = 27.3f;
+   Vertex2D end { 0.f, 0.f }; // Slot: the second centre
+   vector<Vertex2D> polygon; // Polygon: the outline (from the wood mask)
+};
 
 class PrimitiveData final : public BaseProperty
 {
@@ -143,6 +161,15 @@ public:
    float m_plasticUvm[6] = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f }; // table XY to UV: u = a x + b y + c, v = d x + e y + f
    string m_plasticHost; // companions: name of the host primitive (empty = not a companion)
    int m_plasticRole = 0; // companions: 1 = top cap (Clear), 2 = walls and bevel, kRailChannelRole = the ball channel of a Wire Rail (m_plasticHost = the rail)
+   // Playfield Maker (editor operator): the board named playfield_mesh is the host, its companions are the walls and the floor collider. Fields only saved when on
+   bool m_playfieldGen = false;
+   float m_pfThickness = 23.5f; // 0.5 in
+   int m_pfFloor = 0; // 0 Own (the floor collider collides), 1 Keep Existing
+   bool m_pfFloorFollows = true; // Own floor: follows the table's effective playfield physics; false once it took the values of the separate floor collider it replaced (decided when Own is chosen, and at Add)
+   string m_pfWoodMask;
+   int m_pfMaskMode = 0; // 0 auto, 1 dark, 2 light, 3 transparent
+   float m_pfMinHole = 2.35f; // 0.05 in
+   int m_pfDetail = 1; // Curve Detail 1..5, as plastics
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -461,6 +488,25 @@ public:
    // point: the index of the other end of its pill, or -1 for a round hole. A smooth last point, or a smooth point not followed by an equal diameter, is round.
    static vector<int> PlasticPillPartners(const DragPointCurve &holes);
    void SetPlasticHoleDiameter(const DragPoint *hole, float dia); // The hole and the other end of its pill, clamped to the field's 0.5 to 100
+
+   // Playfield Maker board (m_d.m_playfieldGen): the holes live outside m_d, like the plastic curve
+   vector<PlayfieldHole> m_pfHoles;
+   bool m_pfDirty = false; // An edit: RenderSetup rebuilds the board and its companions (a file load keeps the saved meshes)
+   vector<bool> m_pfOverlap; // Per hole at the last rebuild: a cut hole leaving the board or touching another cut hole (left out of the build)
+   float m_pfBuildMs = 0.f; // Time of the last rebuild
+   void RegeneratePlayfield(); // Rebuilds the board, the walls and the floor collider meshes (mesh work only; no-op unless m_d.m_playfieldGen)
+   void UpdatePlayfield(); // An edit: m_pfDirty, then the renderable reinit rebuilds it
+   bool IsPlayfieldPart() const; // The board or one of its companions
+   Primitive *GetPlayfieldCompanion(int role) const; // The board's walls or floor (one pass over the table, unlike GetPlasticCompanions), else null
+   // Own floor with the table's physics: the floor collider follows the table's effective playfield physics (called by the table physics setters).
+   // Only while the board's m_pfFloorFollows is set: no part is searched for here
+   static void SyncPlayfieldFloorPhysics(PinTable *table);
+   // The playfield physics the player uses: the table's, or with Overwrite Physics on the global set's from the settings (as Player::Init reads it; the table's
+   // m_fOverride* fields are only loaded at player start)
+   static void GetTablePlayfieldPhysics(const PinTable *table, float &friction, float &elasticity, float &falloff, float &scatter);
+   // Collidable primitives whose top lies within 1 VPU of z = 0 and that cover more than half of the table rectangle (not the board's parts, not session objects)
+   static vector<Primitive *> FindPlayfieldFloors(PinTable *table);
+   static bool IsOldPlayfieldName(const string &name); // playfield_mesh_old, playfield_mesh_old2...
 
    // Editor drag of a generated part (wire, plastic): see OnGenPointsMoved
    bool m_genDragDefer = false; // Set by the editor around the transform of a drag frame

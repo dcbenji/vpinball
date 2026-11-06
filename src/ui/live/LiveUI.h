@@ -81,6 +81,7 @@ public:
    static void CenteredText(const string &text);
 
    void HandleSDLEvent(SDL_Event &e) const;
+   void MapWindowPoint(float &x, float &y) const; // A window point (an SDL event's) to the UI's, as the mouse position is (rotation, no display scale)
 
 private:
    void SetupImGuiStyle(const bool isEditor) const;

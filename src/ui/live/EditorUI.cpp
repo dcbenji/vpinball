@@ -17,6 +17,7 @@
 #include "editor/IconsLucide.h"
 #include "editor/LiveRenderContext.h"
 #include "editor/MirrorParts.h"
+#include "editor/PlayfieldMaker.h"
 #include "editor/PrimitiveUIPart.h"
 #include "editor/PropertyPane.h"
 #include "editor/RubberBetweenPosts.h"
@@ -2414,6 +2415,7 @@ void EditorUI::RenderUI()
       PlaceNewPartAtCursor(); // As Blender's: a new part goes to the 3D cursor (the desktop backdrop, a 2D plane, keeps the click to place)
    if (m_plasticTrace.active && (IsInspectMode() || m_table->IsLocked() || m_pointEditPart != nullptr))
       PlasticFromAtlas::Cancel(*this);
+   PlayfieldMaker::Update(*this);
    // Plastics whose meshes were rebuilt: their picking colliders follow
    if (m_player != nullptr && m_player->m_physics != nullptr && !IsInspectMode())
       for (IEditable *const part : m_table->GetParts())
@@ -3118,6 +3120,7 @@ void EditorUI::RenderUI()
       }
 
       PlasticFromAtlas::DrawTrace(*this, overlayDrawList, ctx);
+      PlayfieldMaker::Draw(*this, overlayDrawList, ctx);
 
       if (m_physOverlay == PhysicOverlay::All || (m_physOverlay == PhysicOverlay::Selected && !m_multiSel.empty()))
       {
@@ -3275,6 +3278,10 @@ void EditorUI::RenderUI()
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_refImage.PickActive())
             m_refImage.Click(*this, m_boxSelectStart); // Reference image: a point of the two point scale
+         else if (!m_plasticTrace.active && !m_plasticFit.active && m_pointEditPart == nullptr && PlayfieldMaker::Click(*this, m_boxSelectStart))
+         {
+            // Playfield Maker: a hole placed, selected, or a hole grab confirmed
+         }
          else if (m_plasticTrace.active)
             PlasticFromAtlas::Click(*this, m_boxSelectStart, io.KeyShift);
          else if (m_plasticFit.active)
@@ -3581,6 +3588,10 @@ void EditorUI::RenderUI()
          else if (m_measure.OnEscape(*this))
          {
             // Cancelled the ruler being dragged, or left the Measure tool
+         }
+         else if (PlayfieldMaker::Cancel(*this))
+         {
+            // Left hole placement, or a hole grab put back
          }
          else if (m_plasticFit.active)
             PlasticFromAtlas::FitCancel(*this, "Fit to Posts stopped"); // Leave the steps only
@@ -4066,8 +4077,11 @@ void EditorUI::UndoSteps(const size_t count)
          break;
       }
       label = m_undo.UndoLabel(0); // The label reported is the one of the last step actually undone
+      const std::function<void()> keepShown = PlayfieldMaker::KeepShown(*this);
       if (std::any step = m_undo.Undo(); step.has_value())
          state = std::move(step);
+      if (keepShown)
+         keepShown();
    }
    RestoreUndoState(state);
    PlasticFromAtlas::SyncChangedHostVisibility(*this, hostEyes);
@@ -4088,8 +4102,11 @@ void EditorUI::RedoSteps(const size_t count)
    for (; done < count && m_undo.HasRedo(); ++done)
    {
       label = m_undo.RedoLabel(0);
+      const std::function<void()> keepShown = PlayfieldMaker::KeepShown(*this);
       if (std::any step = m_undo.Redo(); step.has_value())
          state = std::move(step);
+      if (keepShown)
+         keepShown();
    }
    RestoreUndoState(state);
    PlasticFromAtlas::SyncChangedHostVisibility(*this, hostEyes);
@@ -4104,6 +4121,16 @@ void EditorUI::SwitchWorkspace(const int index)
    m_pinned.ApplyWorkspace(index);
    if (changed)
       Report("Workspace: " + m_pinned.GetWorkspace(index).name);
+}
+
+void EditorUI::OnFileDrop(const string &path, const float x, const float y)
+{
+   if (m_table->IsLocked() || IsInspectMode())
+   {
+      Report("Dropped files are taken by the editor only (not locked, not in a play test)");
+      return;
+   }
+   PlayfieldMaker::OnFileDrop(*this, path, ImVec2(x, y));
 }
 
 void EditorUI::Report(const string &message)
@@ -4146,6 +4173,11 @@ void EditorUI::DuplicateSelection()
    }
    if (!CanDuplicate())
       return;
+   if (std::ranges::any_of(m_multiSel, [](const std::shared_ptr<EditorUIPart> &p) { return PlayfieldMaker::IsPart(p->GetEditable()); }))
+   {
+      Report(PlayfieldMaker::kFollowsTable);
+      return;
+   }
    const int grabSlot = TransformViewSlot();
    if (!SelectionInView(grabSlot)) // The grab which follows would be refused: no copy then
    {
@@ -4658,6 +4690,11 @@ void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
    if (moved.empty())
       return;
    PlasticFromAtlas::AddCompanions(moved); // A plastic's companions change group with their host, in the same undo step
+   PlayfieldMaker::StripBoard(*this, moved);
+   if (group != nullptr && group->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD) // The board would stop being the playfield (PhysicSetup)
+      PlayfieldMaker::StripBoardGroups(*this, moved);
+   if (moved.empty())
+      return;
    m_undo.BeginUndo();
    for (IEditable *const editable : moved)
    {
@@ -4998,6 +5035,7 @@ void EditorUI::CreateCollection(bool fromSelection)
       for (const auto &uiPart : m_multiSel)
          members.push_back(uiPart->GetEditable());
       PlasticFromAtlas::AddCompanions(members); // A script hiding the collection's plastics hides all three parts of each
+      PlayfieldMaker::StripBoard(*this, members); // The playfield follows the table
       for (IEditable *const editable : members)
          if (editable && editable->GetIScriptable()) // Collections only reference scriptable parts (persisted by name)
             m_table->AddPartToCollection(pcol, editable);
@@ -5071,6 +5109,8 @@ void EditorUI::CopySelection()
       if (IEditable *const editable = part->GetEditable(); editable != nullptr)
          parts.push_back(editable);
    PlasticFromAtlas::AddCompanions(parts); // A plastic is copied with its companions
+   if (PlayfieldMaker::StripBoard(*this, parts) && parts.empty())
+      return;
    RestorePartsVisibility(); // Copy the authored visibility, not the editor display state
    VPX::EditorClipboard::CopyParts(parts);
    if (!parts.empty())
@@ -5113,6 +5153,24 @@ void EditorUI::PasteSelection(const ImVec2 &pos, const bool inPlace)
    const vector<vector<uint8_t>> parts = VPX::EditorClipboard::GetParts();
    if (parts.empty())
       return;
+   // A board (or its companions) is never pasted: the table makes its one board by Add > Playfield (Copy leaves it out, older clipboards may hold it)
+   for (const vector<uint8_t> &partData : parts)
+   {
+      if (partData.size() <= sizeof(int) || *reinterpret_cast<const ItemTypeEnum *>(partData.data()) != eItemPrimitive)
+         continue;
+      IEditable *const editable = EditableRegistry::Create(eItemPrimitive);
+      if (editable == nullptr)
+         continue;
+      BiffReader reader(partData.data() + sizeof(int), static_cast<uint32_t>(partData.size() - sizeof(int)), CURRENT_FILE_FORMAT_VERSION, nullptr, 0);
+      editable->Load(reader);
+      const bool board = PlayfieldMaker::IsPart(editable);
+      editable->Release();
+      if (board)
+      {
+         Report(PlayfieldMaker::kOneBoard);
+         return;
+      }
+   }
    const bool backdrop = (m_camMode == ViewMode::DesktopBackdrop);
    PartGroup *const partGroup = GetPartGroupForNewPart();
    vector<IEditable *> pasted;
@@ -5376,6 +5434,8 @@ void EditorUI::DeleteSelection()
             if (edit->GetPartGroup() == partsToDelete[i] && edit->GetItemType() != eItemBall && std::ranges::find(partsToDelete, edit) == partsToDelete.end())
                partsToDelete.push_back(edit);
    PlasticFromAtlas::AddCompanions(partsToDelete); // A plastic goes with its companions
+   PlayfieldMaker::StripBoard(*this, partsToDelete);
+   PlayfieldMaker::StripBoardGroups(*this, partsToDelete); // A group holding the board stays, with the board in it (its other parts go)
    if (partsToDelete.empty())
       return;
 
@@ -5897,8 +5957,18 @@ void EditorUI::BeginModalTransform(ModalOp op)
       Report("Local View: the selection has parts this view does not show");
       return;
    }
+   if (m_table->IsLocked() || m_modal.active)
+      return;
+   // The Playfield Maker board follows the table: G moves its selected hole instead (tested first: the board has no transform, so GetSelectionTransform fails for it)
+   if (std::ranges::any_of(m_multiSel, [](const std::shared_ptr<EditorUIPart> &p) { return PlayfieldMaker::IsPart(p->GetEditable()); }))
+   {
+      const bool hole = op == ModalOp::Grab && m_multiSel.size() == 1;
+      if (!(hole && PlayfieldMaker::BeginGrab(*this)))
+         Report(hole ? "Select a hole to move it (G): the playfield follows the table"s : string(PlayfieldMaker::kFollowsTable));
+      return;
+   }
    Matrix3D initial;
-   if (m_table->IsLocked() || m_modal.active || !GetSelectionTransform(initial))
+   if (!GetSelectionTransform(initial))
       return;
    PlasticFromAtlas::AbortDrags(*this); // A pill or bow press holds points that a cancelled transform (an undo reload) would free
    if (viewSlot < 0 && m_camMode == ViewMode::PreviewCam)

@@ -319,7 +319,7 @@ void PropertyPane::PropertyLabel(const string& label, const char* tooltip)
    m_syncPos = ImVec2(pos.x + xWidth + valueWidth + (m_syncWidth > 0.f ? style.ItemInnerSpacing.x : 0.f), pos.y + fieldDy);
 }
 
-void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName)
+void PropertyPane::Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName, const char* nameLocked)
 {
    ImGui::Dummy(ImVec2(0.f, 4.f));
    m_modifyFieldId++;
@@ -330,7 +330,7 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
    ImGui::Indent(cardIndent);
    window->WorkRect.Max.x = window->ContentRegionRect.Max.x = window->Pos.x + window->Size.x - (window->DC.CursorPos.x - window->InnerRect.Min.x);
    // Do not edit name of live objects as it would break the script, nor of multi selections (no bulk renaming)
-   ImGui::BeginDisabled(m_table->m_liveBaseTable || IsMultiEdit());
+   ImGui::BeginDisabled(m_table->m_liveBaseTable || IsMultiEdit() || nameLocked != nullptr);
    // One header row: the type (dim caption in the label column, instead of a separate centred line) and the name field
    ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
    PropertyLabel(IsMultiEdit() ? typeName + " x" + std::to_string(GetEditCount()) : typeName, "Name");
@@ -344,6 +344,8 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
       if (getName() != current) // The setter may reject or adjust the name
          m_modified = m_modifyFieldId; // Makes the rename undoable and marks the table as modified
    }
+   if (nameLocked != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_ForTooltip))
+      ImGui::SetTooltip("%s", nameLocked);
    ImGui::EndDisabled();
    window->WorkRect.Max.x = savedWorkMaxX;
    window->ContentRegionRect.Max.x = savedContentMaxX;
@@ -353,9 +355,9 @@ void PropertyPane::Header(const string& typeName, const std::function<string()>&
       m_afterHeader(*this);
 }
 
-void PropertyPane::EditableHeader(const string& typeName, IEditable* editable)
+void PropertyPane::EditableHeader(const string& typeName, IEditable* editable, const char* nameLocked)
 {
-   Header(typeName, [editable]() { return editable->GetName(); }, [editable](const string& v) { editable->SetName(v); });
+   Header(typeName, [editable]() { return editable->GetName(); }, [editable](const string& v) { editable->SetName(v); }, nameLocked);
 }
 
 void PropertyPane::Separator(const string& label)

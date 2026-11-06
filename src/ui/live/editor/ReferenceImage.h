@@ -43,6 +43,10 @@ public:
    void CancelPick() { m_pick = 0; }
    void UiHidden() { m_pick = 0; } // The editor panels are hidden: a pick in progress is dropped
 
+   // The Blueprint slot of the Playfield Maker: opens this file (the panel opens with it); the file shown, empty when none
+   bool OpenFile(EditorUI &ed, const string &file);
+   const string &GetFile(EditorUI &ed);
+
 private:
    struct Params
    {

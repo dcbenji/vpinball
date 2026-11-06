@@ -58,7 +58,7 @@ vector<Primitive *> SetOrigin::SelectedPrimitives(const EditorUI &ed, int &skipp
    for (const auto &part : parts)
    {
       IEditable *const edit = part ? part->GetEditable() : nullptr;
-      if (edit && edit->GetItemType() == eItemPrimitive)
+      if (edit && edit->GetItemType() == eItemPrimitive && !static_cast<Primitive *>(edit)->IsPlayfieldPart()) // The Playfield Maker board and its companions follow the table
          prims.push_back(static_cast<Primitive *>(edit));
       else
          skipped++;

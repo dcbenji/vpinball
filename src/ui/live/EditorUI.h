@@ -79,6 +79,7 @@ class EditorUI final
    friend class SelectRename;
    friend class RubberBetweenPosts;
    friend class PlasticFromAtlas;
+   friend class PlayfieldMaker;
    friend class ReferenceImage;
    friend class MeasureTool;
 
@@ -109,6 +110,7 @@ public:
 
    // Posts a message in the status bar (last operation report, fades after a few seconds)
    void Report(const string &message);
+   void OnFileDrop(const string &path, float x, float y); // A file dropped from the desktop on the window (UI coordinates): the Playfield Maker's slots
    // Development only (EngineMcp): look at camera in table space (VPU, Z up), vertical FOV in degrees; a null fov goes back to the preview camera
    void SetLookAtCamera(const vec3 &eye, const vec3 &target, float fovY, Renderer::ShadeMode shading);
    // Development only: the part of the display showing the 3D view, as fractions of its size; false when it is hidden

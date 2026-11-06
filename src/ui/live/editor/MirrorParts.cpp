@@ -194,6 +194,8 @@ string Refusal(const IEditable *const part, const Axis axis)
    case eItemPrimitive:
    {
       const Primitive *const prim = static_cast<const Primitive *>(part);
+      if (prim->m_d.m_playfieldGen)
+         return "the playfield follows the table";
       if (prim->IsPlasticCompanion())
          return "part derived from its host";
       if (HasMeshToFlip(prim) && prim->m_d.m_objectSpaceNormalMap && !prim->m_d.m_szNormalMap.empty())

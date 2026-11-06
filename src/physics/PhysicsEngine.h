@@ -76,6 +76,7 @@ public:
 
    // True when the player added an implicit (non collidable) playfield mesh, meaning the ground HitPlane must be simulated
    void SetImplicitPlayfieldMesh(const bool hasImplicitMesh) { m_implicitPlayfieldMesh = hasImplicitMesh; }
+   bool HasImplicitPlayfieldMesh() const { return m_implicitPlayfieldMesh; }
 
    // Last simulated time at which a ball hit the plunger vicinity (feedback for UI and toys)
    uint32_t GetLastPlungerHit() const { return m_lastPlungerHit; }

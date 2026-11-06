@@ -2028,6 +2028,22 @@ void Player::ProcessOSMessages(const bool isInitialized)
             }
          }
          break;
+
+      case SDL_EVENT_DROP_BEGIN:
+      case SDL_EVENT_DROP_POSITION:
+      case SDL_EVENT_DROP_COMPLETE:
+         isPFWnd = (SDL_GetWindowFromID(e.drop.windowID) == m_playfieldWnd->GetCore()) || IsVR();
+         break;
+      case SDL_EVENT_DROP_FILE:
+         isPFWnd = (SDL_GetWindowFromID(e.drop.windowID) == m_playfieldWnd->GetCore()) || IsVR();
+         // A file dropped from the desktop on the live editor (the Playfield Maker slots): SDL frees the path after the event, so it is copied
+         if (isPFWnd && isInitialized && m_liveUI && m_liveUI->IsEditorUIOpened() && e.drop.data != nullptr)
+         {
+            float x = e.drop.x, y = e.drop.y;
+            m_liveUI->MapWindowPoint(x, y);
+            m_liveUI->m_editorUI.OnFileDrop(string(e.drop.data), x, y);
+         }
+         break;
       }
 
       if (!isInitialized)

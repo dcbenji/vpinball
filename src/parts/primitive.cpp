@@ -22,6 +22,7 @@
 #include "miniz/miniz.h"
 #include "math/wiresweep.h"
 #include "math/PlasticMesh.h"
+#include <chrono>
 
 
 Primitive::~Primitive()
@@ -42,6 +43,7 @@ Primitive *Primitive::CopyForPlay() const
       dst->m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
    for (const auto &dpt : m_plasticHoles.GetPoints())
       dst->m_plasticHoles.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticHoles, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+   dst->m_pfHoles = m_pfHoles; // Playfield Maker: the saved meshes are copied above, m_pfDirty stays false (F5 never rebuilds)
    if (dst->m_d.m_wireRail)
       dst->RegenerateRail(); // The play copy has its channel before PhysicSetup (RenderSetup comes later); the table is not set yet, so the channel part is left alone
    return dst;
@@ -145,6 +147,15 @@ void Primitive::SetDefaults(const bool fromMouseClick)
       m_d.m_plasticUvm[i] = wireDefaults.m_plasticUvm[i];
    m_d.m_plasticHost = wireDefaults.m_plasticHost;
    m_d.m_plasticRole = wireDefaults.m_plasticRole;
+   m_d.m_playfieldGen = wireDefaults.m_playfieldGen;
+   m_d.m_pfThickness = wireDefaults.m_pfThickness;
+   m_d.m_pfFloor = wireDefaults.m_pfFloor;
+   m_d.m_pfFloorFollows = wireDefaults.m_pfFloorFollows;
+   m_d.m_pfWoodMask = wireDefaults.m_pfWoodMask;
+   m_d.m_pfMaskMode = wireDefaults.m_pfMaskMode;
+   m_d.m_pfMinHole = wireDefaults.m_pfMinHole;
+   m_d.m_pfDetail = wireDefaults.m_pfDetail;
+   m_pfHoles.clear();
    m_plasticEditHoles = false;
    m_wireCurve.ClearPoints();
    m_plasticCurve.ClearPoints();
@@ -834,6 +845,8 @@ void Primitive::RenderSetup(Renderer *renderer)
 
    RegenerateWire(); // Wireform: every editor point edit reinitializes the renderable, so the mesh follows the points
    RegeneratePlastic(); // Plastic from Atlas host: same, and the companions' meshes
+   if (m_d.m_playfieldGen && (m_pfDirty || m_mesh.NumIndices() == 0))
+      RegeneratePlayfield(); // Playfield Maker board: after an edit (or without a mesh) only, a reinit for any other reason keeps the meshes
 
    // Check if we are part of a group, and if so if we are a child or the base
    m_groupdRendering = false;
@@ -2052,6 +2065,8 @@ void Primitive::FlushGenDrag()
 
 void Primitive::Translate(const Vertex2D &offset)
 {
+   if (m_d.m_playfieldGen) // The board follows the table (identity transform, like its companions)
+      return;
    if (IsPlasticCompanion()) // Derived from its host (identity transform, the host carries the curve)
       return;
    if (m_d.m_plasticGen)
@@ -2076,7 +2091,7 @@ void Primitive::Translate(const Vertex2D &offset)
 
 void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool useElementCenter)
 {
-   if (IsPlasticCompanion())
+   if (m_d.m_playfieldGen || IsPlasticCompanion())
       return;
    if (m_d.m_plasticGen)
    {
@@ -2098,7 +2113,7 @@ void Primitive::Rotate(const float ang, const Vertex2D &pvCenter, const bool use
 
 void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pvCenter, const bool useElementCenter)
 {
-   if (IsPlasticCompanion())
+   if (m_d.m_playfieldGen || IsPlasticCompanion())
       return;
    if (m_d.m_plasticGen)
    {
@@ -2120,6 +2135,8 @@ void Primitive::Scale(const float scalex, const float scaley, const Vertex2D &pv
 
 Vertex2D Primitive::GetCenter() const
 {
+   if (m_d.m_playfieldGen && m_ptable != nullptr) // The board covers the table rectangle (identity transform)
+      return { 0.5f * (m_ptable->m_left + m_ptable->m_right), 0.5f * (m_ptable->m_top + m_ptable->m_bottom) };
    if (m_d.m_plasticGen)
       return m_plasticCurve.GetCenter();
    if (m_d.m_wireGen)
@@ -2368,7 +2385,7 @@ bool Primitive::IsPlasticCompanion() const
    if (m_ptable == nullptr) // Loading: the host may come later
       return true;
    for (const IEditable *const part : m_ptable->GetParts())
-      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail) && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail || static_cast<const Primitive *>(part)->m_d.m_playfieldGen) && StrCompareNoCase(part->GetName(), m_d.m_plasticHost))
          return true;
    return false;
 }
@@ -2376,7 +2393,7 @@ bool Primitive::IsPlasticCompanion() const
 vector<Primitive *> Primitive::GetPlasticCompanions() const
 {
    vector<Primitive *> res;
-   if (m_ptable == nullptr || (!m_d.m_plasticGen && !m_d.m_wireRail) || GetName().empty())
+   if (m_ptable == nullptr || (!m_d.m_plasticGen && !m_d.m_wireRail && !m_d.m_playfieldGen) || GetName().empty())
       return res;
    const string name = GetName();
    for (IEditable *const part : m_ptable->GetParts())
@@ -2550,6 +2567,355 @@ void Primitive::InitPlastic(const vector<Vertex3Ds> &outline, const vector<bool>
 }
 
 //////////////////////////////
+// Playfield Maker
+//////////////////////////////
+
+namespace
+{
+// The mesh builder's hole (the one place the hole types map to PlasticMesh)
+PlasticMesh::Hole ToMeshHole(const PlayfieldHole &h)
+{
+   PlasticMesh::Hole m { h.centre.x, h.centre.y, h.diameter, h.end.x, h.end.y, h.type == PlayfieldHole::Slot };
+   if (h.type == PlayfieldHole::Polygon)
+      for (const Vertex2D &v : h.polygon)
+         m.polygon.push_back({ v.x, v.y, false });
+   return m;
+}
+
+// The hole as the closed loop it is cut as (clockwise), flattened to the chord error tol
+vector<PlasticMesh::CurvePoint> PlayfieldHoleLoop(const PlayfieldHole &h, const float tol) { return PlasticMesh::HoleOutline(ToMeshHole(h), tol); }
+
+// Two edges cross, or come within 0.01 VPU of each other: holes that touch, share an edge or lie on each other count as overlapping
+bool SegmentsTouch(const PlasticMesh::CurvePoint &a, const PlasticMesh::CurvePoint &b, const PlasticMesh::CurvePoint &c, const PlasticMesh::CurvePoint &d)
+{
+   const auto orient = [](const PlasticMesh::CurvePoint &p, const PlasticMesh::CurvePoint &q, const PlasticMesh::CurvePoint &r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
+   const float d1 = orient(c, d, a), d2 = orient(c, d, b), d3 = orient(a, b, c), d4 = orient(a, b, d);
+   if (((d1 > 0.f) != (d2 > 0.f)) && ((d3 > 0.f) != (d4 > 0.f)))
+      return true;
+   const auto dist2 = [](const PlasticMesh::CurvePoint &p, const PlasticMesh::CurvePoint &q, const PlasticMesh::CurvePoint &r) // p to the segment q r
+   {
+      const float ex = r.x - q.x, ey = r.y - q.y, l2 = ex * ex + ey * ey;
+      const float t = l2 > 1e-12f ? clamp(((p.x - q.x) * ex + (p.y - q.y) * ey) / l2, 0.f, 1.f) : 0.f;
+      const float dx = q.x + t * ex - p.x, dy = q.y + t * ey - p.y;
+      return dx * dx + dy * dy;
+   };
+   constexpr float eps2 = 0.01f * 0.01f;
+   return dist2(a, c, d) <= eps2 || dist2(b, c, d) <= eps2 || dist2(c, a, b) <= eps2 || dist2(d, a, b) <= eps2;
+}
+
+bool InsideLoop(const vector<PlasticMesh::CurvePoint> &loop, const float x, const float y)
+{
+   bool in = false;
+   for (size_t i = 0, j = loop.size() - 1; i < loop.size(); j = i++)
+      if (((loop[i].y > y) != (loop[j].y > y)) && (x < (loop[j].x - loop[i].x) * (y - loop[i].y) / (loop[j].y - loop[i].y) + loop[i].x))
+         in = !in;
+   return in;
+}
+
+// The one place the board meshes are built (PlasticMesh): the top face at z = 0 of the table rectangle with these holes cut
+bool BuildPlayfieldTop(const PinTable *const t, const vector<const PlayfieldHole *> &holes, const float thickness, const int detail, PlasticMesh::Mesh &top)
+{
+   const float w = t->m_right - t->m_left, h = t->m_bottom - t->m_top;
+   if (w <= 0.f || h <= 0.f)
+      return false;
+   const vector<PlasticMesh::CurvePoint> outline { { t->m_left, t->m_top, false }, { t->m_right, t->m_top, false }, { t->m_right, t->m_bottom, false }, { t->m_left, t->m_bottom, false } };
+   vector<PlasticMesh::Hole> cut;
+   for (const PlayfieldHole *const hole : holes)
+      cut.push_back(ToMeshHole(*hole));
+   PlasticMesh::Params params;
+   params.bottomCap = false; // Its bottom cap would face up into the wood and is never seen
+   params.height = -thickness;
+   params.thickness = thickness;
+   params.bevel = 0.f;
+   params.bevelSegments = 1;
+   params.flatten = PlasticMesh::FlattenTolerance(detail);
+   const float uvm[6] = { 1.f / w, 0.f, -t->m_left / w, 0.f, 1.f / h, -t->m_top / h };
+   for (int i = 0; i < 6; i++)
+      params.uvm[i] = uvm[i];
+   PlasticMesh::Result res;
+   if (!PlasticMesh::Build(outline, cut, params, res))
+      return false;
+   top = std::move(res.top);
+   return true;
+}
+
+// Straight walls from z = 0 down to -thickness along a closed loop. outward: the loop runs counter-clockwise (the board edge), else clockwise (a hole).
+// The right-hand normal of each edge points away from the wood either way. u = running length / (4 thickness), v = depth / thickness
+void AddPlayfieldWalls(const vector<PlasticMesh::CurvePoint> &loop, const float thickness, PlasticMesh::Mesh &m)
+{
+   const size_t n = loop.size();
+   if (n < 3)
+      return;
+   vector<Vertex2D> en(n); // right normal of edge i -> i+1
+   for (size_t i = 0; i < n; i++)
+   {
+      const PlasticMesh::CurvePoint &a = loop[i], &b = loop[(i + 1) % n];
+      const float dx = b.x - a.x, dy = b.y - a.y, l = sqrtf(dx * dx + dy * dy);
+      en[i] = l > 1e-6f ? Vertex2D(dy / l, -dx / l) : Vertex2D(0.f, 0.f);
+   }
+   const auto vertexNormal = [&](const size_t i, const size_t edge) // smooth across shallow turns (circles), sharp at corners
+   {
+      const Vertex2D &p = en[(i + n - 1) % n], &q = en[i % n];
+      if (p.x * q.x + p.y * q.y > 0.866f)
+      {
+         Vertex2D s(p.x + q.x, p.y + q.y);
+         const float l = sqrtf(s.x * s.x + s.y * s.y);
+         return l > 1e-6f ? Vertex2D(s.x / l, s.y / l) : en[edge];
+      }
+      return en[edge];
+   };
+   float along = 0.f;
+   const float uScale = 1.f / (4.f * thickness);
+   for (size_t i = 0; i < n; i++)
+   {
+      const size_t j = (i + 1) % n;
+      const PlasticMesh::CurvePoint &a = loop[i], &b = loop[j];
+      const float l = sqrtf((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
+      if (l <= 1e-6f)
+         continue;
+      const Vertex2D na = vertexNormal(i, i), nb = vertexNormal(j, i);
+      const unsigned base = static_cast<unsigned>(m.verts.size());
+      const float u0 = along * uScale, u1 = (along + l) * uScale;
+      m.verts.push_back({ a.x, a.y, -thickness, na.x, na.y, 0.f, u0, 1.f });
+      m.verts.push_back({ b.x, b.y, -thickness, nb.x, nb.y, 0.f, u1, 1.f });
+      m.verts.push_back({ b.x, b.y, 0.f, nb.x, nb.y, 0.f, u1, 0.f });
+      m.verts.push_back({ a.x, a.y, 0.f, na.x, na.y, 0.f, u0, 0.f });
+      m.idx.insert(m.idx.end(), { base, base + 1, base + 2, base, base + 2, base + 3 }); // As PlasticMesh's walls: (a0, a1, b1), (a0, b1, b0)
+      along += l;
+   }
+}
+}
+
+bool Primitive::IsPlayfieldPart() const
+{
+   return m_d.m_playfieldGen || ((m_d.m_plasticRole == kPlayfieldWallsRole || m_d.m_plasticRole == kPlayfieldFloorRole) && IsPlasticCompanion());
+}
+
+Primitive *Primitive::GetPlayfieldCompanion(const int role) const
+{
+   if (!m_d.m_playfieldGen || m_ptable == nullptr)
+      return nullptr;
+   const string &name = GetName();
+   for (IEditable *const part : m_ptable->GetParts())
+      if (part != static_cast<const IEditable *>(this) && part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_plasticRole == role
+         && StrCompareNoCase(static_cast<Primitive *>(part)->m_d.m_plasticHost, name))
+         return static_cast<Primitive *>(part);
+   return nullptr;
+}
+
+void Primitive::UpdatePlayfield()
+{
+   m_pfDirty = true;
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this); // RenderSetup rebuilds the meshes (the live buffers are not touched before)
+   else
+      RegeneratePlayfield();
+}
+
+void Primitive::RegeneratePlayfield()
+{
+   if (!m_d.m_playfieldGen || m_ptable == nullptr)
+      return;
+   const auto t0 = std::chrono::steady_clock::now();
+   const PinTable *const t = m_ptable;
+   const float thick = m_d.m_pfThickness;
+   const float tol = PlasticMesh::FlattenTolerance(m_d.m_pfDetail);
+
+   // Cut holes that leave the board or touch another cut hole are left out (red in the editor) until moved
+   const size_t n = m_pfHoles.size();
+   vector<vector<PlasticMesh::CurvePoint>> loops(n);
+   vector<FRect> box(n);
+   m_pfOverlap.assign(n, false);
+   vector<size_t> order;
+   for (size_t i = 0; i < n; i++)
+   {
+      if (!(m_pfHoles[i].flags & PlayfieldHole::Cut))
+         continue;
+      loops[i] = PlayfieldHoleLoop(m_pfHoles[i], tol);
+      if (loops[i].size() < 3)
+         continue;
+      FRect &b = box[i];
+      b.left = b.top = FLT_MAX;
+      b.right = b.bottom = -FLT_MAX;
+      for (const PlasticMesh::CurvePoint &p : loops[i])
+      {
+         b.left = min(b.left, p.x);
+         b.right = max(b.right, p.x);
+         b.top = min(b.top, p.y);
+         b.bottom = max(b.bottom, p.y);
+      }
+      if (b.left <= t->m_left || b.right >= t->m_right || b.top <= t->m_top || b.bottom >= t->m_bottom)
+         m_pfOverlap[i] = true;
+      order.push_back(i);
+   }
+   std::ranges::sort(order, [&box](const size_t a, const size_t b) { return box[a].left < box[b].left; });
+   for (size_t oi = 0; oi < order.size(); oi++) // ponytail: sweep on x, then every edge pair; a grid if PF-scale masks make this slow
+      for (size_t oj = oi + 1; oj < order.size() && box[order[oj]].left <= box[order[oi]].right; oj++)
+      {
+         const size_t i = order[oi], j = order[oj];
+         if (box[j].top > box[i].bottom || box[j].bottom < box[i].top)
+            continue;
+         const auto &a = loops[i], &b = loops[j];
+         bool touch = InsideLoop(a, b[0].x, b[0].y) || InsideLoop(b, a[0].x, a[0].y);
+         for (size_t p = 0; p < a.size() && !touch; p++)
+            for (size_t q = 0; q < b.size() && !touch; q++)
+               touch = SegmentsTouch(a[p], a[(p + 1) % a.size()], b[q], b[(q + 1) % b.size()]);
+         if (touch)
+            m_pfOverlap[i] = m_pfOverlap[j] = true;
+      }
+   vector<const PlayfieldHole *> cut, falls;
+   for (size_t i = 0; i < n; i++)
+      if ((m_pfHoles[i].flags & PlayfieldHole::Cut) && loops[i].size() >= 3 && !m_pfOverlap[i])
+      {
+         cut.push_back(&m_pfHoles[i]);
+         if ((m_pfHoles[i].flags & PlayfieldHole::FallsThrough) && m_d.m_pfFloor == 0) // Keep Existing: the existing floor decides where the ball falls
+            falls.push_back(&m_pfHoles[i]);
+      }
+
+   PlasticMesh::Mesh board, floor, walls;
+   if (!BuildPlayfieldTop(t, cut, thick, m_d.m_pfDetail, board) || !BuildPlayfieldTop(t, falls, thick, m_d.m_pfDetail, floor))
+   {
+      m_pfDirty = false;
+      return; // Degenerate table rectangle: the meshes stay as they are
+   }
+   // Walls: the board edge and every cut hole, then the backing (the floor face lowered, all on the dark rows of the plywood image)
+   {
+      const vector<PlasticMesh::CurvePoint> edge { { t->m_left, t->m_top, false }, { t->m_right, t->m_top, false }, { t->m_right, t->m_bottom, false }, { t->m_left, t->m_bottom, false } }; // Counter-clockwise, as the board's outline
+      AddPlayfieldWalls(edge, thick, walls);
+      for (size_t i = 0; i < n; i++)
+         if ((m_pfHoles[i].flags & PlayfieldHole::Cut) && loops[i].size() >= 3 && !m_pfOverlap[i])
+            AddPlayfieldWalls(loops[i], thick, walls);
+      const unsigned base = static_cast<unsigned>(walls.verts.size());
+      for (PlasticMesh::Vertex v : floor.verts)
+      {
+         v.z = -thick - 0.5f;
+         v.tu = 0.5f;
+         v.tv = 0.995f;
+         walls.verts.push_back(v);
+      }
+      for (const unsigned i : floor.idx)
+         walls.idx.push_back(base + i);
+   }
+
+   const auto setMesh = [](Primitive *const p, const PlasticMesh::Mesh &src)
+   {
+      p->m_mesh.Clear();
+      p->m_mesh.m_vertices.resize(src.verts.size());
+      for (size_t i = 0; i < src.verts.size(); i++)
+      {
+         const PlasticMesh::Vertex &v = src.verts[i];
+         p->m_mesh.m_vertices[i] = Vertex3D_NoTex2 { v.x, v.y, v.z, v.nx, v.ny, v.nz, v.tu, v.tv };
+      }
+      p->m_mesh.m_indices = src.idx;
+      p->m_d.m_vPosition = Vertex3Ds(0.f, 0.f, 0.f); // Table coordinates: identity transform, as the implicit playfield
+      p->m_d.m_vSize = Vertex3Ds(1.f, 1.f, 1.f);
+      for (float &v : p->m_d.m_aRotAndTra)
+         v = 0.f;
+      p->m_d.m_use3DMesh = true;
+      p->OnMeshVerticesChanged();
+      p->m_plasticPickDirty = true; // The editor refreshes the colliders (picking, and the floor's gameplay ones) next frame, never from here
+   };
+   setMesh(this, board);
+   if (Primitive *const comp = GetPlayfieldCompanion(kPlayfieldWallsRole); comp != nullptr)
+   {
+      comp->m_d.m_staticRendering = m_d.m_staticRendering;
+      setMesh(comp, walls);
+      if (comp->m_renderer != nullptr)
+         comp->m_renderer->ReinitRenderable(comp);
+   }
+   if (Primitive *const comp = GetPlayfieldCompanion(kPlayfieldFloorRole); comp != nullptr)
+   {
+      comp->m_d.m_collidable = m_d.m_pfFloor == 0;
+      comp->m_d.m_visible = false;
+      setMesh(comp, floor);
+      if (comp->m_renderer != nullptr)
+         comp->m_renderer->ReinitRenderable(comp);
+   }
+   if (m_renderer)
+      m_renderer->MarkStaticPrepassDirty(); // The editor's Preview mode draws the static prepass
+   m_pfDirty = false;
+   m_pfBuildMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
+bool Primitive::IsOldPlayfieldName(const string &name)
+{
+   if (name.size() < 18 || !StrCompareNoCase(name.substr(0, 18), "playfield_mesh_old"s))
+      return false;
+   return std::all_of(name.begin() + 18, name.end(), [](const char c) { return c >= '0' && c <= '9'; });
+}
+
+vector<Primitive *> Primitive::FindPlayfieldFloors(PinTable *const table)
+{
+   vector<Primitive *> res;
+   if (table == nullptr)
+      return res;
+   const float tw = table->m_right - table->m_left, th = table->m_bottom - table->m_top;
+   for (IEditable *const part : table->GetParts())
+   {
+      if (part->GetItemType() != eItemPrimitive || table->IsPlayerSessionObject(part))
+         continue;
+      Primitive *const p = static_cast<Primitive *>(part);
+      if (p->IsPlayfieldPart() || !p->m_d.m_collidable || p->m_d.m_toy || !p->m_d.m_use3DMesh || p->m_mesh.NumVertices() == 0 || p->m_mesh.NumVertices() > 2000000)
+         continue;
+      const Matrix3D &m = p->RecalculateMatrices();
+      float top = -FLT_MAX, x0 = FLT_MAX, x1 = -FLT_MAX, y0 = FLT_MAX, y1 = -FLT_MAX;
+      for (const Vertex3D_NoTex2 &v : p->m_mesh.m_vertices)
+      {
+         const Vertex3Ds w = m * Vertex3Ds(v.x, v.y, v.z);
+         top = max(top, w.z);
+         x0 = min(x0, w.x);
+         x1 = max(x1, w.x);
+         y0 = min(y0, w.y);
+         y1 = max(y1, w.y);
+      }
+      const float cover = max(0.f, min(x1, table->m_right) - max(x0, table->m_left)) * max(0.f, min(y1, table->m_bottom) - max(y0, table->m_top));
+      if (fabsf(top) <= 1.f && cover > 0.5f * tw * th)
+         res.push_back(p);
+   }
+   return res;
+}
+
+void Primitive::SyncPlayfieldFloorPhysics(PinTable *const table)
+{
+   if (table == nullptr)
+      return;
+   Primitive *floor = nullptr;
+   for (IEditable *const part : table->GetParts())
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
+      {
+         // The floor follows the table unless it took the values of the separate floor collider it replaced (decided when Own was chosen, saved with the board)
+         if (static_cast<Primitive *>(part)->m_d.m_pfFloorFollows)
+            floor = static_cast<Primitive *>(part)->GetPlayfieldCompanion(kPlayfieldFloorRole);
+         break;
+      }
+   if (floor == nullptr) // No board: nothing more is looked at (a table without a board is untouched)
+      return;
+   floor->m_d.m_overwritePhysics = true;
+   GetTablePlayfieldPhysics(table, floor->m_d.m_friction, floor->m_d.m_elasticity, floor->m_d.m_elasticityFalloff, floor->m_d.m_scatter);
+   if (g_pplayer && g_pplayer->m_physics && g_pplayer->m_ptable == table)
+      g_pplayer->m_physics->Update(floor);
+}
+
+void Primitive::GetTablePlayfieldPhysics(const PinTable *const table, float &friction, float &elasticity, float &falloff, float &scatter)
+{
+   if (table->m_overridePhysics != 0)
+   {
+      const int set = table->m_overridePhysics - 1;
+      friction = max(table->GetSettings().GetPlayer_TablePhysicsContactFriction(set), 0.f); // As Player::Init: the setting is unbounded, friction can not be negative
+      elasticity = table->GetSettings().GetPlayer_TablePhysicsElasticity(set);
+      falloff = table->GetSettings().GetPlayer_TablePhysicsElasticityFalloff(set);
+      scatter = table->GetSettings().GetPlayer_TablePhysicsScatterAngle(set);
+   }
+   else
+   {
+      friction = table->m_friction;
+      elasticity = table->m_elasticity;
+      falloff = table->m_elasticityFalloff;
+      scatter = table->m_scatter;
+   }
+}
+
+//////////////////////////////
 // Save and Load
 //////////////////////////////
 
@@ -2643,6 +3009,54 @@ static WireRail::Fixture LoadRailFixture(IObjectReader &reader)
       true);
    WireRail::ClampFixture(f);
    return f;
+}
+
+// A Playfield Maker hole (PFHL, a skippable sub object)
+static void SavePlayfieldHole(IObjectWriter &writer, const PlayfieldHole &h)
+{
+   writer.BeginObject(FID(PFHL), true, true);
+   writer.WriteInt(FID(PFHT), h.type);
+   writer.WriteInt(FID(PFHF), h.flags);
+   writer.WriteVector2(FID(PFHC), h.centre);
+   writer.WriteFloat(FID(PFHD), h.diameter);
+   if (h.type == PlayfieldHole::Slot)
+      writer.WriteVector2(FID(PFHE), h.end);
+   if (h.type == PlayfieldHole::Polygon)
+      for (const Vertex2D &v : h.polygon)
+         writer.WriteVector2(FID(PFHP), v);
+   writer.EndObject();
+}
+
+static PlayfieldHole LoadPlayfieldHole(IObjectReader &reader)
+{
+   PlayfieldHole h;
+   size_t dropped = 0;
+   reader.AsObject(
+      [&h, &dropped](int tag, IObjectReader &r)
+      {
+         switch (tag)
+         {
+         case FID(PFHT): h.type = clamp(r.AsInt(), 0, 2); break;
+         case FID(PFHF): h.flags = r.AsInt() & 15; break;
+         case FID(PFHC): h.centre = r.AsVector2(); break;
+         case FID(PFHD): h.diameter = clamp(r.AsFloat(), 0.f, 10000.f); break;
+         case FID(PFHE): h.end = r.AsVector2(); break;
+         case FID(PFHP):
+         {
+            const Vertex2D v = r.AsVector2();
+            if (h.polygon.size() < static_cast<size_t>(kMaxPlayfieldHolePoints))
+               h.polygon.push_back(v);
+            else
+               dropped++;
+            break;
+         }
+         }
+         return true;
+      },
+      true);
+   if (dropped > 0)
+      PLOGW << "Playfield hole: " << dropped << " polygon points over the cap of " << kMaxPlayfieldHolePoints << " skipped";
+   return h;
 }
 
 void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
@@ -2823,6 +3237,19 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
       m_plasticCurve.SavePoints(writer, FID(GRPT), true);
       m_plasticHoles.SavePoints(writer, FID(PHSK), true);
    }
+   if (m_d.m_playfieldGen) // Optional fields: only written for a Playfield Maker board, so other primitives save byte-identical
+   {
+      writer.WriteBool(FID(PFGN), true);
+      writer.WriteFloat(FID(PFTK), m_d.m_pfThickness);
+      writer.WriteInt(FID(PFFL), m_d.m_pfFloor);
+      writer.WriteBool(FID(PFFT), m_d.m_pfFloorFollows);
+      writer.WriteString(FID(PFWM), m_d.m_pfWoodMask);
+      writer.WriteInt(FID(PFMM), m_d.m_pfMaskMode);
+      writer.WriteFloat(FID(PFMH), m_d.m_pfMinHole);
+      writer.WriteInt(FID(PFDT), m_d.m_pfDetail);
+      for (const PlayfieldHole &h : m_pfHoles) // Skippable sub objects: older versions skip them
+         SavePlayfieldHole(writer, h);
+   }
    if (!m_d.m_plasticHost.empty())
    {
       writer.WriteString(FID(PHST), m_d.m_plasticHost);
@@ -2993,7 +3420,24 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PHSK): m_plasticHoles.LoadPointToken(reader, true); break;
          case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break; // Holes as saved by earlier builds
          case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
-         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kRailChannelRole); break;
+         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kPlayfieldFloorRole); break;
+         case FID(PFGN): m_d.m_playfieldGen = reader.AsBool(); break;
+         case FID(PFTK): m_d.m_pfThickness = clamp(reader.AsFloat(), 1.f, 200.f); break;
+         case FID(PFFL): m_d.m_pfFloor = clamp(reader.AsInt(), 0, 1); break;
+         case FID(PFFT): m_d.m_pfFloorFollows = reader.AsBool(); break;
+         case FID(PFWM): m_d.m_pfWoodMask = reader.AsString(); break;
+         case FID(PFMM): m_d.m_pfMaskMode = clamp(reader.AsInt(), 0, 3); break;
+         case FID(PFMH): m_d.m_pfMinHole = clamp(reader.AsFloat(), 0.f, 1000.f); break;
+         case FID(PFDT): m_d.m_pfDetail = clamp(reader.AsInt(), 1, 5); break;
+         case FID(PFHL):
+         {
+            const PlayfieldHole h = LoadPlayfieldHole(reader);
+            if (m_pfHoles.size() < static_cast<size_t>(kMaxPlayfieldHoles))
+               m_pfHoles.push_back(h);
+            else
+               PLOGW << "Playfield Maker: a hole over the cap of " << kMaxPlayfieldHoles << " skipped";
+            break;
+         }
          case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
          case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
          case FID(M3VN):
@@ -3221,6 +3665,12 @@ void Primitive::Load(IObjectReader& reader)
          m_renderer->ReinitRenderable(this);
       else
          RegeneratePlastic();
+   }
+   // Playfield Maker board, live (an undo or redo: the records skip meshes, and OverwritePart keeps the edited one): rebuild it. A file load keeps the saved meshes
+   if (m_d.m_playfieldGen && m_renderer)
+   {
+      m_pfDirty = true;
+      m_renderer->ReinitRenderable(this);
    }
 }
 

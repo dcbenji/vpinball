@@ -284,6 +284,25 @@ bool ReferenceImage::LoadFromFile(EditorUI &ed, const string &file, const bool k
    return true;
 }
 
+bool ReferenceImage::OpenFile(EditorUI &ed, const string &file)
+{
+   EnsureLoaded(ed);
+   if (!LoadFromFile(ed, file, false))
+   {
+      ed.Report(m_error);
+      return false;
+   }
+   m_saveDue = true;
+   m_panelOpen = true;
+   return true;
+}
+
+const string &ReferenceImage::GetFile(EditorUI &ed)
+{
+   EnsureLoaded(ed);
+   return m_p.file;
+}
+
 void ReferenceImage::CenterOnTable(EditorUI &ed)
 {
    m_p.x = 0.5f * (ed.m_table->m_left + ed.m_table->m_right);

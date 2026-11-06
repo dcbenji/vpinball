@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 #include "PartLibraryPanel.h"
+#include "PlayfieldMaker.h"
 
 #include "core/Settings.h"
 #include "core/VPApp.h"
@@ -455,6 +456,9 @@ void PartLibraryPanel::Update()
       for (const auto &part : m_editor.m_multiSel)
          parts.push_back(part->GetEditable());
       PlasticFromAtlas::AddCompanions(parts); // A plastic is exported with its clear and bevel parts
+      PlayfieldMaker::StripBoard(m_editor, parts); // The playfield follows the table
+      if (parts.empty())
+         return;
       VPXFileFeedback feedback;
       m_editor.RestorePartsVisibility(); // Export the authored visibility, not the editor display state
       const HRESULT hr = m_editor.m_table->SavePartsToJSONPack(file, parts, feedback);
@@ -1967,6 +1971,11 @@ void PartLibraryPanel::ImportPack(const std::filesystem::path &path)
       m_editor.m_liveUI.PushNotification("Failed to import '"s + PathToUTF8(path) + '\'', 10000);
       return;
    }
+   if (PlayfieldMaker::RefuseImport(m_editor, temp))
+   {
+      temp->Release();
+      return;
+   }
 
    PinTable *const table = m_editor.m_table;
    PartGroup *const target = m_editor.GetPartGroupForNewPart();
@@ -2041,6 +2050,12 @@ void PartLibraryPanel::StartPlacement()
    {
       temp->Release();
       m_editor.m_liveUI.PushNotification("Failed to load '"s + PathToUTF8(m_placementPack) + '\'', 10000);
+      m_placementPack.clear();
+      return;
+   }
+   if (PlayfieldMaker::RefuseImport(m_editor, temp))
+   {
+      temp->Release();
       m_placementPack.clear();
       return;
    }

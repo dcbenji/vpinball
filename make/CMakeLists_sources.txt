@@ -385,6 +385,8 @@ set(VPX_SOURCES
    src/ui/live/editor/RubberBetweenPosts.cpp
    src/ui/live/editor/PlasticFromAtlas.h
    src/ui/live/editor/PlasticFromAtlas.cpp
+   src/ui/live/editor/PlayfieldMaker.h
+   src/ui/live/editor/PlayfieldMaker.cpp
    src/ui/live/editor/ReferenceImage.h
    src/ui/live/editor/ReferenceImage.cpp
    src/ui/live/editor/WireRailPanel.cpp

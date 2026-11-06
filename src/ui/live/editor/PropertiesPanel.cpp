@@ -30,6 +30,7 @@
 #include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "PlayfieldMaker.h"
 #include "utils/color.h"
 
 #include "PropertyPane.h"
@@ -995,6 +996,10 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      const auto addEdited = [&editor, &companionMap](IEditable *const part)
                      {
                         editor.m_liveEditedParts.insert(part);
+                        if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
+                           for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
+                              if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
+                                 editor.m_liveEditedParts.insert(comp);
                         if (part->GetItemType() == eItemPrimitive)
                            for (const int role : { 1, 2 })
                               if (Primitive *const comp = companionMap ? companionMap->Get(static_cast<Primitive *>(part), role) : PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part), role); comp != nullptr)
@@ -1036,6 +1041,11 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
             if (part->GetItemType() == eItemPrimitive)
                for (const int role : { 1, 2 })
                   if (Primitive *const comp = companionMap ? companionMap->Get(static_cast<Primitive *>(part), role) : PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part), role); comp != nullptr)
+                     editor.m_undo.MarkForUndo(comp, true, false);
+            // The Playfield section writes the walls (Plywood) and the floor (Floor, its physics): in the board's step
+            if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
+               for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
+                  if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                      editor.m_undo.MarkForUndo(comp, true, false);
          };
          if (props.IsMultiEdit())
@@ -1219,6 +1229,13 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
    if (props.BeginSection("Visuals"s))
    {
       props.Separator("Playfield"s);
+      if (PlayfieldMaker::Board(editor.m_table) != nullptr && !editor.IsInspectMode())
+      {
+         props.FlushRow();
+         if (ImGui::Button("Playfield..."))
+            PlayfieldMaker::SelectBoard(editor);
+         ImGui::SetItemTooltip("Select the Playfield Maker board: its layers, floor and holes");
+      }
       props.MaterialCombo<PinTable>(
          table, "Material"s, //
          [](const PinTable *table) { return table->m_playfieldMaterial; }, //
@@ -1320,19 +1337,19 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
       props.InputFloat<PinTable>(
          table, "Playfield Elasticity"s, //
          [](const PinTable *table) { return table->m_elasticity; }, //
-         [](PinTable *table, float v) { table->m_elasticity = v; }, PropertyPane::Unit::None, 3);
+         [](PinTable *table, float v) { table->m_elasticity = v; Primitive::SyncPlayfieldFloorPhysics(table); }, PropertyPane::Unit::None, 3);
       props.InputFloat<PinTable>(
          table, "Playfield Elasticity Falloff"s, //
          [](const PinTable *table) { return table->m_elasticityFalloff; }, //
-         [](PinTable *table, float v) { table->m_elasticityFalloff = v; }, PropertyPane::Unit::None, 3, "Reduce elasticity for slower impacts (0 = constant elasticity)");
+         [](PinTable *table, float v) { table->m_elasticityFalloff = v; Primitive::SyncPlayfieldFloorPhysics(table); }, PropertyPane::Unit::None, 3, "Reduce elasticity for slower impacts (0 = constant elasticity)");
       props.InputFloat<PinTable>(
          table, "Playfield Friction"s, //
          [](const PinTable *table) { return table->m_friction; }, //
-         [](PinTable *table, float v) { table->m_friction = max(v, 0.f); }, PropertyPane::Unit::None, 3);
+         [](PinTable *table, float v) { table->m_friction = max(v, 0.f); Primitive::SyncPlayfieldFloorPhysics(table); }, PropertyPane::Unit::None, 3);
       props.InputFloat<PinTable>(
          table, "Playfield Scatter Angle"s, //
          [](const PinTable *table) { return table->m_scatter; }, //
-         [](PinTable *table, float v) { table->m_scatter = v; }, PropertyPane::Unit::Degree, 1, "Random angle added to the ball's bounce on the playfield");
+         [](PinTable *table, float v) { table->m_scatter = v; Primitive::SyncPlayfieldFloorPhysics(table); }, PropertyPane::Unit::Degree, 1, "Random angle added to the ball's bounce on the playfield");
       props.InputFloat<PinTable>(
          table, "Default Elements Scatter Angle"s, //
          [](const PinTable *table) { return table->m_defaultScatter; }, //
@@ -1340,7 +1357,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
       props.Combo<PinTable>(
          table, "Overwrite Physics by Global Set"s, vector<string> { "Disable"s, "Set1"s, "Set2"s, "Set3"s, "Set4"s, "Set5"s, "Set6"s, "Set7"s, "Set8"s }, //
          [](const PinTable *table) { return table->m_overridePhysics; }, //
-         [](PinTable *table, int v) { table->m_overridePhysics = v; }, "Apply a predefined global physics set to the whole table");
+         [](PinTable *table, int v) { table->m_overridePhysics = v; Primitive::SyncPlayfieldFloorPhysics(table); }, "Apply a predefined global physics set to the whole table");
       props.Checkbox<PinTable>(
          table, "including Flipper Physics"s, //
          [](const PinTable *table) { return table->m_overridePhysicsFlipper; }, //
@@ -2162,7 +2179,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
       {
          vector<IEditable *> candidates;
          for (IEditable *const part : editedTable->GetParts())
-            if (part->GetIScriptable() != nullptr && !PlasticFromAtlas::IsCompanion(part) && std::ranges::find(members, part) == members.end())
+            if (part->GetIScriptable() != nullptr && !PlasticFromAtlas::IsCompanion(part) && !PlayfieldMaker::IsPart(part) && std::ranges::find(members, part) == members.end()) // (the playfield follows the table)
                candidates.push_back(part);
          std::ranges::sort(candidates, [](const IEditable *a, const IEditable *b) { return StrLessNoCase(a->GetName(), b->GetName()); });
          for (IEditable *const part : candidates)

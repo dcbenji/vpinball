@@ -4,6 +4,7 @@
 #include "EditorChrome.h"
 #include "SetOrigin.h"
 #include "RubberBetweenPosts.h"
+#include "PlayfieldMaker.h"
 #include "IconsLucide.h"
 #include "EditorTheme.h"
 #include "PropertyPane.h"
@@ -945,6 +946,8 @@ void EditorChrome::RenderMenuBar()
          }
          if (ImGui::MenuItem("Add Plastic from Atlas", nullptr, false, PlasticFromAtlas::CanStart(editor)))
             PlasticFromAtlas::Start(editor);
+         if (ImGui::MenuItem("Add Playfield", nullptr, false, PlayfieldMaker::CanAdd(editor)))
+            PlayfieldMaker::Add(editor);
          if (ImGui::BeginMenu("Snap"))
          {
             // The 3D cursor (Shift+right click places it): see EditorUI::RunCursorOp
@@ -1600,6 +1603,15 @@ void EditorChrome::RenderToolbar()
             ImGui::CloseCurrentPopup();
          }
          ImGui::SetItemTooltip("Trace a plastic on a print atlas image");
+         ImGui::BeginDisabled(!PlayfieldMaker::CanAdd(editor));
+         if (ImGui::Selectable("Playfield"))
+         {
+            PlayfieldMaker::Add(editor);
+            ImGui::CloseCurrentPopup();
+         }
+         ImGui::EndDisabled();
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_ForTooltip)) // Also while greyed (locked table, play test, point edit)
+            ImGui::SetTooltip("A playfield with layer slots, plywood holes and its own floor (Playfield Maker)");
          ImGui::EndPopup();
       }
    }

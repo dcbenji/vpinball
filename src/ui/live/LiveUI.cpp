@@ -300,6 +300,19 @@ void LiveUI::AddMousePosEvent(bool isTouch, float x, float y) const
    }
 }
 
+void LiveUI::MapWindowPoint(float &x, float &y) const
+{
+   const ImGuiIO &io = ImGui::GetIO();
+   const float wx = x, wy = y;
+   switch (m_rotate) // As AddMousePosEvent
+   {
+   case 1: x = wy; y = io.DisplaySize.y - wx; break;
+   case 2: x = io.DisplaySize.x - wx; y = io.DisplaySize.y - wy; break;
+   case 3: x = io.DisplaySize.x - wy; y = wx; break;
+   default: break;
+   }
+}
+
 void LiveUI::HandleSDLEvent(SDL_Event &e) const
 {
    if (e.type == SDL_EVENT_MOUSE_MOTION)

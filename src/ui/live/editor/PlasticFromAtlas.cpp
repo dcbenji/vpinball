@@ -28,7 +28,7 @@ namespace
 {
 string s_lastImage; // The atlas used last, offered first next time
 
-bool IsHost(const IEditable *part) { return part != nullptr && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail); } // A Wire Rail's channel part is kept the same way
+bool IsHost(const IEditable *part) { return part != nullptr && part->GetItemType() == eItemPrimitive && (static_cast<const Primitive *>(part)->m_d.m_plasticGen || static_cast<const Primitive *>(part)->m_d.m_wireRail || static_cast<const Primitive *>(part)->m_d.m_playfieldGen); } // A Wire Rail's channel part and the Playfield Maker's walls and floor are kept the same way
 // The point edit tools (backdrop, bow, outline) are the plastic generator's only; the companion handling also keeps a Wire Rail's channel part
 bool IsPointEditHost(const IEditable *part) { return IsHost(part) && static_cast<const Primitive *>(part)->m_d.m_plasticGen; }
 

@@ -16,6 +16,7 @@
 #include "Selection.h"
 #include "SetOrigin.h"
 #include "RubberBetweenPosts.h"
+#include "PlayfieldMaker.h"
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
@@ -219,6 +220,7 @@ void SearchPalette::BuildOperators()
          ed.m_addWireRail = true;
       });
    add("Object" + sep + "Add Plastic from Atlas", "", [&ed]() { return PlasticFromAtlas::CanStart(ed); }, [&ed]() { PlasticFromAtlas::Start(ed); });
+   add("Object" + sep + "Add Playfield", "", [&ed]() { return PlayfieldMaker::CanAdd(ed); }, [&ed]() { PlayfieldMaker::Add(ed); });
    for (const auto &[name, op] : { std::pair<const char *, EditorUI::CursorOp> { "Cursor to Selected", EditorUI::CursorOp::CursorToSelected },
            { "Cursor to World Origin", EditorUI::CursorOp::CursorToWorldOrigin }, { "Cursor to Grid", EditorUI::CursorOp::CursorToGrid },
            { "Selection to Cursor", EditorUI::CursorOp::SelectionToCursor }, { "Selection to Cursor (Keep Offset)", EditorUI::CursorOp::SelectionToCursorKeepOffset },

@@ -200,8 +200,9 @@ public:
    // Moves the cursor below a field whose label wrapped to two lines (called by the next row, sections and separators)
    void FlushRow();
 
-   void Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName);
-   void EditableHeader(const string& typeName, IEditable* editable);
+   // nameLocked: the reason the name can not change (the field is disabled and says why), else null
+   void Header(const string& typeName, const std::function<string()>& getName, const std::function<void(const string&)>& setName, const char* nameLocked = nullptr);
+   void EditableHeader(const string& typeName, IEditable* editable, const char* nameLocked = nullptr);
    void Separator(const string& label);
    template <class T> void Checkbox(T* obj, const string& label, const std::function<bool(const T*)>& getter, const std::function<void(T*, bool)>& setter, const char* tooltip = nullptr);
    template <class T> void InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip = nullptr);

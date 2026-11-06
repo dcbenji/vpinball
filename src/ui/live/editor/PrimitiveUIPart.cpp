@@ -4,6 +4,8 @@
 #include "core/extern.h"
 #include "core/player.h"
 #include "PlasticFromAtlas.h"
+#include "PlayfieldMaker.h"
+#include "ui/live/LiveUI.h"
 #include "math/matrix.h"
 #include "utils/color.h"
 
@@ -124,8 +126,8 @@ PrimitiveUIPart::PrimitiveUIPart(Primitive* primitive)
 
 PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform)
 {
-   if (m_part->IsPlasticCompanion())
-      return TM_None; // Derived from its host: not moved, and not picked by a box select
+   if (m_part->IsPlasticCompanion() || m_part->m_d.m_playfieldGen)
+      return TM_None; // Derived from its host (the Playfield Maker board: from the table): not moved, and not picked by a box select
    if (m_part->m_d.m_plasticGen)
       return GetCurveTransform(transform, m_part->m_d.m_plasticHeight + m_part->m_d.m_plasticThickness);
    if (m_part->m_d.m_wireGen)
@@ -148,7 +150,7 @@ PrimitiveUIPart::TransformMask PrimitiveUIPart::GetTransform(Matrix3D& transform
 
 void PrimitiveUIPart::SetTransform(const vec3& pos, const vec3& scale, const vec3& rot)
 {
-   if (m_part->IsPlasticCompanion())
+   if (m_part->IsPlasticCompanion() || m_part->m_d.m_playfieldGen)
       return;
    if (m_part->m_d.m_plasticGen)
    {
@@ -297,7 +299,20 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
             UpdateCurveSection(p);
             UpdateRailPanel(p);
          });
-   props.EditableHeader(m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireRail ? "Wire Rail"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part);
+   if (m_part->m_d.m_playfieldGen) // The board is made here: above the tabs, as a rail is
+      props.PrependAfterHeader(
+         [this](PropertyPane& p)
+         {
+            if (p.IsHarvest()) // Not in the F3 palette (the slots, the drop rectangles and the popups belong to the panel)
+               return;
+            if (p.BeginSection("Playfield"s))
+            {
+               PlayfieldMaker::RenderSection(g_pplayer->m_liveUI->m_editorUI, p, m_part);
+               p.EndSection();
+            }
+         });
+   props.EditableHeader(m_part->m_d.m_playfieldGen ? "Playfield"s : m_part->m_d.m_plasticGen ? "Plastic from Atlas"s : m_part->m_d.m_wireRail ? "Wire Rail"s : m_part->m_d.m_wireGen ? "Metal Wire Guide"s : "Primitive"s, m_part,
+      m_part->m_d.m_playfieldGen ? "The playfield is the part named playfield_mesh: the board keeps that name" : nullptr);
 
    if (!m_part->m_d.m_wireRail)
       UpdateCurveSection(props);
@@ -880,7 +895,7 @@ void PrimitiveUIPart::UpdatePropertyPane(PropertyPane& props)
       props.EndSection();
    }
 
-   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && !m_part->IsPlasticCompanion() && props.BeginSection("Position"s))
+   if (!props.GetEditedPart<Primitive>(m_part)->m_d.m_wireGen && !props.GetEditedPart<Primitive>(m_part)->m_d.m_plasticGen && !m_part->m_d.m_playfieldGen && !m_part->IsPlasticCompanion() && props.BeginSection("Position"s))
    {
       props.Separator("Position, Rotation & Size"s);
       props.InputFloat3<Primitive>(

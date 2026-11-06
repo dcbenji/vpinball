@@ -3390,7 +3390,7 @@ vector<IEditable *> PinTable::ImportParts(PinTable *const source, PartGroup *con
             --lastNonDigit;
          part->SetName(GetUniqueName(input.substr(0, lastNonDigit)));
       }
-      if (part->GetItemType() == eItemPrimitive && (static_cast<Primitive *>(part)->m_d.m_plasticGen || static_cast<Primitive *>(part)->m_d.m_wireRail))
+      if (part->GetItemType() == eItemPrimitive && (static_cast<Primitive *>(part)->m_d.m_plasticGen || static_cast<Primitive *>(part)->m_d.m_wireRail || static_cast<Primitive *>(part)->m_d.m_playfieldGen))
          packHosts.emplace_back(oldName, part->GetName());
       if (part->GetPartGroup() == nullptr)
          part->SetPartGroup(targetGroup);
@@ -6929,6 +6929,7 @@ void PinTable::ImportVPP(const std::filesystem::path &filename)
       ShowError("Error parsing physics settings file");
    }
    xmlDoc.Clear();
+   Primitive::SyncPlayfieldFloorPhysics(this); // A Playfield Maker floor with the table's values follows them
 }
 
 #define EXPORT_VPP_ELEMENT(getter, idx, tab) \

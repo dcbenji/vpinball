@@ -511,6 +511,15 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PHSK), "plastic_holes" }, // Holes, saved skippable. The later entry wins the name on load
             { FID(PHST), "plastic_host" },
             { FID(PHRL), "plastic_role" },
+            { FID(PFGN), "playfield_gen" },
+            { FID(PFTK), "playfield_thickness" },
+            { FID(PFFL), "playfield_floor" },
+            { FID(PFFT), "playfield_floor_follows_table" },
+            { FID(PFWM), "playfield_wood_mask" },
+            { FID(PFMM), "playfield_mask_mode" },
+            { FID(PFMH), "playfield_min_hole" },
+            { FID(PFDT), "playfield_detail" },
+            { FID(PFHL), "playfield_holes" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
@@ -899,6 +908,15 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(RFFA), "foot_connected_arm_length" },
       });
 
+      m[JSONSerializer::kPlayfieldHoleNode] = MakeMap({
+         { FID(PFHT), "type" },
+         { FID(PFHF), "flags" },
+         { FID(PFHC), "centre" },
+         { FID(PFHD), "diameter" },
+         { FID(PFHE), "end" },
+         { FID(PFHP), "points" },
+      }, { FID(PFHP) });
+
       m[JSONSerializer::kPinBinaryNode] = MakeMap({
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(SIZE), "size" }, { FID(DATA), "data" }, // Pack-relative path of the binary file holding the data
       });
@@ -1048,6 +1066,7 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    case FID(PHLS):
    case FID(PHSK): return kDragPointNode;
    case FID(RFIX): return kRailFixtureNode;
+   case FID(PFHL): return kPlayfieldHoleNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
    case FID(JPEG): return kPinBinaryNode;

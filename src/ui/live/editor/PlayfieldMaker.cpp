@@ -1,0 +1,1434 @@
+// license:GPLv3+
+
+#include "core/stdafx.h"
+#include "core/editablereg.h"
+#include "core/player.h"
+#include "core/FileLocator.h"
+#include "core/VPApp.h"
+#include "core/SettingsService.h"
+#include "PlayfieldMaker.h"
+#include "PropertyPane.h"
+#include "EditorUIPart.h"
+#include "LiveRenderContext.h"
+#include "Selection.h"
+#include "ui/live/EditorUI.h"
+#include "ui/live/LiveUI.h"
+#include "math/PlasticMesh.h"
+#include "parts/Material.h"
+#include "parts/PartGroup.h"
+#include "parts/primitive.h"
+#include "physics/PhysicsEngine.h"
+#include "renderer/Renderer.h"
+#include "renderer/Texture.h"
+
+namespace VPX::EditorUI
+{
+
+namespace
+{
+constexpr float kVPUPerInch = 47.06f;
+constexpr const char *kPlywood = "Playfield Plywood"; // The image and the material of the walls
+
+enum Slot { Paint, Shine, Bump, InsertPrint, WoodMask, Plywood, Glow, Blueprint, SlotCount };
+constexpr const char *kSlotNames[SlotCount] = { "Paint", "Shine", "Bump", "Insert Print", "Wood Mask", "Plywood", "Glow", "Blueprint" };
+constexpr const char *kSlotTips[SlotCount] = {
+   "The table's playfield image (albedo)",
+   "Occlusion, roughness and metal packed (the board's ORM map)",
+   "The board's normal map",
+   "The print over the traced inserts: rgb the art, alpha clear where the insert shows",
+   "Holes as black on white (or white on black, or transparent): Find Holes reads it, it is not drawn",
+   "The image of the hole walls; its last rows are the dark backing",
+   "The board's emission map",
+   "Opens Reference Image with this file (view only, not table data)",
+};
+
+struct Preset
+{
+   const char *name;
+   bool slot;
+   float a, b; // round: diameter; slot: length (end to end) and width, inches
+};
+constexpr Preset kPresets[] = { { "Flipper shaft 0.504 in", false, 0.504f, 0.f }, { "GI 0.58 in", false, 0.58f, 0.f }, { "Standup opening 1.1 in", false, 1.1f, 0.f },
+   { "Rollover slot 1.69 x 0.185 in", true, 1.69f, 0.185f } };
+
+// One editor per session: the maker's editor state
+struct State
+{
+   int placing = 0; // 0 none, 1 round, 2 slot
+   float roundDia = 0.58f * kVPUPerInch;
+   float slotLength = 1.69f * kVPUPerInch, slotWidth = 0.185f * kVPUPerInch;
+   const Primitive *board = nullptr; // The board the selected hole belongs to
+   int selected = -1;
+   bool grabbing = false;
+   PlayfieldHole grabOrigin;
+   Vertex2D grabStart { 0.f, 0.f };
+   bool rebuildOnRelease = false; // A number field edit: the board is rebuilt once the field is let go, never per frame of a drag
+   std::shared_ptr<vector<string>> pendingLoad; // The Load... dialog's answer (it comes back on another thread)
+   int pendingSlot = -1;
+   string dropPath;
+   ImVec2 dropPos { 0.f, 0.f };
+   int dropFrame = -1;
+   struct SlotRect
+   {
+      int slot;
+      ImVec2 a, b;
+   };
+   vector<SlotRect> rects; // The slot rows as drawn last frame (screen coordinates), for the drop test
+   bool showGlow = false, showBlueprint = false;
+   bool printAll = false;
+   uint64_t floorsKey = ~0ull;
+   size_t floorsParts = 0;
+   bool floorsStale = true;
+   vector<Primitive *> floors; // Collidable floor colliders (cached until the history or the part count changes)
+} s;
+
+
+int SelectedHole(const Primitive *board)
+{
+   if (board == nullptr || s.board != board || s.selected < 0 || s.selected >= static_cast<int>(board->m_pfHoles.size()))
+      return -1;
+   return s.selected;
+}
+
+void SelectHole(const Primitive *board, const int index)
+{
+   s.board = board;
+   s.selected = index;
+}
+
+
+
+Primitive *OldPlayfield(const PinTable *t)
+{
+   for (IEditable *const part : t->GetParts())
+      if (part->GetItemType() == eItemPrimitive && !t->IsPlayerSessionObject(part) && Primitive::IsOldPlayfieldName(part->GetName()))
+         return static_cast<Primitive *>(part);
+   return nullptr;
+}
+
+// The values a floor collider plays with (its physics material unless overwritten)
+void EffectivePhysics(const PinTable *t, const Primitive *p, float &friction, float &elasticity, float &falloff, float &scatter)
+{
+   const Material *const mat = t->GetMaterial(p->m_d.m_szPhysicsMaterial);
+   if (!p->m_d.m_overwritePhysics && mat != nullptr && !t->IsDummyMaterial(mat))
+   {
+      friction = mat->m_fFriction;
+      elasticity = mat->m_fElasticity;
+      falloff = mat->m_fElasticityFalloff;
+      scatter = mat->m_fScatterAngle;
+   }
+   else
+   {
+      friction = p->m_d.m_friction;
+      elasticity = p->m_d.m_elasticity;
+      falloff = p->m_d.m_elasticityFalloff;
+      scatter = p->m_d.m_scatter;
+   }
+}
+
+// Own floor: the values of the separate floor collider it replaces, else the table's effective playfield values, which it then follows. Decided here (when
+// Own is chosen, and at Add) and kept on the board (m_pfFloorFollows): a later Turn Collision Off on that collider does not change it, and once the floor took
+// a collider's values (at Add, while Keep Existing), choosing Own after that collider's collision was turned off keeps them
+void CopyFloorPhysics(PinTable *const t, Primitive *const board, Primitive *const floor)
+{
+   if (board == nullptr || floor == nullptr)
+      return;
+   floor->m_d.m_overwritePhysics = true;
+   for (const Primitive *const p : Primitive::FindPlayfieldFloors(t))
+      if (!Primitive::IsOldPlayfieldName(p->GetName()))
+      {
+         EffectivePhysics(t, p, floor->m_d.m_friction, floor->m_d.m_elasticity, floor->m_d.m_elasticityFalloff, floor->m_d.m_scatter);
+         board->m_d.m_pfFloorFollows = false;
+         return;
+      }
+   if (!board->m_d.m_pfFloorFollows)
+      return; // It replaced a separate floor collider (its collision off since): it keeps that one's values
+   Primitive::GetTablePlayfieldPhysics(t, floor->m_d.m_friction, floor->m_d.m_elasticity, floor->m_d.m_elasticityFalloff, floor->m_d.m_scatter);
+   board->m_d.m_pfFloorFollows = true;
+}
+
+// A tooltip that also shows on a disabled item (the greyed controls say why they are greyed)
+void DisabledTooltip(const char *text)
+{
+   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_ForTooltip))
+      ImGui::SetTooltip("%s", text);
+}
+
+
+Material *EnsurePlywoodMaterial(PinTable *const t)
+{
+   if (Material *const existing = t->GetMaterial(kPlywood); !t->IsDummyMaterial(existing))
+      return existing;
+   Material *const m = new Material();
+   m->m_name = kPlywood;
+   m->m_type = Material::PBR;
+   m->m_cBase = 0xFFFFFF;
+   m->m_fRoughness = 0.75f;
+   m->m_fMetallic = 0.f;
+   m->m_fOpacity = 1.f;
+   m->m_bOpacityActive = false;
+   t->AddMaterial(m); // Not undone (a harmless leftover; a material is no part)
+   t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   return m;
+}
+
+
+
+vector<Primitive *> TracedCards(const PinTable *t)
+{
+   vector<Primitive *> res;
+   for (IEditable *const part : t->GetParts())
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsTracedInsert())
+         res.push_back(static_cast<Primitive *>(part));
+   return res;
+}
+
+// The print image: the one most traced cards use
+string CurrentPrint(const vector<Primitive *> &cards)
+{
+   std::map<string, int> count;
+   for (const Primitive *const c : cards)
+      if (!c->m_d.m_szORMMap.empty())
+         count[c->m_d.m_szORMMap]++;
+   string best;
+   int n = 0;
+   for (const auto &[name, k] : count)
+      if (k > n)
+      {
+         best = name;
+         n = k;
+      }
+   return best;
+}
+
+
+
+
+
+vector<PlasticMesh::CurvePoint> HoleLoop(const PlayfieldHole &h, const float tol)
+{
+   PlasticMesh::Hole m { h.centre.x, h.centre.y, h.diameter, h.end.x, h.end.y, h.type == PlayfieldHole::Slot };
+   if (h.type == PlayfieldHole::Polygon)
+      for (const Vertex2D &v : h.polygon)
+         m.polygon.push_back({ v.x, v.y, false });
+   return PlasticMesh::HoleOutline(m, tol);
+}
+
+bool InsideLoop(const vector<PlasticMesh::CurvePoint> &loop, const Vertex2D &p)
+{
+   bool in = false;
+   for (size_t i = 0, j = loop.size() - 1; i < loop.size(); j = i++)
+      if (((loop[i].y > p.y) != (loop[j].y > p.y)) && (p.x < (loop[j].x - loop[i].x) * (p.y - loop[i].y) / (loop[j].y - loop[i].y) + loop[i].x))
+         in = !in;
+   return in;
+}
+
+PlayfieldHole NewHole(const Vertex2D &at)
+{
+   PlayfieldHole h;
+   h.centre = at;
+   if (s.placing == 2)
+   {
+      // Long axis along y, centred on the click
+      h.type = PlayfieldHole::Slot;
+      h.diameter = s.slotWidth;
+      const float half = 0.5f * max(0.f, s.slotLength - s.slotWidth);
+      h.centre = Vertex2D(at.x, at.y - half);
+      h.end = Vertex2D(at.x, at.y + half);
+   }
+   else
+      h.diameter = s.roundDia;
+   return h;
+}
+
+void MoveHole(PlayfieldHole &h, const PlayfieldHole &from, const float dx, const float dy)
+{
+   h = from;
+   h.centre = Vertex2D(from.centre.x + dx, from.centre.y + dy);
+   h.end = Vertex2D(from.end.x + dx, from.end.y + dy);
+   for (Vertex2D &v : h.polygon)
+      v = Vertex2D(v.x + dx, v.y + dy);
+}
+
+
+// The table's Add snapshot (see Add): names, the old playfield's physics fields and the ground plane, restored together
+struct AddContext
+{
+   EditorUI *ed = nullptr;
+   PinTable *table = nullptr;
+   Primitive *old = nullptr; // The saved playfield, or the session quad (implicit playfield)
+   bool quad = false;
+   bool oldVisible = true; // Its authored visibility before the Add
+   Primitive *board = nullptr, *walls = nullptr, *floor = nullptr; // Set once created
+};
+
+struct AddSnapshot
+{
+   bool boardIn = false; // The board was in the table (the state after the Add)
+   string boardName, oldName;
+   bool overwrite = false;
+   float friction = 0.f, elasticity = 0.f, falloff = 0.f, scatter = 0.f;
+   bool plane = false;
+};
+
+
+
+
+
+} // namespace
+
+struct PlayfieldMaker::Impl
+{
+   static Primitive *SelectedBoard(const EditorUI &ed)
+   {
+      if (ed.m_selection.GetType() != Selection::S_EDITABLE || ed.m_selection.GetPart() == nullptr)
+         return nullptr;
+      IEditable *const part = ed.m_selection.GetPart()->GetEditable();
+      return part != nullptr && part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen ? static_cast<Primitive *>(part) : nullptr;
+   }
+
+   // Authored visibility: m_d holds the editor display state, the UI part keeps the authored value (written back before a save)
+   static void SetAuthoredVisible(EditorUI &ed, Primitive *const part, const bool visible)
+   {
+      if (part == nullptr)
+         return;
+      part->m_d.m_visible = visible;
+      if (const auto it = ed.m_editableMap.find(part); it != ed.m_editableMap.end())
+         it->second->SyncVisibilityOverrides();
+   }
+
+   static bool AuthoredVisible(EditorUI &ed, Primitive *const part)
+   {
+      ed.m_undo.SyncPartBeforeSave(part); // Writes the authored visibility into m_d
+      return part->m_d.m_visible;
+   }
+
+   static const vector<Primitive *> &Floors(EditorUI &ed)
+   {
+      if (s.floorsStale)
+      {
+         s.floors = Primitive::FindPlayfieldFloors(ed.m_table);
+         s.floorsStale = false;
+      }
+      return s.floors;
+   }
+
+   static string EnsurePlywoodImage(EditorUI &ed)
+   {
+      if (ed.m_table->GetImage(kPlywood) != nullptr)
+         return kPlywood;
+      Texture *const tex = ed.m_table->ImportImage(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "PlayfieldPlywood.png"), kPlywood);
+      if (tex == nullptr)
+         return string();
+      ed.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      return tex->m_name;
+   }
+
+   // A file for a slot: imported under its file name, numbered when the table has that name already (never replaced: the old one may be in use)
+   static Texture *ImportSlotImage(EditorUI &ed, const string &file)
+   {
+      const std::filesystem::path path = PathFromUTF8(file);
+      const string base = PathToUTF8(path.stem());
+      string name = base;
+      for (int n = 1; ed.m_table->GetImage(name) != nullptr; n++)
+         name = base + std::to_string(n);
+      Texture *const tex = ed.m_table->ImportImage(path, name);
+      if (tex == nullptr)
+      {
+         ed.Report("Playfield: could not load " + file);
+         return nullptr;
+      }
+      g_settingsService.GetAppSettings().SetRecentDir_ImageDir(PathToString(path.parent_path()), false);
+      ed.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      return tex;
+   }
+
+   static string GetSlot(EditorUI &ed, const Primitive *board, const int slot)
+   {
+      switch (slot)
+      {
+      case Paint: return ed.m_table->m_image;
+      case Shine: return board->m_d.m_szORMMap;
+      case Bump: return board->m_d.m_szNormalMap;
+      case Glow: return board->m_d.m_szEmissionMap;
+      case WoodMask: return board->m_d.m_pfWoodMask;
+      case Plywood:
+      {
+         const Primitive *const walls = PlayfieldMaker::CompanionOf(board, kPlayfieldWallsRole);
+         return walls != nullptr ? walls->m_d.m_szImage : string();
+      }
+      case InsertPrint: return CurrentPrint(TracedCards(ed.m_table));
+      case Blueprint: return PathToUTF8(PathFromUTF8(ed.m_refImage.GetFile(ed)).filename());
+      default: return string();
+      }
+   }
+
+   // Writes a slot inside the panel's open undo record (the board, its companions and the table's playfield fields are in it already)
+   static void SetSlot(EditorUI &ed, Primitive *const board, const int slot, const string &image)
+   {
+      switch (slot)
+      {
+      case Paint: ed.m_table->m_image = image; break;
+      case Shine: board->m_d.m_szORMMap = image; break;
+      case Bump: board->m_d.m_szNormalMap = image; break;
+      case Glow: board->m_d.m_szEmissionMap = image; break;
+      case WoodMask: board->m_d.m_pfWoodMask = image; break;
+      case Plywood:
+         if (Primitive *const walls = PlayfieldMaker::CompanionOf(board, kPlayfieldWallsRole); walls != nullptr)
+            walls->m_d.m_szImage = image;
+         break;
+      case InsertPrint:
+      {
+         // Cards on the current print (or none) take the new one; cards on another image are left alone unless "All cards" is ticked
+         const vector<Primitive *> cards = TracedCards(ed.m_table);
+         const string current = CurrentPrint(cards);
+         for (Primitive *const c : cards)
+            if (s.printAll || c->m_d.m_szORMMap.empty() || c->m_d.m_szORMMap == current)
+            {
+               ed.m_undo.MarkForUndo(c, true, false);
+               c->m_d.m_szORMMap = image;
+            }
+         break;
+      }
+      default: break;
+      }
+      if (ed.m_renderer)
+         ed.m_renderer->MarkStaticPrepassDirty();
+   }
+
+   static bool ApplyFile(EditorUI &ed, Primitive *const board, const int slot, const string &file)
+   {
+      if (slot == Blueprint)
+      {
+         if (ed.m_refImage.OpenFile(ed, file))
+            s.showBlueprint = true;
+         return false; // Not table data
+      }
+      if (slot == InsertPrint && TracedCards(ed.m_table).empty())
+      {
+         ed.Report("Insert Print: this table has no traced inserts, nothing was imported");
+         return false;
+      }
+      const Texture *const tex = ImportSlotImage(ed, file);
+      if (tex == nullptr)
+         return false;
+      SetSlot(ed, board, slot, tex->m_name);
+      if (slot == Glow)
+         s.showGlow = true;
+      ed.Report(string(kSlotNames[slot]) + ": " + tex->m_name);
+      return true;
+   }
+
+   static void StartLoad(EditorUI &ed, const int slot)
+   {
+      if (ed.m_player == nullptr || ed.m_player->m_playfieldWnd == nullptr || s.pendingLoad != nullptr)
+         return;
+      s.pendingLoad = std::make_shared<vector<string>>();
+      s.pendingSlot = slot;
+      const SDL_DialogFileFilter filters[] = { { "Image Files", "png;jpg;jpeg;webp;exr;hdr" } };
+      const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_ImageDir()));
+      SDL_ShowOpenFileDialog(
+         [](void *userdata, const char *const *filelist, int)
+         {
+            auto *res = static_cast<std::shared_ptr<vector<string>> *>(userdata);
+            (**res).push_back(filelist != nullptr && filelist[0] != nullptr ? string(filelist[0]) : string()); // Cancelled: answered, nothing chosen
+            delete res;
+         },
+         new std::shared_ptr<vector<string>>(s.pendingLoad), ed.m_player->m_playfieldWnd->GetCore(), filters, 1, dir.empty() ? nullptr : dir.c_str(), false);
+   }
+
+   static void EndGrab(EditorUI &ed, const bool confirm)
+   {
+      Primitive *const board = const_cast<Primitive *>(s.board);
+      const int i = SelectedHole(board);
+      s.grabbing = false;
+      if (i < 0)
+         return;
+      if (!confirm)
+      {
+         board->m_pfHoles[i] = s.grabOrigin; // Only its outline moved: nothing to rebuild
+         return;
+      }
+      const PlayfieldHole moved = board->m_pfHoles[i];
+      board->m_pfHoles[i] = s.grabOrigin;
+      ed.m_undo.BeginUndo();
+      ed.m_undo.MarkForUndo(board);
+      board->m_pfHoles[i] = moved;
+      ed.m_undo.SetLabel("Move Hole");
+      ed.m_undo.EndUndo();
+      board->UpdatePlayfield(); // Once, at the release
+   }
+
+   static AddSnapshot TakeSnapshot(const AddContext &c)
+   {
+      AddSnapshot r;
+      r.boardIn = c.board != nullptr && c.table->HasPart(c.board);
+      if (c.board != nullptr)
+         r.boardName = c.board->GetName();
+      if (c.old != nullptr)
+      {
+         r.oldName = c.old->GetName();
+         r.overwrite = c.old->m_d.m_overwritePhysics;
+         r.friction = c.old->m_d.m_friction;
+         r.elasticity = c.old->m_d.m_elasticity;
+         r.falloff = c.old->m_d.m_elasticityFalloff;
+         r.scatter = c.old->m_d.m_scatter;
+      }
+      r.plane = c.ed->m_player != nullptr && c.ed->m_player->m_physics != nullptr && c.ed->m_player->m_physics->HasImplicitPlayfieldMesh();
+      return r;
+   }
+
+   static void Restore(const AddContext &c, const AddSnapshot &r)
+   {
+      PinTable *const t = c.table;
+      EditorUI &ed = *c.ed;
+      struct Target
+      {
+         Primitive *part;
+         string name;
+      };
+      vector<Target> targets;
+      if (c.old != nullptr && !r.oldName.empty())
+         targets.push_back({ c.old, r.oldName });
+      if (c.board != nullptr && !r.boardName.empty())
+         targets.push_back({ c.board, r.boardName });
+      // Pass 1: a part of the table holding a name about to be assigned (the board on undo, which the pre-Add snapshot does not list) steps aside first
+      for (const Target &target : targets)
+         for (IEditable *const part : t->GetParts())
+            if (part != target.part && part->GetIScriptable() != nullptr && StrCompareNoCase(part->GetName(), target.name))
+            {
+               t->RenamePart(part, t->GetUniqueName("playfield_mesh_swap"s));
+               break;
+            }
+      // Pass 2: the final names; a part out of the table (the board during redo, before it is put back) is not in the name registry
+      for (const Target &target : targets)
+         if (t->HasPart(target.part))
+         {
+            if (target.part->GetName() != target.name)
+               t->RenamePart(target.part, target.name);
+         }
+         else
+            target.part->GetIScriptable()->m_name = target.name;
+      // Visibility: the Add state, or the state before it, whatever Show Old Playfield was set to
+      if (r.boardIn)
+      {
+         SetAuthoredVisible(ed, c.board, true);
+         SetAuthoredVisible(ed, c.walls, true);
+         SetAuthoredVisible(ed, c.old, false);
+      }
+      else
+         SetAuthoredVisible(ed, c.old, c.oldVisible);
+      if (c.old != nullptr && !c.quad)
+      {
+         c.old->m_d.m_overwritePhysics = r.overwrite;
+         c.old->m_d.m_friction = r.friction;
+         c.old->m_d.m_elasticity = r.elasticity;
+         c.old->m_d.m_elasticityFalloff = r.falloff;
+         c.old->m_d.m_scatter = r.scatter;
+      }
+      if (ed.m_player != nullptr && ed.m_player->m_physics != nullptr)
+      {
+         for (Primitive *const p : { c.old, c.board, c.walls, c.floor })
+            if (p != nullptr && t->HasPart(p))
+               ed.m_player->m_physics->Update(p); // Clears the cached playfield status (PhysicSetup)
+         ed.m_player->m_physics->SetImplicitPlayfieldMesh(r.plane);
+      }
+      if (ed.m_renderer)
+      {
+         if (c.old != nullptr)
+            ed.m_renderer->ReinitRenderable(c.old);
+         ed.m_renderer->MarkStaticPrepassDirty();
+      }
+      s.floorsStale = true;
+   }
+
+   static PartGroup *BoardGroup(EditorUI &ed, const Primitive *old)
+   {
+      // Never a group whose reference space is not the playfield: that skips PhysicSetup, so the board would stop being the playfield
+      const auto ok = [](const PartGroup *g) { return g != nullptr && g->GetReferenceSpace() == PartGroupData::SpaceReference::SR_PLAYFIELD; };
+      if (old != nullptr && ok(old->GetPartGroup()))
+         return old->GetPartGroup();
+      for (IEditable *const part : ed.m_table->GetParts())
+         if (part->GetItemType() == eItemPartGroup && part->GetPartGroup() == nullptr && ok(static_cast<PartGroup *>(part)))
+            return static_cast<PartGroup *>(part);
+      PartGroup *const g = ed.GetPartGroupForNewPart();
+      return ok(g) ? g : nullptr;
+   }
+
+   static Primitive *NewPart(EditorUI &ed, const string &name, PartGroup *group)
+   {
+      IEditable *const pie = EditableRegistry::CreateAndInit(eItemPrimitive, ed.m_table, 0.f, 0.f);
+      if (pie == nullptr)
+         return nullptr;
+      pie->GetIScriptable()->m_name = name;
+      pie->m_desktopBackdrop = false;
+      ed.m_table->AddPart(pie);
+      pie->SetPartGroup(group);
+      return static_cast<Primitive *>(pie);
+   }
+};
+
+
+Primitive *PlayfieldMaker::Board(const PinTable *table)
+{
+   if (table != nullptr)
+      for (IEditable *const part : table->GetParts())
+         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
+            return static_cast<Primitive *>(part);
+   return nullptr;
+}
+
+Primitive *PlayfieldMaker::CompanionOf(const Primitive *board, const int role)
+{
+   return board != nullptr ? board->GetPlayfieldCompanion(role) : nullptr;
+}
+
+bool PlayfieldMaker::IsPart(const IEditable *part) { return part != nullptr && part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsPlayfieldPart(); }
+
+bool PlayfieldMaker::StripBoard(EditorUI &ed, vector<IEditable *> &parts)
+{
+   const size_t n = parts.size();
+   std::erase_if(parts, [](const IEditable *p) { return IsPart(p); });
+   if (parts.size() == n)
+      return false;
+   ed.Report(kFollowsTable);
+   return true;
+}
+
+bool PlayfieldMaker::StripBoardGroups(EditorUI &ed, vector<IEditable *> &parts)
+{
+   vector<const IEditable *> boardParts;
+   for (const IEditable *const part : ed.m_table->GetParts())
+      if (IsPart(part))
+         boardParts.push_back(part);
+   if (boardParts.empty())
+      return false;
+   const size_t n = parts.size();
+   std::erase_if(parts,
+      [&boardParts](const IEditable *p)
+      {
+         return p->GetItemType() == eItemPartGroup && std::ranges::any_of(boardParts, [p](const IEditable *b) { return b->IsChild(static_cast<const PartGroup *>(p)); });
+      });
+   if (parts.size() == n)
+      return false;
+   ed.Report(kFollowsTable);
+   return true;
+}
+
+bool PlayfieldMaker::RefuseImport(EditorUI &ed, const PinTable *source)
+{
+   if (source == nullptr || std::ranges::none_of(source->GetParts(), [](const IEditable *p) { return IsPart(p); }))
+      return false;
+   ed.Report(kOneBoard);
+   return true;
+}
+
+std::function<void()> PlayfieldMaker::KeepShown(EditorUI &ed)
+{
+   if (s.grabbing)
+      Impl::EndGrab(ed, false); // The step reloads the holes: the grabbed one goes back first
+   Primitive *const board = Board(ed.m_table);
+   Primitive *const old = board != nullptr ? OldPlayfield(ed.m_table) : nullptr;
+   if (old == nullptr) // Nothing to compare the board with
+      return {};
+   Primitive *const walls = CompanionOf(board, kPlayfieldWallsRole);
+   const bool boardShown = Impl::AuthoredVisible(ed, board);
+   const bool wallsShown = walls != nullptr && Impl::AuthoredVisible(ed, walls);
+   const bool oldShown = Impl::AuthoredVisible(ed, old);
+   if (oldShown && (boardShown || wallsShown)) // Both drawn already (the author's own Visible edit): the step is left alone, so it can undo that
+      return {};
+   return [&ed, board, walls, old, boardShown, wallsShown, oldShown]()
+   {
+      PinTable *const t = ed.m_table;
+      if (Board(t) != board || !t->HasPart(old)) // The step took the board or the old playfield out (the undo of Add): its own restore applies
+         return;
+      // Only a step that would leave both playfields drawn (a board record taken on the other side of Show Old Playfield) gets the visibility back.
+      // HasPart compares addresses: a part the step removed is never read
+      const bool wallsIn = walls != nullptr && t->HasPart(walls);
+      if (!Impl::AuthoredVisible(ed, old) || !(Impl::AuthoredVisible(ed, board) || (wallsIn && Impl::AuthoredVisible(ed, walls))))
+         return;
+      Impl::SetAuthoredVisible(ed, board, boardShown);
+      if (wallsIn)
+         Impl::SetAuthoredVisible(ed, walls, wallsShown);
+      Impl::SetAuthoredVisible(ed, old, oldShown);
+      if (ed.m_renderer)
+         ed.m_renderer->MarkStaticPrepassDirty();
+   };
+}
+
+bool PlayfieldMaker::CanAdd(const EditorUI &ed)
+{
+   return !ed.m_table->IsLocked() && !ed.IsInspectMode() && ed.m_player != nullptr && ed.m_player->m_physics != nullptr && ed.m_renderer != nullptr && ed.m_pointEditPart == nullptr;
+}
+
+void PlayfieldMaker::Add(EditorUI &ed)
+{
+   if (!CanAdd(ed))
+      return;
+   PinTable *const t = ed.m_table;
+   if (Board(t) != nullptr)
+   {
+      ed.Report("Add Playfield: this table has a Playfield Maker board already");
+      return;
+   }
+   auto ctx = std::make_shared<AddContext>();
+   ctx->ed = &ed;
+   ctx->table = t;
+   for (IEditable *const part : t->GetParts()) // The saved playfield (session objects are not looked at)
+      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->IsPlayfield() && !t->IsPlayerSessionObject(part))
+      {
+         ctx->old = static_cast<Primitive *>(part);
+         break;
+      }
+   if (ctx->old == nullptr && ed.m_player->m_implicitPlayfieldMesh != nullptr && t->HasPart(ed.m_player->m_implicitPlayfieldMesh))
+   {
+      ctx->old = ed.m_player->m_implicitPlayfieldMesh; // Kept as the session object it is: still never saved
+      ctx->quad = true;
+   }
+   Primitive *const old = ctx->old;
+   const bool quad = ctx->quad;
+   if (old != nullptr)
+      ctx->oldVisible = quad ? old->m_d.m_visible : Impl::AuthoredVisible(ed, old);
+
+   ed.m_undo.BeginUndo();
+   const AddSnapshot before = Impl::TakeSnapshot(*ctx);
+
+   // The old playfield: renamed and hidden, never removed
+   bool keepExisting = false;
+   if (old != nullptr)
+   {
+      const string base = quad ? "playfield_mesh_implicit"s : "playfield_mesh_old"s;
+      string name = base;
+      for (int n = 2; !t->IsNameUnique(name); n++)
+         name = base + std::to_string(n);
+      t->RenamePart(old, name);
+      if (!quad && old->m_d.m_collidable && !old->m_d.m_toy) // A toy has no colliders
+      {
+         // It plays with the table's values while it is the playfield, with its own once renamed: it keeps the table's
+         old->m_d.m_overwritePhysics = true;
+         Primitive::GetTablePlayfieldPhysics(t, old->m_d.m_friction, old->m_d.m_elasticity, old->m_d.m_elasticityFalloff, old->m_d.m_scatter);
+         keepExisting = true;
+      }
+      Impl::SetAuthoredVisible(ed, old, false);
+   }
+   for (const Primitive *const f : Primitive::FindPlayfieldFloors(t))
+      if (f->m_mesh.NumIndices() > 6)
+         keepExisting = true; // A shaped floor collider (pockets, ramps into the floor): the board is look only
+
+   // The board and its companions
+   PartGroup *const group = Impl::BoardGroup(ed, old);
+   const auto unique = [t](const string &name)
+   {
+      string res = name;
+      for (int n = 2; !t->IsNameUnique(res); n++)
+         res = name + std::to_string(n);
+      return res;
+   };
+   const string boardName = "playfield_mesh"s;
+   Primitive *const board = Impl::NewPart(ed, boardName, group);
+   Primitive *const walls = board != nullptr ? Impl::NewPart(ed, unique(boardName + "_Walls"), group) : nullptr;
+   Primitive *const floor = walls != nullptr ? Impl::NewPart(ed, unique(boardName + "_Floor"), group) : nullptr;
+   if (floor == nullptr)
+   {
+      for (Primitive *const made : { walls, board }) // What was made goes again (nothing set up yet: no renderable, no collider)
+         if (made != nullptr)
+         {
+            t->RemovePart(made);
+            made->Release(); // The creation reference
+         }
+      Impl::Restore(*ctx, before); // The names, the physics fields, the visibility and the plane as before
+      ed.m_undo.EndUndo();
+      ed.m_undo.Discard(); // Nothing was recorded
+      ed.Report("Add Playfield: could not create the parts");
+      return;
+   }
+   ctx->board = board;
+   ctx->walls = walls;
+   ctx->floor = floor;
+   // As the implicit playfield (player.cpp) sets its quad
+   board->m_d.m_playfieldGen = true;
+   board->m_d.m_toy = true;
+   board->m_d.m_collidable = false;
+   board->m_d.m_visible = true;
+   board->m_d.m_use3DMesh = true;
+   board->m_d.m_depthBias = 100000.f;
+   board->m_d.m_reflectionEnabled = true;
+   board->m_d.m_disableLightingBelow = 1.f;
+   board->m_d.m_displayTexture = t->m_winEditorBackdrop;
+   board->m_desktopBackdrop = old != nullptr ? old->m_desktopBackdrop : false;
+   board->m_d.m_staticRendering = true;
+   if (old != nullptr && !quad)
+   {
+      board->m_d.m_szORMMap = old->m_d.m_szORMMap;
+      board->m_d.m_szNormalMap = old->m_d.m_szNormalMap;
+      board->m_d.m_szEmissionMap = old->m_d.m_szEmissionMap;
+      board->m_d.m_objectSpaceNormalMap = old->m_d.m_objectSpaceNormalMap;
+      board->m_d.m_staticRendering = old->m_d.m_staticRendering;
+   }
+   board->m_d.m_pfFloor = keepExisting ? 1 : 0;
+
+   walls->m_d.m_plasticHost = boardName;
+   walls->m_d.m_plasticRole = kPlayfieldWallsRole;
+   walls->m_d.m_toy = true;
+   walls->m_d.m_collidable = false;
+   walls->m_d.m_visible = true;
+   walls->m_d.m_reflectionEnabled = false; // Else every wall is mirrored into the playfield reflection as a ghost ring
+   walls->m_d.m_disableLightingBelow = 1.f;
+   walls->m_d.m_staticRendering = board->m_d.m_staticRendering;
+   walls->m_d.m_szMaterial = EnsurePlywoodMaterial(t)->m_name;
+   walls->m_d.m_szImage = Impl::EnsurePlywoodImage(ed);
+   walls->SetUILock(true); // A viewport click lands on the board
+
+   floor->m_d.m_plasticHost = boardName;
+   floor->m_d.m_plasticRole = kPlayfieldFloorRole;
+   floor->m_d.m_toy = false;
+   floor->m_d.m_visible = false;
+   floor->m_d.m_collision_reductionFactor = 0.f;
+   floor->m_d.m_hitEvent = false;
+   floor->SetUILock(true);
+   CopyFloorPhysics(t, board, floor);
+
+   board->RegeneratePlayfield(); // The companions are in the table now
+   for (Primitive *const prim : { board, walls, floor })
+   {
+      ed.m_player->TimerSetup(prim);
+      prim->GetIRenderable()->RenderSetup(ed.m_renderer.get());
+      if (prim->GetIHitable())
+         ed.m_player->m_physics->Add(prim);
+   }
+   if (old != nullptr)
+   {
+      ed.m_player->m_physics->Update(old); // Its cached playfield status clears: it stops being drawn as the playfield
+      ed.m_renderer->ReinitRenderable(old);
+   }
+   if (quad)
+      ed.m_player->m_physics->SetImplicitPlayfieldMesh(false); // The ground plane: the board's floor (or the existing one) takes over
+
+   for (Primitive *const prim : { board, walls, floor })
+      ed.m_undo.MarkForCreate(prim);
+   ed.m_undo.MarkForAction([ctx, before]() { Impl::Restore(*ctx, before); },
+      [ctx]() -> std::function<void()>
+      {
+         const AddSnapshot now = Impl::TakeSnapshot(*ctx);
+         return [ctx, now]() { Impl::Restore(*ctx, now); };
+      });
+   ed.m_undo.SetLabel("Add Playfield");
+   ed.m_renderer->MarkStaticPrepassDirty();
+   ed.m_undo.EndUndo();
+   s = State();
+
+   ed.UpdateEditableList();
+   SelectBoard(ed);
+   ed.Report("Added the playfield board (" + string(old == nullptr ? "no playfield before" : quad ? "the built-in playfield is hidden" : old->GetName() + " is the old one, hidden")
+      + "), Floor: " + (keepExisting ? "Keep Existing" : "Own"));
+}
+
+void PlayfieldMaker::SelectBoard(EditorUI &ed)
+{
+   Primitive *const board = Board(ed.m_table);
+   if (board == nullptr)
+   {
+      ed.Report("This table has no Playfield Maker board (Add > Playfield)");
+      return;
+   }
+   ed.m_selectionFilter = ed.m_selectionFilter | EditorUI::SelectionFilter::Playfield;
+   if (const auto it = ed.m_editableMap.find(board); it != ed.m_editableMap.end())
+   {
+      ed.SetSelection(Selection(it->second));
+      ed.m_outlinerAnchor = it->second;
+   }
+}
+
+void PlayfieldMaker::OnFileDrop(EditorUI &ed, const string &path, const ImVec2 &pos)
+{
+   if (Impl::SelectedBoard(ed) == nullptr)
+   {
+      ed.Report("Drop an image on a playfield slot (select the playfield first)");
+      return;
+   }
+   s.dropPath = path;
+   s.dropPos = pos;
+   s.dropFrame = ImGui::GetFrameCount();
+}
+
+void PlayfieldMaker::Update(EditorUI &ed)
+{
+   // The floor collider list follows the table (an edit, an undo, a part added or removed)
+   if (const uint64_t key = ed.m_undo.TopRecordId(); key != s.floorsKey || ed.m_table->GetParts().size() != s.floorsParts)
+   {
+      s.floorsKey = key;
+      s.floorsParts = ed.m_table->GetParts().size();
+      s.floorsStale = true;
+   }
+   if (s.dropFrame >= 0 && ImGui::GetFrameCount() > s.dropFrame + 2) // Nobody took it
+   {
+      s.dropFrame = -1;
+      ed.Report("Drop an image on a playfield slot");
+   }
+   Primitive *const board = Impl::SelectedBoard(ed);
+   if (s.placing != 0 && (board == nullptr || ed.m_table->IsLocked()))
+      s.placing = 0;
+   if (s.grabbing)
+   {
+      if (board == nullptr || board != s.board || SelectedHole(board) < 0 || ed.m_table->IsLocked())
+      {
+         s.grabbing = false; // The board went (an undo, a selection change): the hole is the record's
+         return;
+      }
+      const Vertex2D at = ed.UnprojectToPlane(ImGui::GetMousePos(), 0.f);
+      MoveHole(board->m_pfHoles[s.selected], s.grabOrigin, at.x - s.grabStart.x, at.y - s.grabStart.y);
+      if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
+         Impl::EndGrab(ed, true);
+      else if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+         Impl::EndGrab(ed, false);
+   }
+}
+
+bool PlayfieldMaker::IsBusy() { return s.placing != 0 || s.grabbing; }
+
+bool PlayfieldMaker::Cancel(EditorUI &ed)
+{
+   if (s.grabbing)
+   {
+      Impl::EndGrab(ed, false);
+      return true;
+   }
+   if (s.placing != 0)
+   {
+      s.placing = 0;
+      ed.Report(string());
+      return true;
+   }
+   return false;
+}
+
+bool PlayfieldMaker::BeginGrab(EditorUI &ed)
+{
+   Primitive *const board = Impl::SelectedBoard(ed);
+   const int i = SelectedHole(board);
+   if (i < 0 || s.grabbing || ed.m_table->IsLocked())
+      return false;
+   s.grabbing = true;
+   s.grabOrigin = board->m_pfHoles[i];
+   s.grabStart = ed.UnprojectToPlane(ImGui::GetMousePos(), 0.f);
+   ed.Report("Move hole: click or Enter places it, Esc or right click cancels");
+   return true;
+}
+
+bool PlayfieldMaker::Click(EditorUI &ed, const ImVec2 &mouse)
+{
+   Primitive *const board = Impl::SelectedBoard(ed);
+   if (s.grabbing)
+   {
+      Impl::EndGrab(ed, true);
+      return true;
+   }
+   if (board == nullptr)
+      return false;
+   const Vertex2D at = ed.UnprojectToPlane(mouse, 0.f);
+   if (s.placing != 0)
+   {
+      if (board->m_pfHoles.size() >= static_cast<size_t>(kMaxPlayfieldHoles))
+      {
+         ed.Report("The board has the most holes it can hold");
+         s.placing = 0;
+         return true;
+      }
+      ed.m_undo.BeginUndo();
+      ed.m_undo.MarkForUndo(board);
+      board->m_pfHoles.push_back(NewHole(at));
+      ed.m_undo.SetLabel(s.placing == 2 ? "Add Slot" : "Add Round Hole");
+      ed.m_undo.EndUndo();
+      SelectHole(board, static_cast<int>(board->m_pfHoles.size()) - 1);
+      board->UpdatePlayfield();
+      s.placing = 0;
+      ed.Report(string());
+      return true;
+   }
+   // A click inside a hole's outline selects the hole (the board stays the selection)
+   const float tol = PlasticMesh::FlattenTolerance(board->m_d.m_pfDetail);
+   for (int i = static_cast<int>(board->m_pfHoles.size()) - 1; i >= 0; i--)
+   {
+      const PlayfieldHole &h = board->m_pfHoles[i];
+      const float r = h.type == PlayfieldHole::Polygon ? FLT_MAX : 0.5f * h.diameter + hypotf(h.end.x - h.centre.x, h.end.y - h.centre.y);
+      if (r != FLT_MAX && hypotf(at.x - h.centre.x, at.y - h.centre.y) > r + 1.f && (h.type != PlayfieldHole::Slot || hypotf(at.x - h.end.x, at.y - h.end.y) > r + 1.f))
+         continue;
+      const vector<PlasticMesh::CurvePoint> loop = HoleLoop(h, tol);
+      if (loop.size() >= 3 && InsideLoop(loop, at))
+      {
+         // A part in the hole (an insert, a lamp, a kicker) is selected first: the editor's own click takes it. Parts hidden in play (the old playfield,
+         // an invisible floor collider) and session objects (the hidden built-in playfield) lie under every hole: they do not count
+         vector<HitTestResult> hits;
+         ed.RayCastParts(mouse, hits);
+         for (const HitTestResult &hit : hits)
+            if (IEditable *const part = ed.HitEditable(hit); part != nullptr && !IsPart(part) && !ed.m_table->IsPlayerSessionObject(part))
+               if (const auto it = ed.m_editableMap.find(part); it != ed.m_editableMap.end() && !it->second->IsHiddenInPlay())
+                  return false;
+         SelectHole(board, i);
+         return true;
+      }
+   }
+   return false;
+}
+
+void PlayfieldMaker::Draw(EditorUI &ed, ImDrawList *const draw, const LiveRenderContext &ctx)
+{
+   Primitive *const board = Impl::SelectedBoard(ed);
+   if (board == nullptr || !ed.m_viewportVisible || ed.m_viewportRect.Width() <= 0.f)
+      return;
+   draw->PushClipRect(ImVec2(ed.m_viewportRect.x0, ed.m_viewportRect.y0), ImVec2(ed.m_viewportRect.x1, ed.m_viewportRect.y1), true); // Never over the panels
+   const float dpi = ed.m_liveUI.GetDPI();
+   const float tol = max(PlasticMesh::FlattenTolerance(board->m_d.m_pfDetail), 0.5f);
+   const int sel = SelectedHole(board);
+   const auto outline = [&](const PlayfieldHole &h, const ImU32 color, const bool dashed, const float width)
+   {
+      const vector<PlasticMesh::CurvePoint> loop = HoleLoop(h, tol);
+      for (size_t i = 0; i < loop.size(); i++)
+      {
+         if (dashed && (i & 1))
+            continue;
+         const PlasticMesh::CurvePoint &a = loop[i], &b = loop[(i + 1) % loop.size()];
+         const ImVec2 pa = ctx.Project(Vertex3Ds(a.x, a.y, 0.1f)), pb = ctx.Project(Vertex3Ds(b.x, b.y, 0.1f));
+         if (pa.x != FLT_MAX && pb.x != FLT_MAX)
+            draw->AddLine(pa, pb, color, width * dpi);
+      }
+   };
+   for (int i = 0; i < static_cast<int>(board->m_pfHoles.size()); i++)
+   {
+      const PlayfieldHole &h = board->m_pfHoles[i];
+      const bool cut = (h.flags & PlayfieldHole::Cut) != 0;
+      const bool overlap = cut && i < static_cast<int>(board->m_pfOverlap.size()) && board->m_pfOverlap[i];
+      ImU32 color = !cut ? IM_COL32(150, 150, 150, 200) : overlap ? IM_COL32(255, 40, 40, 255)
+         : (h.flags & PlayfieldHole::FallsThrough) && board->m_d.m_pfFloor == 0 ? IM_COL32(0, 220, 255, 255) : IM_COL32(255, 150, 0, 255);
+      if (i == sel)
+         color = overlap ? IM_COL32(255, 120, 120, 255) : !cut ? IM_COL32(230, 230, 230, 255) : IM_COL32(255, 230, 120, 255);
+      outline(h, color, !cut, i == sel ? 2.5f : 1.5f);
+      if (overlap)
+         if (const ImVec2 p = ctx.Project(Vertex3Ds(h.centre.x, h.centre.y, 0.1f)); p.x != FLT_MAX)
+            draw->AddText(ImVec2(p.x + 6.f * dpi, p.y - 6.f * dpi), IM_COL32(255, 60, 60, 255), "overlaps");
+   }
+   if (s.placing != 0 && ImGui::IsMousePosValid())
+      outline(NewHole(ed.UnprojectToPlane(ImGui::GetMousePos(), 0.f)), IM_COL32(255, 230, 120, 200), false, 1.5f);
+   draw->PopClipRect();
+}
+
+void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive *const board)
+{
+   if (board->GetPTable() != ed.m_table || ed.IsInspectMode())
+   {
+      props.FlushRow();
+      ImGui::TextDisabled("The playfield is edited in the editor, not in a play test");
+      return;
+   }
+   PinTable *const t = ed.m_table;
+   bool layerEdited = false;
+
+   // A file the Load... dialog or a drop brought (the drop is tested against the slot rows as drawn last frame)
+   if (s.pendingLoad != nullptr && !s.pendingLoad->empty())
+   {
+      const string file = s.pendingLoad->front();
+      const int slot = s.pendingSlot;
+      s.pendingLoad = nullptr;
+      if (!file.empty())
+         layerEdited |= Impl::ApplyFile(ed, board, slot, file);
+   }
+   if (s.dropFrame >= 0)
+      for (const State::SlotRect &r : s.rects)
+         if (s.dropPos.x >= r.a.x && s.dropPos.x <= r.b.x && s.dropPos.y >= r.a.y && s.dropPos.y <= r.b.y)
+         {
+            s.dropFrame = -1;
+            layerEdited |= Impl::ApplyFile(ed, board, r.slot, s.dropPath);
+            break;
+         }
+
+   Primitive *const old = OldPlayfield(t);
+   Primitive *const walls = CompanionOf(board, kPlayfieldWallsRole);
+   Primitive *const floor = CompanionOf(board, kPlayfieldFloorRole);
+   props.FlushRow();
+   if (old != nullptr)
+   {
+      // Flips the authored visibility of the board, its walls and the old playfield together (not an undo step, saved as left)
+      bool showOld = Impl::AuthoredVisible(ed, old);
+      if (ImGui::Checkbox("Show Old Playfield", &showOld))
+      {
+         Impl::SetAuthoredVisible(ed, old, showOld);
+         Impl::SetAuthoredVisible(ed, board, !showOld);
+         Impl::SetAuthoredVisible(ed, walls, !showOld);
+         if (ed.m_renderer)
+            ed.m_renderer->MarkStaticPrepassDirty();
+         t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      }
+      ImGui::SetItemTooltip("Draw %s instead of the board, to compare", old->GetName().c_str());
+   }
+
+   // Layer slots
+   props.Separator("Layers"s);
+   props.FlushRow();
+   vector<State::SlotRect> rects;
+   const float dpi = ed.m_liveUI.GetDPI();
+   const float thumb = 28.f * dpi;
+   const vector<Primitive *> cards = TracedCards(t);
+   if (!board->m_d.m_szEmissionMap.empty())
+      s.showGlow = true;
+   if (!ed.m_refImage.GetFile(ed).empty())
+      s.showBlueprint = true;
+   for (int slot = 0; slot < SlotCount; slot++)
+   {
+      if ((slot == Glow && !s.showGlow) || (slot == Blueprint && !s.showBlueprint))
+         continue;
+      const string value = Impl::GetSlot(ed, board, slot);
+      ImGui::PushID(slot);
+      ImGui::BeginGroup();
+      const Texture *const tex = slot == Blueprint || value.empty() ? nullptr : t->GetImage(value);
+      ImTextureID image = tex != nullptr && ed.m_renderer ? ed.m_renderer->m_renderDevice->m_texMan.LoadTexture(const_cast<Texture *>(tex), false) : ImTextureID {};
+      if (image)
+         ImGui::Image(image, ImVec2(thumb, thumb));
+      else
+         ImGui::Dummy(ImVec2(thumb, thumb));
+      ImGui::SameLine();
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted(kSlotNames[slot]);
+      if (slot == InsertPrint)
+      {
+         int users = 0;
+         for (const Primitive *const c : cards)
+            users += !value.empty() && c->m_d.m_szORMMap == value;
+         if (cards.empty())
+            ImGui::TextDisabled("no traced inserts");
+         else
+            ImGui::TextDisabled("%s, used by %d inserts", value.empty() ? "(none)" : value.c_str(), users);
+      }
+      else
+         ImGui::TextDisabled("%s", value.empty() ? "(none)" : value.c_str());
+      ImGui::EndGroup();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(slot == InsertPrint && cards.empty()); // The slot's tooltip says why
+      if (ImGui::Button("Load..."))
+         Impl::StartLoad(ed, slot);
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(value.empty() || slot == Blueprint || (slot == InsertPrint && cards.empty()));
+      if (ImGui::Button("Clear"))
+      {
+         if (slot == InsertPrint)
+            ImGui::OpenPopup("Clear Insert Print");
+         else
+         {
+            Impl::SetSlot(ed, board, slot, string());
+            layerEdited = true;
+         }
+      }
+      ImGui::EndDisabled();
+      if ((slot == Glow || slot == Blueprint) && value.empty())
+      {
+         ImGui::SameLine();
+         if (ImGui::SmallButton("x"))
+            (slot == Glow ? s.showGlow : s.showBlueprint) = false;
+         ImGui::SetItemTooltip("Remove this layer");
+      }
+      if (ImGui::BeginPopupModal("Clear Insert Print", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+      {
+         int users = 0;
+         for (const Primitive *const c : cards)
+            users += c->m_d.m_szORMMap == value;
+         ImGui::Text("This removes the print from %d inserts.", users);
+         if (ImGui::Button("Remove"))
+         {
+            for (Primitive *const c : cards)
+               if (c->m_d.m_szORMMap == value)
+               {
+                  ed.m_undo.MarkForUndo(c, true, false);
+                  c->m_d.m_szORMMap.clear();
+               }
+            layerEdited = true;
+            ImGui::CloseCurrentPopup();
+         }
+         ImGui::SameLine();
+         if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+         ImGui::EndPopup();
+      }
+      ImGui::EndGroup();
+      if (slot == InsertPrint && cards.empty())
+         ImGui::SetItemTooltip("%s\nThis table has no traced inserts: nothing to load", kSlotTips[slot]);
+      else
+         ImGui::SetItemTooltip("%s\nDrop an image file here, or Load...", kSlotTips[slot]);
+      rects.push_back({ slot, ImGui::GetItemRectMin(), ImGui::GetItemRectMax() });
+      if (slot == InsertPrint && !cards.empty())
+      {
+         int others = 0;
+         for (const Primitive *const c : cards)
+            others += !c->m_d.m_szORMMap.empty() && c->m_d.m_szORMMap != value;
+         if (others > 0)
+         {
+            // The cards a new print leaves alone, by name and image
+            if (ImGui::TreeNode("##others", "%d inserts use another image", others))
+            {
+               for (const Primitive *const c : cards)
+                  if (!c->m_d.m_szORMMap.empty() && c->m_d.m_szORMMap != value)
+                     ImGui::BulletText("%s: %s", c->GetName().c_str(), c->m_d.m_szORMMap.c_str());
+               ImGui::TreePop();
+            }
+            ImGui::Checkbox("All cards", &s.printAll);
+            ImGui::SetItemTooltip("A new print goes on every traced insert, not only the ones on the current print");
+         }
+      }
+      if (slot == WoodMask)
+      {
+         // Find Holes (holes from the wood mask) goes here
+      }
+      ImGui::PopID();
+   }
+   s.rects = std::move(rects);
+   if (!s.showGlow || !s.showBlueprint)
+   {
+      if (ImGui::Button("+ Add Layer"))
+         ImGui::OpenPopup("Add Layer");
+      if (ImGui::BeginPopup("Add Layer"))
+      {
+         if (!s.showGlow && ImGui::Selectable("Glow"))
+            s.showGlow = true;
+         if (!s.showBlueprint && ImGui::Selectable("Blueprint"))
+            s.showBlueprint = true;
+         ImGui::EndPopup();
+      }
+   }
+   props.CustomField(layerEdited, "Layer"s);
+
+   // Board
+   props.Separator("Board"s);
+   props.InputFloat<Primitive>(
+      board, "Thickness"s, //
+      [](const Primitive *p) { return p->m_d.m_pfThickness; }, //
+      [](Primitive *p, float v) { p->m_d.m_pfThickness = clamp(v, 1.f, 200.f); s.rebuildOnRelease = true; }, PropertyPane::Unit::VPLength, 2, "Plywood thickness (0.5 in = 23.5)");
+   props.InputInt<Primitive>(
+      board, "Curve Detail"s, //
+      [](const Primitive *p) { return p->m_d.m_pfDetail; }, //
+      [](Primitive *p, int v) { p->m_d.m_pfDetail = clamp(v, 1, 5); s.rebuildOnRelease = true; }, "How smooth the hole circles are (1 to 5, as plastics)");
+
+   // Floor
+   props.FlushRow();
+   const vector<Primitive *> &floors = Impl::Floors(ed);
+   int mode = board->m_d.m_pfFloor;
+   bool floorEdited = false;
+   ImGui::TextUnformatted("Floor");
+   ImGui::SameLine();
+   if (ImGui::RadioButton("Own", mode == 0) && mode != 0)
+   {
+      board->m_d.m_pfFloor = 0;
+      CopyFloorPhysics(t, board, floor);
+      floorEdited = true;
+   }
+   ImGui::SetItemTooltip("The board's own floor collider: Falls Through holes drop the ball");
+   ImGui::SameLine();
+   ImGui::BeginDisabled(floors.empty() && mode != 1);
+   if (ImGui::RadioButton("Keep Existing", mode == 1) && mode != 1)
+   {
+      board->m_d.m_pfFloor = 1;
+      floorEdited = true;
+   }
+   DisabledTooltip(floors.empty() ? "No existing floor collider" : "The board is look only: the existing floor collider decides where the ball falls");
+   ImGui::EndDisabled();
+   if (board->m_d.m_pfFloor == 1 && floors.empty())
+      ImGui::TextColored(ImVec4(1.f, 0.35f, 0.3f, 1.f), "No floor: balls will fall through");
+   for (Primitive *const f : floors)
+   {
+      ImGui::PushID(f);
+      ImGui::TextDisabled("Floor collider: %s", f->GetName().c_str());
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Turn Collision Off"))
+      {
+         ed.m_undo.MarkForUndo(f, true, false);
+         f->m_d.m_collidable = false;
+         if (ed.m_player != nullptr && ed.m_player->m_physics != nullptr)
+            ed.m_player->m_physics->Update(f);
+         s.floorsStale = true;
+         floorEdited = true;
+      }
+      ImGui::PopID();
+   }
+   if (floorEdited)
+      board->UpdatePlayfield();
+   props.CustomField(floorEdited, "Floor"s);
+
+   // Holes
+   props.Separator("Holes"s);
+   props.FlushRow();
+   bool holesEdited = false;
+   vector<PlayfieldHole> &holes = board->m_pfHoles;
+   int cut = 0, falls = 0, narrow = 0, overlap = 0;
+   const bool keep = board->m_d.m_pfFloor == 1;
+   for (size_t i = 0; i < holes.size(); i++)
+   {
+      const PlayfieldHole &h = holes[i];
+      const bool c = (h.flags & PlayfieldHole::Cut) != 0;
+      cut += c;
+      if (c && i < board->m_pfOverlap.size() && board->m_pfOverlap[i])
+         overlap++;
+      if (c && (h.flags & PlayfieldHole::FallsThrough) && !keep)
+      {
+         falls++;
+         if (h.type != PlayfieldHole::Polygon && h.diameter < 50.f)
+            narrow++;
+      }
+   }
+   ImGui::Text("%d holes, %d cut, %d fall through", static_cast<int>(holes.size()), cut, falls);
+   if (overlap > 0)
+      ImGui::TextColored(ImVec4(1.f, 0.35f, 0.3f, 1.f), "%d holes overlap or leave the board: not cut until moved", overlap);
+   if (falls > 0)
+      ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "Make sure something below catches the ball");
+   if (narrow > 0)
+      ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%d Falls Through holes are narrower than the ball: it will rest on the rim", narrow);
+
+   // Placing: a preset or typed sizes, then a click on the playfield
+   {
+      static int preset = 1;
+      ImGui::SetNextItemWidth(220.f * dpi);
+      if (ImGui::BeginCombo("##preset", preset >= 0 ? kPresets[preset].name : "Custom"))
+      {
+         for (int i = 0; i < static_cast<int>(std::size(kPresets)); i++)
+            if (ImGui::Selectable(kPresets[i].name, preset == i))
+            {
+               preset = i;
+               if (kPresets[i].slot)
+               {
+                  s.slotLength = kPresets[i].a * kVPUPerInch;
+                  s.slotWidth = kPresets[i].b * kVPUPerInch;
+               }
+               else
+                  s.roundDia = kPresets[i].a * kVPUPerInch;
+            }
+         ImGui::EndCombo();
+      }
+      // Typed sizes in inches, as the presets (kept in VPU)
+      const auto inches = [&](const char *label, float &vpu, const float maxVpu)
+      {
+         float v = vpu / kVPUPerInch;
+         ImGui::SetNextItemWidth(90.f * dpi);
+         if (ImGui::InputFloat(label, &v, 0.f, 0.f, "%.3f in"))
+         {
+            vpu = clamp(v * kVPUPerInch, 1.f, maxVpu);
+            preset = -1;
+         }
+      };
+      inches("Diameter", s.roundDia, 1000.f);
+      inches("Slot Length", s.slotLength, 2000.f);
+      ImGui::SameLine();
+      inches("Width", s.slotWidth, 1000.f);
+      if (ImGui::Button(s.placing == 1 ? "Click to place..." : "Add Round Hole"))
+      {
+         s.placing = s.placing == 1 ? 0 : 1;
+         ed.Report(s.placing ? "Click on the playfield to place the hole (Esc cancels)" : "");
+      }
+      ImGui::SameLine();
+      if (ImGui::Button(s.placing == 2 ? "Click to place..." : "Add Slot"))
+      {
+         s.placing = s.placing == 2 ? 0 : 2;
+         ed.Report(s.placing ? "Click on the playfield to place the slot (Esc cancels)" : "");
+      }
+   }
+
+   // The list
+   int sel = SelectedHole(board);
+   int toDelete = -1;
+   if (!holes.empty() && ImGui::BeginChild("##holes", ImVec2(0.f, min(static_cast<float>(holes.size()), 8.f) * ImGui::GetFrameHeightWithSpacing() + 4.f * dpi), ImGuiChildFlags_Borders))
+   {
+      ImGuiListClipper clipper;
+      clipper.Begin(static_cast<int>(holes.size()));
+      while (clipper.Step())
+         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+         {
+            PlayfieldHole &h = holes[i];
+            ImGui::PushID(i);
+            char label[96];
+            const char *const type = h.type == PlayfieldHole::Slot ? "Slot" : h.type == PlayfieldHole::Polygon ? "Shape" : "Round";
+            const char *const under = (h.flags & PlayfieldHole::UnderInsert) ? " (under insert)" : "";
+            if (h.type == PlayfieldHole::Slot) // Length (end to end) x width, as the preset
+               snprintf(label, sizeof(label), "%d %s %.2f x %.3f in%s", i + 1, type, (hypotf(h.end.x - h.centre.x, h.end.y - h.centre.y) + h.diameter) / kVPUPerInch, h.diameter / kVPUPerInch, under);
+            else
+               snprintf(label, sizeof(label), "%d %s %.3f in%s", i + 1, type, h.diameter / kVPUPerInch, under);
+            if (ImGui::Selectable(label, i == sel, ImGuiSelectableFlags_AllowOverlap, ImVec2(170.f * dpi, 0.f)))
+            {
+               SelectHole(board, i);
+               sel = i;
+            }
+            ImGui::SameLine();
+            bool c = (h.flags & PlayfieldHole::Cut) != 0;
+            if (ImGui::Checkbox("Cut", &c))
+            {
+               h.flags = c ? (h.flags | PlayfieldHole::Cut) : (h.flags & ~PlayfieldHole::Cut);
+               holesEdited = true;
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(keep);
+            bool f = (h.flags & PlayfieldHole::FallsThrough) != 0;
+            if (ImGui::Checkbox("Falls Through", &f))
+            {
+               h.flags = f ? (h.flags | PlayfieldHole::FallsThrough) : (h.flags & ~PlayfieldHole::FallsThrough);
+               holesEdited = true;
+            }
+            if (keep)
+               DisabledTooltip("The existing floor decides where the ball falls");
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Delete"))
+               toDelete = i;
+            ImGui::PopID();
+         }
+   }
+   if (!holes.empty())
+      ImGui::EndChild(); // Paired with every BeginChild, whatever it returned: else, with the list scrolled out of view, the rest of the pane went into the hidden child
+   if (toDelete >= 0)
+   {
+      holes.erase(holes.begin() + toDelete);
+      if (sel == toDelete)
+         SelectHole(board, -1);
+      else if (sel > toDelete)
+         SelectHole(board, sel - 1);
+      holesEdited = true;
+   }
+   if (holesEdited)
+      board->UpdatePlayfield();
+   props.CustomField(holesEdited, "Holes"s);
+
+   // The selected hole's fields (G moves it in the viewport)
+   if (SelectedHole(board) >= 0)
+   {
+      const auto holeAt = [](const Primitive *p) -> const PlayfieldHole * { const int i = SelectedHole(p); return i >= 0 ? &p->m_pfHoles[i] : nullptr; };
+      const auto holeEdit = [](Primitive *p, const std::function<void(PlayfieldHole &)> &fn)
+      {
+         if (const int i = SelectedHole(p); i >= 0)
+         {
+            fn(p->m_pfHoles[i]);
+            s.rebuildOnRelease = true;
+         }
+      };
+      const PlayfieldHole *const h = holeAt(board);
+      props.InputFloat<Primitive>(
+         board, "Hole X"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->centre.x : 0.f; }, //
+         [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { MoveHole(h, PlayfieldHole(h), v - h.centre.x, 0.f); }); }, PropertyPane::Unit::VPLength, 2, "G moves the hole in the viewport");
+      props.InputFloat<Primitive>(
+         board, "Hole Y"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->centre.y : 0.f; }, //
+         [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { MoveHole(h, PlayfieldHole(h), 0.f, v - h.centre.y); }); }, PropertyPane::Unit::VPLength, 2);
+      if (h != nullptr && h->type != PlayfieldHole::Polygon)
+         props.InputFloat<Primitive>(
+            board, "Hole Diameter"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->diameter : 0.f; }, //
+            [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { h.diameter = clamp(v, 1.f, 1000.f); }); }, PropertyPane::Unit::VPLength, 2);
+      if (h != nullptr && h->type == PlayfieldHole::Slot)
+      {
+         props.InputFloat<Primitive>(
+            board, "Hole End X"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->end.x : 0.f; }, //
+            [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { h.end.x = v; }); }, PropertyPane::Unit::VPLength, 2);
+         props.InputFloat<Primitive>(
+            board, "Hole End Y"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->end.y : 0.f; }, //
+            [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { h.end.y = v; }); }, PropertyPane::Unit::VPLength, 2);
+      }
+   }
+   if (s.rebuildOnRelease && !ImGui::IsAnyItemActive())
+   {
+      s.rebuildOnRelease = false;
+      board->UpdatePlayfield(); // Once the field is let go
+   }
+}
+
+}
