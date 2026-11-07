@@ -535,6 +535,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(PFOM), "playfield_outline_mode" },
             { FID(PFOL), "playfield_outline" },
             { FID(PFIL), "playfield_insert_lights" },
+            { FID(PFIP), "playfield_cut_inserts" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/

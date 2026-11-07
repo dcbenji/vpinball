@@ -35,6 +35,8 @@ inline constexpr int kRampWallsRole = 4; // m_plasticRole of a Ramp Collider's w
 // Playfield Maker companions
 inline constexpr int kPlayfieldWallsRole = 5; // The hole walls, the board's outer edge and the dark backing (the Plywood image)
 inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut, with their walls
+inline constexpr int kPlayfieldInsertsRole = 7; // Cut Insert Pockets (prototype): the insert bodies filling the cut pockets (Paint image, see-through material)
+inline constexpr int kPlayfieldInsertCapsRole = 8; // Cut Insert Pockets: the ink over the pockets (Insert Caps (baked): alpha = ink, a copy of the playfield material)
 inline constexpr int kMaxPlayfieldHoles = 4096; // Load caps
 inline constexpr int kMaxPlayfieldHolePoints = 4096;
 
@@ -189,6 +191,7 @@ public:
    int m_pfPrintMode = 0; // bit 0: ink from the alpha (else the luminance), bit 1: inverted
    int m_pfOutlineMode = 0; // 0 Table Rectangle, 1 From Wood Mask (the traced outline is in Primitive::m_pfOutline)
    string m_pfInsertLights; // Name of a part group or collection whose lights mark the insert pockets (Find Holes); empty = none
+   bool m_pfCutInserts = false; // Cut Insert Pockets (prototype): insert pockets are cut and filled by the inserts and caps companions
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -534,7 +537,7 @@ public:
    void RegeneratePlayfield(); // Rebuilds the board, the walls and the floor collider meshes (mesh work only; no-op unless m_d.m_playfieldGen)
    void UpdatePlayfield(); // An edit: m_pfDirty, then the renderable reinit rebuilds it
    bool IsPlayfieldPart() const; // The board or one of its companions
-   Primitive *GetPlayfieldCompanion(int role) const; // The board's walls or floor (one pass over the table, unlike GetPlasticCompanions), else null
+   Primitive *GetPlayfieldCompanion(int role) const; // The board's walls, floor, inserts or caps (one pass over the table, unlike GetPlasticCompanions), else null
    // Own floor with the table's physics: the floor collider follows the table's effective playfield physics (called by the table physics setters).
    // Only while the board's m_pfFloorFollows is set: no part is searched for here
    static void SyncPlayfieldFloorPhysics(PinTable *table);

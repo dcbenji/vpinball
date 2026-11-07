@@ -997,7 +997,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      {
                         editor.m_liveEditedParts.insert(part);
                         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
-                           for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
+                           for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
                               if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                                  editor.m_liveEditedParts.insert(comp);
                         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_rampCollider) // The walls part
@@ -1045,9 +1045,9 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                for (const int role : { 1, 2 })
                   if (Primitive *const comp = companionMap ? companionMap->Get(static_cast<Primitive *>(part), role) : PlasticFromAtlas::CompanionOf(static_cast<Primitive *>(part), role); comp != nullptr)
                      editor.m_undo.MarkForUndo(comp, true, false);
-            // The Playfield section writes the walls (Plywood) and the floor (Floor, its physics): in the board's step
+            // The Playfield section writes the walls (Plywood), the floor (Floor, its physics), the inserts and caps (Cut Insert Pockets): in the board's step
             if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
-               for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole })
+               for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
                   if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                      editor.m_undo.MarkForUndo(comp, true, false);
             // The Ramp Collider's Walls fields write the walls part (its physics): in the collider's step

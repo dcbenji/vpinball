@@ -28,7 +28,7 @@ public:
    static constexpr const char *kOneBoard = "A table has one playfield board, made by Add > Playfield: a board is not pasted or imported";
 
    static Primitive *Board(const PinTable *table); // The board of the table, else null
-   static Primitive *CompanionOf(const Primitive *board, int role); // kPlayfieldWallsRole or kPlayfieldFloorRole
+   static Primitive *CompanionOf(const Primitive *board, int role); // kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole or kPlayfieldInsertCapsRole
    static bool IsPart(const IEditable *part); // The board or one of its companions
    // Removes the board and its companions from parts (copy, delete, group, collection, pack export): reports kFollowsTable when it removed any
    static bool StripBoard(EditorUI &ed, vector<IEditable *> &parts);

@@ -117,6 +117,7 @@ struct State
    int bakeFrame = 0; // the frame of the click: the run is dropped if the section is not drawn on the next one
    string bakeStatus;
    bool bakeStatusBad = false;
+   bool listStale = false; // Cut Insert Pockets made its companions: the outliner list is refreshed on the next update (not while the panel draws)
 } s;
 
 
@@ -210,6 +211,81 @@ Material *EnsurePlywoodMaterial(PinTable *const t)
 }
 
 
+
+// Cut Insert Pockets (P2-5 prototype): the insert body. A see-through PBR plastic lit from below too; its colour is the Paint image (the companion's image),
+// frosted (scatter) and tinted by the path through it (absorption, white: the image gives the hue), no clear coat (the board's coat is the cap's).
+// Start values for Ben's look review, not tuned: the traced inserts' defaults (frost off, the plastic's colour fully in the lamp-off look)
+Material *EnsureInsertPlasticMaterial(PinTable *const t)
+{
+   static constexpr const char *kName = "Playfield Insert Plastic";
+   if (Material *const existing = t->GetMaterial(kName); !t->IsDummyMaterial(existing))
+      return existing;
+   Material *const m = new Material();
+   m->m_name = kName;
+   m->m_type = Material::PBR;
+   m->m_cBase = 0xFFFFFF;
+   m->m_cGlossy = 0;
+   m->m_cClearcoat = 0;
+   m->m_cRefractionTint = 0xFFFFFF;
+   m->m_fGlossyImageLerp = 1.f;
+   m->m_fEdge = 1.f;
+   m->m_fWrapLighting = 0.f;
+   m->m_fRoughness = 0.25f;
+   m->m_fThickness = 0.5f;
+   m->m_fEdgeAlpha = 1.f;
+   m->m_fOpacity = 0.6f;
+   m->m_bOpacityActive = true;
+   m->m_fMetallic = 0.f;
+   m->m_fOcclusion = 1.f;
+   m->m_cEmission = 0;
+   m->m_fEmissionIntensity = 1.f;
+   m->m_fClearcoat = 0.f;
+   m->m_fScatter = 0.3f;
+   m->m_fAbsorption = 0.5f;
+   m->m_cAbsorption = 0xFFFFFF;
+   t->AddMaterial(m); // Not undone (a harmless leftover; a material is no part)
+   t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   return m;
+}
+
+// Cut Insert Pockets: the ink over the pockets. A copy of the table's playfield material made once (so the ink reads as the board's print), with opacity
+// active at 1 and no edge fade: the Insert Caps image's alpha (the ink) alone decides the coverage. The board's own playfield material is never changed (it
+// is forced on the board every frame: opacity on it would put the whole board in the transparent pass)
+// A table that already has a "Playfield Ink Cap" keeps it, but with opacity forced on (else the caps would draw opaque over the insert bodies): `forced` says so
+Material *EnsureInkCapMaterial(PinTable *const t, bool &forced)
+{
+   static constexpr const char *kName = "Playfield Ink Cap";
+   forced = false;
+   if (Material *const existing = t->GetMaterial(kName); !t->IsDummyMaterial(existing))
+   {
+      if (!existing->m_bOpacityActive)
+      {
+         existing->m_bOpacityActive = true; // Not undone (as the material's creation)
+         t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+         forced = true;
+      }
+      return existing;
+   }
+   const Material *const pf = t->GetMaterial(t->m_playfieldMaterial);
+   Material *const m = new Material(pf);
+   m->m_name = kName;
+   m->m_bOpacityActive = true;
+   m->m_fOpacity = 1.f;
+   m->m_fEdgeAlpha = 0.f;
+   t->AddMaterial(m);
+   t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   return m;
+}
+
+// The newest "Insert Caps (baked)" image (the bake adds name, name1, name2...), else empty
+string LatestCapsImage(const PinTable *const t)
+{
+   string res;
+   for (const Texture *const im : t->m_vimage)
+      if (im->m_name.rfind("Insert Caps (baked)", 0) == 0)
+         res = im->m_name;
+   return res;
+}
 
 vector<Primitive *> TracedCards(const PinTable *t)
 {
@@ -1007,9 +1083,17 @@ struct PlayfieldMaker::Impl
    {
       switch (slot)
       {
-      case Paint: ed.m_table->m_image = image; break;
-      case Shine: board->m_d.m_szORMMap = image; break;
-      case Bump: board->m_d.m_szNormalMap = image; break;
+      case Paint:
+         ed.m_table->m_image = image;
+         if (Primitive *const inserts = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertsRole); inserts != nullptr)
+            inserts->m_d.m_szImage = image; // The insert bodies show the Paint (marked in the board's record)
+         break;
+      case Shine:
+      case Bump:
+         (slot == Shine ? board->m_d.m_szORMMap : board->m_d.m_szNormalMap) = image;
+         if (Primitive *const caps = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertCapsRole); caps != nullptr) // The ink caps are the board's surface (marked in the board's record)
+            (slot == Shine ? caps->m_d.m_szORMMap : caps->m_d.m_szNormalMap) = image;
+         break;
       case Glow: board->m_d.m_szEmissionMap = image; break;
       case HolesMask: board->m_d.m_pfWoodMask = image; break;
       case PrintMask: board->m_d.m_pfPrintMask = image; break;
@@ -1059,8 +1143,127 @@ struct PlayfieldMaker::Impl
       return true;
    }
 
-   // Insert Caps (baked) is written only with P2-5's Cut Insert Pockets switch on; the switch does not exist yet, so this stays dormant
-   static bool CutInsertPockets(const Primitive *) { return false; }
+   // Insert Caps (baked) is written only with Cut Insert Pockets on
+   static bool CutInsertPockets(const Primitive *board) { return board->m_d.m_pfCutInserts; }
+
+   // The insert bodies and caps are shown only with the switch on and the board shown (Show Old Playfield hides them with it); the caps only once they have an
+   // Insert Caps image (without one they would cover the pocket in plain material colour)
+   static void ShowPocketParts(EditorUI &ed, Primitive *const board)
+   {
+      const bool shown = board->m_d.m_pfCutInserts && AuthoredVisible(ed, board);
+      if (Primitive *const inserts = CompanionOf(board, kPlayfieldInsertsRole); inserts != nullptr)
+         SetAuthoredVisible(ed, inserts, shown);
+      if (Primitive *const caps = CompanionOf(board, kPlayfieldInsertCapsRole); caps != nullptr)
+         SetAuthoredVisible(ed, caps, shown && !caps->m_d.m_szImage.empty());
+   }
+
+   // Show Old Playfield: flips the authored visibility of the board, its walls (and insert bodies and caps) and the old playfield together (not an undo step)
+   static void SetShowOld(EditorUI &ed, Primitive *const board, Primitive *const old, const bool showOld)
+   {
+      SetAuthoredVisible(ed, old, showOld);
+      SetAuthoredVisible(ed, board, !showOld);
+      SetAuthoredVisible(ed, CompanionOf(board, kPlayfieldWallsRole), !showOld);
+      ShowPocketParts(ed, board);
+      if (ed.m_renderer)
+         ed.m_renderer->MarkStaticPrepassDirty();
+      ed.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+   }
+
+   // Cut Insert Pockets (P2-5 prototype), in the caller's open undo record (one step). On: the insert pockets are cut (bevel 0) and two companions fill them,
+   // <board>_Inserts (the insert bodies) and <board>_InsertCaps (the ink, shown once an Insert Caps image is baked). They are made the first time, marked for
+   // create in the same record (its undo takes them out again), and shown again after an off. Off: the pockets close, the companions are hidden (kept, with
+   // their meshes). Returns true when the board changed
+   static bool SetCutInsertPockets(EditorUI &ed, Primitive *const board, const bool on)
+   {
+      PinTable *const t = ed.m_table;
+      if (board->m_d.m_pfCutInserts == on)
+         return false;
+      Primitive *inserts = CompanionOf(board, kPlayfieldInsertsRole), *caps = CompanionOf(board, kPlayfieldInsertCapsRole);
+      vector<Primitive *> made;
+      if (on && (inserts == nullptr || caps == nullptr))
+      {
+         if (ed.m_player == nullptr || ed.m_player->m_physics == nullptr || ed.m_renderer == nullptr)
+            return false;
+         const auto unique = [t](const string &name)
+         {
+            string res = name;
+            for (int n = 2; !t->IsNameUnique(res); n++)
+               res = name + std::to_string(n);
+            return res;
+         };
+         PartGroup *const group = board->GetPartGroup();
+         const string &boardName = board->GetName();
+         for (Primitive **const comp : { &inserts, &caps })
+            if (*comp == nullptr && group != nullptr)
+               if (Primitive *const p = NewPart(ed, unique(boardName + (comp == &inserts ? "_Inserts" : "_InsertCaps")), group); p != nullptr)
+               {
+                  *comp = p;
+                  made.push_back(p);
+               }
+         if (inserts == nullptr || caps == nullptr)
+         {
+            for (Primitive *const p : made) // Nothing set up yet: no renderable, no collider
+            {
+               t->RemovePart(p);
+               p->Release();
+            }
+            ed.Report("Cut Insert Pockets: could not create the parts");
+            return false;
+         }
+         for (Primitive *const p : made)
+         {
+            p->m_d.m_plasticHost = boardName;
+            p->m_d.m_toy = true;
+            p->m_d.m_collidable = false; // Look only: the floor collider stays solid over the pockets
+            p->m_d.m_visible = true;
+            p->m_d.m_use3DMesh = true;
+            p->m_d.m_reflectionEnabled = false; // Not mirrored into the playfield reflection
+            p->m_d.m_useDepthMask = false; // Drawn blended over the board, after it (depth bias)
+            p->m_d.m_staticRendering = false; // See-through: never in the static prepass
+            p->SetUILock(true); // A viewport click lands on the board
+         }
+         if (std::ranges::find(made, inserts) != made.end())
+         {
+            inserts->m_d.m_plasticRole = kPlayfieldInsertsRole;
+            inserts->m_d.m_szMaterial = EnsureInsertPlasticMaterial(t)->m_name;
+            inserts->m_d.m_szImage = t->m_image; // The Paint image, with table UVs: the insert's colour is the art's
+            inserts->m_d.m_depthBias = 2.f; // Transparent parts sort by depth bias - z, descending: the bodies, then the caps, then the traced cards (-0.4)
+            inserts->m_d.m_cullBackfaces = true; // A closed shell: front faces only, sorted back to front (WantsTriangleSort)
+            inserts->m_d.m_disableLightingBelow = 0.f; // Lit from below too: the lamp sits under the insert
+         }
+         if (std::ranges::find(made, caps) != made.end())
+         {
+            caps->m_d.m_plasticRole = kPlayfieldInsertCapsRole;
+            bool forced = false;
+            caps->m_d.m_szMaterial = EnsureInkCapMaterial(t, forced)->m_name;
+            if (forced)
+               ed.Report("Cut Insert Pockets: the existing material \"Playfield Ink Cap\" had no opacity: turned on (the caps cover only the ink)");
+            caps->m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME; // The ball's playfield reflection continues over the pockets (strength: the table's, per frame)
+            caps->m_d.m_szImage = LatestCapsImage(t);
+            caps->m_d.m_depthBias = 1.f;
+            caps->m_d.m_disableLightingBelow = 1.f; // As the board
+         }
+      }
+      board->m_d.m_pfCutInserts = on;
+      if (!made.empty())
+      {
+         board->RegeneratePlayfield(); // The new companions are in the table: their meshes first, then their renderables
+         for (Primitive *const p : made)
+         {
+            ed.m_player->TimerSetup(p);
+            p->GetIRenderable()->RenderSetup(ed.m_renderer.get());
+            if (p->GetIHitable())
+               ed.m_player->m_physics->Add(p);
+            ed.m_undo.MarkForCreate(p);
+         }
+         s.listStale = true;
+      }
+      ShowPocketParts(ed, board);
+      board->UpdatePlayfield();
+      if (ed.m_renderer)
+         ed.m_renderer->MarkStaticPrepassDirty();
+      return true;
+   }
 
    // `name` or the first of name1, name2... the table does not have yet (an existing image is never replaced: the renderer may hold it)
    static string UniqueImageName(const PinTable *t, const string &name)
@@ -1127,6 +1330,12 @@ struct PlayfieldMaker::Impl
          {
             t->AddImage(ct);
             caps = ", " + ct->m_name;
+            if (Primitive *const cap = CompanionOf(board, kPlayfieldInsertCapsRole); cap != nullptr) // In the panel's record (the board's companions are marked)
+            {
+               ed.m_undo.MarkForUndo(cap, true, false);
+               cap->m_d.m_szImage = ct->m_name;
+               ShowPocketParts(ed, board); // Not over a shown old playfield
+            }
          }
          else
             capsFailed = true;
@@ -1147,7 +1356,7 @@ struct PlayfieldMaker::Impl
          s.bakeStatus += ". Insert Caps (baked) could not be encoded and was not added";
       s.bakeStatusBad = capsFailed;
       ed.Report(s.bakeStatus);
-      return repointed > 0;
+      return repointed > 0 || !caps.empty();
    }
 
    static void StartLoad(EditorUI &ed, const int slot)
@@ -1362,26 +1571,36 @@ std::function<void()> PlayfieldMaker::KeepShown(EditorUI &ed)
    Primitive *const old = board != nullptr ? OldPlayfield(ed.m_table) : nullptr;
    if (old == nullptr) // Nothing to compare the board with
       return {};
-   Primitive *const walls = CompanionOf(board, kPlayfieldWallsRole);
+   // The board's drawn companions: the walls, and the insert bodies and caps of Cut Insert Pockets
+   struct Shown
+   {
+      Primitive *part;
+      bool shown;
+   };
+   vector<Shown> parts;
+   for (const int role : { kPlayfieldWallsRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
+      if (Primitive *const p = CompanionOf(board, role); p != nullptr)
+         parts.push_back({ p, Impl::AuthoredVisible(ed, p) });
    const bool boardShown = Impl::AuthoredVisible(ed, board);
-   const bool wallsShown = walls != nullptr && Impl::AuthoredVisible(ed, walls);
    const bool oldShown = Impl::AuthoredVisible(ed, old);
-   if (oldShown && (boardShown || wallsShown)) // Both drawn already (the author's own Visible edit): the step is left alone, so it can undo that
+   if (oldShown && (boardShown || std::ranges::any_of(parts, [](const Shown &p) { return p.shown; }))) // Both drawn already (the author's own Visible edit): the step is left alone, so it can undo that
       return {};
-   return [&ed, board, walls, old, boardShown, wallsShown, oldShown]()
+   return [&ed, board, parts, old, boardShown, oldShown]()
    {
       PinTable *const t = ed.m_table;
       if (Board(t) != board || !t->HasPart(old)) // The step took the board or the old playfield out (the undo of Add): its own restore applies
          return;
       // Only a step that would leave both playfields drawn (a board record taken on the other side of Show Old Playfield) gets the visibility back.
       // HasPart compares addresses: a part the step removed is never read
-      const bool wallsIn = walls != nullptr && t->HasPart(walls);
-      if (!Impl::AuthoredVisible(ed, old) || !(Impl::AuthoredVisible(ed, board) || (wallsIn && Impl::AuthoredVisible(ed, walls))))
+      if (!Impl::AuthoredVisible(ed, old)
+         || !(Impl::AuthoredVisible(ed, board) || std::ranges::any_of(parts, [&ed, t](const Shown &p) { return t->HasPart(p.part) && Impl::AuthoredVisible(ed, p.part); })))
          return;
       Impl::SetAuthoredVisible(ed, board, boardShown);
-      if (wallsIn)
-         Impl::SetAuthoredVisible(ed, walls, wallsShown);
+      for (const Shown &p : parts)
+         if (t->HasPart(p.part))
+            Impl::SetAuthoredVisible(ed, p.part, p.shown);
       Impl::SetAuthoredVisible(ed, old, oldShown);
+      Impl::ShowPocketParts(ed, board); // Bodies and caps the step made again (a redo of the first Cut Insert Pockets) follow the board too
       if (ed.m_renderer)
          ed.m_renderer->MarkStaticPrepassDirty();
    };
@@ -1602,6 +1821,11 @@ void PlayfieldMaker::OnFileDrop(EditorUI &ed, const string &path, const ImVec2 &
 
 void PlayfieldMaker::Update(EditorUI &ed)
 {
+   if (s.listStale)
+   {
+      s.listStale = false;
+      ed.UpdateEditableList();
+   }
    // A queued bake runs on the frame after the click, when the section is drawn for the same board and table; otherwise (the panel closed, another selection, a play test) it is dropped
    if (s.bakeQueued && (ImGui::GetFrameCount() > s.bakeFrame + 1 || s.bakeTable != ed.m_table))
    {
@@ -1851,14 +2075,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       // Flips the authored visibility of the board, its walls and the old playfield together (not an undo step, saved as left)
       bool showOld = Impl::AuthoredVisible(ed, old);
       if (ImGui::Checkbox("Show Old Playfield", &showOld))
-      {
-         Impl::SetAuthoredVisible(ed, old, showOld);
-         Impl::SetAuthoredVisible(ed, board, !showOld);
-         Impl::SetAuthoredVisible(ed, walls, !showOld);
-         if (ed.m_renderer)
-            ed.m_renderer->MarkStaticPrepassDirty();
-         t->SetNonUndoableDirty(SaveDirtyState::Dirty);
-      }
+         Impl::SetShowOld(ed, board, old, showOld);
       ImGui::SetItemTooltip("Draw %s instead of the board, to compare", old->GetName().c_str());
    }
 
@@ -2232,6 +2449,25 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       }
    }
    ImGui::Text("%d holes, %d cut, %d insert pockets, %d fall through", static_cast<int>(holes.size()), cut, pockets, falls);
+   {
+      // Cut Insert Pockets (P2-5 prototype): one undo step, the companions made in the same step the first time
+      bool on = board->m_d.m_pfCutInserts, pocketsEdited = false;
+      if (ImGui::Checkbox("Cut Insert Pockets (prototype)", &on))
+         pocketsEdited = Impl::SetCutInsertPockets(ed, board, on);
+      ImGui::SetItemTooltip("Cut the insert pockets (no bevel) and fill them with insert bodies (the Paint in a see-through plastic) and an ink cap over them "
+                            "(Insert Caps (baked): Bake Insert Print makes it while this is on). A look prototype: the floor stays solid over the pockets");
+      props.CustomField(pocketsEdited, "Cut Insert Pockets"s);
+      if (board->m_d.m_pfCutInserts)
+      {
+         const Primitive *const caps = CompanionOf(board, kPlayfieldInsertCapsRole);
+         if (caps == nullptr || caps->m_d.m_szImage.empty())
+         {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.8f, 0.3f, 1.f));
+            ImGui::TextWrapped("No Insert Caps image yet: the ink over the pockets is not drawn. Bake Insert Print (Ink Mask slot) to make it");
+            ImGui::PopStyleColor();
+         }
+      }
+   }
    if (oldPockets > 0)
       ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%d insert pockets from phase 1 still carry Cut and are no longer cut: they are built only with Cut Insert Pockets (set Kind to Through to cut one)", oldPockets);
    if (overlap > 0)
@@ -2313,7 +2549,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       ImGui::TableSetupColumn("Bevel", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00.00").x + style.FramePadding.x * 2.f);
       ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("x").x + style.FramePadding.x * 2.f);
       ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-      static constexpr const char *kHeaderTips[] = { "Click a hole to select it (G moves it in the viewport)", "Kind: a through-hole, or an insert pocket (an insert sits over it: not cut)", "Cut through the board", "Falls Through: the floor collider has the hole, the ball drops",
+      static constexpr const char *kHeaderTips[] = { "Click a hole to select it (G moves it in the viewport)", "Kind: a through-hole, or an insert pocket (an insert sits over it: cut only with Cut Insert Pockets)", "Cut through the board", "Falls Through: the floor collider has the hole, the ball drops",
          "Bevel of the hole's rim: Def = the board's Default Bevel, Off = none, a number = its own size (Hole Bevel Size)", nullptr };
       for (int col = 0; col < 6; col++)
       {

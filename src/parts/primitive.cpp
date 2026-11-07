@@ -176,6 +176,7 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_pfPrintMode = wireDefaults.m_pfPrintMode;
    m_d.m_pfOutlineMode = wireDefaults.m_pfOutlineMode;
    m_d.m_pfInsertLights = wireDefaults.m_pfInsertLights;
+   m_d.m_pfCutInserts = wireDefaults.m_pfCutInserts;
    m_pfHoles.clear();
    m_pfOutline.clear();
    m_plasticEditHoles = false;
@@ -1421,6 +1422,12 @@ void Primitive::Render(const unsigned int renderMask)
    {
       m_d.m_szMaterial = m_ptable->m_playfieldMaterial;
       m_d.m_szImage = m_ptable->m_image;
+      m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME;
+      m_d.m_reflectionStrength = m_ptable->m_playfieldReflectionStrength;
+      pinf = SamplerFilter::SF_ANISOTROPIC;
+   }
+   else if (m_d.m_plasticRole == kPlayfieldInsertCapsRole && !m_d.m_plasticHost.empty()) // Playfield Maker ink caps: the board's surface over cut insert pockets
+   {
       m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME;
       m_d.m_reflectionStrength = m_ptable->m_playfieldReflectionStrength;
       pinf = SamplerFilter::SF_ANISOTROPIC;
@@ -2684,7 +2691,7 @@ PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOw
 
 bool Primitive::IsPlayfieldPart() const
 {
-   return m_d.m_playfieldGen || ((m_d.m_plasticRole == kPlayfieldWallsRole || m_d.m_plasticRole == kPlayfieldFloorRole) && IsPlasticCompanion());
+   return m_d.m_playfieldGen || (m_d.m_plasticRole >= kPlayfieldWallsRole && m_d.m_plasticRole <= kPlayfieldInsertCapsRole && IsPlasticCompanion()); // Walls, Floor, Inserts, InsertCaps
 }
 
 Primitive *Primitive::GetPlayfieldCompanion(const int role) const
@@ -2741,7 +2748,7 @@ void Primitive::RegeneratePlayfield()
    vector<PlayfieldBoard::BoardHole> holes;
    holes.reserve(m_pfHoles.size());
    for (const PlayfieldHole &hole : m_pfHoles)
-      holes.push_back(ToBoardHole(hole, m_d.m_pfFloor == 0));
+      holes.push_back(ToBoardHole(hole, m_d.m_pfFloor == 0, m_d.m_pfCutInserts));
    PlayfieldBoard::BoardMeshes built;
    PlayfieldBoard::BoardReport report;
    const bool ok = PlayfieldBoard::BuildBoard(params, holes, built, report) && w > 0.f && h > 0.f;
@@ -2799,6 +2806,21 @@ void Primitive::RegeneratePlayfield()
       if (comp->m_renderer != nullptr)
          comp->m_renderer->ReinitRenderable(comp);
    }
+   if (m_d.m_pfCutInserts) // Cut Insert Pockets (prototype): the insert bodies and the ink caps. Switched off, the companions keep their meshes (the editor hides them)
+      for (const auto &[role, mesh] : { std::pair<int, const PlasticMesh::Mesh *> { kPlayfieldInsertsRole, &built.inserts }, { kPlayfieldInsertCapsRole, &built.insertCaps } })
+         if (Primitive *const comp = GetPlayfieldCompanion(role); comp != nullptr)
+         {
+            comp->m_d.m_collidable = false; // Look only: the floor stays solid over the pockets
+            if (role == kPlayfieldInsertCapsRole) // The caps are the board's surface over the pockets: its Shine and Bump (the reflection probe is set per frame in RenderObject)
+            {
+               comp->m_d.m_szORMMap = m_d.m_szORMMap;
+               comp->m_d.m_szNormalMap = m_d.m_szNormalMap;
+               comp->m_d.m_objectSpaceNormalMap = m_d.m_objectSpaceNormalMap;
+            }
+            setMesh(comp, *mesh);
+            if (comp->m_renderer != nullptr)
+               comp->m_renderer->ReinitRenderable(comp);
+         }
    if (m_renderer)
       m_renderer->MarkStaticPrepassDirty(); // The editor's Preview mode draws the static prepass
    m_pfDirty = false;
@@ -3315,6 +3337,8 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
          writer.WriteInt(FID(PFPK), m_d.m_pfPrintMode);
       if (!m_d.m_pfInsertLights.empty())
          writer.WriteString(FID(PFIL), m_d.m_pfInsertLights);
+      if (m_d.m_pfCutInserts)
+         writer.WriteInt(FID(PFIP), 1);
       if (m_d.m_pfOutlineMode == 1)
       {
          writer.WriteInt(FID(PFOM), 1);
@@ -3507,7 +3531,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PHSK): m_plasticHoles.LoadPointToken(reader, true); break;
          case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break; // Holes as saved by earlier builds
          case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
-         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kPlayfieldFloorRole); break;
+         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kPlayfieldInsertCapsRole); break;
          case FID(PFGN): m_d.m_playfieldGen = reader.AsBool(); break;
          case FID(PFTK): m_d.m_pfThickness = clamp(reader.AsFloat(), 1.f, 200.f); break;
          case FID(PFFL): m_d.m_pfFloor = clamp(reader.AsInt(), 0, 1); break;
@@ -3522,6 +3546,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PFPK): m_d.m_pfPrintMode = reader.AsInt() & 3; break;
          case FID(PFIL): m_d.m_pfInsertLights = reader.AsString(); break;
          case FID(PFOM): m_d.m_pfOutlineMode = clamp(reader.AsInt(), 0, 1); break;
+         case FID(PFIP): m_d.m_pfCutInserts = reader.AsInt() == 1; break;
          case FID(PFOL):
          {
             size_t dropped = 0;
