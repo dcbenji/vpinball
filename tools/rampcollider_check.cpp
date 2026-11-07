@@ -296,6 +296,16 @@ int main()
          assert(r.walls.verts[i].x > 300.f - 1e-3f);
       printf("wall sides OK\n");
    }
+   // Fit to several Ramps: the nearest curve wins, a ramp without a curve is skipped, the first wins a tie
+   {
+      using RampCollider::SurfaceFit;
+      SurfaceFit best;
+      assert(!RampCollider::NearestFit({}, best));
+      assert(!RampCollider::NearestFit({ { false, 1.f, 1.f, 0.f } }, best));
+      assert(RampCollider::NearestFit({ { true, 100.f, 60.f, 30.f }, { false, 5.f, 5.f, 0.f }, { true, 90.f, 55.f, 12.f }, { true, 80.f, 50.f, 12.f } }, best));
+      assert(best.height == 90.f && best.width == 55.f && best.dist == 12.f);
+      printf("nearest fit OK\n");
+   }
    printf("rampcollider_check OK\n");
    return 0;
 }

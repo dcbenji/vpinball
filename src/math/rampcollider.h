@@ -546,4 +546,24 @@ inline bool RayFirstHit(const std::vector<V3>& verts, const std::vector<unsigned
    return found;
 }
 
+// A native Ramp's floor on the closest point of its central curve to a collider point (Ramp::GetSurfaceFit): height, width, plan distance
+struct SurfaceFit
+{
+   bool ok = false;
+   float height = 0.f, width = 0.f, dist = 0.f;
+};
+
+// Fit to several Ramps (a route over two joined ramps): the candidate whose central curve is nearest, the first on a tie. False: no candidate has a curve
+inline bool NearestFit(const std::vector<SurfaceFit>& candidates, SurfaceFit& best)
+{
+   bool found = false;
+   for (const SurfaceFit& c : candidates)
+      if (c.ok && (!found || c.dist < best.dist))
+      {
+         best = c;
+         found = true;
+      }
+   return found;
+}
+
 } // namespace RampCollider

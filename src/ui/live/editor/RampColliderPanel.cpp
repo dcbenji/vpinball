@@ -13,6 +13,7 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 #include "parts/PartGroup.h"
+#include "parts/ramp.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
 
@@ -45,6 +46,79 @@ Primitive *FindReference(const Primitive &collider)
       if (IsPlainPrimitive(part) && StrCompareNoCase(part->GetName(), collider.m_d.m_rampReference))
          return static_cast<Primitive *>(part);
    return nullptr;
+}
+
+// The Ramps (the table's native ones) named by the Reference, which may list several names separated by commas: a route over two joined ramps.
+// Names are trimmed and de-duplicated; 'names' counts them and 'missing' lists those that are no Ramp
+vector<Ramp *> FindReferenceRamps(const Primitive &collider, int *const names = nullptr, string *const missing = nullptr)
+{
+   vector<Ramp *> ramps;
+   if (names != nullptr)
+      *names = 0;
+   if (collider.m_d.m_rampReference.empty() || collider.GetPTable() == nullptr)
+      return ramps;
+   vector<string> seen;
+   size_t from = 0;
+   while (from <= collider.m_d.m_rampReference.size())
+   {
+      size_t to = collider.m_d.m_rampReference.find(',', from);
+      if (to == string::npos)
+         to = collider.m_d.m_rampReference.size();
+      string name = collider.m_d.m_rampReference.substr(from, to - from);
+      from = to + 1;
+      const size_t a = name.find_first_not_of(" \t"), b = name.find_last_not_of(" \t");
+      name = a == string::npos ? string() : name.substr(a, b - a + 1);
+      if (name.empty() || std::any_of(seen.begin(), seen.end(), [&](const string &n) { return StrCompareNoCase(n, name); }))
+         continue;
+      seen.push_back(name);
+      Ramp *found = nullptr;
+      for (IEditable *const part : collider.GetPTable()->GetParts())
+         if (part->GetItemType() == eItemRamp && StrCompareNoCase(part->GetName(), name))
+            found = static_cast<Ramp *>(part);
+      if (found != nullptr)
+         ramps.push_back(found);
+      else if (missing != nullptr)
+         *missing += (missing->empty() ? "" : ", ") + name;
+   }
+   if (names != nullptr)
+      *names = (int)seen.size();
+   return ramps;
+}
+
+// Fit to Ramp: each point's height and width from the nearest of the Ramps' central curves, by the Ramp's own interpolation (bottom to top along its curve;
+// a wire or habitrail Ramp gives its rail spacing as the width). With Flush Entry point 1's height is left as it is (the entry is flat on the playfield at
+// 0), its width is still fitted
+string FitToRamps(Primitive &collider, const vector<Ramp *> &ramps, const int names, const string &missing)
+{
+   const auto &points = collider.m_wireCurve.GetPoints();
+   int fitted = 0;
+   bool keptFirst = false;
+   for (size_t k = 0; k < points.size(); k++)
+   {
+      vector<RampCollider::SurfaceFit> cands;
+      for (const Ramp *const r : ramps)
+      {
+         RampCollider::SurfaceFit f;
+         f.ok = r->GetSurfaceFit(points[k]->GetX(), points[k]->GetY(), f.height, f.width, f.dist);
+         cands.push_back(f);
+      }
+      RampCollider::SurfaceFit best;
+      if (!RampCollider::NearestFit(cands, best))
+         continue;
+      points[k]->m_width = best.width;
+      if (k == 0 && collider.m_d.m_rampFlushEntry)
+         keptFirst = true;
+      else
+         points[k]->SetZ(best.height);
+      fitted++;
+   }
+   collider.UpdateRampCollider();
+   string msg = "Fitted " + std::to_string(fitted) + " of " + std::to_string(points.size()) + " points (height and width) to " + std::to_string(ramps.size()) + (ramps.size() == 1 ? " ramp" : " ramps");
+   if (!missing.empty())
+      msg += "; " + std::to_string(ramps.size()) + " of " + std::to_string(names) + " names found: " + missing + " missing";
+   if (keptFirst)
+      msg += "; point 1 height left as it was (Flush Entry), its width fitted";
+   return msg;
 }
 
 // Snap Heights to Reference: the height of the reference under each point, from the up-facing face nearest the point's own height (the closed shell of a
@@ -308,7 +382,7 @@ void PrimitiveUIPart::UpdateRampColliderPanel(PropertyPane &props)
       vector<string> names { "(none)"s };
       int current = 0;
       for (IEditable *const part : edited->GetPTable()->GetParts())
-         if (IsPlainPrimitive(part) && !part->GetName().empty())
+         if ((IsPlainPrimitive(part) || part->GetItemType() == eItemRamp) && !part->GetName().empty())
          {
             names.push_back(part->GetName());
             if (StrCompareNoCase(part->GetName(), edited->m_d.m_rampReference))
@@ -323,10 +397,18 @@ void PrimitiveUIPart::UpdateRampColliderPanel(PropertyPane &props)
          m_part, "Reference"s, names, //
          [current](const Primitive *) { return current; }, //
          [names](Primitive *p, int v) { p->m_d.m_rampReference = v > 0 && v < (int)names.size() ? names[v] : string(); },
-         "The imported ramp whose look this collider follows: Snap Heights reads its surface");
+         "The imported ramp whose look this collider follows (Snap Heights reads its surface), or a native Ramp part (Fit to Ramp reads its curve)");
    }
+   props.InputString<Primitive>(
+      m_part, "Reference Names"s, //
+      [](const Primitive *p) { return p->m_d.m_rampReference; }, //
+      [](Primitive *p, const string &v) { p->m_d.m_rampReference = v; },
+      "The reference as text: for a route over several native Ramps, their names separated by commas (Fit to Ramp takes the nearest for each point). Renaming a part updates it, also inside the list");
    Primitive *const reference = FindReference(*edited);
-   if (!edited->m_d.m_rampReference.empty() && reference == nullptr)
+   int refNames = 0;
+   string refMissing;
+   const vector<Ramp *> refRamps = FindReferenceRamps(*edited, &refNames, &refMissing);
+   if (!edited->m_d.m_rampReference.empty() && reference == nullptr && refRamps.empty())
    {
       props.FlushRow();
       ImGui::PushStyleColor(ImGuiCol_Text, kError);
@@ -339,10 +421,21 @@ void PrimitiveUIPart::UpdateRampColliderPanel(PropertyPane &props)
       ImGui::BeginDisabled(reference == nullptr || edited->m_wireCurve.GetPoints().empty());
       const bool snap = ImGui::Button("Snap Heights to Reference");
       ImGui::EndDisabled();
-      ImGui::SetItemTooltip("Each point's height from the reference's surface under it (the up-facing face nearest the point's own height)");
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) // A disabled button still says why
+         ImGui::SetTooltip("Each point's height from the reference's surface under it (the up-facing face nearest the point's own height)%s",
+         reference == nullptr ? "\nDisabled: the Reference is not an imported ramp primitive" : "");
       if (snap && reference != nullptr)
          m_rampMessage = SnapHeights(*edited, *reference);
       props.CustomField(snap, "Snap Heights to Reference"s);
+      ImGui::BeginDisabled(refRamps.empty() || edited->m_wireCurve.GetPoints().empty());
+      const bool fit = ImGui::Button("Fit to Ramp");
+      ImGui::EndDisabled();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled)) // A disabled button still says why
+         ImGui::SetTooltip("Each point's height and width from the nearest of the reference Ramps' central curves: the Ramp's own bottom-to-top interpolation, what its collider is%s",
+         refRamps.empty() ? "\nDisabled: the Reference names no native Ramp" : "");
+      if (fit && !refRamps.empty())
+         m_rampMessage = FitToRamps(*edited, refRamps, refNames, refMissing);
+      props.CustomField(fit, "Fit to Ramp"s);
       if (!m_rampMessage.empty())
          ImGui::TextWrapped("%s", m_rampMessage.c_str());
    }

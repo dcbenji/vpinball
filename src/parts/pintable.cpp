@@ -5980,6 +5980,44 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
    const string& newName = surface->GetIScriptable()->m_name;
    if (newName == oldName)
       return;
+   // A Ramp Collider names the part(s) whose look it follows: a plain primitive or native Ramps, one name or a comma list (whole tokens, case-insensitive)
+   if (surface->GetItemType() == eItemPrimitive || surface->GetItemType() == eItemRamp)
+      for (IEditable *const pedit : m_vedit)
+         if (pedit->GetItemType() == eItemPrimitive)
+         {
+            Primitive *const collider = static_cast<Primitive *>(pedit);
+            const string &ref = collider->m_d.m_rampReference;
+            if (ref.empty())
+               continue;
+            string out;
+            bool changed = false;
+            size_t from = 0;
+            while (from <= ref.size())
+            {
+               size_t to = ref.find(',', from);
+               if (to == string::npos)
+                  to = ref.size();
+               const string tok = ref.substr(from, to - from);
+               const size_t a = tok.find_first_not_of(" \t"), b = tok.find_last_not_of(" \t");
+               const string trimmed = a == string::npos ? string() : tok.substr(a, b - a + 1);
+               if (from > 0)
+                  out += ',';
+               if (!trimmed.empty() && StrCompareNoCase(trimmed, oldName))
+               {
+                  out += newName;
+                  changed = true;
+               }
+               else
+                  out += tok;
+               from = to + 1;
+            }
+            if (changed)
+            {
+               if (beforeChange)
+                  beforeChange(pedit);
+               collider->m_d.m_rampReference = out;
+            }
+         }
    if (surface->GetItemType() == eItemPrimitive)
    {
       // Rubbers following a post (guided rubbers) hold the names of their posts
@@ -6002,12 +6040,6 @@ void PinTable::UpdateSurfaceReferences(const IEditable *surface, const string &o
                if (beforeChange)
                   beforeChange(pedit);
                companion->m_d.m_plasticHost = newName;
-            }
-            if (StrCompareNoCase(companion->m_d.m_rampReference, oldName)) // A Ramp Collider names the part whose look it follows
-            {
-               if (beforeChange)
-                  beforeChange(pedit);
-               companion->m_d.m_rampReference = newName;
             }
          }
       return;

@@ -353,6 +353,13 @@ Vertex2D *Ramp::GetRampVertex(
 
 float Ramp::GetSurfaceHeight(float x, float y) const
 {
+   float height, width, dist;
+   return GetSurfaceFit(x, y, height, width, dist) ? height : 0.0f; // Object is not on ramp path
+}
+
+// The ramp's floor height and width on the point of its central curve closest to (x, y), and the plan distance to that point (the Ramp Collider's fit)
+bool Ramp::GetSurfaceFit(float x, float y, float &height, float &width, float &dist) const
+{
    vector<RenderVertex3D> vvertex;
    GetCentralCurve(vvertex);
 
@@ -361,7 +368,7 @@ float Ramp::GetSurfaceHeight(float x, float y) const
    ClosestPointOnPolygon(vvertex, Vertex2D(x, y), vOut, iSeg, false);
 
    if (iSeg == -1)
-      return 0.0f; // Object is not on ramp path
+      return false;
 
    // Go through vertices (including iSeg itself) counting control points until iSeg
    float totallength = 0.f;
@@ -387,7 +394,17 @@ float Ramp::GetSurfaceHeight(float x, float y) const
    const float topHeight = m_d.m_heighttop;
    const float bottomHeight = m_d.m_heightbottom;
 
-   return vvertex[iSeg].z + ((totallength != 0.f) ? startlength / totallength : 0.f) * (topHeight - bottomHeight) + bottomHeight;
+   const float t = (totallength != 0.f) ? startlength / totallength : 0.f;
+   height = vvertex[iSeg].z + t * (topHeight - bottomHeight) + bottomHeight;
+   // Wire and habitrail types ignore widthbottom/top: their width is the rail spacing (wire diameter for a 1-wire ramp), as in GetRampVertex without the rendering margin
+   if (m_d.m_type == RampType1Wire)
+      width = m_d.m_wireDiameter;
+   else if (IsHabitrail())
+      width = m_d.m_wireDistanceX;
+   else
+      width = m_d.m_widthbottom + t * (m_d.m_widthtop - m_d.m_widthbottom);
+   dist = sqrtf((vOut.x - x) * (vOut.x - x) + (vOut.y - y) * (vOut.y - y));
+   return true;
 }
 
 

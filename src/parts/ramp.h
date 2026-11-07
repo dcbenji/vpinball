@@ -118,6 +118,7 @@ public:
    void AddPoint(const Vertex2D &v, const bool smooth);
 
    float GetSurfaceHeight(float x, float y) const;
+   bool GetSurfaceFit(float x, float y, float &height, float &width, float &dist) const;
    bool IsHabitrail() const;
 
    // Computes the vertices and additional information for the ramp shape.
