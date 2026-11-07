@@ -2582,7 +2582,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       bool on = board->m_d.m_pfCutInserts, pocketsEdited = false;
       if (ImGui::Checkbox("Cut Insert Pockets (prototype)", &on))
          pocketsEdited = Impl::SetCutInsertPockets(ed, board, on);
-      ImGui::SetItemTooltip("Cut the insert pockets (no bevel) and fill them with insert bodies (the Paint in a see-through plastic) and an ink cap over them "
+      ImGui::SetItemTooltip("Cut the insert pockets (no bevel) and fill them with insert bodies (the Paint in a see-through plastic; none in Placed pockets, where you place a library insert body) and an ink cap over them "
                             "(Insert Caps (baked): Bake Insert Print makes it while this is on). A look prototype: the floor stays solid over the pockets");
       props.CustomField(pocketsEdited, "Cut Insert Pockets"s);
       if (board->m_d.m_pfCutInserts)
@@ -2595,7 +2595,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             board, "Frost"s, //
             [](const Primitive *p) { return static_cast<float>(p->m_d.m_pfInsertFrost); }, //
             [](Primitive *p, float v) { p->m_d.m_pfInsertFrost = clamp(static_cast<int>(std::lround(v)), 0, 12); }, 0.f, 12.f, 0,
-            "How much the insert bodies blur what lies below them (the pocket floor and walls), 0 = clear, 12 = heavily frosted. The ink on top stays sharp. "
+            "How much the generated insert bodies (and placed bodies using the \"Playfield Inserts\" probe) blur what lies below them (the pocket floor and walls), 0 = clear, 12 = heavily frosted. The ink on top stays sharp. "
             "Drives the Roughness of the bodies' render probe (set it here, not in the probe)");
          props.InputFloat<Primitive>(
             board, "Insert Depth"s, //
@@ -2723,7 +2723,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             const bool pocket = (h.flags & PlayfieldHole::UnderInsert) != 0;
             const float clampedTo = IsCutThrough(h) && i < static_cast<int>(board->m_pfBevelClamped.size()) ? board->m_pfBevelClamped[i] : -1.f;
 
-            // Hole: "1 Round 0.580 in", ellipsis when the column is narrow, then a marker: * (amber) bevel clamped, ins = insert pocket
+            // Hole: "1 Round 0.580 in", ellipsis when the column is narrow, then a marker: * (amber) bevel clamped, ins = insert pocket, plc = insert pocket with a placed body
             ImGui::TableSetColumnIndex(0);
             char label[96];
             const char *const type = h.type == PlayfieldHole::Slot ? "Slot" : h.type == PlayfieldHole::Polygon ? "Shape" : "Round";
@@ -2731,7 +2731,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                snprintf(label, sizeof(label), "%d %s %.2f x %.3f in", i + 1, type, (hypotf(h.end.x - h.centre.x, h.end.y - h.centre.y) + h.diameter) / kVPUPerInch, h.diameter / kVPUPerInch);
             else
                snprintf(label, sizeof(label), "%d %s %.3f in", i + 1, type, h.diameter / kVPUPerInch);
-            const char *const marker = pocket ? "ins" : clampedTo >= 0.f ? "*" : nullptr;
+            const char *const marker = pocket ? ((h.flags & PlayfieldHole::PlacedBody) ? "plc" : "ins") : clampedTo >= 0.f ? "*" : nullptr;
             const float markerW = marker ? ImGui::CalcTextSize(marker).x + style.ItemSpacing.x : 0.f;
             const float avail = max(ImGui::GetContentRegionAvail().x - markerW, 1.f);
             string text = label;
@@ -2778,7 +2778,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                   SetHoleKind(h, kind);
                   holesEdited = true;
                }
-               ImGui::SetItemTooltip("Through-hole: cut through the board (GI, hardware, rollovers). Insert pocket: an insert sits over it, so it is not cut (Cut is the through-hole switch only). "
+               ImGui::SetItemTooltip("Through-hole: cut through the board (GI, hardware, rollovers). Insert pocket: an insert sits in it; Cut Insert Pockets cuts it (Cut is the through-hole switch only). "
                                      "Placed: an insert pocket whose body is a library insert you place (no generated body)");
             }
 
