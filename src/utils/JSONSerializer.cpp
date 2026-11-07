@@ -1578,9 +1578,18 @@ void JSONObjectWriter::WriteVector2(const int fieldId, const Vertex2D& vec)
    const Scope& top = m_stack.back();
    if (const char* const name = top.node ? JSONSerializer::GetFieldName(top.nodeKind, fieldId) : nullptr)
    {
-      auto& obj = FieldSlot(*top.node, name);
-      obj["x"] = vec.x;
-      obj["y"] = vec.y;
+      auto& field = FieldSlot(*top.node, name);
+      if (JSONSerializer::IsRepeatableField(top.nodeKind, fieldId)) // A repeated point list (hole polygon points): one element per call
+      {
+         if (!field.is_array())
+            field = nlohmann::ordered_json::array();
+         field.push_back({ { "x", vec.x }, { "y", vec.y } });
+      }
+      else
+      {
+         field["x"] = vec.x;
+         field["y"] = vec.y;
+      }
    }
    else if (top.node)
    {
