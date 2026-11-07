@@ -1587,6 +1587,10 @@ void Primitive::Render(const unsigned int renderMask)
    // Traced insert prototype: an additive card whose image is a multi-view traced bake ('TRACED_' image name prefix). It is
    // drawn with the lamp off too, since the room still glints in its facets
    const bool tracedInsert = IsTracedInsert();
+   // A traced card lies flush with the playfield: its mirror image is itself, and the reflection pass's mirrored camera drew it as a
+   // displaced ghost of the lit window (hidden only while the card's fake depth pushed the read off its image: with depthk near 0 it showed)
+   if (tracedInsert && isReflectionPass)
+      return;
 
    // don't render additive primitive if there is nothing to add
    if (!isUIPass && m_d.m_addBlend && !tracedInsert && (m_d.m_color == 0 || alpha == 0.f))
