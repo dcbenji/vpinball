@@ -1263,8 +1263,8 @@ struct PlayfieldMaker::Impl
             p->m_d.m_visible = true;
             p->m_d.m_use3DMesh = true;
             p->m_d.m_reflectionEnabled = false; // Not mirrored into the playfield reflection
-            p->m_d.m_useDepthMask = false; // Drawn blended over the board, after it (depth bias)
-            p->m_d.m_staticRendering = false; // See-through: never in the static prepass
+            p->m_d.m_useDepthMask = false; // The bodies: drawn blended over the board, after it (the caps and floors are opaque: set below)
+            p->m_d.m_staticRendering = false; // Never in the static prepass (the bodies are see-through)
             p->SetUILock(true); // A viewport click lands on the board
          }
          if (std::ranges::find(made, inserts) != made.end())
@@ -1272,7 +1272,7 @@ struct PlayfieldMaker::Impl
             inserts->m_d.m_plasticRole = kPlayfieldInsertsRole;
             inserts->m_d.m_szMaterial = EnsureInsertPlasticMaterial(t)->m_name;
             inserts->m_d.m_szImage = t->m_image; // The Paint image, with table UVs: the insert's colour is the art's
-            inserts->m_d.m_depthBias = 2.f; // Transparent parts sort by depth bias - z, descending: the bodies, then the caps, then the traced cards (-0.4)
+            inserts->m_d.m_depthBias = 2.f; // Transparent parts sort by depth bias - z, descending: the bodies, then the traced cards (-0.4)
             inserts->m_d.m_cullBackfaces = true; // A closed shell: front faces only, sorted back to front (WantsTriangleSort)
             inserts->m_d.m_disableLightingBelow = 0.f; // Lit from below too: the lamp sits under the insert
             inserts->m_d.m_szRefractionProbe = NewInsertsProbeName(t); // Frost: the body blurs what lies below it (the pocket floor and walls)

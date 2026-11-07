@@ -1438,6 +1438,12 @@ void Primitive::Render(const unsigned int renderMask)
    }
    else if (m_d.m_plasticRole == kPlayfieldInsertCapsRole && !m_d.m_plasticHost.empty()) // Playfield Maker ink caps: the board's surface over cut insert pockets
    {
+      // Opaque and shaded as the board, writing depth; the Insert Caps image's alpha test cuts out the clear windows. Set here so tables saved with the
+      // earlier see-through caps (no rebuild on load) draw the same
+      m_d.m_szMaterial = m_ptable->m_playfieldMaterial;
+      m_d.m_useDepthMask = true;
+      if (Texture *const capsImage = m_ptable->GetImage(m_d.m_szImage); capsImage != nullptr && capsImage->m_alphaTestValue < 0.f)
+         capsImage->m_alphaTestValue = 0.5f;
       m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME;
       m_d.m_reflectionStrength = m_ptable->m_playfieldReflectionStrength;
       pinf = SamplerFilter::SF_ANISOTROPIC;
