@@ -3109,6 +3109,7 @@ void Renderer::UpdateVirtualShadowMaps()
    m_vsmVirtRes = m_table->GetSettings().GetPlayer_PBRShadowMapSize();
    m_vsmMaxLights = std::clamp(m_table->GetSettings().GetPlayer_PBRShadowMaxLights(), 1, VSM::MAX_LIGHTS);
    m_pbrShadowFast = m_table->GetSettings().GetPlayer_PBRShadowFastFilter();
+   m_pbrDimLightCutoff = m_table->GetSettings().GetPlayer_PBRDimLightCutoff();
    m_vsmPageBudget = m_table->GetSettings().GetPlayer_PBRShadowPagesPerFrame();
    CreateVSMPagePoolTargets();
    m_vsmTouchedRTs.clear();
@@ -3617,6 +3618,10 @@ void Renderer::UpdateVirtualShadowMaps()
    const float ablateOpts = g_perfAblateShadowOpts.load();
    const float shadowOpts = ablateOpts >= 0.f ? ablateOpts : (shadowAB && (g_pplayer->m_overall_frames & 1) == 0) ? 0.f : shadowEarly;
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowOpts);
+   // Dim light cutoff (fs_pbr pbrDimParams.x, 0 = off): a light under this unshadowed irradiance luminance at the pixel gets plain
+   // Lambert diffuse only. VPX_DIM_LIGHT_CUTOFF=<float> overrides the PBRDimLightCutoff setting (A/B)
+   static const char* const envDim = std::getenv("VPX_DIM_LIGHT_CUTOFF");
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(envDim ? (float)atof(envDim) : m_pbrDimLightCutoff, 0.f), 0.f, 0.f, 0.f);
 }
 #endif
 

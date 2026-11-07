@@ -138,6 +138,7 @@ SAMPLER2DARRAY(tex_vsm_trans, 6);    // VSM page pool transmittance: translucent
 uniform mat4 matShadowVP[32];   // ortho virtual map view-projection per shadowed light
 uniform vec4 pbrVSMParams[32];  // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
 uniform vec4 pbrVSMBox[32];     // x/y: world->virtual-uv scale (1/ortho box extents), z: ortho near depth (used CPU side)
+uniform vec4 pbrDimParams;      // x: dim light cutoff T (PBRDimLightCutoff / VPX_DIM_LIGHT_CUTOFF): a light under T unshadowed irradiance luminance at the pixel gets plain Lambert only, 0 = off
 uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z/w: page render linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness quantization step
 // Static shadow cache (Renderer::UpdatePBRShadowCache): per cached light, its cube shadow (rgb, as pbr_cube_shadow returns it)
 // baked over the playfield mesh in table xy, alpha 1 where baked. The opaque variants only (sampler 7 is the transparent
@@ -959,6 +960,9 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       const float cNdotLraw = dot(wNc, l); // wNc = wN without a coat
       if (NdotL <= 0.0 && cNdotLraw <= 0.0 && (NdotLraw >= 0.0 || pbrTransmission <= 0.0))
          continue;
+      // Dim light cutoff (off when pbrDimParams.x <= 0): too little of this light reaches the pixel to show specular, coat,
+      // transmission or a shadow, plain Lambert diffuse only
+      if (pbrDimParams.x > 0.0 && dot(lRad.rgb * (x * x / dist2), vec3(0.2126, 0.7152, 0.0722)) < pbrDimParams.x) { acc += diffuse * (NdotL * (1.0 / PI)) * (lCol * (x * x / dist2)); continue; }
       // The geometric normal wNg (no normal map) decides the side of the surface a light is on. An opaque surface (alpha 1)
       // without a transmission gets nothing from a light behind it, however the shading normal leans (faded over ~3 deg so
       // no terminator seam shows). See-through surfaces (clear plastic ramps, Traced cards) keep the light from behind, as
