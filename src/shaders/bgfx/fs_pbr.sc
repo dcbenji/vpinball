@@ -138,8 +138,8 @@ SAMPLER2DARRAY(tex_vsm_trans, 6);    // VSM page pool transmittance: translucent
 uniform mat4 matShadowVP[32];   // ortho virtual map view-projection per shadowed light
 uniform vec4 pbrVSMParams[32];  // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
 uniform vec4 pbrVSMBox[32];     // x/y: world->virtual-uv scale (1/ortho box extents), z: ortho near depth (used CPU side)
-uniform vec4 pbrDimParams;      // x: dim light cutoff T (PBRDimLightCutoff / VPX_DIM_LIGHT_CUTOFF): a light under T unshadowed irradiance luminance at the pixel gets plain Lambert only, 0 = off
-uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z/w: page render linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness quantization step
+uniform vec4 pbrDimParams;      // y: shadow importance gate (VPX_SHADOW_GATE), x: dim light cutoff T (PBRDimLightCutoff / VPX_DIM_LIGHT_CUTOFF): a light under T unshadowed irradiance luminance at the pixel gets plain Lambert only, 0 = off
+uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z/w: page render linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness quantization step, w: shadow tap mode
 // Static shadow cache (Renderer::UpdatePBRShadowCache): per cached light, its cube shadow (rgb, as pbr_cube_shadow returns it)
 // baked over the playfield mesh in table xy, alpha 1 where baked. The opaque variants only (sampler 7 is the transparent
 // variants' probe depth)
@@ -738,11 +738,12 @@ vec4 pbr_light_texel(const int idx)
 #define pbr_light_record(idx) pbr_light_texel(idx)
 #endif
 
-// Main pass pbrShadowParams.w packs the shadow filter options (VPX_SHADOW_EARLY / VPX_SHADOW_GATE): units = tap mode
-// (0 = 16 taps, 1 = 4 corner taps first and the other 12 only in a penumbra, 2 = the 4 corner taps only), tens = the
-// importance gate in 1e-4 steps (a light whose unshadowed radiance at the pixel is under it gets no shadow lookup)
-float pbr_shadow_tap_mode() { return pbrShadowParams.w - 10.0 * floor(pbrShadowParams.w * 0.1); }
-float pbr_shadow_gate() { return floor(pbrShadowParams.w * 0.1) * 0.0001; }
+// Main pass shadow filter options, plain floats: pbrShadowParams.w = tap mode (0 = 16 taps, 1 = 4 corner taps first and the
+// other 12 only in a penumbra, 2 = the 4 corner taps only), pbrDimParams.y = importance gate (a light whose unshadowed
+// irradiance luminance at the pixel is under it gets no shadow lookup; 0 = off). The page render passes use pbrShadowParams.z/.w
+// as a depth range instead, but run no lights. (pbrShadowParams.z is taken in the main pass: transmittance nearness step)
+float pbr_shadow_tap_mode() { return pbrShadowParams.w; }
+float pbr_shadow_gate() { return pbrDimParams.y; }
 
 // Geometric specular AA: the GGX roughness widened by the screen-space variance of the normal n (Tokuyoshi & Kaplanyan
 // 2019: sigma^2 = 1/2pi, kappa = 0.18). Fragment derivatives: call from uniform control flow only.

@@ -3606,22 +3606,29 @@ void Renderer::UpdateVirtualShadowMaps()
    m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
-   // w: shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate). The PBRShadowFastFilter setting (default on) = tap mode 1
-   // (4 corner taps first, the other 12 only in a penumbra) + importance gate 0.5 (no shadow lookup for a light whose unshadowed
-   // radiance at the pixel is under it, 1e-4 steps). VPX_SHADOW_EARLY=0|1|2 (2 = 4 taps only) / VPX_SHADOW_GATE=<radiance> override it (A/B)
+   // Shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate), plain floats: pbrShadowParams.w = tap mode, pbrDimParams.y = gate.
+   // The PBRShadowFastFilter setting (default on) = tap mode 1 (4 corner taps first, the other 12 only in a penumbra) + importance gate 0.5
+   // (no shadow lookup for a light whose unshadowed irradiance luminance at the pixel is under it). VPX_SHADOW_EARLY=0|1|2 (2 = 4 taps only)
+   // / VPX_SHADOW_GATE=<luminance> override it (A/B)
    static const char* const envEarly = std::getenv("VPX_SHADOW_EARLY");
    static const char* const envGate = std::getenv("VPX_SHADOW_GATE");
-   const float shadowEarly = (envEarly ? (float)atoi(envEarly) : m_pbrShadowFast ? 1.f : 0.f)
-      + 10.f * floorf((envGate ? (float)atof(envGate) : m_pbrShadowFast ? 0.5f : 0.f) * 10000.f + 0.5f);
+   float shadowTapMode = envEarly ? (float)std::clamp(atoi(envEarly), 0, 2) : m_pbrShadowFast ? 1.f : 0.f;
+   float shadowGate = envGate ? (float)atof(envGate) : m_pbrShadowFast ? 0.5f : 0.f;
    // VPX_SHADOW_AB=1 (diagnostic): the options above on odd frames only, so consecutive captured frames are an A/B pair
    static const bool shadowAB = std::getenv("VPX_SHADOW_AB") != nullptr;
-   const float ablateOpts = g_perfAblateShadowOpts.load();
-   const float shadowOpts = ablateOpts >= 0.f ? ablateOpts : (shadowAB && (g_pplayer->m_overall_frames & 1) == 0) ? 0.f : shadowEarly;
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowOpts);
+   const float ablateMode = g_perfAblateShadowOpts.load();
+   if (ablateMode >= 0.f) // VPX_PERF_ABLATE shadow option step
+   {
+      shadowTapMode = ablateMode;
+      shadowGate = g_perfAblateShadowGate.load();
+   }
+   else if (shadowAB && (g_pplayer->m_overall_frames & 1) == 0)
+      shadowTapMode = shadowGate = 0.f;
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowTapMode);
    // Dim light cutoff (fs_pbr pbrDimParams.x, 0 = off): a light under this unshadowed irradiance luminance at the pixel gets plain
    // Lambert diffuse only. VPX_DIM_LIGHT_CUTOFF=<float> overrides the PBRDimLightCutoff setting (A/B)
    static const char* const envDim = std::getenv("VPX_DIM_LIGHT_CUTOFF");
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(envDim ? (float)atof(envDim) : m_pbrDimLightCutoff, 0.f), 0.f, 0.f, 0.f);
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(envDim ? (float)atof(envDim) : m_pbrDimLightCutoff, 0.f), shadowGate, 0.f, 0.f);
 }
 #endif
 
@@ -5821,7 +5828,8 @@ void Renderer::RestoreLampTest()
 // run measures what each one costs on the GPU (the frame log's 'ablate' column names the step of each frame). Unset = no change.
 std::atomic<int> g_perfAblateMask { 0 };
 std::atomic<int> g_perfAblateStep { -1 };
-std::atomic<float> g_perfAblateShadowOpts { -1.f }; // >= 0: overrides the shadow filter options (VPX_SHADOW_EARLY / _GATE) for this ablation step
+std::atomic<float> g_perfAblateShadowOpts { -1.f }; // >= 0: overrides the shadow tap mode (VPX_SHADOW_EARLY) for this ablation step, with the gate below (VPX_SHADOW_GATE)
+std::atomic<float> g_perfAblateShadowGate { 0.f };
 const char* PerfAblateStepName(const int step)
 {
    static const char* const names[] = { "base", "nobloom", "noaa", "norefl", "norefr", "noshadow", "nolights", "noui", "nospec", "nomblur", "floor", "base2",
@@ -5851,9 +5859,11 @@ void UpdatePerfAblation(Renderer* r)
       return;
    using namespace PerfAblate;
    static constexpr int masks[nSteps] = { 0, BLOOM, AA, REFL, REFR, SHADOW, LIGHTS, UI, SPEC, MBLUR, BLOOM | AA | REFL | REFR | SHADOW | UI | SPEC | MBLUR, 0, 0, 0, 0, NOTRANS, 0, BLOOM | AA | REFL | REFR | SHADOW | LIGHTS | UI | SPEC | MBLUR | NOTRANS };
-   // Shadow filter option steps (pbrShadowParams.w, see BuildPBRLightList): early-out, early-out + gate 0.5, 4 taps + gate 2
-   static constexpr float shadowOpts[nSteps] = { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, 1.f, 1.f + 10.f * 5000.f, 2.f + 10.f * 20000.f, -1.f, -1.f, -1.f };
-   g_perfAblateShadowOpts = shadowOpts[step];
+   // Shadow filter option steps (tap mode pbrShadowParams.w + gate pbrDimParams.y, see BuildPBRLightList): early-out, early-out + gate 0.5, 4 taps + gate 2
+   static constexpr float shadowMode[nSteps] = { -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, -1.f, 1.f, 1.f, 2.f, -1.f, -1.f, -1.f };
+   static constexpr float shadowGate[nSteps] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.5f, 2.f, 0.f, 0.f, 0.f };
+   g_perfAblateShadowGate = shadowGate[step];
+   g_perfAblateShadowOpts = shadowMode[step];
    // Anisotropic filtering off (step 16)
    static const bool aniso = r->UseAnisoFiltering();
    r->SetAnisoFiltering(step == 16 ? false : aniso);
