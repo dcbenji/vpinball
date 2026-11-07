@@ -177,6 +177,9 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_pfOutlineMode = wireDefaults.m_pfOutlineMode;
    m_d.m_pfInsertLights = wireDefaults.m_pfInsertLights;
    m_d.m_pfCutInserts = wireDefaults.m_pfCutInserts;
+   m_d.m_pfInsertFrost = wireDefaults.m_pfInsertFrost;
+   m_d.m_pfInsertDepth = wireDefaults.m_pfInsertDepth;
+   m_d.m_pfInsertOpacity = wireDefaults.m_pfInsertOpacity;
    m_pfHoles.clear();
    m_pfOutline.clear();
    m_plasticEditHoles = false;
@@ -1633,7 +1636,8 @@ void Primitive::Render(const unsigned int renderMask)
       if (lensProbe == nullptr)
       {
          for (RenderProbe *const probe : m_ptable->m_vrenderprobe)
-            if (probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY && (lensProbe == nullptr || probe->GetRoughness() < lensProbe->GetRoughness()))
+            if (probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY && (lensProbe == nullptr || probe->GetRoughness() < lensProbe->GetRoughness())
+               && probe->GetName().rfind("Playfield Inserts", 0) != 0) // Not the Playfield Maker insert bodies' frosted probe
                lensProbe = probe;
          if (lensProbe == nullptr)
          {
@@ -2741,6 +2745,7 @@ void Primitive::RegeneratePlayfield()
    params.detail = m_d.m_pfDetail;
    params.defaultBevel = m_d.m_pfDefaultBevel;
    params.bevelSegments = m_d.m_pfBevelSegments;
+   params.insertDepth = m_d.m_pfInsertDepth;
    const float w = t->m_right - t->m_left, h = t->m_bottom - t->m_top;
    const float uvm[6] = { 1.f / w, 0.f, -t->m_left / w, 0.f, 1.f / h, -t->m_top / h };
    for (int i = 0; i < 6; i++)
@@ -2765,6 +2770,12 @@ void Primitive::RegeneratePlayfield()
       return; // Degenerate table rectangle: the meshes stay as they are
    }
    PlasticMesh::Mesh &board = built.top, &floor = built.floor, &walls = built.walls;
+   {
+      const unsigned base = static_cast<unsigned>(board.verts.size()); // The insert pockets' floors (Cut Insert Pockets) are drawn with the board
+      board.verts.insert(board.verts.end(), built.pocketFloors.verts.begin(), built.pocketFloors.verts.end());
+      for (const unsigned i : built.pocketFloors.idx)
+         board.idx.push_back(base + i);
+   }
    {
       const unsigned base = static_cast<unsigned>(walls.verts.size()); // The backing goes into the walls part
       walls.verts.insert(walls.verts.end(), built.backing.verts.begin(), built.backing.verts.end());
@@ -3339,6 +3350,12 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
          writer.WriteString(FID(PFIL), m_d.m_pfInsertLights);
       if (m_d.m_pfCutInserts)
          writer.WriteInt(FID(PFIP), 1);
+      if (m_d.m_pfInsertFrost != 6) // The insert body sliders: each only when not its load default
+         writer.WriteInt(FID(PFIF), m_d.m_pfInsertFrost);
+      if (m_d.m_pfInsertDepth != 5.9f)
+         writer.WriteFloat(FID(PFID), m_d.m_pfInsertDepth);
+      if (m_d.m_pfInsertOpacity != 0.5f)
+         writer.WriteFloat(FID(PFIO), m_d.m_pfInsertOpacity);
       if (m_d.m_pfOutlineMode == 1)
       {
          writer.WriteInt(FID(PFOM), 1);
@@ -3547,6 +3564,9 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PFIL): m_d.m_pfInsertLights = reader.AsString(); break;
          case FID(PFOM): m_d.m_pfOutlineMode = clamp(reader.AsInt(), 0, 1); break;
          case FID(PFIP): m_d.m_pfCutInserts = reader.AsInt() == 1; break;
+         case FID(PFIF): m_d.m_pfInsertFrost = clamp(reader.AsInt(), 0, 12); break;
+         case FID(PFID): m_d.m_pfInsertDepth = clamp(FiniteOr(reader.AsFloat(), 5.9f), 1.5f, 11.8f); break;
+         case FID(PFIO): m_d.m_pfInsertOpacity = clamp(FiniteOr(reader.AsFloat(), 0.5f), 0.f, 1.f); break;
          case FID(PFOL):
          {
             size_t dropped = 0;

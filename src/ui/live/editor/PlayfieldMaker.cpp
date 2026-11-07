@@ -27,6 +27,7 @@
 #include "parts/primitive.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
+#include "renderer/RenderProbe.h"
 #include "renderer/Texture.h"
 #ifdef __STANDALONE__
 #define _WINDOWS_ // FreeImage.h would redefine the Windows types the standalone build already has
@@ -118,6 +119,8 @@ struct State
    string bakeStatus;
    bool bakeStatusBad = false;
    bool listStale = false; // Cut Insert Pockets made its companions: the outliner list is refreshed on the next update (not while the panel draws)
+   const Primitive *pocketsBoard = nullptr; // the board whose Frost / Body Opacity Update follows (the last one the panel drew or the switch changed)
+   string pocketsProbe; // its insert bodies' probe
 } s;
 
 
@@ -285,6 +288,31 @@ string LatestCapsImage(const PinTable *const t)
       if (im->m_name.rfind("Insert Caps (baked)", 0) == 0)
          res = im->m_name;
    return res;
+}
+
+// Cut Insert Pockets: the insert bodies' screen space see-through probe. A copy of the scene drawn so far, taken when the first body draws (the bodies draw
+// first among the see-through parts: the copy holds the board, the pocket walls and floors), blurred by the probe's roughness: the Frost slider
+static constexpr const char *kInsertsProbe = "Playfield Inserts";
+RenderProbe *FindProbe(const PinTable *const t, const string &name)
+{
+   for (RenderProbe *const p : t->GetRenderProbeList())
+      if (StrCompareNoCase(p->GetName(), name))
+         return p;
+   return nullptr;
+}
+
+// The name for a new insert bodies' companion: "Playfield Inserts" unless the table has a probe of that name that is not a screen space one (then the first
+// free or screen space "Playfield InsertsN")
+string NewInsertsProbeName(const PinTable *const t)
+{
+   string name = kInsertsProbe;
+   for (int n = 2;; n++)
+   {
+      const RenderProbe *const p = FindProbe(t, name);
+      if (p == nullptr || p->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY)
+         return name;
+      name = kInsertsProbe + std::to_string(n);
+   }
 }
 
 vector<Primitive *> TracedCards(const PinTable *t)
@@ -1230,6 +1258,7 @@ struct PlayfieldMaker::Impl
             inserts->m_d.m_depthBias = 2.f; // Transparent parts sort by depth bias - z, descending: the bodies, then the caps, then the traced cards (-0.4)
             inserts->m_d.m_cullBackfaces = true; // A closed shell: front faces only, sorted back to front (WantsTriangleSort)
             inserts->m_d.m_disableLightingBelow = 0.f; // Lit from below too: the lamp sits under the insert
+            inserts->m_d.m_szRefractionProbe = NewInsertsProbeName(t); // Frost: the body blurs what lies below it (the pocket floor and walls)
          }
          if (std::ranges::find(made, caps) != made.end())
          {
@@ -1245,6 +1274,39 @@ struct PlayfieldMaker::Impl
          }
       }
       board->m_d.m_pfCutInserts = on;
+      s.pocketsBoard = board;
+      if (on && inserts->m_d.m_szRefractionProbe.empty())
+         inserts->m_d.m_szRefractionProbe = NewInsertsProbeName(t); // Bodies made before the frost (in the board's record)
+      if (on && FindProbe(t, inserts->m_d.m_szRefractionProbe) == nullptr)
+      {
+         // Made with the parts the first time, in the same step: its undo takes the probe out of the table and releases its render targets at the end of the
+         // frame (the renderer may still use them), its redo puts it back and sets it up again. An existing screen space probe of that name is used as it is (its
+         // roughness follows Frost)
+         Renderer *const renderer = ed.m_renderer.get();
+         RenderProbe *const probe = new RenderProbe();
+         probe->SetType(RenderProbe::SCREEN_SPACE_TRANSPARENCY);
+         probe->SetName(inserts->m_d.m_szRefractionProbe);
+         probe->SetRoughness(clamp(board->m_d.m_pfInsertFrost, 0, 12));
+         probe->RenderSetup(renderer);
+         t->AddLiveRenderProbe(probe);
+         ed.m_undo.MarkForAction(
+            [t, probe, renderer]()
+            {
+               t->RemoveLiveRenderProbe(probe);
+               renderer->m_renderDevice->AddEndOfFrameCmd([probe]() { probe->RenderRelease(); });
+            },
+            [t, probe, renderer]() -> std::function<void()>
+            {
+               return [t, probe, renderer]()
+               {
+                  t->AddLiveRenderProbe(probe); // Not drawn until set up again (Render returns nothing without a renderer)
+                  renderer->m_renderDevice->AddEndOfFrameCmd([probe, renderer]() { probe->RenderSetup(renderer); });
+               };
+            });
+         t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      }
+      if (on)
+         s.pocketsProbe = inserts->m_d.m_szRefractionProbe;
       if (!made.empty())
       {
          board->RegeneratePlayfield(); // The new companions are in the table: their meshes first, then their renderables
@@ -1825,6 +1887,16 @@ void PlayfieldMaker::Update(EditorUI &ed)
    {
       s.listStale = false;
       ed.UpdateEditableList();
+   }
+   // Cut Insert Pockets: Frost and Body Opacity live on the board (its undo record) and drive the table's probe and material, followed every frame (an undo of the
+   // slider included). By name: no pass over the parts
+   if (const Primitive *const pf = s.pocketsBoard; pf != nullptr && ed.m_table->HasPart(const_cast<Primitive *>(pf)) && pf->m_d.m_pfCutInserts)
+   {
+      if (RenderProbe *const probe = FindProbe(ed.m_table, s.pocketsProbe); probe != nullptr && probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY
+         && probe->GetRoughness() != clamp(pf->m_d.m_pfInsertFrost, 0, 12))
+         probe->SetRoughness(clamp(pf->m_d.m_pfInsertFrost, 0, 12));
+      if (Material *const m = ed.m_table->GetMaterial("Playfield Insert Plastic"s); !ed.m_table->IsDummyMaterial(m) && m->m_fOpacity != pf->m_d.m_pfInsertOpacity)
+         m->m_fOpacity = pf->m_d.m_pfInsertOpacity;
    }
    // A queued bake runs on the frame after the click, when the section is drawn for the same board and table; otherwise (the panel closed, another selection, a play test) it is dropped
    if (s.bakeQueued && (ImGui::GetFrameCount() > s.bakeFrame + 1 || s.bakeTable != ed.m_table))
@@ -2459,6 +2531,32 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       props.CustomField(pocketsEdited, "Cut Insert Pockets"s);
       if (board->m_d.m_pfCutInserts)
       {
+         s.pocketsBoard = board;
+         if (const Primitive *const inserts = CompanionOf(board, kPlayfieldInsertsRole); inserts != nullptr)
+            s.pocketsProbe = inserts->m_d.m_szRefractionProbe;
+         // The insert body sliders: live while dragging, one undo step per drag (the panel's record)
+         props.SliderFloat<Primitive>(
+            board, "Frost"s, //
+            [](const Primitive *p) { return static_cast<float>(p->m_d.m_pfInsertFrost); }, //
+            [](Primitive *p, float v) { p->m_d.m_pfInsertFrost = clamp(static_cast<int>(std::lround(v)), 0, 12); }, 0.f, 12.f, 0,
+            "How much the insert bodies blur what lies below them (the pocket floor and walls), 0 = clear, 12 = heavily frosted. The ink on top stays sharp. "
+            "Drives the Roughness of the bodies' render probe (set it here, not in the probe)");
+         props.InputFloat<Primitive>(
+            board, "Insert Depth"s, //
+            [](const Primitive *p) { return p->m_d.m_pfInsertDepth; }, //
+            [](Primitive *p, float v)
+            {
+               p->m_d.m_pfInsertDepth = clamp(v, 1.5f, 11.8f);
+               s.rebuildOnRelease = true; // As the other board fields
+            },
+            PropertyPane::Unit::VPLength, 2, "How deep the insert body is under the surface (1/32 to 1/4 in, 1/8 in by default, at most the board's Thickness): its frosted bottom, below which the pocket is closed. The cut through the board and the floor collider do not change");
+         props.SliderFloat<Primitive>(
+            board, "Body Opacity"s, //
+            [](const Primitive *p) { return p->m_d.m_pfInsertOpacity; }, //
+            [](Primitive *p, float v) { p->m_d.m_pfInsertOpacity = clamp(v, 0.f, 1.f); }, 0.f, 1.f, 2,
+            "How much of the insert body is its own colour (the Paint) against the frosted view of the pocket below it. Drives the Opacity of the material "
+            "Playfield Insert Plastic (set it here, not in the material)");
+         props.FlushRow();
          const Primitive *const caps = CompanionOf(board, kPlayfieldInsertCapsRole);
          if (caps == nullptr || caps->m_d.m_szImage.empty())
          {

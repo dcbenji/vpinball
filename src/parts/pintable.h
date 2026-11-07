@@ -745,6 +745,19 @@ public:
    void RemoveRenderProbe(RenderProbe *pb) { std::erase(m_vrenderprobe, pb); }
    RenderProbe *NewRenderProbe() { auto pb = new RenderProbe(); m_vrenderprobe.push_back(pb); return pb; }
    const vector<RenderProbe *> &GetRenderProbeList() const { return m_vrenderprobe; }
+   // A probe added or taken out while playing (the live editor): the lookup map (filled for play) follows. The caller owns a removed probe
+   void AddLiveRenderProbe(RenderProbe *pb)
+   {
+      m_vrenderprobe.push_back(pb);
+      if (!m_renderprobeMap.empty())
+         m_renderprobeMap[pb->GetName()] = pb;
+   }
+   void RemoveLiveRenderProbe(RenderProbe *pb)
+   {
+      std::erase(m_vrenderprobe, pb);
+      if (const auto it = m_renderprobeMap.find(pb->GetName()); it != m_renderprobeMap.end() && it->second == pb)
+         m_renderprobeMap.erase(it);
+   }
    vector<RenderProbe *> GetRenderProbeList(RenderProbe::ProbeType type) const
    {
       std::vector<RenderProbe *> list;

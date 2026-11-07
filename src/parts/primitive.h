@@ -192,6 +192,9 @@ public:
    int m_pfOutlineMode = 0; // 0 Table Rectangle, 1 From Wood Mask (the traced outline is in Primitive::m_pfOutline)
    string m_pfInsertLights; // Name of a part group or collection whose lights mark the insert pockets (Find Holes); empty = none
    bool m_pfCutInserts = false; // Cut Insert Pockets (prototype): insert pockets are cut and filled by the inserts and caps companions
+   int m_pfInsertFrost = 6; // Cut Insert Pockets: Frost, the blur of what the insert bodies show below them (the "Playfield Inserts" probe's roughness, 0..12)
+   float m_pfInsertDepth = 5.9f; // Cut Insert Pockets: Insert Depth (VPU), the insert body's bottom (1/8 in); an opaque floor closes the pocket there
+   float m_pfInsertOpacity = 0.5f; // Cut Insert Pockets: Body Opacity, the "Playfield Insert Plastic" opacity (0 = only the frosted floor shows, 1 = only the body's Paint)
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
