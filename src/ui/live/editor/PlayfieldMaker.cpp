@@ -251,19 +251,19 @@ Material *EnsureInsertPlasticMaterial(PinTable *const t)
    return m;
 }
 
-// Cut Insert Pockets: the ink over the pockets. A copy of the table's playfield material made once (so the ink reads as the board's print), with opacity
-// active at 1 and no edge fade: the Insert Caps image's alpha (the ink) alone decides the coverage. The board's own playfield material is never changed (it
-// is forced on the board every frame: opacity on it would put the whole board in the transparent pass)
-// A table that already has a "Playfield Ink Cap" keeps it, but with opacity forced on (else the caps would draw opaque over the insert bodies): `forced` says so
+// Cut Insert Pockets: the ink over the pockets. A copy of the table's playfield material made once, opaque like the board: the printed ink is shaded exactly as
+// the board's art around it (on the transparent path it read darker, Ben 2026-11-07), and the clear windows are cut out by the Insert Caps image's alpha test
+// (kCapsAlphaTest). The board's own playfield material is never changed
+// A table that already has a "Playfield Ink Cap" keeps it, but with opacity forced off (round 2 made it see-through): `forced` says so
 Material *EnsureInkCapMaterial(PinTable *const t, bool &forced)
 {
    static constexpr const char *kName = "Playfield Ink Cap";
    forced = false;
    if (Material *const existing = t->GetMaterial(kName); !t->IsDummyMaterial(existing))
    {
-      if (!existing->m_bOpacityActive)
+      if (existing->m_bOpacityActive)
       {
-         existing->m_bOpacityActive = true; // Not undone (as the material's creation)
+         existing->m_bOpacityActive = false; // Not undone (as the material's creation)
          t->SetNonUndoableDirty(SaveDirtyState::Dirty);
          forced = true;
       }
@@ -272,13 +272,14 @@ Material *EnsureInkCapMaterial(PinTable *const t, bool &forced)
    const Material *const pf = t->GetMaterial(t->m_playfieldMaterial);
    Material *const m = new Material(pf);
    m->m_name = kName;
-   m->m_bOpacityActive = true;
-   m->m_fOpacity = 1.f;
-   m->m_fEdgeAlpha = 0.f;
+   m->m_bOpacityActive = false;
    t->AddMaterial(m);
    t->SetNonUndoableDirty(SaveDirtyState::Dirty);
    return m;
 }
+
+// The Insert Caps image's alpha test: the ink (alpha = ink) is drawn where it is at least half, the window is cut out
+static constexpr float kCapsAlphaTest = 0.5f;
 
 // The newest "Insert Bodies (baked)" image, else the Paint
 string LatestBodiesImage(const PinTable *const t)
@@ -1293,9 +1294,12 @@ struct PlayfieldMaker::Impl
             bool forced = false;
             caps->m_d.m_szMaterial = EnsureInkCapMaterial(t, forced)->m_name;
             if (forced)
-               ed.Report("Cut Insert Pockets: the existing material \"Playfield Ink Cap\" had no opacity: turned on (the caps cover only the ink)");
+               ed.Report("Cut Insert Pockets: the existing material \"Playfield Ink Cap\" was see-through: made opaque (the caps' image cuts out the windows)");
             caps->m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME; // The ball's playfield reflection continues over the pockets (strength: the table's, per frame)
             caps->m_d.m_szImage = LatestCapsImage(t);
+            if (Texture *const ci = t->GetImage(caps->m_d.m_szImage); ci != nullptr && ci->m_alphaTestValue < 0.f)
+               ci->m_alphaTestValue = kCapsAlphaTest; // A round 2 bake: cut out its windows
+            caps->m_d.m_useDepthMask = true; // Opaque, as the board
             caps->m_d.m_depthBias = 1.f;
             caps->m_d.m_disableLightingBelow = 1.f; // As the board
          }
@@ -1418,6 +1422,7 @@ struct PlayfieldMaker::Impl
       if (prm.makeCaps)
          if (Texture *const ct = MakePngTexture(UniqueImageName(t, "Insert Caps (baked)"s), res.caps, res.w, res.h); ct != nullptr)
          {
+            ct->m_alphaTestValue = kCapsAlphaTest; // Opaque caps: the windows are cut out
             t->AddImage(ct);
             caps = ", " + ct->m_name;
             if (Primitive *const cap = CompanionOf(board, kPlayfieldInsertCapsRole); cap != nullptr) // In the panel's record (the board's companions are marked)
