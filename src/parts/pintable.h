@@ -364,6 +364,7 @@ public:
    bool ExportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
    void RemoveSound(VPX::Sound *const pps);
    Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
+   void AddImage(Texture *image); // Takes ownership of an image made in memory (name already unique); ImportImage uses it too
    void RemoveImage(Texture *const ppi);
 
    Texture *GetImage(const string &szName) const;
