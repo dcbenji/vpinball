@@ -280,6 +280,16 @@ Material *EnsureInkCapMaterial(PinTable *const t, bool &forced)
    return m;
 }
 
+// The newest "Insert Bodies (baked)" image, else the Paint
+string LatestBodiesImage(const PinTable *const t)
+{
+   string res = t->m_image;
+   for (const Texture *const im : t->m_vimage)
+      if (im->m_name.rfind("Insert Bodies (baked)", 0) == 0)
+         res = im->m_name;
+   return res;
+}
+
 // The newest "Insert Caps (baked)" image (the bake adds name, name1, name2...), else empty
 string LatestCapsImage(const PinTable *const t)
 {
@@ -1270,7 +1280,7 @@ struct PlayfieldMaker::Impl
          {
             floors->m_d.m_plasticRole = kPlayfieldInsertFloorsRole;
             floors->m_d.m_szMaterial = t->m_playfieldMaterial; // Per frame the board's material (RenderObject); opaque, in the depth prepass, lit and shadowed as the board
-            floors->m_d.m_szImage = t->m_image; // The Paint until Bake Insert Print makes the soft colour (Insert Bodies (baked))
+            floors->m_d.m_szImage = LatestBodiesImage(t); // The Paint until Bake Insert Print makes the soft colour (Insert Bodies (baked))
             floors->m_d.m_useDepthMask = true;
             floors->m_d.m_depthBias = 0.f;
             floors->m_d.m_disableLightingBelow = 1.f; // As the board
@@ -1451,7 +1461,7 @@ struct PlayfieldMaker::Impl
          static_cast<int>(cards.size()));
       s.bakeStatus = line;
       if (capsFailed)
-         s.bakeStatus += ". Insert Caps (baked) could not be encoded and was not added";
+         s.bakeStatus += ". Insert Caps or Insert Bodies (baked) could not be encoded and was not added";
       s.bakeStatusBad = capsFailed;
       ed.Report(s.bakeStatus);
       return repointed > 0 || !caps.empty();

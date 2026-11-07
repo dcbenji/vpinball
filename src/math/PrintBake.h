@@ -164,7 +164,8 @@ inline void SoftBodies(const std::vector<uint8_t>& rgba, int W, int H, int radiu
    }
    if (radius > 0)
    {
-      std::vector<float> line((size_t)std::max(W, H) * 4), sum((size_t)std::max(W, H) * 4 + 4);
+      std::vector<float> line((size_t)std::max(W, H) * 4);
+      std::vector<double> sum((size_t)std::max(W, H) * 4 + 4); // double: float running sums lose a few levels on a long line
       const auto pass = [&](bool horizontal)
       {
          const int len = horizontal ? W : H, lines = horizontal ? H : W;
@@ -172,7 +173,7 @@ inline void SoftBodies(const std::vector<uint8_t>& rgba, int W, int H, int radiu
          {
             const auto at = [&](int k) -> float* { return &acc[(horizontal ? ((size_t)l * W + k) : ((size_t)k * W + l)) * 4]; };
             for (int c = 0; c < 4; c++)
-               sum[c] = 0.f;
+               sum[c] = 0.0;
             for (int k = 0; k < len; k++)
                for (int c = 0; c < 4; c++)
                   sum[(size_t)(k + 1) * 4 + c] = sum[(size_t)k * 4 + c] + at(k)[c];
@@ -181,7 +182,7 @@ inline void SoftBodies(const std::vector<uint8_t>& rgba, int W, int H, int radiu
                const int a = std::max(0, k - radius), b = std::min(len, k + radius + 1);
                const float inv = 1.f / (float)(b - a);
                for (int c = 0; c < 4; c++)
-                  line[(size_t)k * 4 + c] = (sum[(size_t)b * 4 + c] - sum[(size_t)a * 4 + c]) * inv;
+                  line[(size_t)k * 4 + c] = (float)((sum[(size_t)b * 4 + c] - sum[(size_t)a * 4 + c]) * inv);
             }
             for (int k = 0; k < len; k++)
                for (int c = 0; c < 4; c++)
@@ -337,7 +338,17 @@ inline bool Bake(const BakeImage& paint, const BakeImage& printMask, const BakeP
       }
       out.inkCoverage = inkSum / (255. * W * H);
       if (prm.makeBodies)
-         SoftBodies(out.print, W, H, prm.bodyBlurRadius, out.bodies);
+      {
+         try
+         {
+            SoftBodies(out.print, W, H, prm.bodyBlurRadius, out.bodies);
+         }
+         catch (const std::bad_alloc&)
+         {
+            out.bodies.clear(); // Only the soft colour is lost (the caller keeps the Paint on the bodies); the print and the caps are done
+            std::vector<uint8_t>().swap(out.bodies);
+         }
+      }
    }
    catch (const std::bad_alloc&)
    {

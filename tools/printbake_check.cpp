@@ -288,6 +288,18 @@ static void bodies()
    CHECK(px(80, 60, 0) > 60 && px(80, 60, 0) < 190, "the bar is a soft dip: %d (sharp would be 0)", px(80, 60, 0));
    // the black ink around the window barely tints the window next to its edge (the weights of the inked pixels are 0.002)
    CHECK(px(42, 60, 0) > 150, "ink does not leak into the window: %d", px(42, 60, 0));
+   // a long line: the top half clear (value 200), the bottom half ink (value 20), far from the window the colour stays the ink's (no float running-sum bias)
+   {
+      const int w2 = 8, h2 = 4524;
+      const std::vector<uint8_t> pa = fill(w2, h2, 3, [h2](int, int y, int) { return (uint8_t)(y < h2 / 2 ? 200 : 20); });
+      const std::vector<uint8_t> ma = fill(w2, h2, 4, [h2](int, int y, int c) { return (uint8_t)(c < 3 ? 0 : (y < h2 / 2 ? 0 : 255)); });
+      BakeParams q = p;
+      q.maxWidth = w2;
+      q.bodyBlurRadius = 24;
+      BakeResult r2;
+      CHECK(Bake(Img(pa, w2, h2, 3), Img(ma, w2, h2, 4), q, r2), "bake long");
+      CHECK(std::abs((int)r2.bodies[((size_t)(h2 - 20) * w2 + 4) * 4] - 20) <= 1, "long line, deep in the ink: %d (want 20)", (int)r2.bodies[((size_t)(h2 - 20) * w2 + 4) * 4]);
+   }
    p.bodyBlurRadius = 0;
    CHECK(Bake(Img(paint, W, H, 3), Img(mask, W, H, 4), p, r), "bake radius 0");
    CHECK(px(80, 60, 0) == 0 && px(60, 60, 0) == 200, "radius 0 keeps the pixels: %d %d", px(80, 60, 0), px(60, 60, 0));
