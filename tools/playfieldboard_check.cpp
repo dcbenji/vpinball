@@ -812,12 +812,47 @@ static void Pockets()
       }
    CHECK(off == 0, "%d insert / cap vertices are not on a hole wall", off);
    CHECK(zMax == -0.1f && fabs(zMin - (-0.1f - 11.8f)) < 1e-5f, "insert from z %g to %g (want -0.1 to -11.9)", zMax, zMin);
-   // Board top + caps = the outline less the through-hole (grown by its bevel; within 40 VPU^2: the true circle against its flattened loop)
+   // The board top + the pocket floors = the outline less the through-hole (grown by its bevel; within 40 VPU^2: the true circle against its flattened loop); the
+   // floors (at the bodies' bottom, facing up) cover what the caps cover
    int inv = 0;
-   const double top = CapArea(m.top, inv), caps = CapArea(m.insertCaps, inv);
+   const double top = CapArea(m.top, inv), caps = CapArea(m.insertCaps, inv), floorArea = CapArea(m.pocketFloors, inv);
    const double want = 400. * 800. - CircleGrown(27.3, r.bevel[2]);
-   CHECK(inv == 0 && fabs(top + caps - want) < 40., "top %.1f + caps %.1f = %.1f, want %.1f", top, caps, top + caps, want);
-   printf("pockets: %d built, insert %zu tris, caps %zu tris, top + caps %.1f (want %.1f)\n", r.pockets, r.insertTriangles, r.capTriangles, top + caps, want);
+   for (const PlasticMesh::Vertex& v : m.pocketFloors.verts)
+      CHECK(v.z == -11.9f && v.nz == 1.f, "pocket floor at -11.9 facing up");
+   CHECK(inv == 0 && fabs(top + floorArea - want) < 40., "top %.1f + floors %.1f, want %.1f", top, floorArea, want);
+   CHECK(caps > 1000. && fabs(floorArea - caps) < 1e-2 * caps, "pocket floors %.1f = caps %.1f", floorArea, caps);
+   CHECK(AgainstNormals(m.pocketFloors) == 0, "floor winding");
+   printf("pockets: %d built, insert %zu tris, caps %zu tris, top + floors %.1f (want %.1f), floors %.1f = caps %.1f\n", r.pockets, r.insertTriangles, r.capTriangles, top + floorArea, want, floorArea, caps);
+
+   // Insert Depth 1/16 in: bodies from -0.1 to -2.9, floors at -2.9; the walls still run down to the thickness
+   BoardParams shallow = p;
+   shallow.insertDepth = 2.9f;
+   BoardMeshes ms;
+   BoardReport rs;
+   CHECK(BuildBoard(shallow, holes, ms, rs) && rs.pockets == 2, "shallow build");
+   float sMin = 1e9f, wMin = 1e9f;
+   for (const PlasticMesh::Vertex& v : ms.inserts.verts)
+      sMin = std::min(sMin, v.z);
+   for (const PlasticMesh::Vertex& v : ms.walls.verts)
+      wMin = std::min(wMin, v.z);
+   int atFloor = 0;
+   for (const PlasticMesh::Vertex& v : ms.pocketFloors.verts)
+      atFloor += v.z == -2.9f;
+   CHECK(fabs(sMin + 2.9f) < 1e-5f && atFloor > 0 && wMin == -23.5f, "shallow: body bottom %g, %d floor vertices, walls to %g", sMin, atFloor, wMin);
+   int rim2 = 0;
+   CHECK(ShellBreaks({ &ms.inserts }, 999.f, rim2) == 0, "shallow bodies closed");
+
+   // A thin board: the depth is clamped to the wood (thickness 5 - 0.5)
+   BoardParams thin = p;
+   thin.thickness = 5.f;
+   thin.insertDepth = 5.9f;
+   BoardMeshes mt2;
+   BoardReport rt2;
+   CHECK(BuildBoard(thin, holes, mt2, rt2) && rt2.pockets == 2, "thin build");
+   float fz = 0.f;
+   for (const PlasticMesh::Vertex& v : mt2.pocketFloors.verts)
+      fz = std::min(fz, v.z);
+   CHECK(fz == -4.5f, "thin board: floor at %g (want -4.5)", fz);
 
    // The switch off: the caller clears kCut on the pockets: no inserts, the same board as without them
    std::vector<BoardHole> off2 = holes;
@@ -826,7 +861,7 @@ static void Pockets()
    BoardMeshes mo, mt;
    BoardReport ro, rt;
    CHECK(BuildBoard(p, off2, mo, ro) && BuildBoard(p, { through }, mt, rt), "switch off builds");
-   CHECK(mo.inserts.verts.empty() && mo.insertCaps.verts.empty() && ro.pockets == 0, "switch off: no inserts");
+   CHECK(mo.inserts.verts.empty() && mo.insertCaps.verts.empty() && mo.pocketFloors.verts.empty() && ro.pockets == 0, "switch off: no inserts");
    CHECK(Compare(mo.top, mt.top) == 0. && Compare(mo.walls, mt.walls) == 0., "switch off: the board is the one without the pockets");
 }
 

@@ -44,6 +44,9 @@ struct BoardParams
    int detail = 1; // Curve Detail 1..5
    float defaultBevel = 0.f; // The bevel of holes at -1 (Default), VPU
    int bevelSegments = 3; // Rings of the rounded profile (1 = a chamfer); the floor collider always uses one
+   // Built insert pockets: the insert body runs from z -0.1 down to -insertDepth (at least 0.2, at most thickness - 0.5: never below the wood), where an opaque floor (BoardMeshes::pocketFloors: facing up,
+   // table UVs; the editor draws it with the board) closes the pocket, so the walls and backing below it never show through the body
+   float insertDepth = 11.9f;
 };
 
 struct BoardMeshes
@@ -53,9 +56,10 @@ struct BoardMeshes
    PlasticMesh::Mesh backing; // The face lowered below the wood (on the board's outline), on the dark rows of the plywood image (the editor appends it to the walls part)
    PlasticMesh::Mesh floor; // The flat collider face with only the kFallsThrough holes cut, then their walls down to -thickness (a chamfer when the bevel >= 2)
    // Built kUnderInsert holes (the caller sets kCut on them when the board cuts insert pockets): the insert bodies and their ink caps (InsertPocket.h), on the
-   // contours the hole walls use. Empty when no pocket is built
+   // contours the hole walls use, and the pockets' floors at the bodies' bottom. Empty when no pocket is built
    PlasticMesh::Mesh inserts;
    PlasticMesh::Mesh insertCaps;
+   PlasticMesh::Mesh pocketFloors;
 };
 
 struct BoardReport
