@@ -971,11 +971,11 @@ void EditorChrome::RenderMenuBar()
             ImGui::EndMenu();
          }
          ImGui::Separator();
-         if (ImGui::MenuItem("Move", "G", editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
+         if (ImGui::MenuItem("Move", editor.GizmoKeyLabel(ImGuizmo::TRANSLATE, "G"), editor.m_gizmoOperation == ImGuizmo::TRANSLATE))
             editor.SetGizmoOperation(ImGuizmo::TRANSLATE);
-         if (ImGui::MenuItem("Rotate", "R", editor.m_gizmoOperation == ImGuizmo::ROTATE))
+         if (ImGui::MenuItem("Rotate", editor.GizmoKeyLabel(ImGuizmo::ROTATE, "R"), editor.m_gizmoOperation == ImGuizmo::ROTATE))
             editor.SetGizmoOperation(ImGuizmo::ROTATE);
-         if (ImGui::MenuItem("Scale", "S", editor.m_gizmoOperation == ImGuizmo::SCALE))
+         if (ImGui::MenuItem("Scale", editor.GizmoKeyLabel(ImGuizmo::SCALE, "S"), editor.m_gizmoOperation == ImGuizmo::SCALE))
             editor.SetGizmoOperation(ImGuizmo::SCALE);
          if (ImGui::BeginMenu("Transform Orientation"))
          {
@@ -1363,7 +1363,7 @@ void EditorChrome::RenderToolbar()
             const bool active = (editor.m_gizmoOperation == mode.operation) && !editor.m_measure.IsActive();
             if (ToolButton(mode.icon, active))
                editor.SetGizmoOperation(mode.operation);
-            Tip(mode.title, mode.shortcut);
+            Tip(mode.title, editor.GizmoKeyLabel(mode.operation, mode.shortcut));
             if (&mode != std::end(editModes) - 1)
                ImGui::SameLine(0.f, toolGap);
          }
@@ -1759,7 +1759,7 @@ void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
          const bool active = (editor.m_gizmoOperation == mode.operation) && !editor.m_measure.IsActive();
          if (ToolButton(mode.icon, active))
             editor.SetGizmoOperation(mode.operation);
-         Tip(mode.title, mode.shortcut);
+         Tip(mode.title, editor.GizmoKeyLabel(mode.operation, mode.shortcut));
       }
       MeasureToolButton(); // Blender's Measure (ruler) tool
 

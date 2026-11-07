@@ -138,7 +138,7 @@ void EditorUIPart::UpdateCurveSection(PropertyPane& props)
          AlignSelectedPoints(false, true);
    }
 
-   ImGui::TextDisabled("Click or box select points, drag or use the gizmo (G/R/S) to move them in the playfield plane, Shift+A to add a point on the nearest segment, Del to "
+   ImGui::TextDisabled("Click or box select points, drag or use the gizmo (W/E/T) to move them in the playfield plane, Shift+A to add a point on the nearest segment, Del to "
                        "delete, Tab/Esc to exit");
    props.EndSection();
    props.SkipRest(skipping);

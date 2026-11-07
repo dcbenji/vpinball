@@ -777,6 +777,8 @@ private:
    float m_navOrbitSensitivity = 1.f;
    void LoadNavPreferences();
    bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
+   // Key shown in menus and tooltips for the gizmo of an operation: with the Blender transform keys G / R / S are the modal transforms, so the gizmos are W / E / T
+   const char *GizmoKeyLabel(int operation, const char *plain) const { return !m_navBlenderTransform ? plain : operation == ImGuizmo::TRANSLATE ? "W" : operation == ImGuizmo::ROTATE ? "E" : operation == ImGuizmo::SCALE ? "T" : plain; }
    bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
    bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
    void SetView(PredefinedView view); // Axis aligned view (also reachable from the View menu)

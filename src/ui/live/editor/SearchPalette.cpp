@@ -233,9 +233,9 @@ void SearchPalette::BuildOperators()
    add("Object" + sep + "Rubber" + sep + "Bind Selected", "", [&ed]() { return RubberBetweenPosts::CanBind(ed); }, [&ed]() { RubberBetweenPosts::Bind(ed); });
    add("Object" + sep + "Rubber" + sep + "Autofit Now", "", [&ed]() { return RubberBetweenPosts::CanAutofit(ed); }, [&ed]() { RubberBetweenPosts::Autofit(ed); });
    add("Object" + sep + "Rubber" + sep + "Detach From Posts", "", [&ed]() { return RubberBetweenPosts::CanDetach(ed); }, [&ed]() { RubberBetweenPosts::Detach(ed); });
-   add("Object" + sep + "Move", "G", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
-   add("Object" + sep + "Rotate", "R", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
-   add("Object" + sep + "Scale", "S", nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
+   add("Object" + sep + "Move", ed.GizmoKeyLabel(ImGuizmo::TRANSLATE, "G"), nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::TRANSLATE); });
+   add("Object" + sep + "Rotate", ed.GizmoKeyLabel(ImGuizmo::ROTATE, "R"), nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::ROTATE); });
+   add("Object" + sep + "Scale", ed.GizmoKeyLabel(ImGuizmo::SCALE, "S"), nullptr, [&ed]() { ed.SetGizmoOperation(ImGuizmo::SCALE); });
    // Transform Orientation (the 3D view header's dropdown)
    static constexpr std::pair<const char *, EditorUI::TransformOrientation> orientations[] = { { "Global", EditorUI::TransformOrientation::Global },
       { "Local", EditorUI::TransformOrientation::Local }, { "Normal", EditorUI::TransformOrientation::Normal }, { "View", EditorUI::TransformOrientation::View } };
