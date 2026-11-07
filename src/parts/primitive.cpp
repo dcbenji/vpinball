@@ -1393,6 +1393,8 @@ void Primitive::Render(const unsigned int renderMask)
       if (m_lightmap != nullptr && m_lightmap == m_renderer->m_vsmShadowLight && IsFlasherDome())
          return;
 #endif
+      if (m_d.m_plasticRole == kPlayfieldInsertCapsRole && !m_d.m_plasticHost.empty())
+         return; // The ink caps are a print on the board: they cast nothing (their own translucent shadow tinted the caps and the pocket floor below them)
       if (m_d.m_visible && !m_skipRendering && m_meshBuffer != nullptr && ((renderMask & Renderer::STATIC_ONLY) == 0 || m_d.m_staticRendering))
       {
          // Translucent casters (PBR materials with a transmission, or with opacity) tint the light instead of blocking it:
