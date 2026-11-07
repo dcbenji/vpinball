@@ -2916,6 +2916,11 @@ static WireRail::Fixture LoadRailFixture(IObjectReader &reader)
 // A float field read from a file: a NaN or infinity (exponent bits all set, a bit test that -ffast-math keeps) is replaced by its load default
 static float FiniteOr(const float v, const float def) { return (float_as_uint(v) & 0x7F800000u) == 0x7F800000u ? def : v; }
 
+// A table coordinate read from a file that is finite (the same bit test) and within a sane range (tables are a few thousand VPU): a NaN, an infinity or a huge value
+// would reach the board's triangulator and clamps at the next rebuild
+static bool SaneCoord(const float c) { return (float_as_uint(c) & 0x7F800000u) != 0x7F800000u && c > -1e5f && c < 1e5f; }
+static bool SanePoint(const Vertex2D &v) { return SaneCoord(v.x) && SaneCoord(v.y); }
+
 // A Playfield Maker hole (PFHL, a skippable sub object)
 static void SavePlayfieldHole(IObjectWriter &writer, const PlayfieldHole &h)
 {
@@ -2945,14 +2950,16 @@ static PlayfieldHole LoadPlayfieldHole(IObjectReader &reader)
          {
          case FID(PFHT): h.type = clamp(r.AsInt(), 0, 2); break;
          case FID(PFHF): h.flags = r.AsInt() & 15; break;
-         case FID(PFHC): h.centre = r.AsVector2(); break;
-         case FID(PFHD): h.diameter = clamp(r.AsFloat(), 0.f, 10000.f); break;
-         case FID(PFHE): h.end = r.AsVector2(); break;
+         case FID(PFHC): { const Vertex2D v = r.AsVector2(); if (SanePoint(v)) h.centre = v; break; } // Not sane: the default stays
+         case FID(PFHD): h.diameter = clamp(FiniteOr(r.AsFloat(), h.diameter), 0.f, 10000.f); break;
+         case FID(PFHE): { const Vertex2D v = r.AsVector2(); if (SanePoint(v)) h.end = v; break; }
          case FID(PFHB): { const float b = FiniteOr(r.AsFloat(), -1.f); h.bevel = b < 0.f ? -1.f : clamp(b, 0.f, 200.f); break; } // Absent or not finite: -1 (Default)
          case FID(PFHP):
          {
             const Vertex2D v = r.AsVector2();
-            if (h.polygon.size() < static_cast<size_t>(kMaxPlayfieldHolePoints))
+            if (!SanePoint(v))
+               dropped++; // a polygon point that is not finite or far outside any table is left out
+            else if (h.polygon.size() < static_cast<size_t>(kMaxPlayfieldHolePoints))
                h.polygon.push_back(v);
             else
                dropped++;
