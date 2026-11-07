@@ -86,6 +86,7 @@ namespace PerfAblate { enum : int { BLOOM = 1, AA = 2, REFL = 4, REFR = 8, SHADO
 extern std::atomic<int> g_perfAblateMask;
 extern std::atomic<int> g_perfAblateStep;
 extern std::atomic<float> g_perfAblateShadowOpts;
+extern std::atomic<float> g_perfAblateShadowGate;
 const char* PerfAblateStepName(const int step);
 
 class Renderer final
