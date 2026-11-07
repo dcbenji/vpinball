@@ -43,6 +43,8 @@ struct BakeParams
    unsigned printMode = 0;
    int maxWidth = 2048; // output width cap; the Ink Mask is never upscaled
    bool makeCaps = false; // also fill BakeResult::caps (Insert Caps)
+   bool makeBodies = false; // also fill BakeResult::bodies (Insert Bodies): the soft colour the pockets show at depth
+   int bodyBlurRadius = 24; // box radius in output pixels of each of the three passes (about a Gaussian of sigma 0.82 * radius * 1.4); 0 = no blur
 };
 
 struct BakeResult
@@ -50,6 +52,7 @@ struct BakeResult
    int w = 0, h = 0;
    std::vector<uint8_t> print; // w * h * 4 RGBA: rgb = Paint, a = 255 - ink
    std::vector<uint8_t> caps; // same size, only if BakeParams::makeCaps: rgb = Paint, a = ink
+   std::vector<uint8_t> bodies; // same size, only if BakeParams::makeBodies: rgb = the Paint of the clear windows blurred over the printed ink (no recognisable art), a = 255
    double inkCoverage = 0.; // mean ink, 0..1 (a quick sanity number: 0 = nothing printed, 1 = all ink)
 };
 
@@ -146,6 +149,60 @@ inline bool Usable(const BakeImage& im)
 } // namespace detail
 
 // False (out cleared) for an unusable image or parameter, or an output over kMaxSide on a side, or when the buffers cannot be allocated.
+// The soft insert colour: `rgba` (rgb = Paint, a = 255 - ink = how clear) blurred by three box passes of `radius` pixels with the clear windows as weights
+// (a normalised convolution: ink pixels contribute almost nothing, so the printed art does not tint the window), a = 255. Rows and columns use running sums.
+inline void SoftBodies(const std::vector<uint8_t>& rgba, int W, int H, int radius, std::vector<uint8_t>& out)
+{
+   const size_t n = (size_t)W * H;
+   std::vector<float> acc(n * 4); // r*w, g*w, b*w, w
+   for (size_t i = 0; i < n; i++)
+   {
+      const float w = rgba[i * 4 + 3] / 255.f + 0.002f; // the base keeps a fully inked region (no window anywhere near) from dividing by zero: it falls back to a blur of its own colour
+      for (int c = 0; c < 3; c++)
+         acc[i * 4 + c] = rgba[i * 4 + c] * w;
+      acc[i * 4 + 3] = w;
+   }
+   if (radius > 0)
+   {
+      std::vector<float> line((size_t)std::max(W, H) * 4), sum((size_t)std::max(W, H) * 4 + 4);
+      const auto pass = [&](bool horizontal)
+      {
+         const int len = horizontal ? W : H, lines = horizontal ? H : W;
+         for (int l = 0; l < lines; l++)
+         {
+            const auto at = [&](int k) -> float* { return &acc[(horizontal ? ((size_t)l * W + k) : ((size_t)k * W + l)) * 4]; };
+            for (int c = 0; c < 4; c++)
+               sum[c] = 0.f;
+            for (int k = 0; k < len; k++)
+               for (int c = 0; c < 4; c++)
+                  sum[(size_t)(k + 1) * 4 + c] = sum[(size_t)k * 4 + c] + at(k)[c];
+            for (int k = 0; k < len; k++)
+            {
+               const int a = std::max(0, k - radius), b = std::min(len, k + radius + 1);
+               const float inv = 1.f / (float)(b - a);
+               for (int c = 0; c < 4; c++)
+                  line[(size_t)k * 4 + c] = (sum[(size_t)b * 4 + c] - sum[(size_t)a * 4 + c]) * inv;
+            }
+            for (int k = 0; k < len; k++)
+               for (int c = 0; c < 4; c++)
+                  at(k)[c] = line[(size_t)k * 4 + c];
+         }
+      };
+      for (int rep = 0; rep < 3; rep++)
+      {
+         pass(true);
+         pass(false);
+      }
+   }
+   out.assign(n * 4, 255);
+   for (size_t i = 0; i < n; i++)
+   {
+      const float w = std::max(acc[i * 4 + 3], 1e-6f);
+      for (int c = 0; c < 3; c++)
+         out[i * 4 + c] = (uint8_t)std::min(255.f, std::max(0.f, acc[i * 4 + c] / w + 0.5f));
+   }
+}
+
 inline bool Bake(const BakeImage& paint, const BakeImage& printMask, const BakeParams& prm, BakeResult& out)
 {
    using namespace detail;
@@ -279,6 +336,8 @@ inline bool Bake(const BakeImage& paint, const BakeImage& printMask, const BakeP
          }
       }
       out.inkCoverage = inkSum / (255. * W * H);
+      if (prm.makeBodies)
+         SoftBodies(out.print, W, H, prm.bodyBlurRadius, out.bodies);
    }
    catch (const std::bad_alloc&)
    {

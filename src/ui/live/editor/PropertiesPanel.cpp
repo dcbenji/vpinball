@@ -997,7 +997,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      {
                         editor.m_liveEditedParts.insert(part);
                         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
-                           for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
+                           for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole, kPlayfieldInsertFloorsRole })
                               if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                                  editor.m_liveEditedParts.insert(comp);
                         if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_rampCollider) // The walls part
@@ -1047,7 +1047,7 @@ void PropertiesPanel::RenderInArea(const ImVec2 &pos, const ImVec2 &size)
                      editor.m_undo.MarkForUndo(comp, true, false);
             // The Playfield section writes the walls (Plywood), the floor (Floor, its physics), the inserts and caps (Cut Insert Pockets): in the board's step
             if (part->GetItemType() == eItemPrimitive && static_cast<Primitive *>(part)->m_d.m_playfieldGen)
-               for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
+               for (const int role : { kPlayfieldWallsRole, kPlayfieldFloorRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole, kPlayfieldInsertFloorsRole })
                   if (Primitive *const comp = static_cast<Primitive *>(part)->GetPlayfieldCompanion(role); comp != nullptr)
                      editor.m_undo.MarkForUndo(comp, true, false);
             // The Ramp Collider's Walls fields write the walls part (its physics): in the collider's step

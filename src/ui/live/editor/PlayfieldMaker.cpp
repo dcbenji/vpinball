@@ -1114,13 +1114,17 @@ struct PlayfieldMaker::Impl
       case Paint:
          ed.m_table->m_image = image;
          if (Primitive *const inserts = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertsRole); inserts != nullptr)
-            inserts->m_d.m_szImage = image; // The insert bodies show the Paint (marked in the board's record)
+            inserts->m_d.m_szImage = image; // The insert bodies show the Paint (marked in the board's record), until the next Bake Insert Print makes their soft colour
+         if (Primitive *const floors = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertFloorsRole); floors != nullptr)
+            floors->m_d.m_szImage = image;
          break;
       case Shine:
       case Bump:
          (slot == Shine ? board->m_d.m_szORMMap : board->m_d.m_szNormalMap) = image;
          if (Primitive *const caps = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertCapsRole); caps != nullptr) // The ink caps are the board's surface (marked in the board's record)
             (slot == Shine ? caps->m_d.m_szORMMap : caps->m_d.m_szNormalMap) = image;
+         if (Primitive *const floors = PlayfieldMaker::CompanionOf(board, kPlayfieldInsertFloorsRole); floors != nullptr)
+            (slot == Shine ? floors->m_d.m_szORMMap : floors->m_d.m_szNormalMap) = image;
          break;
       case Glow: board->m_d.m_szEmissionMap = image; break;
       case HolesMask: board->m_d.m_pfWoodMask = image; break;
@@ -1183,6 +1187,8 @@ struct PlayfieldMaker::Impl
          SetAuthoredVisible(ed, inserts, shown);
       if (Primitive *const caps = CompanionOf(board, kPlayfieldInsertCapsRole); caps != nullptr)
          SetAuthoredVisible(ed, caps, shown && !caps->m_d.m_szImage.empty());
+      if (Primitive *const floors = CompanionOf(board, kPlayfieldInsertFloorsRole); floors != nullptr)
+         SetAuthoredVisible(ed, floors, shown);
    }
 
    // Show Old Playfield: flips the authored visibility of the board, its walls (and insert bodies and caps) and the old playfield together (not an undo step)
@@ -1206,9 +1212,9 @@ struct PlayfieldMaker::Impl
       PinTable *const t = ed.m_table;
       if (board->m_d.m_pfCutInserts == on)
          return false;
-      Primitive *inserts = CompanionOf(board, kPlayfieldInsertsRole), *caps = CompanionOf(board, kPlayfieldInsertCapsRole);
+      Primitive *inserts = CompanionOf(board, kPlayfieldInsertsRole), *caps = CompanionOf(board, kPlayfieldInsertCapsRole), *floors = CompanionOf(board, kPlayfieldInsertFloorsRole);
       vector<Primitive *> made;
-      if (on && (inserts == nullptr || caps == nullptr))
+      if (on && (inserts == nullptr || caps == nullptr || floors == nullptr))
       {
          if (ed.m_player == nullptr || ed.m_player->m_physics == nullptr || ed.m_renderer == nullptr)
             return false;
@@ -1221,14 +1227,14 @@ struct PlayfieldMaker::Impl
          };
          PartGroup *const group = board->GetPartGroup();
          const string &boardName = board->GetName();
-         for (Primitive **const comp : { &inserts, &caps })
+         for (Primitive **const comp : { &inserts, &caps, &floors })
             if (*comp == nullptr && group != nullptr)
-               if (Primitive *const p = NewPart(ed, unique(boardName + (comp == &inserts ? "_Inserts" : "_InsertCaps")), group); p != nullptr)
+               if (Primitive *const p = NewPart(ed, unique(boardName + (comp == &inserts ? "_Inserts" : comp == &caps ? "_InsertCaps" : "_InsertFloors")), group); p != nullptr)
                {
                   *comp = p;
                   made.push_back(p);
                }
-         if (inserts == nullptr || caps == nullptr)
+         if (inserts == nullptr || caps == nullptr || floors == nullptr)
          {
             for (Primitive *const p : made) // Nothing set up yet: no renderable, no collider
             {
@@ -1259,6 +1265,17 @@ struct PlayfieldMaker::Impl
             inserts->m_d.m_cullBackfaces = true; // A closed shell: front faces only, sorted back to front (WantsTriangleSort)
             inserts->m_d.m_disableLightingBelow = 0.f; // Lit from below too: the lamp sits under the insert
             inserts->m_d.m_szRefractionProbe = NewInsertsProbeName(t); // Frost: the body blurs what lies below it (the pocket floor and walls)
+         }
+         if (std::ranges::find(made, floors) != made.end())
+         {
+            floors->m_d.m_plasticRole = kPlayfieldInsertFloorsRole;
+            floors->m_d.m_szMaterial = t->m_playfieldMaterial; // Per frame the board's material (RenderObject); opaque, in the depth prepass, lit and shadowed as the board
+            floors->m_d.m_szImage = t->m_image; // The Paint until Bake Insert Print makes the soft colour (Insert Bodies (baked))
+            floors->m_d.m_useDepthMask = true;
+            floors->m_d.m_depthBias = 0.f;
+            floors->m_d.m_disableLightingBelow = 1.f; // As the board
+            floors->m_d.m_szORMMap = board->m_d.m_szORMMap;
+            floors->m_d.m_szNormalMap = board->m_d.m_szNormalMap;
          }
          if (std::ranges::find(made, caps) != made.end())
          {
@@ -1366,6 +1383,7 @@ struct PlayfieldMaker::Impl
       PrintBake::BakeParams prm;
       prm.printMode = static_cast<unsigned>(board->m_d.m_pfPrintMode);
       prm.makeCaps = CutInsertPockets(board);
+      prm.makeBodies = prm.makeCaps;
       int w = 0, h = 0;
       if (!PrintBake::OutputSize(mi.w, mi.h, prm.maxWidth, w, h)) // before Bake: a huge mask is refused here without allocating
       {
@@ -1401,6 +1419,24 @@ struct PlayfieldMaker::Impl
          }
          else
             capsFailed = true;
+      if (prm.makeBodies && !res.bodies.empty())
+      {
+         // The pockets' soft colour (the Paint of the clear windows, blurred): the bodies, their floors and rims show this, so the art at depth cannot slide against the
+         // sharp ink at the surface when the camera moves. Not added when it cannot be encoded: they keep the Paint
+         if (Texture *const bt = MakePngTexture(UniqueImageName(t, "Insert Bodies (baked)"s), res.bodies, res.w, res.h); bt != nullptr)
+         {
+            t->AddImage(bt);
+            caps += ", " + bt->m_name;
+            for (const int role : { kPlayfieldInsertsRole, kPlayfieldInsertFloorsRole })
+               if (Primitive *const part = CompanionOf(board, role); part != nullptr)
+               {
+                  ed.m_undo.MarkForUndo(part, true, false);
+                  part->m_d.m_szImage = bt->m_name;
+               }
+         }
+         else
+            capsFailed = true;
+      }
       t->SetNonUndoableDirty(SaveDirtyState::Dirty);
       const vector<Primitive *> cards = TracedCards(t);
       vector<string> before;
@@ -1640,7 +1676,7 @@ std::function<void()> PlayfieldMaker::KeepShown(EditorUI &ed)
       bool shown;
    };
    vector<Shown> parts;
-   for (const int role : { kPlayfieldWallsRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole })
+   for (const int role : { kPlayfieldWallsRole, kPlayfieldInsertsRole, kPlayfieldInsertCapsRole, kPlayfieldInsertFloorsRole })
       if (Primitive *const p = CompanionOf(board, role); p != nullptr)
          parts.push_back({ p, Impl::AuthoredVisible(ed, p) });
    const bool boardShown = Impl::AuthoredVisible(ed, board);

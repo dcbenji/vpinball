@@ -259,12 +259,47 @@ static void caps()
    CHECK(!Bake(Img(p, 2, 2, 3), BakeImage(), prm, r) && r.print.empty() && r.w == 0, "bad image");
 }
 
+// Soft insert bodies: a clear window (alpha mask 0 = ink 0) in black printed ink, with a sharp dark letter bar and a flat colour inside; after the blur the window is
+// the flat colour (the black ink around does not tint it) and the letter's edge is soft; off by default; radius 0 = a plain copy of the print
+static void bodies()
+{
+   const int W = 160, H = 120;
+   // Paint: orange (200, 120, 40) inside a window x 40..119, y 30..89, with a black vertical bar x 78..81 inside it; black around. Mask alpha 255 = ink (printMode alpha)
+   const std::vector<uint8_t> paint = fill(W, H, 3, [](int x, int y, int c) {
+      const bool win = x >= 40 && x < 120 && y >= 30 && y < 90;
+      if (!win || (x >= 78 && x < 82)) return (uint8_t)0;
+      return (uint8_t)(c == 0 ? 200 : c == 1 ? 120 : 40); });
+   const std::vector<uint8_t> mask = fill(W, H, 4, [](int x, int y, int c) {
+      if (c < 3) return (uint8_t)0;
+      const bool win = x >= 40 && x < 120 && y >= 30 && y < 90;
+      return (uint8_t)(win ? 0 : 255); });
+   BakeParams p;
+   p.printMode = kSourceAlpha;
+   p.maxWidth = W;
+   BakeResult r;
+   CHECK(Bake(Img(paint, W, H, 3), Img(mask, W, H, 4), p, r) && r.bodies.empty(), "bodies not made by default");
+   p.makeBodies = true;
+   p.bodyBlurRadius = 6;
+   CHECK(Bake(Img(paint, W, H, 3), Img(mask, W, H, 4), p, r) && r.bodies.size() == (size_t)W * H * 4, "bodies size");
+   const auto px = [&](int x, int y, int c) { return (int)r.bodies[((size_t)y * W + x) * 4 + c]; };
+   CHECK(px(60, 60, 3) == 255, "alpha 255");
+   // the bar (black, but it is clear: weight 1) is blurred to a soft dip, far from it (x 50, 10 px from the bar) the window colour is nearly flat
+   CHECK(std::abs(px(50, 60, 0) - 200) <= 8 && std::abs(px(50, 60, 1) - 120) <= 5, "window colour %d %d", px(50, 60, 0), px(50, 60, 1));
+   CHECK(px(80, 60, 0) > 60 && px(80, 60, 0) < 190, "the bar is a soft dip: %d (sharp would be 0)", px(80, 60, 0));
+   // the black ink around the window barely tints the window next to its edge (the weights of the inked pixels are 0.002)
+   CHECK(px(42, 60, 0) > 150, "ink does not leak into the window: %d", px(42, 60, 0));
+   p.bodyBlurRadius = 0;
+   CHECK(Bake(Img(paint, W, H, 3), Img(mask, W, H, 4), p, r), "bake radius 0");
+   CHECK(px(80, 60, 0) == 0 && px(60, 60, 0) == 200, "radius 0 keeps the pixels: %d %d", px(80, 60, 0), px(60, 60, 0));
+}
+
 int main(int argc, char** argv)
 {
    small();
    resample();
    thinLines();
    caps();
+   bodies();
    if (argc > 4 && !strcmp(argv[1], "real")) real(argc, argv);
    printf(fails ? "FAILED: %d\n" : "all checks passed\n", fails);
    return fails ? 1 : 0;

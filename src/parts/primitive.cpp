@@ -1429,6 +1429,11 @@ void Primitive::Render(const unsigned int renderMask)
       m_d.m_reflectionStrength = m_ptable->m_playfieldReflectionStrength;
       pinf = SamplerFilter::SF_ANISOTROPIC;
    }
+   else if (m_d.m_plasticRole == kPlayfieldInsertFloorsRole && !m_d.m_plasticHost.empty()) // Playfield Maker pocket floors: opaque, the board's material
+   {
+      m_d.m_szMaterial = m_ptable->m_playfieldMaterial;
+      pinf = SamplerFilter::SF_ANISOTROPIC;
+   }
    else if (m_d.m_plasticRole == kPlayfieldInsertCapsRole && !m_d.m_plasticHost.empty()) // Playfield Maker ink caps: the board's surface over cut insert pockets
    {
       m_d.m_szReflectionProbe = RenderProbe::PLAYFIELD_REFLECTION_RENDERPROBE_NAME;
@@ -2695,7 +2700,7 @@ PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOw
 
 bool Primitive::IsPlayfieldPart() const
 {
-   return m_d.m_playfieldGen || (m_d.m_plasticRole >= kPlayfieldWallsRole && m_d.m_plasticRole <= kPlayfieldInsertCapsRole && IsPlasticCompanion()); // Walls, Floor, Inserts, InsertCaps
+   return m_d.m_playfieldGen || (m_d.m_plasticRole >= kPlayfieldWallsRole && m_d.m_plasticRole <= kPlayfieldInsertFloorsRole && IsPlasticCompanion()); // Walls, Floor, Inserts, InsertCaps, InsertFloors
 }
 
 Primitive *Primitive::GetPlayfieldCompanion(const int role) const
@@ -2770,8 +2775,10 @@ void Primitive::RegeneratePlayfield()
       return; // Degenerate table rectangle: the meshes stay as they are
    }
    PlasticMesh::Mesh &board = built.top, &floor = built.floor, &walls = built.walls;
+   Primitive *const floorsPart = m_d.m_pfCutInserts ? GetPlayfieldCompanion(kPlayfieldInsertFloorsRole) : nullptr;
+   if (floorsPart == nullptr) // The insert pockets' floors (Cut Insert Pockets) are drawn with the board unless they have their own part (a table made before it)
    {
-      const unsigned base = static_cast<unsigned>(board.verts.size()); // The insert pockets' floors (Cut Insert Pockets) are drawn with the board
+      const unsigned base = static_cast<unsigned>(board.verts.size());
       board.verts.insert(board.verts.end(), built.pocketFloors.verts.begin(), built.pocketFloors.verts.end());
       for (const unsigned i : built.pocketFloors.idx)
          board.idx.push_back(base + i);
@@ -2818,11 +2825,11 @@ void Primitive::RegeneratePlayfield()
          comp->m_renderer->ReinitRenderable(comp);
    }
    if (m_d.m_pfCutInserts) // Cut Insert Pockets (prototype): the insert bodies and the ink caps. Switched off, the companions keep their meshes (the editor hides them)
-      for (const auto &[role, mesh] : { std::pair<int, const PlasticMesh::Mesh *> { kPlayfieldInsertsRole, &built.inserts }, { kPlayfieldInsertCapsRole, &built.insertCaps } })
+      for (const auto &[role, mesh] : { std::pair<int, const PlasticMesh::Mesh *> { kPlayfieldInsertsRole, &built.inserts }, { kPlayfieldInsertCapsRole, &built.insertCaps }, { kPlayfieldInsertFloorsRole, &built.pocketFloors } })
          if (Primitive *const comp = GetPlayfieldCompanion(role); comp != nullptr)
          {
             comp->m_d.m_collidable = false; // Look only: the floor stays solid over the pockets
-            if (role == kPlayfieldInsertCapsRole) // The caps are the board's surface over the pockets: its Shine and Bump (the reflection probe is set per frame in RenderObject)
+            if (role == kPlayfieldInsertCapsRole || role == kPlayfieldInsertFloorsRole) // The caps and the floors are the board's surface over the pockets: its Shine and Bump (the reflection probe is set per frame in RenderObject)
             {
                comp->m_d.m_szORMMap = m_d.m_szORMMap;
                comp->m_d.m_szNormalMap = m_d.m_szNormalMap;
@@ -3548,7 +3555,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PHSK): m_plasticHoles.LoadPointToken(reader, true); break;
          case FID(PHLS): m_plasticHoles.LoadPointToken(reader); break; // Holes as saved by earlier builds
          case FID(PHST): m_d.m_plasticHost = reader.AsString(); break;
-         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kPlayfieldInsertCapsRole); break;
+         case FID(PHRL): m_d.m_plasticRole = clamp(reader.AsInt(), 0, kPlayfieldInsertFloorsRole); break;
          case FID(PFGN): m_d.m_playfieldGen = reader.AsBool(); break;
          case FID(PFTK): m_d.m_pfThickness = clamp(reader.AsFloat(), 1.f, 200.f); break;
          case FID(PFFL): m_d.m_pfFloor = clamp(reader.AsInt(), 0, 1); break;

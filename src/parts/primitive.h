@@ -37,6 +37,7 @@ inline constexpr int kPlayfieldWallsRole = 5; // The hole walls, the board's out
 inline constexpr int kPlayfieldFloorRole = 6; // The invisible floor collider: only the Falls Through holes are cut, with their walls
 inline constexpr int kPlayfieldInsertsRole = 7; // Cut Insert Pockets (prototype): the insert bodies filling the cut pockets (Paint image, see-through material)
 inline constexpr int kPlayfieldInsertCapsRole = 8; // Cut Insert Pockets: the ink over the pockets (Insert Caps (baked): alpha = ink, a copy of the playfield material)
+inline constexpr int kPlayfieldInsertFloorsRole = 9; // Cut Insert Pockets: the pockets' floors and rims, opaque, in a soft colour of the art (Insert Bodies (baked)), the playfield material
 inline constexpr int kMaxPlayfieldHoles = 4096; // Load caps
 inline constexpr int kMaxPlayfieldHolePoints = 4096;
 
