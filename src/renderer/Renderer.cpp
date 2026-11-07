@@ -3626,7 +3626,7 @@ void Renderer::UpdateVirtualShadowMaps()
       shadowTapMode = shadowGate = 0.f;
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrShadowParams, 1.f / VSM::PAGE_DIM, 0.002f, m_vsmTransNearStep, shadowTapMode);
    // Dim light cutoff (fs_pbr pbrDimParams.x, 0 = off): a light under this unshadowed irradiance luminance at the pixel gets plain
-   // Lambert diffuse only. VPX_DIM_LIGHT_CUTOFF=<float> overrides the PBRDimLightCutoff setting (A/B)
+   // diffuse only (no specular, coat reflection or shadow). VPX_DIM_LIGHT_CUTOFF=<float> overrides the PBRDimLightCutoff setting (A/B)
    static const char* const envDim = std::getenv("VPX_DIM_LIGHT_CUTOFF");
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrDimParams, max(envDim ? (float)atof(envDim) : m_pbrDimLightCutoff, 0.f), shadowGate, 0.f, 0.f);
 }
