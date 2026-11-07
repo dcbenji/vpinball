@@ -280,8 +280,8 @@ void main()
 		// vector of that refraction (eta * the ray on to the eye - the ray from the bulb). The lobe is wrapped (a facet turned
 		// a right angle away still passes a quarter at sharpness 2), so a low sharpness is a milky plastic whose whole body
 		// glows with soft rays, a high one a clear plastic where only the facets turned to the eye light up. Brightest over
-		// the bulb (an inverse-square falloff: softer than a bare point source, as the pocket walls fill some back in); only on
-		// the faceted floor (the map's alpha). 0 = off.
+		// the bulb (an inverse-square falloff: softer than a bare point source, as the pocket walls fill some back in), up to
+		// the window's edge. 0 = off.
 		const bool fgOn = fgAmount > 0.0 && tracedParams[12].x > 0.0;
 		vec3 fgHalf = vec3(0.0, 0.0, 1.0);
 		float fgFall = 0.0;
@@ -294,6 +294,13 @@ void main()
 			fgFall = pow(below / length(vec3(pmm, below)), 2.0);
 		}
 		const float fgS = max(fgSharp * (1.0 - 0.6 * frost), 1.0);
+		// The glow fills the insert's window, not just its faceted floor: the bake's smooth margin round the facets (about
+		// 2 mm on Police Force's squares) passes the light too, so outside the floor the floor mask is spread outward by
+		// about 2 mm (read at the mip whose texel is 2 mm, which bilinear filtering spreads over one texel); inside the floor
+		// each tap keeps the sharp mask, so narrow points keep their glow
+		float fgMask = 0.0;
+		if (fgOn)
+			fgMask = smoothstep(0.05, 0.35, texture2DLod(tex_base_normalmap, card, log2(max(2.0 / (size / 1024.0), 1.0))).a);
 		for (int i = 0; i < 4; i++)
 		{
 			const vec4 f = texture2DGrad(tex_base_normalmap, floorUv + gx * taps[i].x + gy * taps[i].y, gx * footprint, gy * footprint);
@@ -301,10 +308,10 @@ void main()
 			const vec3 wavy = normalize(vec3(nxy + lean, sqrt(saturate(1.0 - dot(nxy, nxy)))));
 			glint += vec3(tracedGlint(wavy, v, glintTurn, sharp, 0.0), tracedGlint(wavy, v, glintTurn, sharp, 1.0), tracedGlint(wavy, v, glintTurn, sharp, 2.0)) * f.a;
 			if (fgOn)
-				facetGlow += pow(saturate(dot(wavy, fgHalf) * 0.5 + 0.5), fgS) * f.a;
+				facetGlow += pow(saturate(dot(wavy, fgHalf) * 0.5 + 0.5), fgS) * max(f.a, fgMask);
 		}
 		glint *= 0.25 * (1.0 - 0.5 * frost);
-		facetGlow *= 0.25 * fgFall * outline * fgAmount;
+		facetGlow *= 0.25 * fgFall * fgAmount;
 	}
 
 	// The lamp-off look, always there under the lamp, at the same card point and weights as the traced light, filtered by
