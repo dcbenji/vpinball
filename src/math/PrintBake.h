@@ -4,12 +4,12 @@
 // No engine dependency (standard library only), so it can be checked standalone: clang++ -std=c++20 -I src tools/printbake_check.cpp
 //   Insert Print: rgb = Paint, alpha = 1 - ink (1 where the insert shows clear, 0 where printed over: fs_insert_traced.sc:311-318).
 //   Insert Caps (P2-5, only when Cut Insert Pockets is on): the same rgb, alpha = ink.
-// Needs no traced inserts: the inputs are the two images only. The output has the Print mask's size, capped at maxWidth (2048) wide, aspect kept; both
+// Needs no traced inserts: the inputs are the two images only. The output has the Ink Mask's size, capped at maxWidth (2048) wide, aspect kept; both
 // images cover the whole table, so both are resampled to that grid: bilinear (sampled at pixel centres, edges clamped) while the downscale ratio is at most 1.5
 // (exact at the same size), an area-weighted box average above that, so a 1 px ink line survives a 3x downscale instead of falling between the samples.
 // The output is at most kMaxSide (16384) pixels on a side; larger asks fail (Bake returns false, OutputSize returns false), they never allocate.
 // The names BakeImage / BakeParams / BakeResult differ from MaskTrace's Image / Params / Result so one .cpp can use both namespaces.
-// The Print mask's ink: ink = 1 after the source and the invert are applied. The source is the alpha channel (an image without alpha counts as opaque, ink 1
+// The Ink Mask's ink: ink = 1 after the source and the invert are applied. The source is the alpha channel (an image without alpha counts as opaque, ink 1
 // before the invert) or the luminance (channel average, as MaskTrace); invert flips it. PF's PF_inkmask is alpha + invert (its alpha is 1 where clear), so
 // the baked Insert Print alpha is exactly that mask's alpha. Output is straight (not premultiplied) 8-bit RGBA, row 0 first.
 
@@ -35,13 +35,13 @@ struct BakeImage
    size_t stride = 0;
 };
 
-// The saved Print slot mode (PFPK).
+// The saved Ink Mask slot mode (PFPK).
 enum PrintMode : unsigned { kSourceAlpha = 1, kInvert = 2 }; // bit 0: source = alpha (else luminance); bit 1: invert
 
 struct BakeParams
 {
    unsigned printMode = 0;
-   int maxWidth = 2048; // output width cap; the Print mask is never upscaled
+   int maxWidth = 2048; // output width cap; the Ink Mask is never upscaled
    bool makeCaps = false; // also fill BakeResult::caps (Insert Caps)
 };
 
@@ -55,7 +55,7 @@ struct BakeResult
 
 constexpr int kMaxSide = 16384; // output cap per side (a 16384 x 16384 RGBA buffer is 1 GiB; real maps are 2048 x ~4500)
 
-// The output size for a Print mask of pw x ph pixels: min(pw, maxWidth) wide, the height rounded to keep the aspect (at least 1). False for bad input or an
+// The output size for an Ink Mask of pw x ph pixels: min(pw, maxWidth) wide, the height rounded to keep the aspect (at least 1). False for bad input or an
 // output over kMaxSide on either side (call this first to know before baking).
 inline bool OutputSize(int pw, int ph, int maxWidth, int& w, int& h)
 {

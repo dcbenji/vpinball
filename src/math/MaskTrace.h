@@ -575,7 +575,7 @@ inline bool UnderInsert(const Hole& hole, const std::vector<Pt>& hull)
    return subj.size() >= 3 && total > 0. && std::fabs(SignedArea(subj)) > 0.5 * total;
 }
 
-// ---- Phase 2 (P2-3): the board outline from the Holes mask. ----
+// ---- Phase 2 (P2-3): the board outline from the Wood Mask. ----
 
 struct OutlineResult
 {
@@ -749,26 +749,26 @@ struct StripParams
    Mode mode = Mode::Auto; // pass the resolved mode of the last Find Holes if there is one
    float minFraction = 0.02f; // a band narrower than this share of the image width is a normal margin, not a baked-in strip (PF/WW: 80 px of 3072 = 2.6%; a real margin: 13 px of 2992 = 0.4%)
    float uniformity = 0.995f; // a column belongs to the band when this share of its pixels have the band's kind
-   float oppositeMax = 0.005f; // no Print mask: the side opposite a band must be narrower than this share of the width
+   float oppositeMax = 0.005f; // no Ink Mask: the side opposite a band must be narrower than this share of the width
 };
 
 struct StripScan
 {
-   // A band of columns along the left or right image edge where every column is (almost) all one kind: all hole or all wood. The Holes mask of a
+   // A band of columns along the left or right image edge where every column is (almost) all one kind: all hole or all wood. The Wood Mask of a
    // paint that still carries freezy's plywood side strip has such a band (the strip is uniform: in WW's mask it is all wood, 80 px plus the margin).
    // Only columns are scanned: a hole-free band along the top is just the board's top (WW: the first 363 rows).
-   // The Holes mask alone cannot tell the strip from a real wood margin (PF has 88 px of wood on the left, 2.9%, the WW strip 93 px, 3.0%), so a side only
-   // fires when the Print mask is ALSO uniform over the same share of its own width: a real margin is printed (art and ink run into it), the baked-in strip is not.
+   // The Wood Mask alone cannot tell the strip from a real wood margin (PF has 88 px of wood on the left, 2.9%, the WW strip 93 px, 3.0%), so a side only
+   // fires when the Ink Mask is ALSO uniform over the same share of its own width: a real margin is printed (art and ink run into it), the baked-in strip is not.
    int leftCols = 0, rightCols = 0; // mask band widths in pixels of the sides that fired, 0 = that side did not fire
    int leftMaskCols = 0, rightMaskCols = 0; // the raw mask bands (>= minFraction of the width, else 0), fired or not, for diagnostics
    bool leftIsHole = false, rightIsHole = false; // the band's kind
    bool fires = false; // either side is a baked-in strip: warn before Fit Table to Paint
-   bool hint = false; // fires from the weaker mask-only rule (no Print mask given): show "check this", do not block
+   bool hint = false; // fires from the weaker mask-only rule (no Ink Mask given): show "check this", do not block
    Mode usedMode = Mode::Dark;
 };
 
-// printMask: optional (null = the weaker mask-only rule). printMode: the saved Print slot mode, bit 0 = source is alpha (an image without alpha counts as
-// opaque), bit 1 = invert; the ink is >= 128 after both (as PrintBake). Without a Print mask a side fires only when exactly one side has a band >= minFraction
+// printMask: optional (null = the weaker mask-only rule). printMode: the saved Ink Mask slot mode, bit 0 = source is alpha (an image without alpha counts as
+// opaque), bit 1 = invert; the ink is >= 128 after both (as PrintBake). Without an Ink Mask a side fires only when exactly one side has a band >= minFraction
 // and the opposite side's band is < oppositeMax (the strip is one-sided, a real margin is two-sided), and `hint` is set.
 inline bool DetectStrip(const Image& im, const StripParams& prm, StripScan& out, const Image* printMask = nullptr, unsigned printMode = 0)
 {

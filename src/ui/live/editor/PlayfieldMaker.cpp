@@ -42,13 +42,13 @@ constexpr float kVPUPerInch = 47.06f;
 constexpr const char *kPlywood = "Playfield Plywood"; // The image and the material of the walls
 
 enum Slot { Paint, Shine, Bump, InsertPrint, HolesMask, PrintMask, Plywood, Glow, Blueprint, SlotCount };
-constexpr const char *kSlotNames[SlotCount] = { "Paint", "Shine", "Bump", "Insert Print", "Holes", "Print", "Plywood", "Glow", "Blueprint" };
+constexpr const char *kSlotNames[SlotCount] = { "Paint", "Shine", "Bump", "Insert Print", "Wood Mask", "Ink Mask", "Plywood", "Glow", "Blueprint" };
 constexpr const char *kSlotTips[SlotCount] = {
    "The table's playfield image (albedo)",
    "Occlusion, roughness and metal packed (the board's ORM map)",
    "The board's normal map",
    "The print over the traced inserts: rgb the art, alpha clear where the insert shows",
-   "Every hole routed in the wood at its cut size, inserts included (freezy calls it the wood mask). Black on white, white on black, or transparent: Find Holes reads it, it is not drawn",
+   "every routed hole, inserts included, black on white",
    "Where the ink is opaque (freezy's ink mask). Not drawn, and it needs no traced inserts. The plywood strip check reads it; the print bake will",
    "The image of the hole walls; its last rows are the dark backing",
    "The board's emission map",
@@ -445,18 +445,18 @@ void InsertLightChoices(const PinTable *const t, const string &current, vector<s
    }
 }
 
-// The board outline from the Holes mask (Outline = From Holes Mask): the outer boundary of the largest wood component. `mode` is the resolved mask mode of the
+// The board outline from the Wood Mask (Outline = From Wood Mask): the outer boundary of the largest wood component. `mode` is the resolved mask mode of the
 // last Find Holes. Empty on success (board->m_pfOutline is set), else why not (the outline is left as it was)
 string TraceBoardOutline(const PinTable *const t, Primitive *const board, const MaskPixels &mp, const MaskTrace::Mode mode)
 {
    MaskTrace::OutlineResult out;
    if (!MaskTrace::TraceOutline(mp.im, MaskParams(t, board, mode), out, static_cast<size_t>(kMaxPlayfieldHolePoints)))
-      return "The Holes mask has no wood to make a board outline from";
+      return "The Wood Mask has no wood to make a board outline from";
    board->m_pfOutline.clear();
    for (const MaskTrace::Pt &p : out.polygon)
       board->m_pfOutline.push_back(Vertex2D(p.x, p.y));
    char line[160];
-   snprintf(line, sizeof(line), "Outline: %d points from the Holes mask%s", static_cast<int>(out.polygon.size()), out.toleranceDoubled > 0 ? " (simplified more to stay under the point limit)" : "");
+   snprintf(line, sizeof(line), "Outline: %d points from the Wood Mask%s", static_cast<int>(out.polygon.size()), out.toleranceDoubled > 0 ? " (simplified more to stay under the point limit)" : "");
    s.outlineStatus = line;
    s.outlineStatusBad = false;
    return string();
@@ -465,12 +465,12 @@ string TraceBoardOutline(const PinTable *const t, Primitive *const board, const 
 // The mode the outline is traced with: what the last Find Holes of this board resolved, else the board's own setting
 MaskTrace::Mode OutlineMode(const Primitive *const board)
 {
-   // What the last Find Holes resolved, only while the Holes image and the Mask Mode are the ones it read
+   // What the last Find Holes resolved, only while the Wood Mask image and the Mask Mode are the ones it read
    const bool same = s.findBoard == board && s.findImage == board->m_d.m_pfWoodMask && s.findMaskMode == board->m_d.m_pfMaskMode && s.usedMode != MaskTrace::Mode::Auto;
    return same ? s.usedMode : static_cast<MaskTrace::Mode>(clamp(board->m_d.m_pfMaskMode, 0, 3));
 }
 
-// The Outline setting: Table Rectangle, or From Holes Mask (traces it now). True if the setting changed (a failed trace leaves it on Table Rectangle)
+// The Outline setting: Table Rectangle, or From Wood Mask (traces it now). True if the setting changed (a failed trace leaves it on Table Rectangle)
 bool SetOutlineMode(const PinTable *const t, Primitive *const board, const int mode)
 {
    if (mode == board->m_d.m_pfOutlineMode)
@@ -483,7 +483,7 @@ bool SetOutlineMode(const PinTable *const t, Primitive *const board, const int m
       return true;
    }
    MaskPixels mp;
-   string why = ReadMask(t, board->m_d.m_pfWoodMask, "Holes", mp);
+   string why = ReadMask(t, board->m_d.m_pfWoodMask, "Wood Mask", mp);
    if (why.empty())
       why = TraceBoardOutline(t, board, mp, OutlineMode(board));
    if (!why.empty())
@@ -582,7 +582,7 @@ bool SameHole(const Sampled &a, const Sampled &b)
    return frac(a, b) > 0.5f && frac(b, a) > 0.5f;
 }
 
-// Find Holes: traces the Holes mask into holes and sorts each shape: an insert pocket (a traced card's footprint covers it, or a picked Insert Light lies in it;
+// Find Holes: traces the Wood Mask into holes and sorts each shape: an insert pocket (a traced card's footprint covers it, or a picked Insert Light lies in it;
 // left uncut), a through-hole (everything else), or an edge cut (touches the image edge: counted, not stored, it shapes the outline). Replaces the holes a
 // previous run made (FromMask), keeps the hand-placed ones, and re-traces the outline when it follows the mask. Returns the status line.
 string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
@@ -590,11 +590,11 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
    ok = false;
    const auto t0 = std::chrono::steady_clock::now();
    MaskPixels mp;
-   if (const string why = ReadMask(t, board->m_d.m_pfWoodMask, "Holes", mp); !why.empty())
+   if (const string why = ReadMask(t, board->m_d.m_pfWoodMask, "Wood Mask", mp); !why.empty())
       return why;
    MaskTrace::Result res;
    if (!MaskTrace::Trace(mp.im, MaskParams(t, board, static_cast<MaskTrace::Mode>(clamp(board->m_d.m_pfMaskMode, 0, 3))), res))
-      return "The Holes image could not be traced";
+      return "The Wood Mask image could not be traced";
 
    // Footprints of the traced insert cards: the convex hull of their mesh vertices through the full matrix; and the picked insert lights
    HoleClassify::Footprints fp;
@@ -792,7 +792,7 @@ void SetHoleKind(PlayfieldHole &h, const bool pocket)
    h.flags = (pocket ? (h.flags | PlayfieldHole::UnderInsert) & ~PlayfieldHole::Cut : (h.flags & ~PlayfieldHole::UnderInsert) | PlayfieldHole::Cut) & ~PlayfieldHole::FromMask;
 }
 
-// The plywood side strip test of the Holes mask, confirmed by the Print mask when there is one (without it only a hint: "check this", never a block). Cached for
+// The plywood side strip test of the Wood Mask, confirmed by the Ink Mask when there is one (without it only a hint: "check this", never a block). Cached for
 // the board and the images; s.stripText is empty when nothing fires
 void UpdateStripWarning(const PinTable *const t, const Primitive *const board)
 {
@@ -805,9 +805,9 @@ void UpdateStripWarning(const PinTable *const t, const Primitive *const board)
    s.stripText.clear();
    s.stripHint = false;
    MaskPixels holes, print;
-   if (!ReadMask(t, board->m_d.m_pfWoodMask, "Holes", holes).empty())
+   if (!ReadMask(t, board->m_d.m_pfWoodMask, "Wood Mask", holes).empty())
       return;
-   const bool havePrint = !board->m_d.m_pfPrintMask.empty() && ReadMask(t, board->m_d.m_pfPrintMask, "Print", print).empty();
+   const bool havePrint = !board->m_d.m_pfPrintMask.empty() && ReadMask(t, board->m_d.m_pfPrintMask, "Ink Mask", print).empty();
    MaskTrace::StripParams sp;
    sp.mode = OutlineMode(board);
    MaskTrace::StripScan sc;
@@ -821,11 +821,11 @@ void UpdateStripWarning(const PinTable *const t, const Primitive *const board)
          return;
       if (sc.hint)
          snprintf(line, sizeof(line),
-            "Check this: the Holes mask has an all-%s band about %d px wide on the %s edge only (set a Print mask for a better test). If it is a baked-in plywood strip, crop it from the maps before Fit Table to Paint",
+            "Check this: the Wood Mask has an all-%s band about %d px wide on the %s edge only (set an Ink Mask for a better test). If it is a baked-in plywood strip, crop it from the maps before Fit Table to Paint",
             isHole ? "hole" : "wood", cols, where);
       else
          snprintf(line, sizeof(line),
-            "The Holes mask has an all-%s band about %d px wide on the %s edge and the Print mask has no art there: it looks like a baked-in plywood strip. Crop it from the maps before Fit Table to Paint, or the board is that much too wide",
+            "The Wood Mask has an all-%s band about %d px wide on the %s edge and the Ink Mask has no art there: it looks like a baked-in plywood strip. Crop it from the maps before Fit Table to Paint, or the board is that much too wide",
             isHole ? "hole" : "wood", cols, where);
       s.stripText += (s.stripText.empty() ? "" : "\n") + string(line);
    };
@@ -1071,7 +1071,7 @@ struct PlayfieldMaker::Impl
       return res;
    }
 
-   // Bake Insert Print (P2-4): Paint + the Print mask -> "Insert Print (baked)" (PNG, at most 2048 wide), added to the table and set in every traced card that
+   // Bake Insert Print (P2-4): Paint + the Ink Mask -> "Insert Print (baked)" (PNG, at most 2048 wide), added to the table and set in every traced card that
    // takes the slot (the slot's rule). The cards go into the panel's open undo record (one step); the image add is not undoable (undo leaves it unused). Returns
    // true when a card changed. Writes s.bakeStatus
    static bool BakeInsertPrint(EditorUI &ed, Primitive *const board)
@@ -1088,7 +1088,7 @@ struct PlayfieldMaker::Impl
       MaskPixels paint, print;
       string err = ReadMask(t, t->m_image, "Paint", paint);
       if (err.empty())
-         err = ReadMask(t, board->m_d.m_pfPrintMask, "Print", print);
+         err = ReadMask(t, board->m_d.m_pfPrintMask, "Ink Mask", print);
       if (!err.empty())
       {
          s.bakeStatus = "Bake Insert Print: " + err;
@@ -1104,7 +1104,7 @@ struct PlayfieldMaker::Impl
       int w = 0, h = 0;
       if (!PrintBake::OutputSize(mi.w, mi.h, prm.maxWidth, w, h)) // before Bake: a huge mask is refused here without allocating
       {
-         s.bakeStatus = "Bake Insert Print: the Print mask is too large (the baked image may be at most 16384 pixels a side)";
+         s.bakeStatus = "Bake Insert Print: the Ink Mask is too large (the baked image may be at most 16384 pixels a side)";
          return false;
       }
       PrintBake::BakeResult res;
@@ -2007,7 +2007,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                SelectHole(board, -1);
          }
          ImGui::EndDisabled();
-         ImGui::SetItemTooltip("Sorts every shape in the Holes mask: a through-hole (cut), an insert pocket (a traced insert or an Insert Light is over it: left uncut), or an edge cut (counted: it shapes the outline). Replaces the holes the last run made (a hole you moved, resized or toggled is kept)");
+         ImGui::SetItemTooltip("Sorts every shape in the Wood Mask: a through-hole (cut), an insert pocket (a traced insert or an Insert Light is over it: left uncut), or an edge cut (counted: it shapes the outline). Replaces the holes the last run made (a hole you moved, resized or toggled is kept)");
          if (!s.findStatus.empty() && s.findBoard == board && s.findImage == board->m_d.m_pfWoodMask)
          {
             ImGui::PushStyleColor(ImGuiCol_Text, s.findStatusBad ? ImVec4(1.f, 0.35f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f));
@@ -2018,11 +2018,11 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       if (slot == PrintMask)
       {
          props.Combo<Primitive>(
-            board, "Print Source"s, vector<string> { "Luminance"s, "Alpha"s }, //
+            board, "Ink Source"s, vector<string> { "Luminance"s, "Alpha"s }, //
             [](const Primitive *p) { return p->m_d.m_pfPrintMode & 1; }, //
             [](Primitive *p, int v) { p->m_d.m_pfPrintMode = (p->m_d.m_pfPrintMode & ~1) | (v != 0 ? 1 : 0); }, "Where the mask holds the ink: its brightness (white = ink), or its alpha (opaque = ink)");
          props.Checkbox<Primitive>(
-            board, "Invert Print"s, //
+            board, "Invert Ink"s, //
             [](const Primitive *p) { return (p->m_d.m_pfPrintMode & 2) != 0; }, //
             [](Primitive *p, bool v) { p->m_d.m_pfPrintMode = (p->m_d.m_pfPrintMode & ~2) | (v ? 2 : 0); }, "Swap ink and clear (PF's ink mask is alpha, inverted: its alpha is 1 where clear)");
          ImGui::BeginDisabled(value.empty() || t->m_image.empty() || cards.empty() || s.bakeQueued);
@@ -2100,12 +2100,12 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       }
    }
    {
-      // By hand rather than props.Combo: a switch that fails (no Holes image, no wood in it) must not count as an edit, so it records no undo step
-      props.PropertyLabel("Outline"s, "The board's edge: the table rectangle, or the outer boundary of the wood in the Holes mask (edge cuts like a shooter lane or notches cut into it). The walls and the backing follow it; the floor collider stays the table rectangle");
+      // By hand rather than props.Combo: a switch that fails (no Wood Mask image, no wood in it) must not count as an edit, so it records no undo step
+      props.PropertyLabel("Outline"s, "The board's edge: the table rectangle, or the outer boundary of the wood in the Wood Mask (edge cuts like a shooter lane or notches cut into it). The walls and the backing follow it; the floor collider stays the table rectangle");
       int mode = board->m_d.m_pfOutlineMode;
       ImGui::SetNextItemWidth(-FLT_MIN);
       bool outlineEdited = false;
-      if (ImGui::Combo("##outline", &mode, "Table Rectangle\0From Holes Mask\0"))
+      if (ImGui::Combo("##outline", &mode, "Table Rectangle\0From Wood Mask\0"))
       {
          outlineEdited = SetOutlineMode(t, board, mode);
          if (outlineEdited)
@@ -2133,7 +2133,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       board, "Default Bevel"s, //
       [](const Primitive *p) { return p->m_d.m_pfDefaultBevel; }, //
       [](Primitive *p, float v) { p->m_d.m_pfDefaultBevel = clamp(v, 0.f, 200.f); s.rebuildOnRelease = true; }, PropertyPane::Unit::VPLength, 2,
-      "The rounded rim of the holes set to Default (0 = none; 1/32 in is the Jurassic Park rim). The Holes mask is the cut at the wall, as a router "
+      "The rounded rim of the holes set to Default (0 = none; 1/32 in is the Jurassic Park rim). The Wood Mask is the cut at the wall, as a router "
       "makes it: a bevelled hole is this much wider each side at the surface. Insert pockets never get one");
    props.InputInt<Primitive>(
       board, "Bevel Segments"s, //
