@@ -19,6 +19,7 @@
 #include "math/HoleClassify.h"
 #include "math/MaskTrace.h"
 #include "math/PlasticMesh.h"
+#include "math/PrintBake.h"
 #include "parts/Material.h"
 #include "parts/Collection.h"
 #include "parts/light.h"
@@ -27,6 +28,10 @@
 #include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
 #include "renderer/Texture.h"
+#ifdef __STANDALONE__
+#define _WINDOWS_ // FreeImage.h would redefine the Windows types the standalone build already has
+#endif
+#include "FreeImage.h"
 
 namespace VPX::EditorUI
 {
@@ -105,6 +110,13 @@ struct State
    const Primitive *stripBoard = nullptr; // the strip scan below is for this board and these images
    string stripKey, stripText;
    bool stripHint = false;
+   // Bake Insert Print: queued by the button so the progress line is drawn before the (blocking) bake runs on the next frame
+   bool bakeQueued = false;
+   const Primitive *bakeBoard = nullptr; // the board and table the queued run and the status line belong to
+   const PinTable *bakeTable = nullptr;
+   int bakeFrame = 0; // the frame of the click: the run is dropped if the section is not drawn on the next one
+   string bakeStatus;
+   bool bakeStatusBad = false;
 } s;
 
 
@@ -312,6 +324,36 @@ string ReadMask(const PinTable *const t, const string &name, const char *const w
    mp.im.channels = channels;
    mp.im.stride = stride;
    return string();
+}
+
+// A table image from straight RGBA pixels (RGB byte order, row 0 = the top; BaseTexture's order, which PrintBake keeps), PNG-encoded in memory with FreeImage
+// (FreeImage's 32 bpp bytes are BGRA on little-endian, so the bytes go through FI_RGBA_*, and its rows run bottom-up). The path is `<name>.png`, the extension
+// the pack writer gives it. nullptr when the encode or the image fails
+Texture *MakePngTexture(const string &name, const vector<uint8_t> &rgba, const int w, const int h)
+{
+   FIBITMAP *const dib = FreeImage_Allocate(w, h, 32);
+   if (dib == nullptr)
+      return nullptr;
+   for (int y = 0; y < h; y++)
+   {
+      BYTE *d = FreeImage_GetScanLine(dib, h - 1 - y);
+      const uint8_t *q = &rgba[static_cast<size_t>(y) * w * 4];
+      for (int x = 0; x < w; x++, d += 4, q += 4)
+         d[FI_RGBA_RED] = q[0], d[FI_RGBA_GREEN] = q[1], d[FI_RGBA_BLUE] = q[2], d[FI_RGBA_ALPHA] = q[3];
+   }
+   vector<uint8_t> data;
+   if (FIMEMORY *const mem = FreeImage_OpenMemory(); mem != nullptr)
+   {
+      if (FreeImage_SaveToMemory(FIF_PNG, dib, mem, PNG_Z_DEFAULT_COMPRESSION))
+      {
+         data.resize(static_cast<size_t>(FreeImage_TellMemory(mem)));
+         FreeImage_SeekMemory(mem, 0, SEEK_SET);
+         FreeImage_ReadMemory(data.data(), 1, static_cast<unsigned>(data.size()), mem);
+      }
+      FreeImage_CloseMemory(mem);
+   }
+   FreeImage_Unload(dib);
+   return data.empty() ? nullptr : Texture::CreateFromMemory(name, PathFromUTF8(name + ".png"), std::move(data));
 }
 
 MaskTrace::Params MaskParams(const PinTable *const t, const Primitive *const board, const MaskTrace::Mode mode)
@@ -1017,6 +1059,97 @@ struct PlayfieldMaker::Impl
       return true;
    }
 
+   // Insert Caps (baked) is written only with P2-5's Cut Insert Pockets switch on; the switch does not exist yet, so this stays dormant
+   static bool CutInsertPockets(const Primitive *) { return false; }
+
+   // `name` or the first of name1, name2... the table does not have yet (an existing image is never replaced: the renderer may hold it)
+   static string UniqueImageName(const PinTable *t, const string &name)
+   {
+      string res = name;
+      for (int n = 1; t->GetImage(res) != nullptr; n++)
+         res = name + std::to_string(n);
+      return res;
+   }
+
+   // Bake Insert Print (P2-4): Paint + the Print mask -> "Insert Print (baked)" (PNG, at most 2048 wide), added to the table and set in every traced card that
+   // takes the slot (the slot's rule). The cards go into the panel's open undo record (one step); the image add is not undoable (undo leaves it unused). Returns
+   // true when a card changed. Writes s.bakeStatus
+   static bool BakeInsertPrint(EditorUI &ed, Primitive *const board)
+   {
+      PinTable *const t = ed.m_table;
+      s.bakeBoard = board;
+      s.bakeTable = t;
+      s.bakeStatusBad = true;
+      if (TracedCards(t).empty())
+      {
+         s.bakeStatus = "Bake Insert Print: this table has no traced inserts";
+         return false;
+      }
+      MaskPixels paint, print;
+      string err = ReadMask(t, t->m_image, "Paint", paint);
+      if (err.empty())
+         err = ReadMask(t, board->m_d.m_pfPrintMask, "Print", print);
+      if (!err.empty())
+      {
+         s.bakeStatus = "Bake Insert Print: " + err;
+         return false;
+      }
+      // Paint is in BaseTexture's RGB(A) byte order, which is what PrintBake wants (it copies channels as they come) and MakePngTexture expects
+      PrintBake::BakeImage pi, mi;
+      pi.data = paint.im.data, pi.w = paint.im.w, pi.h = paint.im.h, pi.channels = paint.im.channels, pi.stride = paint.im.stride;
+      mi.data = print.im.data, mi.w = print.im.w, mi.h = print.im.h, mi.channels = print.im.channels, mi.stride = print.im.stride;
+      PrintBake::BakeParams prm;
+      prm.printMode = static_cast<unsigned>(board->m_d.m_pfPrintMode);
+      prm.makeCaps = CutInsertPockets(board);
+      int w = 0, h = 0;
+      if (!PrintBake::OutputSize(mi.w, mi.h, prm.maxWidth, w, h)) // before Bake: a huge mask is refused here without allocating
+      {
+         s.bakeStatus = "Bake Insert Print: the Print mask is too large (the baked image may be at most 16384 pixels a side)";
+         return false;
+      }
+      PrintBake::BakeResult res;
+      if (!PrintBake::Bake(pi, mi, prm, res))
+      {
+         s.bakeStatus = "Bake Insert Print: could not bake (out of memory?)";
+         return false;
+      }
+      Texture *const tex = MakePngTexture(UniqueImageName(t, "Insert Print (baked)"s), res.print, res.w, res.h);
+      if (tex == nullptr)
+      {
+         s.bakeStatus = "Bake Insert Print: could not encode the image";
+         return false;
+      }
+      t->AddImage(tex);
+      string caps;
+      bool capsFailed = false;
+      if (prm.makeCaps)
+         if (Texture *const ct = MakePngTexture(UniqueImageName(t, "Insert Caps (baked)"s), res.caps, res.w, res.h); ct != nullptr)
+         {
+            t->AddImage(ct);
+            caps = ", " + ct->m_name;
+         }
+         else
+            capsFailed = true;
+      t->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      const vector<Primitive *> cards = TracedCards(t);
+      vector<string> before;
+      for (const Primitive *const c : cards)
+         before.push_back(c->m_d.m_szORMMap);
+      SetSlot(ed, board, InsertPrint, tex->m_name);
+      int repointed = 0;
+      for (size_t i = 0; i < cards.size(); i++)
+         repointed += cards[i]->m_d.m_szORMMap != before[i];
+      char line[400];
+      snprintf(line, sizeof(line), "Baked %s%s: %d x %d, %.1f%% ink, set in %d of %d inserts", tex->m_name.c_str(), caps.c_str(), res.w, res.h, res.inkCoverage * 100., repointed,
+         static_cast<int>(cards.size()));
+      s.bakeStatus = line;
+      if (capsFailed)
+         s.bakeStatus += ". Insert Caps (baked) could not be encoded and was not added";
+      s.bakeStatusBad = capsFailed;
+      ed.Report(s.bakeStatus);
+      return repointed > 0;
+   }
+
    static void StartLoad(EditorUI &ed, const int slot)
    {
       if (ed.m_player == nullptr || ed.m_player->m_playfieldWnd == nullptr || s.pendingLoad != nullptr)
@@ -1469,6 +1602,12 @@ void PlayfieldMaker::OnFileDrop(EditorUI &ed, const string &path, const ImVec2 &
 
 void PlayfieldMaker::Update(EditorUI &ed)
 {
+   // A queued bake runs on the frame after the click, when the section is drawn for the same board and table; otherwise (the panel closed, another selection, a play test) it is dropped
+   if (s.bakeQueued && (ImGui::GetFrameCount() > s.bakeFrame + 1 || s.bakeTable != ed.m_table))
+   {
+      s.bakeQueued = false;
+      s.bakeStatus.clear();
+   }
    // The floor collider list follows the table (an edit, an undo, a part added or removed)
    if (const uint64_t key = ed.m_undo.TopRecordId(); key != s.floorsKey || ed.m_table->GetParts().size() != s.floorsParts)
    {
@@ -1686,6 +1825,14 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       if (!file.empty())
          layerEdited |= Impl::ApplyFile(ed, board, slot, file);
    }
+   if (s.bakeQueued)
+   {
+      s.bakeQueued = false;
+      if (s.bakeBoard == board && s.bakeTable == t)
+         layerEdited |= Impl::BakeInsertPrint(ed, board);
+      else
+         s.bakeStatus.clear();
+   }
    if (s.dropFrame >= 0)
       for (const State::SlotRect &r : s.rects)
          if (s.dropPos.x >= r.a.x && s.dropPos.x <= r.b.x && s.dropPos.y >= r.a.y && s.dropPos.y <= r.b.y)
@@ -1878,6 +2025,29 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             board, "Invert Print"s, //
             [](const Primitive *p) { return (p->m_d.m_pfPrintMode & 2) != 0; }, //
             [](Primitive *p, bool v) { p->m_d.m_pfPrintMode = (p->m_d.m_pfPrintMode & ~2) | (v ? 2 : 0); }, "Swap ink and clear (PF's ink mask is alpha, inverted: its alpha is 1 where clear)");
+         ImGui::BeginDisabled(value.empty() || t->m_image.empty() || cards.empty() || s.bakeQueued);
+         if (ImGui::Button("Bake Insert Print"))
+         {
+            int w = 0, h = 0;
+            const Texture *const pt = t->GetImage(value);
+            if (pt != nullptr && PrintBake::OutputSize(static_cast<int>(pt->m_width), static_cast<int>(pt->m_height), 2048, w, h))
+               s.bakeStatus = "Baking Insert Print (" + std::to_string(w) + " x " + std::to_string(h) + ")...";
+            else
+               s.bakeStatus = "Baking Insert Print...";
+            s.bakeStatusBad = false;
+            s.bakeQueued = true;
+            s.bakeBoard = board;
+            s.bakeTable = t;
+            s.bakeFrame = ImGui::GetFrameCount();
+         }
+         ImGui::EndDisabled();
+         ImGui::SetItemTooltip("Composes the Paint image and this mask into an Insert Print image (the Paint's colours, clear where the insert shows, 0 where printed over; at most 2048 wide), adds it to the table as \"Insert Print (baked)\" (a re-bake gets the next free name and leaves the old image unused) and sets it in the traced inserts' Insert Print. Needs Paint, this mask and traced inserts. Undo puts the inserts back; the image stays in the table");
+         if (!s.bakeStatus.empty() && s.bakeBoard == board && s.bakeTable == t)
+         {
+            ImGui::PushStyleColor(ImGuiCol_Text, s.bakeStatusBad ? ImVec4(1.f, 0.35f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f));
+            ImGui::TextWrapped("%s", s.bakeStatus.c_str());
+            ImGui::PopStyleColor();
+         }
       }
       ImGui::PopID();
    }
