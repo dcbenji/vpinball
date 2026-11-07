@@ -17,7 +17,8 @@ namespace PlayfieldBoard
 {
 
 enum HoleKind { kRound = 0, kSlot = 1, kPolygon = 2 };
-enum HoleFlags { kCut = 1, kFallsThrough = 2, kUnderInsert = 4, kFromMask = 8 }; // As the editor's PlayfieldHole::Flags
+enum HoleFlags { kCut = 1, kFallsThrough = 2, kUnderInsert = 4, kFromMask = 8, kPlacedBody = 16 }; // As the editor's PlayfieldHole::Flags
+// kPlacedBody (with kUnderInsert): the author places the insert body as a part of its own (a library insert); the pocket is cut, capped and floored, but gets no generated body
 constexpr float kFloorBevelMin = 2.f; // A Falls Through hole's bevel goes into the floor collider (one chamfer) from this size: thinner would make sliver triangles
 constexpr float kRimInset = 0.5f; // An insert pocket's rim takes the art this far (VPU) inside the hole outline
 
@@ -75,7 +76,7 @@ struct BoardReport
    std::vector<char> clamped;
    std::vector<float> bevel; // Per input hole: the bevel it was built with (0 when not built)
    int built = 0; // Holes built
-   int pockets = 0; // Insert pockets built with an insert body and cap
+   int pockets = 0; // Insert pockets built with an insert body (or kPlacedBody) and cap
    size_t topTriangles = 0, wallTriangles = 0, backingTriangles = 0, floorTriangles = 0, insertTriangles = 0, capTriangles = 0;
    std::vector<std::string> warnings;
 };

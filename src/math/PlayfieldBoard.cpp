@@ -601,7 +601,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
    fp.capZ = -bottom;
    for (size_t c = 0; c < cut.size(); c++)
       if (const int k = topRes.contourOfHole[c]; k >= 0 && (cut[c]->flags & kUnderInsert))
-         if (InsertPocket::AddPuck(topRes.contours[k], ip, out.inserts) && InsertPocket::AddCap(topRes.contours[k], ip, out.insertCaps))
+         if (((cut[c]->flags & kPlacedBody) || InsertPocket::AddPuck(topRes.contours[k], ip, out.inserts)) && InsertPocket::AddCap(topRes.contours[k], ip, out.insertCaps)) // A placed body: the author's own part fills the pocket
          {
             InsertPocket::AddCap(topRes.contours[k], fp, out.pocketFloors);
             InsertPocket::AddRim(topRes.contours[k], ip, 0.f, -bottom, kRimInset, out.pocketFloors);

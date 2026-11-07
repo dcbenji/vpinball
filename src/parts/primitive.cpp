@@ -2678,7 +2678,8 @@ static_assert(static_cast<int>(PlayfieldHole::Round) == static_cast<int>(Playfie
       && static_cast<int>(PlayfieldHole::Polygon) == static_cast<int>(PlayfieldBoard::kPolygon),
    "PlayfieldHole::Type must match PlayfieldBoard::HoleKind");
 static_assert(static_cast<int>(PlayfieldHole::Cut) == static_cast<int>(PlayfieldBoard::kCut) && static_cast<int>(PlayfieldHole::FallsThrough) == static_cast<int>(PlayfieldBoard::kFallsThrough)
-      && static_cast<int>(PlayfieldHole::UnderInsert) == static_cast<int>(PlayfieldBoard::kUnderInsert) && static_cast<int>(PlayfieldHole::FromMask) == static_cast<int>(PlayfieldBoard::kFromMask),
+      && static_cast<int>(PlayfieldHole::UnderInsert) == static_cast<int>(PlayfieldBoard::kUnderInsert) && static_cast<int>(PlayfieldHole::FromMask) == static_cast<int>(PlayfieldBoard::kFromMask)
+      && static_cast<int>(PlayfieldHole::PlacedBody) == static_cast<int>(PlayfieldBoard::kPlacedBody),
    "PlayfieldHole::Flags must match PlayfieldBoard::HoleFlags");
 
 // The board builder's hole (the one place the editor's hole types map to PlayfieldBoard)
@@ -3118,7 +3119,7 @@ static PlayfieldHole LoadPlayfieldHole(IObjectReader &reader)
          switch (tag)
          {
          case FID(PFHT): h.type = clamp(r.AsInt(), 0, 2); break;
-         case FID(PFHF): h.flags = r.AsInt() & 15; break;
+         case FID(PFHF): h.flags = r.AsInt() & 31; break;
          case FID(PFHC): { const Vertex2D v = r.AsVector2(); if (SanePoint(v)) h.centre = v; break; } // Not sane: the default stays
          case FID(PFHD): h.diameter = clamp(FiniteOr(r.AsFloat(), h.diameter), 0.f, 10000.f); break;
          case FID(PFHE): { const Vertex2D v = r.AsVector2(); if (SanePoint(v)) h.end = v; break; }

@@ -868,6 +868,19 @@ static void Pockets()
       fz = std::min(fz, v.z);
    CHECK(fz == -4.5f, "thin board: floor at %g (want -4.5)", fz);
 
+   // Placed bodies: a kPlacedBody pocket is cut, capped and floored like the others but gets no generated body (the author's part fills it)
+   std::vector<BoardHole> placed = holes;
+   placed[0].flags |= kPlacedBody;
+   BoardMeshes mp, mOne;
+   BoardReport rp, rOne;
+   CHECK(BuildBoard(p, placed, mp, rp) && rp.pockets == 2, "placed build: pockets %d (want 2)", rp.pockets);
+   CHECK(BuildBoard(p, { holes[1], through }, mOne, rOne), "arrow-only build");
+   CHECK(Compare(mp.inserts, mOne.inserts) == 0., "placed: only the arrow's generated body");
+   CHECK(Compare(mp.insertCaps, m.insertCaps) == 0. && Compare(mp.pocketFloors, m.pocketFloors) == 0. && Compare(mp.top, m.top) == 0. && Compare(mp.walls, m.walls) == 0.,
+      "placed: the caps, floors, rims, top and walls are the generated build's");
+   placed[1].flags |= kPlacedBody;
+   CHECK(BuildBoard(p, placed, mp, rp) && rp.pockets == 2 && mp.inserts.verts.empty() && !mp.insertCaps.verts.empty(), "all placed: no generated bodies, caps kept");
+
    // The switch off: the caller clears kCut on the pockets: no inserts, the same board as without them
    std::vector<BoardHole> off2 = holes;
    off2[0].flags &= ~kCut;

@@ -45,7 +45,7 @@ inline constexpr int kMaxPlayfieldHolePoints = 4096;
 struct PlayfieldHole
 {
    enum Type { Round = 0, Slot = 1, Polygon = 2 };
-   enum Flags { Cut = 1, FallsThrough = 2, UnderInsert = 4, FromMask = 8 };
+   enum Flags { Cut = 1, FallsThrough = 2, UnderInsert = 4, FromMask = 8, PlacedBody = 16 }; // PlacedBody: an insert pocket whose body is a part the author placed (no generated body)
    int type = Round;
    int flags = Cut;
    Vertex2D centre { 0.f, 0.f };

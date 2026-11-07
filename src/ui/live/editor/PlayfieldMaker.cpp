@@ -899,12 +899,17 @@ struct AddContext
 // A hole that is cut as a through-hole: Cut is the through-hole switch only, an insert pocket ignores it
 bool IsCutThrough(const PlayfieldHole &h) { return (h.flags & PlayfieldHole::Cut) && !(h.flags & PlayfieldHole::UnderInsert); }
 
-// The Kind selector: Through / Insert pocket flips the Under Insert bit and the Cut default (pocket off, through on). A hand edit: the next Find Holes keeps the hole
-void SetHoleKind(PlayfieldHole &h, const bool pocket)
+// The Kind selector: Through / Insert pocket flips the Under Insert bit and the Cut default (pocket off, through on); Insert pocket, placed body is a pocket
+// whose body is the author's own part (Placed Body: no generated body). A hand edit: the next Find Holes keeps the hole
+int HoleKind(const PlayfieldHole &h) { return !(h.flags & PlayfieldHole::UnderInsert) ? 0 : (h.flags & PlayfieldHole::PlacedBody) ? 2 : 1; }
+void SetHoleKind(PlayfieldHole &h, const int kind)
 {
-   if (pocket == ((h.flags & PlayfieldHole::UnderInsert) != 0))
+   if (kind == HoleKind(h))
       return;
-   h.flags = (pocket ? (h.flags | PlayfieldHole::UnderInsert) & ~PlayfieldHole::Cut : (h.flags & ~PlayfieldHole::UnderInsert) | PlayfieldHole::Cut) & ~PlayfieldHole::FromMask;
+   const bool pocket = kind != 0;
+   h.flags = (pocket ? (h.flags | PlayfieldHole::UnderInsert) & ~PlayfieldHole::Cut : (h.flags & ~PlayfieldHole::UnderInsert) | PlayfieldHole::Cut) & ~(PlayfieldHole::FromMask | PlayfieldHole::PlacedBody);
+   if (kind == 2)
+      h.flags |= PlayfieldHole::PlacedBody;
 }
 
 // The plywood side strip test of the Wood Mask, confirmed by the Ink Mask when there is one (without it only a hint: "check this", never a block). Cached for
@@ -2766,14 +2771,15 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             // Kind: a through-hole (cut), or an insert pocket (an insert sits over it: uncut, Cut ignored)
             ImGui::TableSetColumnIndex(1);
             {
-               int kind = pocket ? 1 : 0;
+               int kind = HoleKind(h);
                ImGui::SetNextItemWidth(-FLT_MIN);
-               if (ImGui::Combo("##kind", &kind, "Through\0Pocket\0"))
+               if (ImGui::Combo("##kind", &kind, "Through\0Pocket\0Placed\0"))
                {
-                  SetHoleKind(h, kind == 1);
+                  SetHoleKind(h, kind);
                   holesEdited = true;
                }
-               ImGui::SetItemTooltip("Through-hole: cut through the board (GI, hardware, rollovers). Insert pocket: an insert sits over it, so it is not cut (Cut is the through-hole switch only)");
+               ImGui::SetItemTooltip("Through-hole: cut through the board (GI, hardware, rollovers). Insert pocket: an insert sits over it, so it is not cut (Cut is the through-hole switch only). "
+                                     "Placed: an insert pocket whose body is a library insert you place (no generated body)");
             }
 
             ImGui::TableSetColumnIndex(2);
@@ -2872,9 +2878,10 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
          board, "Hole Y"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->centre.y : 0.f; }, //
          [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { MoveHole(h, PlayfieldHole(h), 0.f, v - h.centre.y); }); }, PropertyPane::Unit::VPLength, 2);
       props.Combo<Primitive>(
-         board, "Hole Kind"s, { "Through"s, "Insert pocket"s }, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h && (h->flags & PlayfieldHole::UnderInsert) ? 1 : 0; }, //
-         [holeEdit](Primitive *p, int v) { holeEdit(p, [v](PlayfieldHole &h) { SetHoleKind(h, v == 1); }); },
-         "Through-hole: cut through the board. Insert pocket: an insert sits over it, so it is not cut. Find Holes keeps a hole whose kind you set");
+         board, "Hole Kind"s, { "Through"s, "Insert pocket"s, "Insert pocket, placed body"s }, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? HoleKind(*h) : 0; }, //
+         [holeEdit](Primitive *p, int v) { holeEdit(p, [v](PlayfieldHole &h) { SetHoleKind(h, v); }); },
+         "Through-hole: cut through the board. Insert pocket: an insert sits over it, so it is not cut (Cut Insert Pockets fills it with a generated body). "
+         "Insert pocket, placed body: Cut Insert Pockets cuts, caps and floors it but makes no body: place a library insert body in it. Find Holes keeps a hole whose kind you set");
       if (h != nullptr && h->type != PlayfieldHole::Polygon)
          props.InputFloat<Primitive>(
             board, "Hole Diameter"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->diameter : 0.f; }, //
