@@ -47,6 +47,7 @@ Primitive *Primitive::CopyForPlay() const
       dst->m_plasticCurve.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticCurve, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
    for (const auto &dpt : m_plasticHoles.GetPoints())
       dst->m_plasticHoles.PushPoint(std::make_unique<DragPoint>(&dst->m_plasticHoles, dpt->GetX(), dpt->GetY(), dpt->GetZ(), dpt->IsSmooth()));
+   dst->m_pfOutline = m_pfOutline;
    dst->m_pfHoles = m_pfHoles; // Playfield Maker: the saved meshes are copied above, m_pfDirty stays false (F5 never rebuilds)
    if (dst->m_d.m_wireRail)
       dst->RegenerateRail(); // The play copy has its channel before PhysicSetup (RenderSetup comes later); the table is not set yet, so the channel part is left alone
@@ -166,7 +167,12 @@ void Primitive::SetDefaults(const bool fromMouseClick)
    m_d.m_rampFlushEntry = wireDefaults.m_rampFlushEntry;
    m_d.m_rampEntryLength = wireDefaults.m_rampEntryLength;
    m_d.m_rampCurvatureDetail = wireDefaults.m_rampCurvatureDetail;
+   m_d.m_pfPrintMask = wireDefaults.m_pfPrintMask;
+   m_d.m_pfPrintMode = wireDefaults.m_pfPrintMode;
+   m_d.m_pfOutlineMode = wireDefaults.m_pfOutlineMode;
+   m_d.m_pfInsertLights = wireDefaults.m_pfInsertLights;
    m_pfHoles.clear();
+   m_pfOutline.clear();
    m_plasticEditHoles = false;
    m_wireCurve.ClearPoints();
    m_plasticCurve.ClearPoints();
@@ -2604,11 +2610,14 @@ static_assert(static_cast<int>(PlayfieldHole::Cut) == static_cast<int>(Playfield
    "PlayfieldHole::Flags must match PlayfieldBoard::HoleFlags");
 
 // The board builder's hole (the one place the editor's hole types map to PlayfieldBoard)
-PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOwn)
+// An insert pocket ignores its Cut bit (Cut is the through-hole switch only): it is built when the board cuts insert pockets (Cut Insert Pockets, P2-5), else never
+PlayfieldBoard::BoardHole ToBoardHole(const PlayfieldHole &h, const bool floorOwn, const bool cutInsertPockets = false)
 {
    PlayfieldBoard::BoardHole b;
    b.kind = h.type == PlayfieldHole::Slot ? PlayfieldBoard::kSlot : h.type == PlayfieldHole::Polygon ? PlayfieldBoard::kPolygon : PlayfieldBoard::kRound;
    b.flags = h.flags;
+   if (h.flags & PlayfieldHole::UnderInsert)
+      b.flags = cutInsertPockets ? (b.flags | PlayfieldBoard::kCut) : (b.flags & ~PlayfieldBoard::kCut);
    if (!floorOwn) // Keep Existing: the existing floor decides where the ball falls
       b.flags &= ~PlayfieldBoard::kFallsThrough;
    b.cx = h.centre.x;
@@ -2664,6 +2673,17 @@ void Primitive::RegeneratePlayfield()
    // The board, its walls, the backing and the floor collider come from PlayfieldBoard (math/PlayfieldBoard.h); this only converts and copies
    PlayfieldBoard::BoardParams params;
    params.outline = { t->m_left, t->m_top, t->m_right, t->m_top, t->m_right, t->m_bottom, t->m_left, t->m_bottom }; // The table rectangle
+   if (m_d.m_pfOutlineMode == 1 && m_pfOutline.size() >= 3)
+   {
+      // The board, its walls and the backing follow the traced outline; the floor collider stays the table rectangle, so the ball still rolls over an edge cut
+      params.floorOutline = params.outline;
+      params.outline.clear();
+      for (const Vertex2D &v : m_pfOutline)
+      {
+         params.outline.push_back(v.x);
+         params.outline.push_back(v.y);
+      }
+   }
    params.thickness = thick;
    params.detail = m_d.m_pfDetail;
    params.defaultBevel = m_d.m_pfDefaultBevel;
@@ -3184,6 +3204,23 @@ void Primitive::Save(IObjectWriter& writer, const bool saveForUndo)
          writer.WriteFloat(FID(PFBV), m_d.m_pfDefaultBevel);
       if (m_d.m_pfBevelSegments != 3)
          writer.WriteInt(FID(PFBS), m_d.m_pfBevelSegments);
+      if (!m_d.m_pfPrintMask.empty()) // Phase 2 fields: each only when it differs from its load default, so phase 1 boards save as before
+         writer.WriteString(FID(PFPM), m_d.m_pfPrintMask);
+      if (m_d.m_pfPrintMode != 0)
+         writer.WriteInt(FID(PFPK), m_d.m_pfPrintMode);
+      if (!m_d.m_pfInsertLights.empty())
+         writer.WriteString(FID(PFIL), m_d.m_pfInsertLights);
+      if (m_d.m_pfOutlineMode == 1)
+      {
+         writer.WriteInt(FID(PFOM), 1);
+         if (m_pfOutline.size() >= 3) // A skippable sub object: older versions skip it
+         {
+            writer.BeginObject(FID(PFOL), true, true);
+            for (const Vertex2D &v : m_pfOutline)
+               writer.WriteVector2(FID(PFOP), v);
+            writer.EndObject();
+         }
+      }
       for (const PlayfieldHole &h : m_pfHoles) // Skippable sub objects: older versions skip them
          SavePlayfieldHole(writer, h);
    }
@@ -3373,6 +3410,34 @@ void Primitive::Load(IObjectReader& reader)
          case FID(PFDT): m_d.m_pfDetail = clamp(reader.AsInt(), 1, 5); break;
          case FID(PFBV): m_d.m_pfDefaultBevel = clamp(FiniteOr(reader.AsFloat(), 0.f), 0.f, 200.f); break;
          case FID(PFBS): m_d.m_pfBevelSegments = clamp(reader.AsInt(), 1, 8); break;
+         case FID(PFPM): m_d.m_pfPrintMask = reader.AsString(); break;
+         case FID(PFPK): m_d.m_pfPrintMode = reader.AsInt() & 3; break;
+         case FID(PFIL): m_d.m_pfInsertLights = reader.AsString(); break;
+         case FID(PFOM): m_d.m_pfOutlineMode = clamp(reader.AsInt(), 0, 1); break;
+         case FID(PFOL):
+         {
+            size_t dropped = 0;
+            m_pfOutline.clear();
+            reader.AsObject(
+               [this, &dropped](int tag, IObjectReader &r)
+               {
+                  if (tag == FID(PFOP))
+                  {
+                     const Vertex2D v = r.AsVector2();
+                     if (!SanePoint(v))
+                        dropped++; // not finite or far outside any table
+                     else if (m_pfOutline.size() < static_cast<size_t>(kMaxPlayfieldHolePoints))
+                        m_pfOutline.push_back(v);
+                     else
+                        dropped++;
+                  }
+                  return true;
+               },
+               true);
+            if (dropped > 0)
+               PLOGW << "Playfield outline: " << dropped << " points over the cap of " << kMaxPlayfieldHolePoints << " skipped";
+            break;
+         }
          case FID(PFHL):
          {
             const PlayfieldHole h = LoadPlayfieldHole(reader);

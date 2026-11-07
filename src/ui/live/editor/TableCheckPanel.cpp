@@ -195,7 +195,8 @@ void CollectRefs(const PinTable &table, const ScanContext &ctx, vector<ResourceR
          const auto &d = static_cast<Primitive *>(part)->m_d;
          base(d);
          img("Dome Glow Map", d.m_domeGlowMap);
-         img("Wood Mask", d.m_pfWoodMask); // Playfield Maker board (not drawn: Find Holes reads it)
+         img("Holes", d.m_pfWoodMask); // Playfield Maker board (not drawn: Find Holes reads it)
+         img("Print", d.m_pfPrintMask); // (not drawn either)
          break;
       }
       case eItemRamp: base(static_cast<Ramp *>(part)->m_d); break;

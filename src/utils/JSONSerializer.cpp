@@ -527,6 +527,11 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(RCFE), "ramp_flush_entry" },
             { FID(RCEL), "ramp_entry_length" },
             { FID(RCCD), "ramp_curvature_detail" },
+            { FID(PFPM), "playfield_print" },
+            { FID(PFPK), "playfield_print_mode" },
+            { FID(PFOM), "playfield_outline_mode" },
+            { FID(PFOL), "playfield_outline" },
+            { FID(PFIL), "playfield_insert_lights" },
          },
          {},
          // The mesh binary fields are intentionally unmapped: the mesh is stored as a GLB file under meshes/
@@ -928,6 +933,10 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(PFHP), "points" },
       }, { FID(PFHP) });
 
+      m[JSONSerializer::kPlayfieldOutlineNode] = MakeMap({
+         { FID(PFOP), "points" },
+      }, { FID(PFOP) });
+
       m[JSONSerializer::kPinBinaryNode] = MakeMap({
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(SIZE), "size" }, { FID(DATA), "data" }, // Pack-relative path of the binary file holding the data
       });
@@ -1078,6 +1087,7 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    case FID(PHSK): return kDragPointNode;
    case FID(RFIX): return kRailFixtureNode;
    case FID(PFHL): return kPlayfieldHoleNode;
+   case FID(PFOL): return kPlayfieldOutlineNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
    case FID(JPEG): return kPinBinaryNode;
@@ -1579,7 +1589,7 @@ void JSONObjectWriter::WriteVector2(const int fieldId, const Vertex2D& vec)
    if (const char* const name = top.node ? JSONSerializer::GetFieldName(top.nodeKind, fieldId) : nullptr)
    {
       auto& field = FieldSlot(*top.node, name);
-      if (JSONSerializer::IsRepeatableField(top.nodeKind, fieldId)) // A repeated point list (hole polygon points): one element per call
+      if (JSONSerializer::IsRepeatableField(top.nodeKind, fieldId)) // A repeated point list (hole polygons, the board outline): one element per call
       {
          if (!field.is_array())
             field = nlohmann::ordered_json::array();

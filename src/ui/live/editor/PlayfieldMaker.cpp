@@ -16,9 +16,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include "math/HoleClassify.h"
 #include "math/MaskTrace.h"
 #include "math/PlasticMesh.h"
 #include "parts/Material.h"
+#include "parts/Collection.h"
+#include "parts/light.h"
 #include "parts/PartGroup.h"
 #include "parts/primitive.h"
 #include "physics/PhysicsEngine.h"
@@ -33,14 +36,15 @@ namespace
 constexpr float kVPUPerInch = 47.06f;
 constexpr const char *kPlywood = "Playfield Plywood"; // The image and the material of the walls
 
-enum Slot { Paint, Shine, Bump, InsertPrint, WoodMask, Plywood, Glow, Blueprint, SlotCount };
-constexpr const char *kSlotNames[SlotCount] = { "Paint", "Shine", "Bump", "Insert Print", "Wood Mask", "Plywood", "Glow", "Blueprint" };
+enum Slot { Paint, Shine, Bump, InsertPrint, HolesMask, PrintMask, Plywood, Glow, Blueprint, SlotCount };
+constexpr const char *kSlotNames[SlotCount] = { "Paint", "Shine", "Bump", "Insert Print", "Holes", "Print", "Plywood", "Glow", "Blueprint" };
 constexpr const char *kSlotTips[SlotCount] = {
    "The table's playfield image (albedo)",
    "Occlusion, roughness and metal packed (the board's ORM map)",
    "The board's normal map",
    "The print over the traced inserts: rgb the art, alpha clear where the insert shows",
-   "Holes as black on white (or white on black, or transparent): Find Holes reads it, it is not drawn",
+   "Every hole routed in the wood at its cut size, inserts included (freezy calls it the wood mask). Black on white, white on black, or transparent: Find Holes reads it, it is not drawn",
+   "Where the ink is opaque (freezy's ink mask). Not drawn, and it needs no traced inserts. The plywood strip check reads it; the print bake will",
    "The image of the hole walls; its last rows are the dark backing",
    "The board's emission map",
    "Opens Reference Image with this file (view only, not table data)",
@@ -88,6 +92,19 @@ struct State
    bool findStatusBad = false;
    const Primitive *findBoard = nullptr;
    string findImage;
+   // Phase 2: what the last Find Holes saw (for the outline text), and the Fit Table / strip checks
+   int edgeCuts = -1; // edge cuts of the last Find Holes for findBoard, -1 = not known
+   MaskTrace::Mode usedMode = MaskTrace::Mode::Auto; // the resolved mask mode of the last Find Holes (Auto = none yet)
+   int findMaskMode = -1; // the board's Mask Mode at the last Find Holes
+   string outlineStatus, fitStatus;
+   const Primitive *sizeBoard = nullptr; // the last table rectangle a rebuild at a size change did not bring level (see Update): not retried until the table changes
+   float sizeRect[4] = { 0.f, 0.f, 0.f, 0.f };
+   const Primitive *scaledBoard = nullptr; // the outline was scaled to this table rectangle by Fit Table: Update must not scale it again after a failed rebuild
+   float scaledRect[4] = { 0.f, 0.f, 0.f, 0.f };
+   bool outlineStatusBad = false;
+   const Primitive *stripBoard = nullptr; // the strip scan below is for this board and these images
+   string stripKey, stripText;
+   bool stripHint = false;
 } s;
 
 
@@ -213,19 +230,25 @@ string CurrentPrint(const vector<Primitive *> &cards)
 
 
 
-// Find Holes: traces the Wood Mask into holes. Replaces the holes a previous run made (FromMask), keeps the hand-placed ones. Returns the status line.
-string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
+// A mask image as 8-bit pixels for MaskTrace (float and 565 masks are converted: a mask is black and white, clamped to 0..1)
+struct MaskPixels
 {
-   ok = false;
-   const Texture *const tex = board->m_d.m_pfWoodMask.empty() ? nullptr : t->GetImage(board->m_d.m_pfWoodMask);
+   std::shared_ptr<const BaseTexture> bmp;
+   vector<uint8_t> conv;
+   MaskTrace::Image im;
+};
+
+// Reads the table image `name` as a mask: empty on success, else the reason. `what` names the slot in the message
+string ReadMask(const PinTable *const t, const string &name, const char *const what, MaskPixels &mp)
+{
+   const Texture *const tex = name.empty() ? nullptr : t->GetImage(name);
    if (tex == nullptr)
-      return "The Wood Mask image is missing from the table";
-   const auto t0 = std::chrono::steady_clock::now();
-   std::shared_ptr<const BaseTexture> bmp = tex->GetRawBitmap(false, 0);
+      return string("The ") + what + " image is missing from the table";
+   mp.bmp = tex->GetRawBitmap(false, 0);
+   const BaseTexture *const bmp = mp.bmp.get();
    if (bmp == nullptr || bmp->width() == 0 || bmp->height() == 0)
-      return "The Wood Mask image could not be read";
+      return string("The ") + what + " image could not be read";
    int channels = 4;
-   vector<uint8_t> conv; // float and 565 masks become 8-bit (a mask is black and white: clamp to 0..1)
    const uint8_t *pixels = static_cast<const uint8_t *>(bmp->datac());
    size_t stride = bmp->pitch();
    const size_t w = bmp->width(), h = bmp->height();
@@ -236,6 +259,7 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
       return (v & 0x8000) ? -f : f;
    };
    const auto to8 = [](const float f) { return static_cast<uint8_t>(clamp(f, 0.f, 1.f) * 255.f + 0.5f); };
+   vector<uint8_t> &conv = mp.conv;
    switch (bmp->m_format)
    {
    case BaseTexture::BW: channels = 1; break;
@@ -280,28 +304,258 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
       pixels = conv.data();
       stride = w * 3;
       break;
-   default: return "The Wood Mask image format is not supported (use PNG or JPG)";
+   default: return string("The ") + what + " image format is not supported (use PNG or JPG)";
    }
-   MaskTrace::Image im;
-   im.data = pixels;
-   im.w = static_cast<int>(bmp->width());
-   im.h = static_cast<int>(bmp->height());
-   im.channels = channels;
-   im.stride = stride;
+   mp.im.data = pixels;
+   mp.im.w = static_cast<int>(w);
+   mp.im.h = static_cast<int>(h);
+   mp.im.channels = channels;
+   mp.im.stride = stride;
+   return string();
+}
+
+MaskTrace::Params MaskParams(const PinTable *const t, const Primitive *const board, const MaskTrace::Mode mode)
+{
    MaskTrace::Params prm;
    prm.left = t->m_left;
    prm.top = t->m_top;
    prm.right = t->m_right;
    prm.bottom = t->m_bottom;
-   prm.mode = static_cast<MaskTrace::Mode>(clamp(board->m_d.m_pfMaskMode, 0, 3));
+   prm.mode = mode;
    prm.minSize = board->m_d.m_pfMinHole;
    prm.vpuPerInch = kVPUPerInch;
-   MaskTrace::Result res;
-   if (!MaskTrace::Trace(im, prm, res))
-      return "The Wood Mask image could not be traced";
+   return prm;
+}
 
-   // Footprints of the traced insert cards: the convex hull of their mesh vertices through the full matrix
-   vector<vector<MaskTrace::Pt>> hulls;
+// An Insert Lights pick is stored as "group:<name>" or "collection:<name>"
+constexpr const char *kGroupPrefix = "group:";
+constexpr const char *kCollectionPrefix = "collection:";
+
+// Centres of the picked group's or collection's lights that sit under an insert: lights with Show Bulb Mesh on draw a bulb, so they are in a hole, not under
+// an insert, and never count (`bulbs` counts them)
+vector<MaskTrace::Pt> InsertLightCentres(const PinTable *const t, const string &pick, int &lights, int &bulbs)
+{
+   vector<MaskTrace::Pt> res;
+   lights = bulbs = 0;
+   vector<const IEditable *> parts;
+   if (pick.rfind(kGroupPrefix, 0) == 0)
+   {
+      const string name = pick.substr(strlen(kGroupPrefix));
+      const PartGroup *group = nullptr;
+      for (const IEditable *const part : t->GetParts())
+         if (part->GetItemType() == eItemPartGroup && StrCompareNoCase(part->GetName(), name))
+            group = static_cast<const PartGroup *>(part);
+      if (group != nullptr)
+         for (const IEditable *const part : t->GetParts())
+            if (part->IsChild(group))
+               parts.push_back(part);
+   }
+   else if (pick.rfind(kCollectionPrefix, 0) == 0)
+   {
+      const string name = pick.substr(strlen(kCollectionPrefix));
+      for (const auto *const col : t->GetCollections())
+         if (StrCompareNoCase(col->m_name, name))
+            for (const IEditable *const part : col->GetParts())
+               parts.push_back(part);
+   }
+   for (const IEditable *const part : parts)
+      if (part->GetItemType() == eItemLight)
+      {
+         const Light *const l = static_cast<const Light *>(part);
+         if (l->m_d.m_showBulbMesh)
+            bulbs++;
+         else
+         {
+            lights++;
+            res.push_back({ l->m_d.m_vCenter.x, l->m_d.m_vCenter.y });
+         }
+      }
+   return res;
+}
+
+// The choices of the Insert Lights field: the labels and what is stored (index 0 = none). A stored pick that no longer exists is kept as the last choice
+void InsertLightChoices(const PinTable *const t, const string &current, vector<string> &labels, vector<string> &values)
+{
+   labels = { "(none)"s };
+   values = { string() };
+   vector<string> groups, cols;
+   for (const IEditable *const part : t->GetParts())
+      if (part->GetItemType() == eItemPartGroup)
+         groups.push_back(part->GetName());
+   for (const auto *const col : t->GetCollections())
+      cols.push_back(col->m_name);
+   std::sort(groups.begin(), groups.end(), StrLessNoCase);
+   std::sort(cols.begin(), cols.end(), StrLessNoCase);
+   for (const string &g : groups)
+   {
+      labels.push_back("Group: " + g);
+      values.push_back(kGroupPrefix + g);
+   }
+   for (const string &c : cols)
+   {
+      labels.push_back("Collection: " + c);
+      values.push_back(kCollectionPrefix + c);
+   }
+   if (!current.empty() && std::ranges::find(values, current) == values.end())
+   {
+      labels.push_back(current.substr(current.find(':') + 1) + " (missing)");
+      values.push_back(current);
+   }
+}
+
+// The board outline from the Holes mask (Outline = From Holes Mask): the outer boundary of the largest wood component. `mode` is the resolved mask mode of the
+// last Find Holes. Empty on success (board->m_pfOutline is set), else why not (the outline is left as it was)
+string TraceBoardOutline(const PinTable *const t, Primitive *const board, const MaskPixels &mp, const MaskTrace::Mode mode)
+{
+   MaskTrace::OutlineResult out;
+   if (!MaskTrace::TraceOutline(mp.im, MaskParams(t, board, mode), out, static_cast<size_t>(kMaxPlayfieldHolePoints)))
+      return "The Holes mask has no wood to make a board outline from";
+   board->m_pfOutline.clear();
+   for (const MaskTrace::Pt &p : out.polygon)
+      board->m_pfOutline.push_back(Vertex2D(p.x, p.y));
+   char line[160];
+   snprintf(line, sizeof(line), "Outline: %d points from the Holes mask%s", static_cast<int>(out.polygon.size()), out.toleranceDoubled > 0 ? " (simplified more to stay under the point limit)" : "");
+   s.outlineStatus = line;
+   s.outlineStatusBad = false;
+   return string();
+}
+
+// The mode the outline is traced with: what the last Find Holes of this board resolved, else the board's own setting
+MaskTrace::Mode OutlineMode(const Primitive *const board)
+{
+   // What the last Find Holes resolved, only while the Holes image and the Mask Mode are the ones it read
+   const bool same = s.findBoard == board && s.findImage == board->m_d.m_pfWoodMask && s.findMaskMode == board->m_d.m_pfMaskMode && s.usedMode != MaskTrace::Mode::Auto;
+   return same ? s.usedMode : static_cast<MaskTrace::Mode>(clamp(board->m_d.m_pfMaskMode, 0, 3));
+}
+
+// The Outline setting: Table Rectangle, or From Holes Mask (traces it now). True if the setting changed (a failed trace leaves it on Table Rectangle)
+bool SetOutlineMode(const PinTable *const t, Primitive *const board, const int mode)
+{
+   if (mode == board->m_d.m_pfOutlineMode)
+      return false;
+   if (mode == 0)
+   {
+      board->m_d.m_pfOutlineMode = 0;
+      board->m_pfOutline.clear();
+      s.outlineStatus.clear();
+      return true;
+   }
+   MaskPixels mp;
+   string why = ReadMask(t, board->m_d.m_pfWoodMask, "Holes", mp);
+   if (why.empty())
+      why = TraceBoardOutline(t, board, mp, OutlineMode(board));
+   if (!why.empty())
+   {
+      s.outlineStatus = "Outline: " + why;
+      s.outlineStatusBad = true;
+      return false;
+   }
+   board->m_d.m_pfOutlineMode = 1;
+   return true;
+}
+
+// The traced outline follows the table when its size changes: it came from a mask that covers the table rectangle, so its points scale with it. From the old
+// rectangle (left, top, right, bottom) to the table's
+void RescaleOutline(Primitive *const board, const PinTable *const t, const float ol, const float ot, const float orr, const float ob)
+{
+   if (board->m_d.m_pfOutlineMode != 1 || !(orr > ol) || !(ob > ot))
+      return;
+   const float sx = (t->m_right - t->m_left) / (orr - ol), sy = (t->m_bottom - t->m_top) / (ob - ot);
+   for (Vertex2D &v : board->m_pfOutline)
+      v = Vertex2D(t->m_left + (v.x - ol) * sx, t->m_top + (v.y - ot) * sy);
+}
+
+// A hole as MaskTrace's shape (to test points against it), and a point that stands for a shape (a slot's middle, else its centre)
+MaskTrace::Hole ToTraceHole(const PlayfieldHole &h)
+{
+   MaskTrace::Hole t;
+   t.type = h.type == PlayfieldHole::Slot ? MaskTrace::HoleType::Slot : h.type == PlayfieldHole::Polygon ? MaskTrace::HoleType::Polygon : MaskTrace::HoleType::Round;
+   t.x = h.centre.x, t.y = h.centre.y, t.x2 = h.end.x, t.y2 = h.end.y, t.diameter = h.diameter;
+   for (const Vertex2D &v : h.polygon)
+      t.polygon.push_back({ v.x, v.y });
+   return t;
+}
+
+// A hole and sample points inside it, to tell two holes are the same one by overlap. A polygon's area centroid lies outside a C, a crescent or a thin L, so no
+// single reference point will do: a grid over the bounding box keeps the points that are inside (PointInHole), with the polygon's own corners as the fallback
+// for a shape thinner than the grid
+struct Sampled
+{
+   MaskTrace::Hole hole;
+   float x0, y0, x1, y1; // bounding box
+   vector<MaskTrace::Pt> in;
+};
+
+Sampled SampleHole(const PlayfieldHole &h)
+{
+   Sampled r;
+   r.hole = ToTraceHole(h);
+   const float rad = 0.5f * h.diameter;
+   if (h.type == PlayfieldHole::Polygon && !h.polygon.empty())
+   {
+      r.x0 = r.y0 = FLT_MAX, r.x1 = r.y1 = -FLT_MAX;
+      for (const Vertex2D &v : h.polygon)
+         r.x0 = min(r.x0, v.x), r.x1 = max(r.x1, v.x), r.y0 = min(r.y0, v.y), r.y1 = max(r.y1, v.y);
+   }
+   else
+   {
+      const bool slot = h.type == PlayfieldHole::Slot;
+      r.x0 = min(h.centre.x, slot ? h.end.x : h.centre.x) - rad, r.x1 = max(h.centre.x, slot ? h.end.x : h.centre.x) + rad;
+      r.y0 = min(h.centre.y, slot ? h.end.y : h.centre.y) - rad, r.y1 = max(h.centre.y, slot ? h.end.y : h.centre.y) + rad;
+   }
+   constexpr int n = 10;
+   for (int j = 0; j < n; j++)
+      for (int i = 0; i < n; i++)
+      {
+         const float x = r.x0 + (r.x1 - r.x0) * (i + 0.5f) / n, y = r.y0 + (r.y1 - r.y0) * (j + 0.5f) / n;
+         if (HoleClassify::PointInHole(r.hole, x, y))
+            r.in.push_back({ x, y });
+      }
+   if (r.in.empty()) // thinner than the grid
+   {
+      if (h.type == PlayfieldHole::Polygon)
+         for (const Vertex2D &v : h.polygon)
+            r.in.push_back({ v.x, v.y });
+      else
+         r.in.push_back({ h.centre.x, h.centre.y });
+   }
+   return r;
+}
+
+// The same hole: more than half of the samples of EACH lie inside the other, after a bounding-box test (so one moved a little still matches; a small hole inside a big
+// one, or a round hole in the mouth of a C, does not: the overlap rules of the cut deal with those)
+bool SameHole(const Sampled &a, const Sampled &b)
+{
+   if (a.x1 < b.x0 || b.x1 < a.x0 || a.y1 < b.y0 || b.y1 < a.y0)
+      return false;
+   const auto frac = [](const Sampled &from, const Sampled &in)
+   {
+      if (from.in.empty())
+         return 0.f; // never 0 / 0
+      size_t n = 0;
+      for (const MaskTrace::Pt &p : from.in)
+         n += HoleClassify::PointInHole(in.hole, p.x, p.y);
+      return static_cast<float>(n) / static_cast<float>(from.in.size());
+   };
+   return frac(a, b) > 0.5f && frac(b, a) > 0.5f;
+}
+
+// Find Holes: traces the Holes mask into holes and sorts each shape: an insert pocket (a traced card's footprint covers it, or a picked Insert Light lies in it;
+// left uncut), a through-hole (everything else), or an edge cut (touches the image edge: counted, not stored, it shapes the outline). Replaces the holes a
+// previous run made (FromMask), keeps the hand-placed ones, and re-traces the outline when it follows the mask. Returns the status line.
+string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
+{
+   ok = false;
+   const auto t0 = std::chrono::steady_clock::now();
+   MaskPixels mp;
+   if (const string why = ReadMask(t, board->m_d.m_pfWoodMask, "Holes", mp); !why.empty())
+      return why;
+   MaskTrace::Result res;
+   if (!MaskTrace::Trace(mp.im, MaskParams(t, board, static_cast<MaskTrace::Mode>(clamp(board->m_d.m_pfMaskMode, 0, 3))), res))
+      return "The Holes image could not be traced";
+
+   // Footprints of the traced insert cards: the convex hull of their mesh vertices through the full matrix; and the picked insert lights
+   HoleClassify::Footprints fp;
    for (Primitive *const c : TracedCards(t))
    {
       if (c->m_mesh.NumVertices() == 0)
@@ -314,14 +568,37 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
          const Vertex3Ds w = m * Vertex3Ds(v.x, v.y, v.z);
          pts.push_back({ w.x, w.y });
       }
-      hulls.push_back(MaskTrace::ConvexHull(std::move(pts)));
+      fp.hulls.push_back(MaskTrace::ConvexHull(std::move(pts)));
    }
+   int lights = 0, bulbs = 0;
+   fp.lightCentres = InsertLightCentres(t, board->m_d.m_pfInsertLights, lights, bulbs);
+   const HoleClassify::Classes cls = HoleClassify::Classify(res, fp);
 
    vector<PlayfieldHole> &holes = board->m_pfHoles;
    std::erase_if(holes, [](const PlayfieldHole &h) { return (h.flags & PlayfieldHole::FromMask) != 0; });
-   int round = 0, slots = 0, under = 0, skipped = 0;
-   for (const MaskTrace::Hole &th : res.holes)
+   int round = 0, slots = 0, shapes = 0, pockets = 0, throughs = 0, skipped = 0, kept = 0;
+   // The holes left are the author's (hand-placed, or a mask hole edited since: its From Mask bit is cleared): they win over the traced copy of the same shape
+   // and keep their kind, bevel and flags
+   vector<Sampled> mine;
+   for (const PlayfieldHole &h : holes)
+      mine.push_back(SampleHole(h));
+   for (size_t i = 0; i < res.holes.size(); i++)
    {
+      const MaskTrace::Hole &th = res.holes[i];
+      if (!mine.empty())
+      {
+         PlayfieldHole as; // the traced shape as a hole, to sample it as the kept ones
+         as.type = th.type == MaskTrace::HoleType::Slot ? PlayfieldHole::Slot : th.type == MaskTrace::HoleType::Polygon ? PlayfieldHole::Polygon : PlayfieldHole::Round;
+         as.centre = Vertex2D(th.x, th.y), as.end = Vertex2D(th.x2, th.y2), as.diameter = th.diameter;
+         for (const MaskTrace::Pt &p : th.polygon)
+            as.polygon.push_back(Vertex2D(p.x, p.y));
+         const Sampled traced = SampleHole(as);
+         if (std::ranges::any_of(mine, [&traced](const Sampled &k) { return SameHole(traced, k); }))
+         {
+            kept++;
+            continue;
+         }
+      }
       if (holes.size() >= static_cast<size_t>(kMaxPlayfieldHoles) || (th.type == MaskTrace::HoleType::Polygon && th.polygon.size() > static_cast<size_t>(kMaxPlayfieldHolePoints)))
       {
          skipped++;
@@ -345,19 +622,35 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
          for (const MaskTrace::Pt &p : th.polygon)
             h.polygon.push_back(Vertex2D(p.x, p.y));
          h.diameter = max(th.maxX - th.minX, th.maxY - th.minY);
+         shapes++;
       }
-      for (const vector<MaskTrace::Pt> &hull : hulls)
-         if (MaskTrace::UnderInsert(th, hull))
-         {
-            h.flags = (h.flags & ~PlayfieldHole::Cut) | PlayfieldHole::UnderInsert;
-            under++;
-            break;
-         }
+      if (cls.kind[i] == HoleClassify::Kind::InsertPocket)
+      {
+         h.flags = (h.flags & ~PlayfieldHole::Cut) | PlayfieldHole::UnderInsert; // a pocket ignores Cut and is built only with Cut Insert Pockets
+         pockets++;
+      }
+      else
+         throughs++;
       holes.push_back(std::move(h));
    }
    board->m_pfOverlap.clear();
    board->m_pfBevelClamped.clear();
-   char line[256];
+   s.edgeCuts = cls.edgeCuts;
+   s.usedMode = res.usedMode;
+   s.findMaskMode = board->m_d.m_pfMaskMode;
+   string outline;
+   if (board->m_d.m_pfOutlineMode == 1)
+   {
+      outline = TraceBoardOutline(t, board, mp, res.usedMode);
+      if (!outline.empty())
+      {
+         board->m_d.m_pfOutlineMode = 0; // no board in the mask: back to the table rectangle
+         board->m_pfOutline.clear();
+         s.outlineStatus = "Outline: " + outline + ", back to Table Rectangle";
+         s.outlineStatusBad = true;
+      }
+   }
+   char line[512];
    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
    const int found = static_cast<int>(res.holes.size()) - skipped;
    const char *const names[] = { "Auto", "Dark", "Light", "Transparent" };
@@ -370,10 +663,22 @@ string FindHoles(const PinTable *const t, Primitive *const board, bool &ok)
       snprintf(how, sizeof(how), "Auto -> %s", used);
    else
       snprintf(how, sizeof(how), "%s", used);
-   snprintf(line, sizeof(line), "%d holes found (%d round, %d slots), %d under inserts left uncut, %d outline cuts, %d under Min Size, mask read as %s, %.2f s%s", found, round, slots, under,
-      static_cast<int>(res.outlineCuts.size()), res.droppedSmall, how, secs, skipped > 0 ? ", some skipped (hole limit)" : "");
+   char sort[160];
+   if (cls.byLight > 0)
+      snprintf(sort, sizeof(sort), "%d through-holes, %d insert pockets (%d by card, %d by light)", throughs, pockets, cls.byCard, cls.byLight);
+   else
+      snprintf(sort, sizeof(sort), "%d through-holes, %d insert pockets", throughs, pockets);
+   snprintf(line, sizeof(line), "%d shapes found (%d round, %d slots, %d polygons): %s; %d edge cuts, %d under Min Size, mask read as %s, %.2f s%s", found, round, slots, shapes, sort, cls.edgeCuts, res.droppedSmall,
+      how, secs, skipped > 0 ? ", some skipped (hole limit)" : "");
+   string out = line;
+   if (kept > 0) // the sort above counts the holes made now
+      out += "\n" + std::to_string(kept) + " of the shapes are holes you edited or placed: kept as they are (their kind, bevel and flags), not made again";
+   if (throughs > 0 && !cls.haveEvidence)
+      out += "\n" + std::to_string(throughs) + " shapes without a traced card or insert light were treated as through-holes; mark inserts by hand or pick Insert Lights";
+   if (!board->m_d.m_pfInsertLights.empty() && lights == 0)
+      out += "\nThe picked Insert Lights group or collection has no light without a bulb mesh" + (bulbs > 0 ? " (" + std::to_string(bulbs) + " with Show Bulb Mesh on are ignored)" : string());
    ok = true;
-   return line;
+   return out;
 }
 
 vector<PlasticMesh::CurvePoint> HoleLoop(const PlayfieldHole &h, const float tol)
@@ -434,6 +739,58 @@ struct AddContext
    Primitive *board = nullptr, *walls = nullptr, *floor = nullptr; // Set once created
 };
 
+// A hole that is cut as a through-hole: Cut is the through-hole switch only, an insert pocket ignores it
+bool IsCutThrough(const PlayfieldHole &h) { return (h.flags & PlayfieldHole::Cut) && !(h.flags & PlayfieldHole::UnderInsert); }
+
+// The Kind selector: Through / Insert pocket flips the Under Insert bit and the Cut default (pocket off, through on). A hand edit: the next Find Holes keeps the hole
+void SetHoleKind(PlayfieldHole &h, const bool pocket)
+{
+   if (pocket == ((h.flags & PlayfieldHole::UnderInsert) != 0))
+      return;
+   h.flags = (pocket ? (h.flags | PlayfieldHole::UnderInsert) & ~PlayfieldHole::Cut : (h.flags & ~PlayfieldHole::UnderInsert) | PlayfieldHole::Cut) & ~PlayfieldHole::FromMask;
+}
+
+// The plywood side strip test of the Holes mask, confirmed by the Print mask when there is one (without it only a hint: "check this", never a block). Cached for
+// the board and the images; s.stripText is empty when nothing fires
+void UpdateStripWarning(const PinTable *const t, const Primitive *const board)
+{
+   const string key = board->m_d.m_pfWoodMask + "|" + board->m_d.m_pfPrintMask + "|" + std::to_string(board->m_d.m_pfPrintMode) + "|" + std::to_string(board->m_d.m_pfMaskMode) + "|"
+      + std::to_string(static_cast<int>(s.usedMode));
+   if (s.stripBoard == board && s.stripKey == key)
+      return;
+   s.stripBoard = board;
+   s.stripKey = key;
+   s.stripText.clear();
+   s.stripHint = false;
+   MaskPixels holes, print;
+   if (!ReadMask(t, board->m_d.m_pfWoodMask, "Holes", holes).empty())
+      return;
+   const bool havePrint = !board->m_d.m_pfPrintMask.empty() && ReadMask(t, board->m_d.m_pfPrintMask, "Print", print).empty();
+   MaskTrace::StripParams sp;
+   sp.mode = OutlineMode(board);
+   MaskTrace::StripScan sc;
+   if (!MaskTrace::DetectStrip(holes.im, sp, sc, havePrint ? &print.im : nullptr, static_cast<unsigned>(board->m_d.m_pfPrintMode)) || !sc.fires)
+      return;
+   s.stripHint = sc.hint;
+   char line[400];
+   const auto side = [&](const char *const where, const int cols, const bool isHole)
+   {
+      if (cols <= 0)
+         return;
+      if (sc.hint)
+         snprintf(line, sizeof(line),
+            "Check this: the Holes mask has an all-%s band about %d px wide on the %s edge only (set a Print mask for a better test). If it is a baked-in plywood strip, crop it from the maps before Fit Table to Paint",
+            isHole ? "hole" : "wood", cols, where);
+      else
+         snprintf(line, sizeof(line),
+            "The Holes mask has an all-%s band about %d px wide on the %s edge and the Print mask has no art there: it looks like a baked-in plywood strip. Crop it from the maps before Fit Table to Paint, or the board is that much too wide",
+            isHole ? "hole" : "wood", cols, where);
+      s.stripText += (s.stripText.empty() ? "" : "\n") + string(line);
+   };
+   side("left", sc.leftCols, sc.leftIsHole);
+   side("right", sc.rightCols, sc.rightIsHole);
+}
+
 struct AddSnapshot
 {
    bool boardIn = false; // The board was in the table (the state after the Add)
@@ -465,6 +822,57 @@ struct PlayfieldMaker::Impl
          h.bevel = b;
       }
       return changed;
+   }
+
+   // Fit Table to Paint: the table's height = its width x the Paint image's aspect. The table is marked in the caller's open undo record. Returns the status line;
+   // `changed` is true when the table changed (the caller rebuilds the board). Warns about parts that end up outside the new size
+   static string FitTable(EditorUI &ed, Primitive *const board, bool &changed)
+   {
+      changed = false;
+      PinTable *const t = ed.m_table;
+      const Texture *const tex = t->m_image.empty() ? nullptr : t->GetImage(t->m_image);
+      if (tex == nullptr)
+         return "Fit Table to Paint: the table has no Paint image";
+      unsigned w = tex->m_width, h = tex->m_height;
+      if (w == 0 || h == 0)
+         if (const std::shared_ptr<const BaseTexture> bmp = tex->GetRawBitmap(false, 0); bmp != nullptr)
+            w = bmp->width(), h = bmp->height();
+      const float width = t->GetTableWidth();
+      const float height = MaskTrace::FitTableHeight(width, static_cast<int>(w), static_cast<int>(h));
+      if (!(height > 0.f))
+         return "Fit Table to Paint: the Paint image has no size";
+      char line[400];
+      if (fabsf(t->GetHeight() - height) < 0.005f)
+      {
+         snprintf(line, sizeof(line), "The table already fits the Paint image (%.2f x %.2f in)", width / kVPUPerInch, height / kVPUPerInch);
+         return line;
+      }
+      ed.m_undo.MarkForUndo(t);
+      const float before = t->GetHeight();
+      const float oldBottom = t->m_bottom;
+      t->SetHeight(t->m_top + height);
+      if (board != nullptr)
+      {
+         RescaleOutline(board, t, t->m_left, t->m_top, t->m_right, oldBottom); // the board is in the panel's record already
+         s.scaledBoard = board;
+         s.scaledRect[0] = t->m_left, s.scaledRect[1] = t->m_top, s.scaledRect[2] = t->m_right, s.scaledRect[3] = t->m_bottom;
+      }
+      changed = true;
+      int outside = 0;
+      for (const IEditable *const part : t->GetParts())
+      {
+         if (part->GetItemType() == eItemPartGroup || part->GetItemType() == eItemDecal || t->IsPlayerSessionObject(part) || (part->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(part)->IsPlayfieldPart()))
+            continue;
+         const Vertex2D c = part->GetCenter();
+         outside += c.x < t->m_left || c.x > t->m_right || c.y < t->m_top || c.y > t->m_bottom;
+      }
+      snprintf(line, sizeof(line), "Table length %.2f -> %.2f in (width %.2f in, Paint %u x %u)", before / kVPUPerInch, height / kVPUPerInch, width / kVPUPerInch, w, h);
+      string res = line;
+      if (outside > 0)
+         res += "\n" + std::to_string(outside) + " parts are now outside the table";
+      if (board != nullptr && std::ranges::any_of(board->m_pfHoles, [](const PlayfieldHole &x) { return (x.flags & PlayfieldHole::FromMask) != 0; }))
+         res += "\nThe holes were traced at the old size: run Find Holes again (the outline was scaled with the table)";
+      return res;
    }
 
    static Primitive *SelectedBoard(const EditorUI &ed)
@@ -539,7 +947,8 @@ struct PlayfieldMaker::Impl
       case Shine: return board->m_d.m_szORMMap;
       case Bump: return board->m_d.m_szNormalMap;
       case Glow: return board->m_d.m_szEmissionMap;
-      case WoodMask: return board->m_d.m_pfWoodMask;
+      case HolesMask: return board->m_d.m_pfWoodMask;
+      case PrintMask: return board->m_d.m_pfPrintMask;
       case Plywood:
       {
          const Primitive *const walls = PlayfieldMaker::CompanionOf(board, kPlayfieldWallsRole);
@@ -560,7 +969,8 @@ struct PlayfieldMaker::Impl
       case Shine: board->m_d.m_szORMMap = image; break;
       case Bump: board->m_d.m_szNormalMap = image; break;
       case Glow: board->m_d.m_szEmissionMap = image; break;
-      case WoodMask: board->m_d.m_pfWoodMask = image; break;
+      case HolesMask: board->m_d.m_pfWoodMask = image; break;
+      case PrintMask: board->m_d.m_pfPrintMask = image; break;
       case Plywood:
          if (Primitive *const walls = PlayfieldMaker::CompanionOf(board, kPlayfieldWallsRole); walls != nullptr)
             walls->m_d.m_szImage = image;
@@ -1071,6 +1481,36 @@ void PlayfieldMaker::Update(EditorUI &ed)
       s.dropFrame = -1;
       ed.Report("Drop an image on a playfield slot");
    }
+   // The table's size changed under the board (the table's own Playfield Length / Width, an undo of it, a script): the board is rebuilt. The floor collider's mesh
+   // always spans the table rectangle, whatever the outline, so it tells which size the meshes were built for
+   if (Primitive *const pf = Board(ed.m_table); pf != nullptr && !s.grabbing)
+      if (const Primitive *const floor = CompanionOf(pf, kPlayfieldFloorRole); floor != nullptr && floor->m_mesh.NumVertices() > 0 && !pf->m_pfDirty && ed.m_table->m_right > ed.m_table->m_left && ed.m_table->m_bottom > ed.m_table->m_top)
+      {
+         float x0 = FLT_MAX, y0 = FLT_MAX, x1 = -FLT_MAX, y1 = -FLT_MAX;
+         for (const Vertex3D_NoTex2 &v : floor->m_mesh.m_vertices)
+            x0 = min(x0, v.x), x1 = max(x1, v.x), y0 = min(y0, v.y), y1 = max(y1, v.y);
+         const PinTable *const t = ed.m_table;
+         if (fabsf(x0 - t->m_left) > 0.01f || fabsf(x1 - t->m_right) > 0.01f || fabsf(y0 - t->m_top) > 0.01f || fabsf(y1 - t->m_bottom) > 0.01f)
+         {
+            // One try per table size and board: a rebuild that cannot be built (the meshes stay as they were) is not repeated every frame
+            const bool tried = s.sizeBoard == pf && s.sizeRect[0] == t->m_left && s.sizeRect[1] == t->m_top && s.sizeRect[2] == t->m_right && s.sizeRect[3] == t->m_bottom;
+            if (!tried)
+            {
+               s.sizeBoard = pf;
+               s.sizeRect[0] = t->m_left, s.sizeRect[1] = t->m_top, s.sizeRect[2] = t->m_right, s.sizeRect[3] = t->m_bottom;
+               const bool scaled = s.scaledBoard == pf && s.scaledRect[0] == t->m_left && s.scaledRect[1] == t->m_top && s.scaledRect[2] == t->m_right && s.scaledRect[3] == t->m_bottom;
+               if (!scaled)
+                  RescaleOutline(pf, t, x0, y0, x1, y1);
+               s.scaledBoard = nullptr;
+               pf->UpdatePlayfield();
+            }
+         }
+         else
+         {
+            s.sizeBoard = nullptr; // level again
+            s.scaledBoard = nullptr;
+         }
+      }
    Primitive *const board = Impl::SelectedBoard(ed);
    if (s.placing != 0 && (board == nullptr || ed.m_table->IsLocked()))
       s.placing = 0;
@@ -1202,7 +1642,7 @@ void PlayfieldMaker::Draw(EditorUI &ed, ImDrawList *const draw, const LiveRender
    for (int i = 0; i < static_cast<int>(board->m_pfHoles.size()); i++)
    {
       const PlayfieldHole &h = board->m_pfHoles[i];
-      const bool cut = (h.flags & PlayfieldHole::Cut) != 0;
+      const bool cut = IsCutThrough(h);
       const bool overlap = cut && i < static_cast<int>(board->m_pfOverlap.size()) && board->m_pfOverlap[i];
       ImU32 color = !cut ? IM_COL32(150, 150, 150, 200) : overlap ? IM_COL32(255, 40, 40, 255)
          : (h.flags & PlayfieldHole::FallsThrough) && board->m_d.m_pfFloor == 0 ? IM_COL32(0, 220, 255, 255) : IM_COL32(255, 150, 0, 255);
@@ -1213,6 +1653,14 @@ void PlayfieldMaker::Draw(EditorUI &ed, ImDrawList *const draw, const LiveRender
          if (const ImVec2 p = ctx.Project(Vertex3Ds(h.centre.x, h.centre.y, 0.1f)); p.x != FLT_MAX)
             draw->AddText(ImVec2(p.x + 6.f * dpi, p.y - 6.f * dpi), IM_COL32(255, 60, 60, 255), "overlaps");
    }
+   if (board->m_d.m_pfOutlineMode == 1 && board->m_pfOutline.size() >= 3) // The traced board outline
+      for (size_t i = 0; i < board->m_pfOutline.size(); i++)
+      {
+         const Vertex2D &a = board->m_pfOutline[i], &b = board->m_pfOutline[(i + 1) % board->m_pfOutline.size()];
+         const ImVec2 pa = ctx.Project(Vertex3Ds(a.x, a.y, 0.1f)), pb = ctx.Project(Vertex3Ds(b.x, b.y, 0.1f));
+         if (pa.x != FLT_MAX && pb.x != FLT_MAX)
+            draw->AddLine(pa, pb, IM_COL32(90, 200, 255, 255), 1.5f * dpi);
+      }
    if (s.placing != 0 && ImGui::IsMousePosValid())
       outline(NewHole(ed.UnprojectToPlane(ImGui::GetMousePos(), 0.f)), IM_COL32(255, 230, 120, 200), false, 1.5f);
    draw->PopClipRect();
@@ -1380,7 +1828,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             ImGui::SetItemTooltip("A new print goes on every traced insert, not only the ones on the current print");
          }
       }
-      if (slot == WoodMask)
+      if (slot == HolesMask)
       {
          props.Combo<Primitive>(
             board, "Mask Mode"s, vector<string> { "Auto"s, "Dark"s, "Light"s, "Transparent"s }, //
@@ -1390,6 +1838,15 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             board, "Min Size"s, //
             [](const Primitive *p) { return p->m_d.m_pfMinHole; }, //
             [](Primitive *p, float v) { p->m_d.m_pfMinHole = clamp(v, 0.f, 1000.f); }, PropertyPane::Unit::VPLength, 2, "Shapes smaller than this are ignored (0.05 in = 2.35)");
+         {
+            vector<string> labels, values;
+            InsertLightChoices(t, board->m_d.m_pfInsertLights, labels, values);
+            props.Combo<Primitive>(
+               board, "Insert Lights"s, labels, //
+               [values](const Primitive *p) { const auto it = std::ranges::find(values, p->m_d.m_pfInsertLights); return it == values.end() ? 0 : static_cast<int>(it - values.begin()); }, //
+               [values](Primitive *p, int v) { p->m_d.m_pfInsertLights = v >= 0 && v < static_cast<int>(values.size()) ? values[v] : string(); },
+               "A part group or collection of the lights that sit under the inserts: Find Holes makes a shape with one of their centres inside it an insert pocket. Lights with Show Bulb Mesh on never count");
+         }
          ImGui::BeginDisabled(value.empty());
          if (ImGui::Button("Find Holes"))
          {
@@ -1403,13 +1860,24 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                SelectHole(board, -1);
          }
          ImGui::EndDisabled();
-         ImGui::SetItemTooltip("Cuts a hole for each shape in the Wood Mask, replacing the holes the last run made (a hole you moved, resized or toggled is kept). Holes under an insert are left uncut");
+         ImGui::SetItemTooltip("Sorts every shape in the Holes mask: a through-hole (cut), an insert pocket (a traced insert or an Insert Light is over it: left uncut), or an edge cut (counted: it shapes the outline). Replaces the holes the last run made (a hole you moved, resized or toggled is kept)");
          if (!s.findStatus.empty() && s.findBoard == board && s.findImage == board->m_d.m_pfWoodMask)
          {
             ImGui::PushStyleColor(ImGuiCol_Text, s.findStatusBad ? ImVec4(1.f, 0.35f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f));
             ImGui::TextWrapped("%s", s.findStatus.c_str());
             ImGui::PopStyleColor();
          }
+      }
+      if (slot == PrintMask)
+      {
+         props.Combo<Primitive>(
+            board, "Print Source"s, vector<string> { "Luminance"s, "Alpha"s }, //
+            [](const Primitive *p) { return p->m_d.m_pfPrintMode & 1; }, //
+            [](Primitive *p, int v) { p->m_d.m_pfPrintMode = (p->m_d.m_pfPrintMode & ~1) | (v != 0 ? 1 : 0); }, "Where the mask holds the ink: its brightness (white = ink), or its alpha (opaque = ink)");
+         props.Checkbox<Primitive>(
+            board, "Invert Print"s, //
+            [](const Primitive *p) { return (p->m_d.m_pfPrintMode & 2) != 0; }, //
+            [](Primitive *p, bool v) { p->m_d.m_pfPrintMode = (p->m_d.m_pfPrintMode & ~2) | (v ? 2 : 0); }, "Swap ink and clear (PF's ink mask is alpha, inverted: its alpha is 1 where clear)");
       }
       ImGui::PopID();
    }
@@ -1435,6 +1903,58 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       board, "Thickness"s, //
       [](const Primitive *p) { return p->m_d.m_pfThickness; }, //
       [](Primitive *p, float v) { p->m_d.m_pfThickness = clamp(v, 1.f, 200.f); s.rebuildOnRelease = true; }, PropertyPane::Unit::VPLength, 2, "Plywood thickness (0.5 in = 23.5)");
+   {
+      // Fit Table to Paint: one undo step (the table is marked in the panel's record), and the board follows the new size
+      props.FlushRow();
+      bool fitEdited = false;
+      ImGui::BeginDisabled(t->m_image.empty());
+      if (ImGui::Button("Fit Table to Paint"))
+      {
+         bool changed = false;
+         s.fitStatus = Impl::FitTable(ed, board, changed);
+         fitEdited = changed;
+         if (changed)
+            board->UpdatePlayfield();
+      }
+      ImGui::EndDisabled();
+      ImGui::SetItemTooltip("The table's length from its width and the Paint image's shape (a Williams, Bally or Stern board is 20.25 in wide). One undo step. Crop a plywood side strip off the maps first");
+      props.CustomField(fitEdited, "Fit Table to Paint"s);
+      if (!s.fitStatus.empty())
+         ImGui::TextWrapped("%s", s.fitStatus.c_str());
+      UpdateStripWarning(t, board);
+      if (!s.stripText.empty())
+      {
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.8f, 0.3f, 1.f));
+         ImGui::TextWrapped("%s", s.stripText.c_str());
+         ImGui::PopStyleColor();
+      }
+   }
+   {
+      // By hand rather than props.Combo: a switch that fails (no Holes image, no wood in it) must not count as an edit, so it records no undo step
+      props.PropertyLabel("Outline"s, "The board's edge: the table rectangle, or the outer boundary of the wood in the Holes mask (edge cuts like a shooter lane or notches cut into it). The walls and the backing follow it; the floor collider stays the table rectangle");
+      int mode = board->m_d.m_pfOutlineMode;
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      bool outlineEdited = false;
+      if (ImGui::Combo("##outline", &mode, "Table Rectangle\0From Holes Mask\0"))
+      {
+         outlineEdited = SetOutlineMode(t, board, mode);
+         if (outlineEdited)
+            s.rebuildOnRelease = true;
+      }
+      props.CustomField(outlineEdited, "Outline"s);
+      props.FlushRow();
+   }
+   if (board->m_d.m_pfOutlineMode == 1)
+   {
+      char cuts[160] = "";
+      if (s.findBoard == board && s.edgeCuts >= 0)
+         snprintf(cuts, sizeof(cuts), "the %d edge cuts", s.edgeCuts);
+      else
+         snprintf(cuts, sizeof(cuts), "any edge cuts");
+      ImGui::TextWrapped("Outline: %d points. The ball still rolls over %s (the floor stays flat); paint a shooter lane, don't cut it", static_cast<int>(board->m_pfOutline.size()), cuts);
+   }
+   if (!s.outlineStatus.empty() && s.outlineStatusBad)
+      ImGui::TextColored(ImVec4(1.f, 0.35f, 0.3f, 1.f), "%s", s.outlineStatus.c_str());
    props.InputInt<Primitive>(
       board, "Curve Detail"s, //
       [](const Primitive *p) { return p->m_d.m_pfDetail; }, //
@@ -1443,7 +1963,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       board, "Default Bevel"s, //
       [](const Primitive *p) { return p->m_d.m_pfDefaultBevel; }, //
       [](Primitive *p, float v) { p->m_d.m_pfDefaultBevel = clamp(v, 0.f, 200.f); s.rebuildOnRelease = true; }, PropertyPane::Unit::VPLength, 2,
-      "The rounded rim of the holes set to Default (0 = none; 1/32 in is the Jurassic Park rim). The Wood Mask is the cut at the wall, as a router "
+      "The rounded rim of the holes set to Default (0 = none; 1/32 in is the Jurassic Park rim). The Holes mask is the cut at the wall, as a router "
       "makes it: a bevelled hole is this much wider each side at the surface. Insert pockets never get one");
    props.InputInt<Primitive>(
       board, "Bevel Segments"s, //
@@ -1521,13 +2041,15 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
    props.FlushRow();
    bool holesEdited = findDone;
    vector<PlayfieldHole> &holes = board->m_pfHoles;
-   int cut = 0, falls = 0, narrow = 0, overlap = 0, clamped = 0;
+   int cut = 0, falls = 0, narrow = 0, overlap = 0, clamped = 0, pockets = 0, oldPockets = 0;
    const bool keep = board->m_d.m_pfFloor == 1;
    for (size_t i = 0; i < holes.size(); i++)
    {
       const PlayfieldHole &h = holes[i];
-      const bool c = (h.flags & PlayfieldHole::Cut) != 0;
+      const bool c = IsCutThrough(h);
       cut += c;
+      pockets += (h.flags & PlayfieldHole::UnderInsert) != 0;
+      oldPockets += (h.flags & PlayfieldHole::UnderInsert) && (h.flags & PlayfieldHole::Cut);
       if (c && i < board->m_pfOverlap.size() && board->m_pfOverlap[i])
          overlap++;
       if (c && i < board->m_pfBevelClamped.size() && board->m_pfBevelClamped[i] >= 0.f)
@@ -1539,7 +2061,9 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             narrow++;
       }
    }
-   ImGui::Text("%d holes, %d cut, %d fall through", static_cast<int>(holes.size()), cut, falls);
+   ImGui::Text("%d holes, %d cut, %d insert pockets, %d fall through", static_cast<int>(holes.size()), cut, pockets, falls);
+   if (oldPockets > 0)
+      ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%d insert pockets from phase 1 still carry Cut and are no longer cut: they are built only with Cut Insert Pockets (set Kind to Through to cut one)", oldPockets);
    if (overlap > 0)
       ImGui::TextColored(ImVec4(1.f, 0.35f, 0.3f, 1.f), "%d holes overlap or leave the board: not cut until moved", overlap);
    if (clamped > 0)
@@ -1607,20 +2131,21 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
    const ImGuiStyle &style = ImGui::GetStyle();
    const float rowH = ImGui::GetFrameHeight() + style.CellPadding.y * 2.f;
    if (!holes.empty()
-      && ImGui::BeginTable("##holes", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingFixedFit,
+      && ImGui::BeginTable("##holes", 6, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingFixedFit,
          ImVec2(0.f, (min(static_cast<float>(holes.size()), 8.f) + 1.f) * rowH + 4.f * dpi)))
    {
       const float box = ImGui::GetFrameHeight();
       ImGui::TableSetupScrollFreeze(0, 1);
       ImGui::TableSetupColumn("Hole", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Through").x + style.FramePadding.x * 2.f + box);
       ImGui::TableSetupColumn("Cut", ImGuiTableColumnFlags_WidthFixed, max(box, ImGui::CalcTextSize("Cut").x));
       ImGui::TableSetupColumn("Falls", ImGuiTableColumnFlags_WidthFixed, max(box, ImGui::CalcTextSize("Falls").x));
       ImGui::TableSetupColumn("Bevel", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("00.00").x + style.FramePadding.x * 2.f);
       ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("x").x + style.FramePadding.x * 2.f);
       ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-      static constexpr const char *kHeaderTips[] = { "Click a hole to select it (G moves it in the viewport)", "Cut through the board", "Falls Through: the floor collider has the hole, the ball drops",
+      static constexpr const char *kHeaderTips[] = { "Click a hole to select it (G moves it in the viewport)", "Kind: a through-hole, or an insert pocket (an insert sits over it: not cut)", "Cut through the board", "Falls Through: the floor collider has the hole, the ball drops",
          "Bevel of the hole's rim: Def = the board's Default Bevel, Off = none, a number = its own size (Hole Bevel Size)", nullptr };
-      for (int col = 0; col < 5; col++)
+      for (int col = 0; col < 6; col++)
       {
          ImGui::TableSetColumnIndex(col);
          ImGui::TableHeader(ImGui::TableGetColumnName(col));
@@ -1636,7 +2161,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             ImGui::PushID(i);
             ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
             const bool pocket = (h.flags & PlayfieldHole::UnderInsert) != 0;
-            const float clampedTo = (h.flags & PlayfieldHole::Cut) && i < static_cast<int>(board->m_pfBevelClamped.size()) ? board->m_pfBevelClamped[i] : -1.f;
+            const float clampedTo = IsCutThrough(h) && i < static_cast<int>(board->m_pfBevelClamped.size()) ? board->m_pfBevelClamped[i] : -1.f;
 
             // Hole: "1 Round 0.580 in", ellipsis when the column is narrow, then a marker: * (amber) bevel clamped, ins = insert pocket
             ImGui::TableSetColumnIndex(0);
@@ -1683,16 +2208,34 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                holeTip();
             }
 
+            // Kind: a through-hole (cut), or an insert pocket (an insert sits over it: uncut, Cut ignored)
             ImGui::TableSetColumnIndex(1);
-            bool c = (h.flags & PlayfieldHole::Cut) != 0;
+            {
+               int kind = pocket ? 1 : 0;
+               ImGui::SetNextItemWidth(-FLT_MIN);
+               if (ImGui::Combo("##kind", &kind, "Through\0Pocket\0"))
+               {
+                  SetHoleKind(h, kind == 1);
+                  holesEdited = true;
+               }
+               ImGui::SetItemTooltip("Through-hole: cut through the board (GI, hardware, rollovers). Insert pocket: an insert sits over it, so it is not cut (Cut is the through-hole switch only)");
+            }
+
+            ImGui::TableSetColumnIndex(2);
+            bool c = IsCutThrough(h);
+            ImGui::BeginDisabled(pocket);
             if (ImGui::Checkbox("##cut", &c))
             {
                h.flags = (c ? (h.flags | PlayfieldHole::Cut) : (h.flags & ~PlayfieldHole::Cut)) & ~PlayfieldHole::FromMask;
                holesEdited = true;
             }
-            ImGui::SetItemTooltip("Cut");
+            if (pocket)
+               DisabledTooltip("An insert pocket ignores Cut: it is cut only when the board cuts its insert pockets");
+            else
+               ImGui::SetItemTooltip("Cut");
+            ImGui::EndDisabled();
 
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(3);
             ImGui::BeginDisabled(keep);
             bool f = (h.flags & PlayfieldHole::FallsThrough) != 0;
             if (ImGui::Checkbox("##falls", &f))
@@ -1704,7 +2247,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
             ImGui::EndDisabled();
 
             // Bevel: Def / Off / its own size (set in the selected hole's fields)
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(4);
             {
                char preview[16];
                if (pocket || h.bevel == 0.f)
@@ -1732,7 +2275,7 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
                ImGui::EndDisabled();
             }
 
-            ImGui::TableSetColumnIndex(4);
+            ImGui::TableSetColumnIndex(5);
             if (ImGui::SmallButton("x"))
                toDelete = i;
             ImGui::SetItemTooltip("Delete the hole");
@@ -1773,6 +2316,10 @@ void PlayfieldMaker::RenderSection(EditorUI &ed, PropertyPane &props, Primitive 
       props.InputFloat<Primitive>(
          board, "Hole Y"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->centre.y : 0.f; }, //
          [holeEdit](Primitive *p, float v) { holeEdit(p, [v](PlayfieldHole &h) { MoveHole(h, PlayfieldHole(h), 0.f, v - h.centre.y); }); }, PropertyPane::Unit::VPLength, 2);
+      props.Combo<Primitive>(
+         board, "Hole Kind"s, { "Through"s, "Insert pocket"s }, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h && (h->flags & PlayfieldHole::UnderInsert) ? 1 : 0; }, //
+         [holeEdit](Primitive *p, int v) { holeEdit(p, [v](PlayfieldHole &h) { SetHoleKind(h, v == 1); }); },
+         "Through-hole: cut through the board. Insert pocket: an insert sits over it, so it is not cut. Find Holes keeps a hole whose kind you set");
       if (h != nullptr && h->type != PlayfieldHole::Polygon)
          props.InputFloat<Primitive>(
             board, "Hole Diameter"s, [holeAt](const Primitive *p) { const PlayfieldHole *h = holeAt(p); return h ? h->diameter : 0.f; }, //

@@ -182,6 +182,10 @@ public:
    bool m_rampFlushEntry = true; // The floor leaves the playfield flat (z 0), eased to the route's height over m_rampEntryLength
    float m_rampEntryLength = RampCollider::kDefaultEntryLength;
    int m_rampCurvatureDetail = RampCollider::kDefaultCurvatureDetail;
+   string m_pfPrintMask; // The Print slot: freezy's ink mask (ink = 1 after the source and the invert bit are applied). Not drawn; the print bake (P2-4) reads it
+   int m_pfPrintMode = 0; // bit 0: ink from the alpha (else the luminance), bit 1: inverted
+   int m_pfOutlineMode = 0; // 0 Table Rectangle, 1 From Holes Mask (the traced outline is in Primitive::m_pfOutline)
+   string m_pfInsertLights; // Name of a part group or collection whose lights mark the insert pockets (Find Holes); empty = none
    float m_rubberGuideRadius = 0.f; // radius of this primitive as a guide (post) of a guided rubber, 0 = from the mesh bounds. Only saved when set
    bool m_displayTexture = false;     // in editor
    bool m_objectSpaceNormalMap = false; // matches the +X,+Y,+Z object space export/baking of Blender
@@ -517,6 +521,7 @@ public:
 
    // Playfield Maker board (m_d.m_playfieldGen): the holes live outside m_d, like the plastic curve
    vector<PlayfieldHole> m_pfHoles;
+   vector<Vertex2D> m_pfOutline; // The board outline traced from the Holes mask (m_d.m_pfOutlineMode 1), table coordinates, at most kMaxPlayfieldHolePoints points
    bool m_pfDirty = false; // An edit: RenderSetup rebuilds the board and its companions (a file load keeps the saved meshes)
    vector<bool> m_pfOverlap; // Per hole at the last rebuild: a cut hole leaving the board or touching another cut hole (left out of the build)
    vector<float> m_pfBevelClamped; // Per hole at the last rebuild: the bevel it was built with when smaller than set (near the edge or another hole, too wide for its shape, over the thickness), else -1

@@ -29,6 +29,7 @@ public:
    static constexpr int kTextureNode = 0x104;
    static constexpr int kRailFixtureNode = 0x105;
    static constexpr int kPlayfieldHoleNode = 0x106;
+   static constexpr int kPlayfieldOutlineNode = 0x107;
 
    // Version of the VPZ pack file format (preliminary, no backward compatibility across versions)
    static constexpr int kFormatVersion = 1;
