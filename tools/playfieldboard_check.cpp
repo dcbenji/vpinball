@@ -5,7 +5,8 @@
 // settings, every hole and the meshes that build produced. The check rebuilds from the holes and compares with a 1e-5 tolerance (--exact: bit for bit; clang and gcc differ by ~1e-7 from float contraction, g++ -O2 -ffast-math gave 0) and reports the largest difference.
 // The fixtures have no bevels (phase 1): top, walls and backing must come out as they were. The floor collider gained the Falls Through holes' walls
 // (P2-2): its flat face must still be the fixture's floor, followed by those walls.
-// Then synthetic cases: overlaps, outlines, and the bevels (profile, default and insert pockets, the board edge and hole-to-hole clamps, the floor's chamfer).
+// Then synthetic cases: overlaps, outlines, the bevels (profile, default and insert pockets, the board edge and hole-to-hole clamps, the floor's chamfer), and the
+// cut insert pockets' bodies and caps (P2-5).
 #include "math/PlayfieldBoard.h"
 #include <chrono>
 #include <algorithm>
@@ -765,6 +766,70 @@ static void Outlines()
    CHECK(ok && br.overlapping >= outside, "big outline build");
 }
 
+// ---- insert pockets (P2-5): Under Insert holes the caller marks Cut get an insert body and an ink cap on the contour their walls use, with bevel 0
+static void Pockets()
+{
+   BoardParams p;
+   p.outline = { 0, 0, 400, 0, 400, 800, 0, 800 };
+   p.thickness = 23.5f;
+   p.uvm[0] = 1.f / 400.f;
+   p.uvm[4] = 1.f / 800.f;
+   p.defaultBevel = 1.47f;
+   BoardHole round = Round(100, 100, 44, kCut | kUnderInsert);
+   round.bevel = 5.f; // ignored: a pocket is never bevelled
+   BoardHole arrow = Poly({ 200, 300, 230, 220, 260, 300, 236, 290, 236, 420, 224, 420, 224, 290 });
+   arrow.flags = kCut | kUnderInsert | kFromMask;
+   const BoardHole through = Round(300, 600, 27.3f); // Default bevel
+   const BoardHole uncut = Round(100, 600, 40, kUnderInsert); // a pocket while the switch is off
+   const std::vector<BoardHole> holes = { round, arrow, through, uncut };
+   BoardMeshes m;
+   BoardReport r;
+   CHECK(BuildBoard(p, holes, m, r), "pockets build");
+   CHECK(r.built == 3 && r.pockets == 2, "built %d (want 3), pockets %d (want 2)", r.built, r.pockets);
+   CHECK(r.bevel[0] == 0.f && r.bevel[1] == 0.f && r.bevel[2] > 1.4f, "pocket bevels %g %g (want 0), through %g", r.bevel[0], r.bevel[1], r.bevel[2]);
+   CHECK(r.insertTriangles == m.inserts.idx.size() / 3 && r.capTriangles == m.insertCaps.idx.size() / 3 && r.capTriangles > 0, "triangle counts");
+   int rim = 0;
+   CHECK(ShellBreaks({ &m.inserts }, 999.f, rim) == 0 && rim == 0, "the insert bodies are closed shells");
+   CHECK(AgainstNormals(m.inserts) == 0 && AgainstNormals(m.insertCaps) == 0, "insert winding agrees with normals");
+   // Every insert and cap vertex lies on a hole wall (same x, y as a wall vertex): the insert fills the pocket exactly as cut
+   std::set<std::pair<long, long>> wallXY;
+   for (const PlasticMesh::Vertex& v : m.walls.verts)
+      wallXY.insert({ lround(v.x * 1000), lround(v.y * 1000) });
+   int off = 0;
+   float zMin = 1e9f, zMax = -1e9f;
+   for (const PlasticMesh::Mesh* mm : { &m.inserts, &m.insertCaps })
+      for (const PlasticMesh::Vertex& v : mm->verts)
+      {
+         off += !wallXY.count({ lround(v.x * 1000), lround(v.y * 1000) });
+         if (mm == &m.inserts)
+         {
+            zMin = std::min(zMin, v.z);
+            zMax = std::max(zMax, v.z);
+         }
+         else
+            CHECK(v.z == 0.05f && v.nz == 1.f, "cap at z 0.05 facing up");
+         CHECK(fabs(v.tu - v.x / 400.f) < 1e-6f && fabs(v.tv - v.y / 800.f) < 1e-6f, "table UVs");
+      }
+   CHECK(off == 0, "%d insert / cap vertices are not on a hole wall", off);
+   CHECK(zMax == -0.1f && fabs(zMin - (-0.1f - 11.8f)) < 1e-5f, "insert from z %g to %g (want -0.1 to -11.9)", zMax, zMin);
+   // Board top + caps = the outline less the through-hole (grown by its bevel; within 40 VPU^2: the true circle against its flattened loop)
+   int inv = 0;
+   const double top = CapArea(m.top, inv), caps = CapArea(m.insertCaps, inv);
+   const double want = 400. * 800. - CircleGrown(27.3, r.bevel[2]);
+   CHECK(inv == 0 && fabs(top + caps - want) < 40., "top %.1f + caps %.1f = %.1f, want %.1f", top, caps, top + caps, want);
+   printf("pockets: %d built, insert %zu tris, caps %zu tris, top + caps %.1f (want %.1f)\n", r.pockets, r.insertTriangles, r.capTriangles, top + caps, want);
+
+   // The switch off: the caller clears kCut on the pockets: no inserts, the same board as without them
+   std::vector<BoardHole> off2 = holes;
+   off2[0].flags &= ~kCut;
+   off2[1].flags &= ~kCut;
+   BoardMeshes mo, mt;
+   BoardReport ro, rt;
+   CHECK(BuildBoard(p, off2, mo, ro) && BuildBoard(p, { through }, mt, rt), "switch off builds");
+   CHECK(mo.inserts.verts.empty() && mo.insertCaps.verts.empty() && ro.pockets == 0, "switch off: no inserts");
+   CHECK(Compare(mo.top, mt.top) == 0. && Compare(mo.walls, mt.walls) == 0., "switch off: the board is the one without the pockets");
+}
+
 int main(int argc, char** argv)
 {
    std::vector<const char*> files;
@@ -786,6 +851,7 @@ int main(int argc, char** argv)
    Synthetic();
    Bevels();
    Outlines();
+   Pockets();
    printf(fails ? "FAILED %d\n" : "ALL OK\n", fails);
    return fails ? 1 : 0;
 }

@@ -590,6 +590,14 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
    for (size_t c = 0; c < falls.size(); c++)
       if (const int k = floorRes.contourOfHole[c]; k >= 0)
          AddHoleWalls(floorRes.contours[k], floorRes.topRings[k], floorRes.effBevel[k], 1, params.thickness, out.floor);
+   // Insert pockets: an insert body and an ink cap on each built Under Insert hole's contour (bevel 0, so its top ring is the contour)
+   InsertPocket::Params ip;
+   for (int i = 0; i < 6; i++)
+      ip.uvm[i] = params.uvm[i];
+   for (size_t c = 0; c < cut.size(); c++)
+      if (const int k = topRes.contourOfHole[c]; k >= 0 && (cut[c]->flags & kUnderInsert))
+         if (InsertPocket::AddPuck(topRes.contours[k], ip, out.inserts) && InsertPocket::AddCap(topRes.contours[k], ip, out.insertCaps))
+            report.pockets++;
    for (PlasticMesh::Vertex& v : out.backing.verts)
    {
       v.z = -params.thickness - 0.5f;
@@ -601,6 +609,8 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
    report.wallTriangles = out.walls.idx.size() / 3;
    report.backingTriangles = out.backing.idx.size() / 3;
    report.floorTriangles = out.floor.idx.size() / 3;
+   report.insertTriangles = out.inserts.idx.size() / 3;
+   report.capTriangles = out.insertCaps.idx.size() / 3;
    meshes = std::move(out);
    return true;
 }

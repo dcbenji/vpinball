@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "InsertPocket.h"
 #include "PlasticMesh.h"
 
 #include <string>
@@ -51,6 +52,10 @@ struct BoardMeshes
    PlasticMesh::Mesh walls; // The board edge and the walls of every built hole, with their bevels
    PlasticMesh::Mesh backing; // The face lowered below the wood (on the board's outline), on the dark rows of the plywood image (the editor appends it to the walls part)
    PlasticMesh::Mesh floor; // The flat collider face with only the kFallsThrough holes cut, then their walls down to -thickness (a chamfer when the bevel >= 2)
+   // Built kUnderInsert holes (the caller sets kCut on them when the board cuts insert pockets): the insert bodies and their ink caps (InsertPocket.h), on the
+   // contours the hole walls use. Empty when no pocket is built
+   PlasticMesh::Mesh inserts;
+   PlasticMesh::Mesh insertCaps;
 };
 
 struct BoardReport
@@ -64,7 +69,8 @@ struct BoardReport
    std::vector<char> clamped;
    std::vector<float> bevel; // Per input hole: the bevel it was built with (0 when not built)
    int built = 0; // Holes built
-   size_t topTriangles = 0, wallTriangles = 0, backingTriangles = 0, floorTriangles = 0;
+   int pockets = 0; // Insert pockets built with an insert body and cap
+   size_t topTriangles = 0, wallTriangles = 0, backingTriangles = 0, floorTriangles = 0, insertTriangles = 0, capTriangles = 0;
    std::vector<std::string> warnings;
 };
 
