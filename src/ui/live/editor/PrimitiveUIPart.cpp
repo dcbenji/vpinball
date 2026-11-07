@@ -68,6 +68,8 @@ constexpr TracedLookKey kLookKeys[] = {
    { "Glow Spread", "spread", 0.67f, 0.2f, 4.f, 2, "Higher lifts the dim parts of the glow toward its peak" },
    { "White Leak", "leak", 0.f, 0.f, 1.f, 2, "How much white shows at the glow's hot core" },
    { "Frost", "frost", 0.f, 0.f, 1.f, 2, "A sanded cap: 0 = clear, more = the light under the cap blurs and the glints go soft, so the print over it reads more easily" },
+   { "Facet Glow", "facetglow", 0.f, 0.f, 3.f, 2, "The bulb seen through the facets: the whole insert glows in rays that turn with the eye, brightest over the bulb (needs a facet map and a Bulb Depth). 0 = off" },
+   { "Facet Glow Sharpness", "facetlobe", 6.f, 1.f, 60.f, 1, "Low = a milky plastic, the whole insert glows with soft rays; high = a clear one, only the facets turned to the eye light up" },
 };
 
 // The traced fields a slider marks as touched in Primitive::m_tracedTouched: one bit per field, the bulb fields then the look keys

@@ -30,6 +30,7 @@
 //      through the print by its alpha (the print's transmission) tinted by its hue; 0 = alpha only, as a cut-out window
 //      y how much the plastic's colour tints the lamp-off look (plastictint: 1 = fully, for a neutral bake; 0 = not at all,
 //      the atlas keeps the colour baked into it: a bake that already shows the plastic's colour is not filtered twice)
+//      z facet glow (facetglow: the bulb seen through the facets, its peak in glow gains; 0 = off), w its sharpness (facetlobe)
 // [12] parallax hot spot: x the bulb's depth below the insert top in mm (0 = off: the block is skipped, output unchanged),
 //      y spot size (1 = a soft spot ~19 mm across at half height), z brightness (1 = +80 % of the glow's peak at its centre),
 //      w how much the glints' highlights turn with the eye's bearing (glintturn: 1 = fully, 0 = they hold still relative to the
@@ -233,15 +234,20 @@ void main()
 
 	const bool hasFacets = tracedParams[5].y > 0.5;
 	vec3 glint = vec3(0.0, 0.0, 0.0);
+	const float fgAmount = tracedParams[11].z;
+	const float fgSharp = tracedParams[11].w;
+	float facetGlow = 0.0;
 	if (hasFacets)
 	{
 		// Fade the light over the last millimetres inside the outline (the render's pocket wall seen at a slant): the floor
 		// mask blurred over that width is a half on the outline
+		float outline = 1.0;
 		if (tracedParams[1].w > 0.0)
 		{
 			const float texel = size / 1024.0;
 			const float mip = log2(max(2.0 * tracedParams[1].w / texel, 1.0));
-			light *= mix(smoothstep(0.5, 0.95, texture2DLod(tex_base_normalmap, card, mip).a), 1.0, 0.5 * frost);
+			outline = mix(smoothstep(0.5, 0.95, texture2DLod(tex_base_normalmap, card, mip).a), 1.0, 0.5 * frost);
+			light *= outline;
 		}
 
 		// The facets under the card, where the refracted eye ray meets them. The map's green is 'up the table', -v.
@@ -269,14 +275,36 @@ void main()
 		const float footprint = 0.5 * exp2(max(tracedParams[7].w, 0.0));
 		// Undoes part of the highlights' turn with the eye's bearing, as the eye's bearing in table space (0 from the player's side, so its seam is behind the backbox)
 		const float glintTurn = -(1.0 - tracedParams[12].w) * degrees(atan2(vt.x, vt.y));
+		// Facet glow: the bulb seen through the facets. Its light travels up from the bulb (bulb_depth below the top, under the
+		// facets) to the facet floor, where each facet refracts it: a facet sends it to the eye when its normal is the half
+		// vector of that refraction (eta * the ray on to the eye - the ray from the bulb). The lobe is wrapped (a facet turned
+		// a right angle away still passes a quarter at sharpness 2), so a low sharpness is a milky plastic whose whole body
+		// glows with soft rays, a high one a clear plastic where only the facets turned to the eye light up. Brightest over
+		// the bulb (an inverse-square falloff: softer than a bare point source, as the pocket walls fill some back in); only on
+		// the faceted floor (the map's alpha). 0 = off.
+		const bool fgOn = fgAmount > 0.0 && tracedParams[12].x > 0.0;
+		vec3 fgHalf = vec3(0.0, 0.0, 1.0);
+		float fgFall = 0.0;
+		if (fgOn)
+		{
+			const vec2 pmm = (floorUv - 0.5) * size - tracedParams[13].zw;
+			const float below = max(tracedParams[12].x - tracedParams[1].y, 1.0);
+			const vec3 fromBulb = normalize(vec3(pmm, below));
+			fgHalf = normalize(-eta * inside - fromBulb);
+			fgFall = pow(below / length(vec3(pmm, below)), 2.0);
+		}
+		const float fgS = max(fgSharp * (1.0 - 0.6 * frost), 1.0);
 		for (int i = 0; i < 4; i++)
 		{
 			const vec4 f = texture2DGrad(tex_base_normalmap, floorUv + gx * taps[i].x + gy * taps[i].y, gx * footprint, gy * footprint);
 			const vec2 nxy = vec2(f.r * 2.0 - 1.0, 1.0 - f.g * 2.0);
 			const vec3 wavy = normalize(vec3(nxy + lean, sqrt(saturate(1.0 - dot(nxy, nxy)))));
 			glint += vec3(tracedGlint(wavy, v, glintTurn, sharp, 0.0), tracedGlint(wavy, v, glintTurn, sharp, 1.0), tracedGlint(wavy, v, glintTurn, sharp, 2.0)) * f.a;
+			if (fgOn)
+				facetGlow += pow(saturate(dot(wavy, fgHalf) * 0.5 + 0.5), fgS) * f.a;
 		}
 		glint *= 0.25 * (1.0 - 0.5 * frost);
+		facetGlow *= 0.25 * fgFall * outline * fgAmount;
 	}
 
 	// The lamp-off look, always there under the lamp, at the same card point and weights as the traced light, filtered by
@@ -291,6 +319,8 @@ void main()
 	const vec3 roomGlint = tracedParams[6].rgb * mix(vec3_splat(1.0), tracedParams[7].rgb, tracedParams[10].w);
 	const vec3 glowTint = mix(staticColor_Alpha.rgb, vec3_splat(staticColor_Alpha.a), tracedParams[10].z * saturate(light));
 	vec3 result = glowTint * (tracedParams[2].x * light) + staticColor_Alpha.rgb * (10.0 * tracedParams[3].x * glint) + roomGlint * (10.0 * tracedParams[3].x) * glint + lampOff;
+	// the facet glow, whiter where it is bright by the same white-leak share
+	result += mix(staticColor_Alpha.rgb, vec3_splat(staticColor_Alpha.a), tracedParams[10].z * saturate(facetGlow)) * (tracedParams[2].x * facetGlow);
 
 	// Parallax hot spot: the lamp's light inside the lit insert is brightest over the bulb, which sits bulb_depth mm below the
 	// top; the refracted eye ray travels that far down before it meets it, so the soft spot shifts against the top (and the
