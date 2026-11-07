@@ -119,6 +119,8 @@ static double CheckFixture(const char* path)
    if (fx.floorMode != 0)
       for (BoardHole& h : holes)
          h.flags &= ~kFallsThrough; // Keep Existing floor: what the editor does
+   for (BoardHole& h : holes)
+      h.flags &= ~kUnderInsert; // Phase 1 cut a Cut + Under Insert hole as a plain hole (with walls); in phase 2 such a hole is a cut insert pocket (no plywood walls)
    BoardMeshes m;
    BoardReport r;
    CHECK(BuildBoard(p, holes, m, r), "%s: BuildBoard failed", path);
@@ -791,10 +793,22 @@ static void Pockets()
    int rim = 0;
    CHECK(ShellBreaks({ &m.inserts }, 999.f, rim) == 0 && rim == 0, "the insert bodies are closed shells");
    CHECK(AgainstNormals(m.inserts) == 0 && AgainstNormals(m.insertCaps) == 0, "insert winding agrees with normals");
-   // Every insert and cap vertex lies on a hole wall (same x, y as a wall vertex): the insert fills the pocket exactly as cut
+   // Every insert and cap vertex lies on its pocket's rim (same x, y as a rim vertex: the side walls facing in, in pocketFloors), and the walls part has no
+   // plywood wall for a pocket: it is the one of the board with the through-hole only
    std::set<std::pair<long, long>> wallXY;
-   for (const PlasticMesh::Vertex& v : m.walls.verts)
-      wallXY.insert({ lround(v.x * 1000), lround(v.y * 1000) });
+   int rimVerts = 0;
+   for (const PlasticMesh::Vertex& v : m.pocketFloors.verts)
+      if (v.nz == 0.f)
+      {
+         wallXY.insert({ lround(v.x * 1000), lround(v.y * 1000) });
+         rimVerts++;
+      }
+   CHECK(rimVerts > 0, "pocket rims built");
+   {
+      BoardMeshes mw;
+      BoardReport rw;
+      CHECK(BuildBoard(p, { through }, mw, rw) && Compare(m.walls, mw.walls) == 0., "no plywood walls for the pockets: the walls are the through-hole board's");
+   }
    int off = 0;
    float zMin = 1e9f, zMax = -1e9f;
    for (const PlasticMesh::Mesh* mm : { &m.inserts, &m.insertCaps })
@@ -810,7 +824,7 @@ static void Pockets()
             CHECK(v.z == 0.05f && v.nz == 1.f, "cap at z 0.05 facing up");
          CHECK(fabs(v.tu - v.x / 400.f) < 1e-6f && fabs(v.tv - v.y / 800.f) < 1e-6f, "table UVs");
       }
-   CHECK(off == 0, "%d insert / cap vertices are not on a hole wall", off);
+   CHECK(off == 0, "%d insert / cap vertices are not on a pocket rim", off);
    CHECK(zMax == -0.1f && fabs(zMin - (-0.1f - 11.8f)) < 1e-5f, "insert from z %g to %g (want -0.1 to -11.9)", zMax, zMin);
    // The board top + the pocket floors = the outline less the through-hole (grown by its bevel; within 40 VPU^2: the true circle against its flattened loop); the
    // floors (at the bodies' bottom, facing up) cover what the caps cover
@@ -818,10 +832,10 @@ static void Pockets()
    const double top = CapArea(m.top, inv), caps = CapArea(m.insertCaps, inv), floorArea = CapArea(m.pocketFloors, inv);
    const double want = 400. * 800. - CircleGrown(27.3, r.bevel[2]);
    for (const PlasticMesh::Vertex& v : m.pocketFloors.verts)
-      CHECK(v.z == -11.9f && v.nz == 1.f, "pocket floor at -11.9 facing up");
+      CHECK((v.z == -11.9f && v.nz == 1.f) || (v.nz == 0.f && (v.z == 0.f || v.z == -11.9f)), "pocket floor at -11.9 facing up, rims from 0 to -11.9");
    CHECK(inv == 0 && fabs(top + floorArea - want) < 40., "top %.1f + floors %.1f, want %.1f", top, floorArea, want);
    CHECK(caps > 1000. && fabs(floorArea - caps) < 1e-2 * caps, "pocket floors %.1f = caps %.1f", floorArea, caps);
-   CHECK(AgainstNormals(m.pocketFloors) == 0, "floor winding");
+   CHECK(AgainstNormals(m.pocketFloors) == 0, "floor and rim winding");
    printf("pockets: %d built, insert %zu tris, caps %zu tris, top + floors %.1f (want %.1f), floors %.1f = caps %.1f\n", r.pockets, r.insertTriangles, r.capTriangles, top + floorArea, want, floorArea, caps);
 
    // Insert Depth 1/16 in: bodies from -0.1 to -2.9, floors at -2.9; the walls still run down to the thickness

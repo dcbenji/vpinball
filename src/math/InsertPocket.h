@@ -168,6 +168,67 @@ inline bool AddPuck(const std::vector<CurvePoint>& contour, const Params& prm, M
    return true;
 }
 
+// The pocket's rim: its side walls from zTop down to zBottom facing into the pocket (seen through the insert body instead of the plywood), coloured by the
+// art at the rim: every row of a wall takes the table UVs of its top edge, sampled `inset` VPU inside the contour (so the colour is the art just inside the
+// edge, stretched down the side). False (mesh untouched) as AddPuck, or for zBottom >= zTop
+inline bool AddRim(const std::vector<CurvePoint>& contour, const Params& prm, const float zTop, const float zBottom, const float inset, Mesh& m)
+{
+   if (!(zTop > zBottom))
+      return false;
+   const std::vector<CurvePoint> p = Prepare(contour);
+   if (p.empty())
+      return false;
+   // Inward edge normals of the counter-clockwise loop: (-dy, dx); smooth across shallow turns, sharp at corners, as the walls
+   const size_t n = p.size();
+   std::vector<std::array<float, 2>> en(n);
+   for (size_t i = 0; i < n; i++)
+   {
+      const CurvePoint &a = p[i], &b = p[(i + 1) % n];
+      const float dx = b.x - a.x, dy = b.y - a.y, l = std::sqrt(dx * dx + dy * dy);
+      en[i] = l > 1e-6f ? std::array<float, 2> { -dy / l, dx / l } : std::array<float, 2> { 0.f, 0.f };
+   }
+   const auto vertexNormal = [&](const size_t i, const size_t edge)
+   {
+      const std::array<float, 2> &u = en[(i + n - 1) % n], &w = en[i % n];
+      if (u[0] * w[0] + u[1] * w[1] > 0.866f)
+      {
+         const float sx = u[0] + w[0], sy = u[1] + w[1], l = std::sqrt(sx * sx + sy * sy);
+         return l > 1e-6f ? std::array<float, 2> { sx / l, sy / l } : en[edge];
+      }
+      return en[edge];
+   };
+   // The rim sample of each contour point: moved inward along the bisector of its two edge normals by the mitre (inset from both edges; capped at a sharp
+   // corner), the same for every row and both walls meeting there
+   std::vector<std::array<float, 2>> uv(n);
+   for (size_t i = 0; i < n; i++)
+   {
+      const std::array<float, 2> &u = en[(i + n - 1) % n], &w = en[i];
+      float bx = u[0] + w[0], by = u[1] + w[1];
+      const float bl = std::sqrt(bx * bx + by * by);
+      if (bl > 1e-6f)
+         bx /= bl, by /= bl;
+      else
+         bx = w[0], by = w[1];
+      const float c = bx * w[0] + by * w[1], d = inset / (c > 0.5f ? c : 0.5f);
+      Vertex s { p[i].x + d * bx, p[i].y + d * by, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f };
+      TableUv(prm, s);
+      uv[i] = { s.tu, s.tv };
+   }
+   for (size_t i = 0; i < n; i++)
+   {
+      const size_t j = (i + 1) % n;
+      const CurvePoint &a = p[i], &b = p[j];
+      const std::array<float, 2> na = vertexNormal(i, i), nb = vertexNormal(j, i);
+      const uint32_t base = static_cast<uint32_t>(m.verts.size());
+      m.verts.push_back({ a.x, a.y, zBottom, na[0], na[1], 0.f, uv[i][0], uv[i][1] });
+      m.verts.push_back({ b.x, b.y, zBottom, nb[0], nb[1], 0.f, uv[j][0], uv[j][1] });
+      m.verts.push_back({ b.x, b.y, zTop, nb[0], nb[1], 0.f, uv[j][0], uv[j][1] });
+      m.verts.push_back({ a.x, a.y, zTop, na[0], na[1], 0.f, uv[i][0], uv[i][1] });
+      m.idx.insert(m.idx.end(), { base, base + 2, base + 1, base, base + 3, base + 2 }); // The outward wall's winding reversed: facing into the pocket
+   }
+   return true;
+}
+
 // The ink cap over one pocket: its face at capZ, facing up. False (mesh untouched) as AddPuck
 inline bool AddCap(const std::vector<CurvePoint>& contour, const Params& prm, Mesh& m)
 {

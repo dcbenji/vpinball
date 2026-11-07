@@ -19,6 +19,7 @@ namespace PlayfieldBoard
 enum HoleKind { kRound = 0, kSlot = 1, kPolygon = 2 };
 enum HoleFlags { kCut = 1, kFallsThrough = 2, kUnderInsert = 4, kFromMask = 8 }; // As the editor's PlayfieldHole::Flags
 constexpr float kFloorBevelMin = 2.f; // A Falls Through hole's bevel goes into the floor collider (one chamfer) from this size: thinner would make sliver triangles
+constexpr float kRimInset = 0.5f; // An insert pocket's rim takes the art this far (VPU) inside the hole outline
 
 // One hole, in table coordinates. Round: centre (cx, cy), diameter. Slot: the capsule of that diameter between (cx, cy) and (ex, ey).
 // Polygon: `polygon` is x0, y0, x1, y1, ... (3 or more points, either winding).
@@ -52,11 +53,12 @@ struct BoardParams
 struct BoardMeshes
 {
    PlasticMesh::Mesh top; // The board face at z = 0 with every built hole cut
-   PlasticMesh::Mesh walls; // The board edge and the walls of every built hole, with their bevels
+   PlasticMesh::Mesh walls; // The board edge and the walls of every built hole except the insert pockets, with their bevels
    PlasticMesh::Mesh backing; // The face lowered below the wood (on the board's outline), on the dark rows of the plywood image (the editor appends it to the walls part)
    PlasticMesh::Mesh floor; // The flat collider face with only the kFallsThrough holes cut, then their walls down to -thickness (a chamfer when the bevel >= 2)
    // Built kUnderInsert holes (the caller sets kCut on them when the board cuts insert pockets): the insert bodies and their ink caps (InsertPocket.h), on the
-   // contours the hole walls use, and the pockets' floors at the bodies' bottom. Empty when no pocket is built
+   // contours the hole walls use, and the pockets' floors at the bodies' bottom with their rims (side walls facing in, the art's colour at the rim stretched
+   // down; the walls part gets no plywood wall for a pocket). Empty when no pocket is built
    PlasticMesh::Mesh inserts;
    PlasticMesh::Mesh insertCaps;
    PlasticMesh::Mesh pocketFloors;

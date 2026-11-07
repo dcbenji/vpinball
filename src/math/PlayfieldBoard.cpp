@@ -570,7 +570,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
    // Walls: the board edge and every built hole with its bevel, from the contours and top rings Build used (never re-flattened)
    AddWalls(outline, params.thickness, out.walls);
    for (size_t c = 0; c < cut.size(); c++)
-      if (const int k = topRes.contourOfHole[c]; k >= 0)
+      if (const int k = topRes.contourOfHole[c]; k >= 0 && !(cut[c]->flags & kUnderInsert)) // An insert pocket has no plywood wall: the insert fills it (its rim, below)
          AddHoleWalls(topRes.contours[k], topRes.topRings[k], topRes.effBevel[k], params.bevelSegments, params.thickness, out.walls);
 
    // The floor collider: the flat face with the Falls Through holes cut, then their walls (normals into the hole: they keep a dropped ball in), with one
@@ -591,7 +591,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
       if (const int k = floorRes.contourOfHole[c]; k >= 0)
          AddHoleWalls(floorRes.contours[k], floorRes.topRings[k], floorRes.effBevel[k], 1, params.thickness, out.floor);
    // Insert pockets: an insert body and an ink cap on each built Under Insert hole's contour (bevel 0, so its top ring is the contour), and the pocket's floor
-   // at the body's bottom (opaque, facing up: what the see-through body shows below it instead of the walls and backing)
+   // and rim (its side walls in the art's colour at the rim, facing in: no plywood wall) at the body's bottom (opaque, facing up: what the see-through body shows below it instead of the walls and backing)
    InsertPocket::Params ip;
    for (int i = 0; i < 6; i++)
       ip.uvm[i] = params.uvm[i];
@@ -604,6 +604,7 @@ bool BuildBoard(const BoardParams& params, const std::vector<BoardHole>& holes, 
          if (InsertPocket::AddPuck(topRes.contours[k], ip, out.inserts) && InsertPocket::AddCap(topRes.contours[k], ip, out.insertCaps))
          {
             InsertPocket::AddCap(topRes.contours[k], fp, out.pocketFloors);
+            InsertPocket::AddRim(topRes.contours[k], ip, 0.f, -bottom, kRimInset, out.pocketFloors);
             report.pockets++;
          }
    for (PlasticMesh::Vertex& v : out.backing.verts)

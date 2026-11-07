@@ -5,6 +5,8 @@
 // the shell is closed (welded by position, every directed edge has its reverse exactly once), every triangle's right-hand normal agrees with its
 // vertex normals, the top / bottom / cap faces sit at their heights and cover the contour's area, the volume is area x depth (divergence theorem),
 // the walls follow the contour exactly (no vertex off it), and every UV is the table mapping of its vertex. No NaN / Inf (bit test, fast-math safe).
+// The rim (AddRim: the pocket's side walls facing in, coloured by the art just inside the outline): faces point into the pocket, winding agrees, each
+// column samples one point inside the contour (at most a mitre from it), the same on both rows.
 #include "math/InsertPocket.h"
 #include <cmath>
 #include <cstdio>
@@ -165,6 +167,52 @@ static std::vector<CurvePoint> Circle(const float cx, const float cy, const floa
 }
 static double PolyArea(const std::vector<CurvePoint>& p) { return 0.5 * fabs(Area2(p)); }
 
+// The rim: side walls facing into the pocket, from zTop to zBottom, each column's UV the table UV of a point `inset` inside the contour (the same on every row)
+static void RimCase(const char* name, const std::vector<CurvePoint>& contour)
+{
+   Params prm;
+   prm.uvm[0] = 1.f / 952.f;
+   prm.uvm[2] = 0.01f;
+   prm.uvm[4] = 1.f / 2103.f;
+   prm.uvm[5] = -0.02f;
+   Mesh m;
+   CHECK(AddRim(contour, prm, 0.f, -5.9f, 0.5f, m), "%s: rim built", name);
+   const auto inside = [&](const float x, const float y)
+   {
+      bool in = false;
+      for (size_t i = 0, j = contour.size() - 1; i < contour.size(); j = i++)
+         if (((contour[i].y > y) != (contour[j].y > y)) && (x < (contour[j].x - contour[i].x) * (y - contour[i].y) / (contour[j].y - contour[i].y) + contour[i].x))
+            in = !in;
+      return in;
+   };
+   int outward = 0, badZ = 0, badUv = 0, stretch = 0, nan = 0;
+   for (size_t t = 0; t + 2 < m.idx.size(); t += 3)
+   {
+      const Vertex &a = m.verts[m.idx[t]], &b = m.verts[m.idx[t + 1]], &c = m.verts[m.idx[t + 2]];
+      const float x = (a.x + b.x + c.x) / 3.f + 0.01f * (a.nx + b.nx + c.nx), y = (a.y + b.y + c.y) / 3.f + 0.01f * (a.ny + b.ny + c.ny);
+      outward += !inside(x, y);
+   }
+   for (size_t v = 0; v < m.verts.size(); v++)
+   {
+      const Vertex& q = m.verts[v];
+      badZ += q.z != 0.f && q.z != -5.9f;
+      for (const float f : { q.x, q.y, q.z, q.nx, q.ny, q.nz, q.tu, q.tv })
+         nan += BadBits(f);
+      // The table point the UV samples: inside the contour, about the inset from it
+      const float sx = (q.tu - prm.uvm[2]) / prm.uvm[0], sy = (q.tv - prm.uvm[5]) / prm.uvm[4];
+      const double dist = DistToLoop(contour, sx, sy);
+      badUv += !inside(sx, sy) || dist < 0.2 || dist > 2.f * 0.5 + 1e-3; // a mitre: up to twice the inset at a sharp or reflex corner
+      if (v % 4 == 3) // a quad: bottom a, bottom b, top b, top a: each column has one UV on both rows
+         stretch += m.verts[v].tu != m.verts[v - 3].tu || m.verts[v].tv != m.verts[v - 3].tv || m.verts[v - 1].tu != m.verts[v - 2].tu;
+   }
+   printf("%-24s rim %zu tris, %d outward, uv off the rim %d\n", name, m.idx.size() / 3, outward, badUv);
+   CHECK(AgainstNormals(m) == 0, "%s: rim winding agrees with its normals", name);
+   CHECK(outward == 0, "%s: %d rim faces point out of the pocket", name, outward);
+   CHECK(badZ == 0 && nan == 0 && badUv == 0 && stretch == 0, "%s: z %d nan %d uv %d stretch %d", name, badZ, nan, badUv, stretch);
+   Mesh none;
+   CHECK(!AddRim(contour, prm, -1.f, 0.f, 0.5f, none) && none.verts.empty(), "%s: inverted heights build nothing", name);
+}
+
 int main()
 {
    const std::vector<CurvePoint> round = Circle(400.f, 900.f, 22.f, 48, true); // a 1.75 in round insert, clockwise as the board's hole loops
@@ -181,6 +229,9 @@ int main()
    dup.insert(dup.begin() + 2, dup[1]); // a repeated point
    dup.push_back(dup[0]); // and the closing point repeated
    Case("repeated points", dup, 1600.);
+   RimCase("round rim", round);
+   RimCase("concave L rim", ell);
+   RimCase("square rim (ccw input)", square);
 
    // Degenerate: nothing is added
    Params prm;
