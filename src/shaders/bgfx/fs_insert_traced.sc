@@ -224,7 +224,10 @@ void main()
 	// The traced elevation weights, and how far the inside of the plastic slides against the traced direction
 	// (the bake looks up the table from the player's side: its eye is along +v)
 	const float elevation = degrees(acos(saturate(v.z)));
-	const vec4 weights = mix(tracedAngleWeights(elevation), vec4(0.25, 0.25, 0.25, 0.25), 0.3 * frost);
+	// (the live trace below draws the lit insert; its frost must not mix the four traced elevations of the lamp-off image
+	// together: each sees the insert foreshortened differently, so they stack as nested, smaller copies)
+	const bool liveOn = tracedParams[16].x > 0.0 && tracedParams[12].x > 0.0 && tracedParams[5].y > 0.5;
+	const vec4 weights = mix(tracedAngleWeights(elevation), vec4(0.25, 0.25, 0.25, 0.25), liveOn ? 0.0 : 0.3 * frost);
 	const vec3 tracedView = vec3(0.0, sin(radians(elevation)), cos(radians(elevation)));
 	const vec3 tracedInside = refract(-tracedView, vec3(0.0, 0.0, 1.0), 1.0 / eta);
 	const vec2 slide = (inside.xy / max(-inside.z, 0.25) - tracedInside.xy / max(-tracedInside.z, 0.25)) * (tracedParams[1].z / size);
@@ -336,7 +339,7 @@ void main()
 			if (fgOn)
 				facetGlow += pow(saturate(dot(wavy, fgHalf) * 0.5 + 0.5), fgS);
 		}
-		glint *= 0.25 * (1.0 - 0.5 * frost);
+		glint *= 0.25 * (1.0 - (liveOn ? 0.85 : 0.5) * frost); // a sanded top all but hides the facets' highlights (with the live trace)
 		facetGlow *= 0.25 * fgFall * fgMask * fgAmount;
 	}
 
@@ -356,7 +359,7 @@ void main()
 	// (its seed) plus the eye's, so it changes smoothly with the view. It replaces the baked glow (keepbake = the share
 	// kept). 0 = off.
 	float live = 0.0;
-	if (tracedParams[16].x > 0.0 && tracedParams[12].x > 0.0 && hasFacets)
+	if (liveOn)
 	{
 		const float depth = tracedParams[12].x;
 		const float plate = max(min(tracedParams[16].z, depth - 0.5), 0.2);
@@ -429,7 +432,16 @@ void main()
 	// the plastic's colour by plastictint: mix(1, colour, plastictint), written so that 1 gives exactly the colour
 	vec3 lampOff = vec3(0.0, 0.0, 0.0);
 	if (tracedParams[6].w > 0.0)
-		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * tracedEnv(lightUv, weights, log2(max(0.5 * blurMm / size * 512.0, 1.0)));
+	{
+		// With the live trace, frost sands the top for the lamp-off look too: the room seen through it blurs over up to ~9 mm
+		// (slowly at first: 0.6 mm at 0.2) and evens out toward a milky fill at the top of the range
+		const float offBlurMm = liveOn ? 1.2 * frost + 8.0 * frost * frost : blurMm;
+		const float offLod = log2(max(0.5 * offBlurMm / size * 512.0, 1.0));
+		vec3 env = tracedEnv(lightUv, weights, offLod);
+		if (liveOn && frost > 0.0)
+			env = mix(env, tracedEnv(lightUv, weights, max(6.0, offLod + 1.0)), 0.5 * frost * frost);
+		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * env;
+	}
 
 	// The lamp's glow and glints, plus the room glinting in the facets whatever the lamp does
 	// (the white share grows with the glow: the bake's peak (1) gets all of it, the dim body almost none)
@@ -449,8 +461,8 @@ void main()
 	// toward the eye is the bulb's 1/r^2 summed along the ray: in closed form, (atan(b - t0) - atan(a - t0)) / h over a segment
 	// [a, b] (h = the ray's closest approach to the bulb, t0 = where it is). A forward-scattering lobe (bodyfwd) makes it
 	// hottest where the eye looks down the bulb's beam: a core that slides with the view as a thing below the top does, and
-	// HDR-bright there, so the tonemapper and the bloom blow it out. The ray is split in 4 and each piece counts only inside
-	// the window (the floor mask under it), so where the eye ray leaves the body through its wall the glow stops early: the
+	// HDR-bright there, so the tonemapper and the bloom blow it out. The ray is split in 8 and each piece counts only inside
+	// the window (the bake's window under it, the skirt included), so where the eye ray leaves the body through its wall the glow stops early: the
 	// far side of the window gets darker, the near wall lit. Scaled by bulb_depth, so a straight-down view right over the bulb
 	// is about 1 before the lobe at the default thickness (the lobe adds up to (1+g)/(1-g) there). 0 = off.
 	// with the live trace on, a little of the body glow always fills the plastic (light scattered in it: the gaps between the
@@ -468,13 +480,14 @@ void main()
 		const float h = sqrt(max(dot(toBulb, toBulb) - t0 * t0, tracedParams[14].w * tracedParams[14].w));
 		float sum = 0.0;
 		float prev = atan((0.0 - t0) / h);
-		for (int i = 1; i <= 4; i++)
+		for (int i = 1; i <= 8; i++)
 		{
-			const float b = tEnd * (float(i) * 0.25);
+			const float b = tEnd * (float(i) * 0.125);
 			const float next = atan((b - t0) / h);
-			const vec3 mid = p0 + inside * (b - 0.125 * tEnd);
+			const vec3 mid = p0 + inside * (b - 0.0625 * tEnd);
 			const vec2 muv = (mid.xy + tracedParams[13].zw) / size + 0.5;
-			const float inWindow = hasFacets ? smoothstep(0.3, 0.9, texture2DLod(tex_base_normalmap, muv, 2.0).a) : 1.0;
+			// the wall, softened (a blurred mip, a wide ramp) so the pieces' edges blend instead of stepping
+			const float inWindow = smoothstep(0.0003, 0.002, dot(texture2DLod(tex_base_color, muv, 3.5), weights)); // the bake's whole window, the skirt included
 			sum += (next - prev) * inWindow;
 			prev = next;
 		}
