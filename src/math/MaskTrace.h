@@ -147,17 +147,17 @@ inline std::vector<D2> Rdp(const std::vector<D2>& p, double tol)
    const size_t n = p.size();
    if (n < 4)
       return p;
-   size_t far = 0;
+   size_t farIdx = 0;
    double fd = -1.;
    for (size_t i = 1; i < n; i++)
    {
       const double d = std::hypot(p[i].x - p[0].x, p[i].y - p[0].y);
       if (d > fd)
-         fd = d, far = i;
+         fd = d, farIdx = i;
    }
    std::vector<char> keep(n, 0);
-   keep[0] = keep[far] = 1;
-   std::vector<std::pair<size_t, size_t>> st { { 0, far }, { far, n } }; // chain [a, b] with index b taken modulo n
+   keep[0] = keep[farIdx] = 1;
+   std::vector<std::pair<size_t, size_t>> st { { 0, farIdx }, { farIdx, n } }; // chain [a, b] with index b taken modulo n
    while (!st.empty())
    {
       const auto [a, b] = st.back();
