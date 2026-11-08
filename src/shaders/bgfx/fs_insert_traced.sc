@@ -66,16 +66,20 @@ SAMPLER2D(tex_pbr_orm, 8);        // the table's print map: art in rgb, clear in
 
 // Live trace: what a ray leaving the insert's floor downward (from p, mm about the bulb's axis, z up from the insert top)
 // sees: the bulb, a glowing sphere of radius r at depth (hotter toward its middle, as the filament inside it), or else the
-// cavity under the insert lit by it (the pocket and the board, falling off away from the bulb).
-float liveTraceBelow(vec3 p, vec3 d, float depth, float r, float cavity)
+// cavity under the insert lit by it (the pocket and the board, falling off away from the bulb). soft: a slightly rough
+// underside spreads each ray into a cone, as wide as soft x the way down: the bulb's image widens by it (same light), so a
+// facet fades in and out of the bulb as the eye moves instead of snapping.
+float liveTraceBelow(vec3 p, vec3 d, float depth, float rBulb, float cavity, float soft)
 {
+	const float down = (p.z + depth) / max(-d.z, 0.05); // the way down to the bulb's level
+	const float r = sqrt(rBulb * rBulb + soft * soft * down * down);
 	const vec3 oc = p - vec3(0.0, 0.0, -depth);
 	const float b = dot(oc, d);
 	const float miss2 = max(dot(oc, oc) - b * b, 0.0); // the ray's closest approach to the bulb's centre, squared
 	const float edge = saturate(1.0 - miss2 / (r * r));
 	// the sphere's face: brightest straight on at its middle (a filament glow inside the glass), a bright rim to its edge
-	const float bulb = b < 0.0 ? edge * (0.6 + 2.4 * edge * edge * edge) : 0.0;
-	const vec2 q = p.xy + d.xy * ((p.z + depth) / max(-d.z, 0.05)); // where the ray reaches the bulb's level
+	const float bulb = b < 0.0 ? edge * (0.6 + 2.4 * edge * edge * edge) * (rBulb * rBulb) / (r * r) : 0.0;
+	const vec2 q = p.xy + d.xy * down; // where the ray reaches the bulb's level
 	const float cavityLight = cavity / (1.0 + dot(q, q) / (depth * depth));
 	return bulb + (1.0 - saturate(edge * 4.0)) * cavityLight;
 }
@@ -253,7 +257,6 @@ void main()
 	const float fgAmount = tracedParams[11].z;
 	const float fgSharp = tracedParams[11].w;
 	float facetGlow = 0.0;
-	vec2 biHalo = vec2(0.0, 0.0); // the bulb image's halo and core (below)
 	if (hasFacets)
 	{
 		// Fade the light over the last millimetres inside the outline (the render's pocket wall seen at a slant): the floor
@@ -316,14 +319,8 @@ void main()
 		// window is read at the card point (the top) from its 8-texel mip, 4 taps on a rotated grid so the edge is smooth;
 		// the bake is dark between its wedges, but on Police Force's square and triangle bakes the window's cells stay above
 		// about 0.002 of the peak at that scale and every cell outside it is 0
-		// Bulb image (after freezy's VPE Insert Hybrid): each facet is a prism that looks down at the bulb, a soft disc
-		// bulbradius mm across at bulb_depth: the eye ray goes in through the top, out through the facet (where the facet would
-		// trap it, it goes on straight, as through a flat bottom), and lands on the bulb's plane; a halo of the bulb's size
-		// and a tight core 3.7 times as bright, Schlick-weighted by how much leaves the facet. So only the facets aimed at
-		// the bulb light up, and the core moves through them as the eye moves, at the bulb's depth. 0 = off.
-		const bool biOn = tracedParams[15].x > 0.0 && tracedParams[12].x > 0.0;
 		float fgMask = 0.0;
-		if (fgOn || biOn)
+		if (fgOn)
 		{
 			const vec2 mo = vec2_splat(4.0 / 1024.0);
 			const vec4 m4 = texture2DLod(tex_base_color, card + vec2(-0.25 * mo.x, -0.75 * mo.y), 3.0) + texture2DLod(tex_base_color, card + vec2(0.75 * mo.x, -0.25 * mo.y), 3.0)
@@ -338,33 +335,14 @@ void main()
 			glint += vec3(tracedGlint(wavy, v, glintTurn, sharp, 0.0), tracedGlint(wavy, v, glintTurn, sharp, 1.0), tracedGlint(wavy, v, glintTurn, sharp, 2.0)) * f.a;
 			if (fgOn)
 				facetGlow += pow(saturate(dot(wavy, fgHalf) * 0.5 + 0.5), fgS);
-			if (biOn)
-			{
-				const float r0 = (eta - 1.0) * (eta - 1.0) / ((eta + 1.0) * (eta + 1.0));
-				const float cosIn = saturate(dot(-inside, wavy));
-				const float sinOut = eta * sqrt(saturate(1.0 - cosIn * cosIn));
-				const float passing = 1.0 - smoothstep(0.75, 1.0, sinOut);
-				const vec3 facetRay = passing > 0.0 ? refract(inside, wavy, eta) : -v;
-				const float cosOut = saturate(dot(facetRay, -wavy));
-				const float facetExit = 1.0 - (r0 + (1.0 - r0) * pow(1.0 - cosOut, 5.0));
-				const float flatExit = 1.0 - (r0 + (1.0 - r0) * pow(1.0 - saturate(v.z), 5.0));
-				const vec3 ray = normalize(mix(-v, facetRay, passing));
-				const float exitT = mix(flatExit, facetExit, passing);
-				const vec2 tapMm = (floorUv + gx * taps[i].x + gy * taps[i].y - 0.5) * size - tracedParams[13].zw;
-				const float below = max(tracedParams[12].x - tracedParams[1].y, 1.0);
-				const vec2 d = (tapMm + ray.xy * (below / max(-ray.z, 0.12))) / max(tracedParams[15].y, 0.5);
-				const float d2 = dot(d, d);
-				biHalo += vec2(exp2(-2.0 * d2), 3.7 * exp2(-12.0 * d2)) * (exitT * f.a);
-			}
 		}
 		glint *= 0.25 * (1.0 - 0.5 * frost);
 		facetGlow *= 0.25 * fgFall * fgMask * fgAmount;
-		biHalo *= 0.25 * fgMask * tracedParams[15].x * vec2(1.0, tracedParams[15].z);
 	}
 
 	// Live trace (a clear starburst insert, traced through for real per pixel): the eye ray refracts in at the top, falls to
 	// the faceted floor (a plane floordepth mm under the top, its facets from the facet map), and splits there by Fresnel:
-	// what leaves through the facet goes on down to the bulb (a glowing sphere of the bulb image's radius at bulb_depth,
+	// what leaves through the facet goes on down to the bulb (a glowing sphere, bulbradius mm, at bulb_depth,
 	// moved by the bulb offset) or the lit cavity round it; what the facet reflects goes back up, where the top reflects it
 	// again (all of it past the critical angle: total internal reflection) to a second facet, and leaves there. So the facets
 	// aimed at the bulb carry its image at its real depth, the others go dark or carry its second bounce: the diamond look.
@@ -372,7 +350,11 @@ void main()
 	// more than the lit cavity: skirt = its share. Eight rays per pixel (the facets' edges are sharp and there is no
 	// temporal AA). Frost (a sanded top) turns them a little about the refracted ray and hands the light over to the body
 	// glow below (the light scattered in the whole body, smooth): from a clear diamond at 0 to a milky glow at about 0.7.
-	// It replaces the baked glow (keepbake = the share kept). 0 = off.
+	// softness = the underside's roughness (see liveTraceBelow). spokes = how differently the two slopes of a spoke couple
+	// the bulb's light (moulded starbursts do: one slope reads bright, the other dark, even straight from above, where a
+	// clear trace alone would light both alike), after VPE Insert Hybrid's facet contrast: one fixed direction per insert
+	// (its seed) plus the eye's, so it changes smoothly with the view. It replaces the baked glow (keepbake = the share
+	// kept). 0 = off.
 	float live = 0.0;
 	if (tracedParams[16].x > 0.0 && tracedParams[12].x > 0.0 && hasFacets)
 	{
@@ -382,6 +364,11 @@ void main()
 		const float cav = tracedParams[16].y;
 		const float r0 = (eta - 1.0) * (eta - 1.0) / ((eta + 1.0) * (eta + 1.0));
 		const vec2 cx = dFdx(card), cy = dFdy(card);
+		const float soft = tracedParams[15].x;
+		const float spokes = tracedParams[15].z;
+		const float turnS = tracedParams[5].x * 6.28318530718;
+		const vec2 biasRaw = v.xy + 0.45 * vec2(cos(turnS), sin(turnS));
+		const vec2 bias = biasRaw / max(length(biasRaw), 0.45); // fades through zero rather than flipping where the eye cancels the seed's direction
 		// 8 rays: a rotated 8-rook pattern over the pixel, each turned by frost a different way
 		const vec2 sub[8] = { vec2(-0.4375, 0.0625), vec2(-0.3125, -0.3125), vec2(-0.1875, 0.3125), vec2(-0.0625, -0.0625),
 			vec2(0.0625, 0.4375), vec2(0.1875, -0.4375), vec2(0.3125, 0.1875), vec2(0.4375, -0.1875) };
@@ -407,7 +394,13 @@ void main()
 				const float k = 1.0 - eta * eta * (1.0 - cosI * cosI);
 				const float F = k <= 0.0 ? 1.0 : r0 + (1.0 - r0) * pow(1.0 - sqrt(k), 5.0); // Schlick on the air side: ramps to 1 at the critical angle
 				if (k > 0.0)
-					seen += w * (1.0 - F) * liveTraceBelow(p, refract(d, n, eta), depth, r, cav) * mix(tracedParams[15].w, 1.0, smoothstep(0.03, 0.12, length(nxy)));
+				{
+					const float onFacet = smoothstep(0.03, 0.12, length(nxy));
+					const float coupling = saturate(0.5 + 1.8 * dot(nxy, bias));
+					// over its mean (about 0.85), so the spokes change the pattern, not the insert's brightness
+					const float faceGain = mix(1.0, (0.12 + 1.8 * pow(coupling, 1.3)) / 0.85, spokes * onFacet);
+					seen += w * (1.0 - F) * liveTraceBelow(p, refract(d, n, eta), depth, r, cav, soft) * mix(tracedParams[15].w, 1.0, onFacet) * faceGain;
+				}
 				// back up to the top, and down again off it
 				d = reflect(d, n);
 				w *= F;
@@ -449,9 +442,6 @@ void main()
 
 	// the live trace, whitened by the white-leak share where it is bright
 	result += mix(staticColor_Alpha.rgb, vec3_splat(staticColor_Alpha.a), tracedParams[10].z * saturate(live)) * (tracedParams[2].x * live);
-	// the bulb image: the halo in the lamp's colour, the core whitened by the white-leak share as it gets bright
-	result += staticColor_Alpha.rgb * (tracedParams[2].x * biHalo.x)
-		+ mix(staticColor_Alpha.rgb, vec3_splat(staticColor_Alpha.a), tracedParams[10].z * saturate(biHalo.y)) * (tracedParams[2].x * biHalo.y);
 
 	// Body glow: the plastic is a little milky, so the bulb's light scatters inside the whole body and the glow sits in it,
 	// under the top. The body is a slab bodythick mm deep under the top; the bulb (a small sphere, bodybulb mm) sits

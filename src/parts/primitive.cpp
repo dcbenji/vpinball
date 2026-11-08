@@ -1742,7 +1742,7 @@ void Primitive::Render(const unsigned int renderMask)
             vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 0.25f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness; how much the glints turn with the eye
             vec4(m_d.m_bulbStretchX, m_d.m_bulbStretchY, m_d.m_bulbOffsetX, m_d.m_bulbOffsetY), // hot spot stretch (u, v), offset (u, v, mm)
             vec4(0.f, 6.35f, 0.6f, 3.f), // body glow: amount (0 = off), body thickness (mm), forward scatter, bulb radius (mm)
-            vec4(0.f, 5.f, 1.f, 0.12f), // bulb image: amount (0 = off), bulb radius (mm, also the live trace's bulb), core gain; live trace: the skirt's light
+            vec4(0.3f, 5.f, 0.35f, 0.12f), // live trace: softness (the underside's roughness), bulb radius (mm), spoke contrast, the skirt's light
             vec4(0.f, 0.05f, 2.53f, 0.f) }; // live trace: amount (0 = off), lit cavity, facet floor depth under the top (mm), share of the baked glow kept
          // The lamp-off look atlas, in the Emission Map slot
          Texture *const envMap = m_ptable->GetImage(m_d.m_szEmissionMap);
@@ -1809,9 +1809,9 @@ void Primitive::Render(const unsigned int renderMask)
             if ((p = strstr(tuning, "bodythick=")) && sscanf(p + 10, "%f", &v) == 1) params[14].y = max(v, 0.5f);
             if ((p = strstr(tuning, "bodyfwd=")) && sscanf(p + 8, "%f", &v) == 1) params[14].z = clamp(v, 0.f, 0.95f);
             if ((p = strstr(tuning, "bodybulb=")) && sscanf(p + 9, "%f", &v) == 1) params[14].w = max(v, 0.5f);
-            if ((p = strstr(tuning, "bulbimage=")) && sscanf(p + 10, "%f", &v) == 1) params[15].x = max(v, 0.f);
+            if ((p = strstr(tuning, "softness=")) && sscanf(p + 9, "%f", &v) == 1) params[15].x = max(v, 0.f);
             if ((p = strstr(tuning, "bulbradius=")) && sscanf(p + 11, "%f", &v) == 1) params[15].y = max(v, 0.5f);
-            if ((p = strstr(tuning, "bulbcore=")) && sscanf(p + 9, "%f", &v) == 1) params[15].z = max(v, 0.f);
+            if ((p = strstr(tuning, "spokes=")) && sscanf(p + 7, "%f", &v) == 1) params[15].z = saturate(v);
             if ((p = strstr(tuning, "livetrace=")) && sscanf(p + 10, "%f", &v) == 1) params[16].x = max(v, 0.f);
             if ((p = strstr(tuning, "cavity=")) && sscanf(p + 7, "%f", &v) == 1) params[16].y = max(v, 0.f);
             if ((p = strstr(tuning, "floordepth=")) && sscanf(p + 11, "%f", &v) == 1) params[16].z = max(v, 0.2f);
