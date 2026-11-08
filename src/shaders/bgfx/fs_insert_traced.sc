@@ -146,6 +146,43 @@ vec3 tracedEnv(vec2 uv, vec4 weights, float minLod)
 		+ texture2DLod(tex_traced_env, q + vec2(0.5, 0.5), lod).rgb * weights.w;
 }
 
+// A cubic B-spline read folded into 4 bilinear taps, for a texture n texels across at the mip read: the taps' coordinates
+// (xy the first along u and v, zw the second) and their weights (xy along u and v for the first taps, zw for the second).
+// A high mip read plainly is a box (big bilinear blocks); this is smooth.
+void bsplineTaps(vec2 uv, float n, out vec4 at, out vec4 g)
+{
+	const vec2 p = uv * n - 0.5;
+	const vec2 i = floor(p);
+	const vec2 f = p - i;
+	const vec2 f2 = f * f;
+	const vec2 f3 = f2 * f;
+	const vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+	const vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	const vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+	const vec2 w3 = f3 / 6.0;
+	g = vec4(w0 + w1, w2 + w3);
+	at = vec4((i - 0.5 + w1 / g.xy) / n, (i + 1.5 + w3 / g.zw) / n);
+}
+
+// One slice of the lamp-off atlas (o = its corner), B-spline smoothed at a mip
+vec3 tracedEnvSlice(vec4 at, vec4 g, vec2 o, float lod)
+{
+	return g.y * (g.x * texture2DLod(tex_traced_env, at.xy + o, lod).rgb + g.z * texture2DLod(tex_traced_env, at.zy + o, lod).rgb)
+		+ g.w * (g.x * texture2DLod(tex_traced_env, at.xw + o, lod).rgb + g.z * texture2DLod(tex_traced_env, at.zw + o, lod).rgb);
+}
+
+// The lamp-off look blurred smoothly: the four elevations, each B-spline read at a mip, 1.5 texels of it in from the slice's
+// edge so no slice bleeds into its neighbour
+vec3 tracedEnvSmooth(vec2 uv, vec4 weights, float lod)
+{
+	const float n = 512.0 * exp2(-lod);
+	vec4 at, g;
+	bsplineTaps(clamp(uv, 1.5 / n, 1.0 - 1.5 / n), n, at, g);
+	at *= 0.5; // a slice is a quarter of the atlas
+	return tracedEnvSlice(at, g, vec2(0.0, 0.0), lod) * weights.x + tracedEnvSlice(at, g, vec2(0.5, 0.0), lod) * weights.y
+		+ tracedEnvSlice(at, g, vec2(0.0, 0.5), lod) * weights.z + tracedEnvSlice(at, g, vec2(0.5, 0.5), lod) * weights.w;
+}
+
 #ifndef CLIP
 EARLY_DEPTH_STENCIL
 #endif
@@ -295,7 +332,8 @@ void main()
 		// every seam (stair-stepped dashes, with no temporal AA to hide them): average 4 samples on a rotated grid inside
 		// the pixel, each reading the facets over a quarter of its footprint
 		const vec2 taps[4] = { vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(0.125, 0.375), vec2(-0.375, 0.125) };
-		const float footprint = 0.5 * exp2(max(tracedParams[7].w, 0.0));
+		// (with the live trace, a sanded cap also spreads the facets the glints are seen in, the lamp's and the room's: up to 6x wider at full frost)
+		const float footprint = 0.5 * exp2(max(tracedParams[7].w, 0.0) + (liveOn ? 2.5 * frost : 0.0));
 		// Undoes part of the highlights' turn with the eye's bearing, as the eye's bearing in table space (0 from the player's side, so its seam is behind the backbox)
 		const float glintTurn = -(1.0 - tracedParams[12].w) * degrees(atan2(vt.x, vt.y));
 		// Facet glow: the bulb seen through the facets. Its light travels up from the bulb (bulb_depth below the top, under the
@@ -359,6 +397,11 @@ void main()
 	// (its seed) plus the eye's, so it changes smoothly with the view. It replaces the baked glow (keepbake = the share
 	// kept). 0 = off.
 	float live = 0.0;
+	const float spokes = tracedParams[15].z;
+	const float turnS = tracedParams[5].x * 6.28318530718;
+	const vec2 biasRaw = v.xy + 0.45 * vec2(cos(turnS), sin(turnS));
+	const vec2 bias = biasRaw / max(length(biasRaw), 0.45); // fades through zero rather than flipping where the eye cancels the seed's direction
+	float liveWindow = 0.0;
 	if (liveOn)
 	{
 		const float depth = tracedParams[12].x;
@@ -368,10 +411,6 @@ void main()
 		const float r0 = (eta - 1.0) * (eta - 1.0) / ((eta + 1.0) * (eta + 1.0));
 		const vec2 cx = dFdx(card), cy = dFdy(card);
 		const float soft = tracedParams[15].x;
-		const float spokes = tracedParams[15].z;
-		const float turnS = tracedParams[5].x * 6.28318530718;
-		const vec2 biasRaw = v.xy + 0.45 * vec2(cos(turnS), sin(turnS));
-		const vec2 bias = biasRaw / max(length(biasRaw), 0.45); // fades through zero rather than flipping where the eye cancels the seed's direction
 		// 8 rays: a rotated 8-rook pattern over the pixel, each turned by frost a different way
 		const vec2 sub[8] = { vec2(-0.4375, 0.0625), vec2(-0.3125, -0.3125), vec2(-0.1875, 0.3125), vec2(-0.0625, -0.0625),
 			vec2(0.0625, 0.4375), vec2(0.1875, -0.4375), vec2(0.3125, 0.1875), vec2(0.4375, -0.1875) };
@@ -422,7 +461,8 @@ void main()
 		const vec2 mo = vec2_splat(4.0 / 1024.0);
 		const vec4 m4 = texture2DLod(tex_base_color, card + vec2(-0.25 * mo.x, -0.75 * mo.y), 3.0) + texture2DLod(tex_base_color, card + vec2(0.75 * mo.x, -0.25 * mo.y), 3.0)
 			+ texture2DLod(tex_base_color, card + vec2(0.25 * mo.x, 0.75 * mo.y), 3.0) + texture2DLod(tex_base_color, card + vec2(-0.75 * mo.x, 0.25 * mo.y), 3.0);
-		live = 0.125 * sum * tracedParams[16].x * (1.0 - 0.8 * frost) * smoothstep(0.0003, 0.002, 0.25 * dot(m4, weights));
+		liveWindow = smoothstep(0.0003, 0.002, 0.25 * dot(m4, weights));
+		live = 0.125 * sum * tracedParams[16].x * (1.0 - 0.8 * frost) * liveWindow;
 		// the baked glow goes (keepbake keeps a share); with it go the parallax hot spot's 0.7 share and the white leak's
 		// share over it, which follow the baked glow
 		light *= tracedParams[16].w;
@@ -433,14 +473,46 @@ void main()
 	vec3 lampOff = vec3(0.0, 0.0, 0.0);
 	if (tracedParams[6].w > 0.0)
 	{
-		// With the live trace, frost sands the top for the lamp-off look too: the room seen through it blurs over up to ~9 mm
-		// (slowly at first: 0.6 mm at 0.2) and evens out toward a milky fill at the top of the range
-		const float offBlurMm = liveOn ? 1.2 * frost + 8.0 * frost * frost : blurMm;
-		const float offLod = log2(max(0.5 * offBlurMm / size * 512.0, 1.0));
-		vec3 env = tracedEnv(lightUv, weights, offLod);
+		vec3 env;
+		vec3 body = vec3(0.0, 0.0, 0.0);
 		if (liveOn && frost > 0.0)
-			env = mix(env, tracedEnv(lightUv, weights, max(6.0, offLod + 1.0)), 0.5 * frost * frost);
-		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * env;
+		{
+			// With the live trace, frost is a sanded cap (the top the spokes are fused to). The room's light entering it is
+			// scattered every way, so the facets under it are lit evenly instead of mirroring a few room lights, and what comes
+			// back up is spread again on the way out. The lamp-off image is only those few mirrored lights (a few hot wedges,
+			// black elsewhere): sanding spreads them (a smooth read over the blur, never a coarse mip's blocks; whole mips, as
+			// a B-spline is smooth only at one) and they fade into the body, while the room lights the whole body: the plastic's
+			// colour inside the window, its spokes shaded faintly as the lit ones are (spokes), seen through the same blur
+			// (the cap is ~2.5 mm over the facets)
+			const float offBlurMm = 0.4 + 2.2 * frost;
+			const vec2 sx = dFdx(lightUv) * 512.0, sy = dFdy(lightUv) * 512.0;
+			const float screenLod = 0.5 * log2(max(max(dot(sx, sx), dot(sy, sy)), 1e-8));
+			// (the blur's lod rounded, constant over the insert; the pixel's footprint, if wider, left as it is: no seam where it crosses a mip)
+			const vec3 spread = tracedEnvSmooth(lightUv, weights, clamp(max(floor(log2(offBlurMm / size * 512.0) + 0.5), screenLod), 0.0, 5.0));
+			if (frost < 0.25)
+				env = mix(tracedEnv(lightUv, weights, 0.0), spread, 4.0 * frost);
+			else
+				env = spread;
+			env *= (1.0 - frost) * (1.0 - frost);
+			const float nLod = clamp(floor(log2(offBlurMm / size * 1024.0) + 0.5), 0.0, 7.0);
+			const vec2 fuv = card + inside.xy * (tracedParams[1].y / size / steepInside);
+			vec4 at, g;
+			bsplineTaps(fuv, 1024.0 * exp2(-nLod), at, g); // (no margin: not an atlas, and clamp addressing holds the edge)
+			const vec4 f = g.y * (g.x * texture2DLod(tex_base_normalmap, at.xy, nLod) + g.z * texture2DLod(tex_base_normalmap, at.zy, nLod))
+				+ g.w * (g.x * texture2DLod(tex_base_normalmap, at.xw, nLod) + g.z * texture2DLod(tex_base_normalmap, at.zw, nLod));
+			const vec2 nxy = vec2(f.r * 2.0 - 1.0, 1.0 - f.g * 2.0);
+			const float coupling = saturate(0.5 + 1.8 * dot(nxy, bias));
+			const float shade = mix(1.0, (0.12 + 1.8 * pow(coupling, 1.3)) / 0.85, 0.6 * spokes * saturate(f.a));
+			// lit by the room (its colour, its level by the lamp-off gain), always the plastic's colour: the body is not in the
+			// lamp-off image, so plastictint (which only says whether that image already has the colour) does not apply
+			body = tracedParams[6].rgb / max(tracedParams[6].g, 1e-4) * tracedParams[7].rgb * (tracedParams[6].w * 0.3 * frost * (2.0 - frost) * shade * liveWindow);
+		}
+		else
+		{
+			const float offLod = log2(max(0.5 * blurMm / size * 512.0, 1.0));
+			env = tracedEnv(lightUv, weights, offLod);
+		}
+		lampOff = tracedParams[6].w * (tracedParams[7].rgb * tracedParams[11].y + (1.0 - tracedParams[11].y)) * env + body;
 	}
 
 	// The lamp's glow and glints, plus the room glinting in the facets whatever the lamp does
