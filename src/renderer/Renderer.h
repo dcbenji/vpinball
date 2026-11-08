@@ -397,6 +397,9 @@ public:
    // transparency probe render target used for the transmission term of transparent parts.
    Shader::PBRTextureSet GetPBRTextureSet(const BaseProperty& partData, const Vertex3Ds& center, const float radius, const bool inShaderSpecular, const bool transparent,
       const unsigned int renderMask, RenderTarget* const refrProbe = nullptr);
+   // Used by every renderer (the editor marks shadow content and records Lamp Test views on GL too)
+   unsigned int m_vsmContentSerial = 0, m_vsmLastContentSerial = 0; // Bumped when shadow caster content changed (editor moves), forces a rebuild of the cached shadow pages
+   int m_lampTestListSlot = -1; // The secondary view being recorded uses the light list of this slot (-1: the main one)
 #if defined(ENABLE_BGFX)
    const class Light* m_vsmShadowLight = nullptr; // light whose shadow map pages are being rendered (a flasher dome stays out of its own lamp's map)
    bool IsPBRShadowCacheOn() const { return m_shadowCacheOn; } // the playfield draw reads the static shadow cache (UpdatePBRShadowCache)
@@ -452,7 +455,6 @@ private:
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
    float m_pbrDimLightCutoff = 0.f; // PBR dim light cutoff (Player_PBRDimLightCutoff), 0 = off
    bool m_pbrShadowFast = true; // shadow filter early-out + importance gate (Player_PBRShadowFastFilter)
-   unsigned int m_vsmContentSerial = 0, m_vsmLastContentSerial = 0; // Bumped when shadow caster content changed (editor moves), forces a rebuild of the cached shadow pages
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame
    int m_vsmPageBudget = 32; // dirty pages rendered per frame (Player_PBRShadowPagesPerFrame)
    unsigned int m_vsmRebuildSerial = 0; // bumped when the shadow caster content changed (every cached map and shadow bake is stale)
@@ -663,7 +665,6 @@ private:
       vec4 lights[8];
    };
    vector<DomeLightState> m_lampTestDomeSaved; // The flasher domes' light state as the main view built it, while a view's own light list rewrites it
-   int m_lampTestListSlot = -1; // The secondary view being recorded uses the light list of this slot (-1: the main one)
    std::shared_ptr<Sampler> m_altLightList[kMaxEditorViews]; // Secondary views' own light lists (tex_pbr_lights), created when first needed
    static_assert(kMaxEditorViews == 3, "m_altLightListTex is initialised for 3 views");
    bgfx::TextureHandle m_altLightListTex[kMaxEditorViews] = { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE }; // ... their textures (owned by the samplers)

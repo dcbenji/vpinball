@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstring>
 #include "MaskTrace.h"
 
 #include <vector>
@@ -63,7 +64,7 @@ inline bool PointInHole(const MaskTrace::Hole& h, float px, float py)
 inline bool Finite(const float& f)
 {
    uint32_t b;
-   __builtin_memcpy(&b, &f, 4);
+   std::memcpy(&b, &f, 4);
    return (b & 0x7f800000u) != 0x7f800000u;
 }
 
