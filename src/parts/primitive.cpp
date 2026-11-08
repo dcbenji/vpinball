@@ -1726,7 +1726,7 @@ void Primitive::Render(const unsigned int renderMask)
          const float hash = sinf(m_d.m_vPosition.x * 127.1f + m_d.m_vPosition.y * 311.7f) * 43758.5453f;
          const float seed = hash - floorf(hash);
          float turn = -78.201f, turnJitter = 14.641f, fadeTint = 1.f, depthK = 1.f;
-         vec4 params[14] = {
+         vec4 params[17] = {
             vec4(15.f, 45.f, 60.f, 70.f), // traced elevations
             vec4(4.f, 2.5f, 3.5f, 1.5f), // depths (mm): cover, facets, glow parallax, rim fade
             vec4(m_d.m_tracedGain, 0.67f, 1.6f, 0.f), // glow gain, glow spread, IOR, alignment view
@@ -1740,7 +1740,10 @@ void Primitive::Render(const unsigned int renderMask)
             vec4(0.f, 0.f, 0.f, 0.f), // print map texel at the spill mip (u, v), white leak through the plastic, room glint tint
             vec4(0.f, 1.f, 0.f, 6.f), // print map tint on the glow, how much the plastic's colour tints the lamp-off look; facet glow: amount (0 = off), sharpness
             vec4(m_d.m_bulbDepth, m_d.m_bulbScale, m_d.m_bulbBrightness, 0.25f), // parallax hot spot: bulb depth (mm, 0 = off), size, brightness; how much the glints turn with the eye
-            vec4(m_d.m_bulbStretchX, m_d.m_bulbStretchY, m_d.m_bulbOffsetX, m_d.m_bulbOffsetY) }; // hot spot stretch (u, v), offset (u, v, mm)
+            vec4(m_d.m_bulbStretchX, m_d.m_bulbStretchY, m_d.m_bulbOffsetX, m_d.m_bulbOffsetY), // hot spot stretch (u, v), offset (u, v, mm)
+            vec4(0.f, 6.35f, 0.6f, 3.f), // body glow: amount (0 = off), body thickness (mm), forward scatter, bulb radius (mm)
+            vec4(0.f, 5.f, 1.f, 0.12f), // bulb image: amount (0 = off), bulb radius (mm, also the live trace's bulb), core gain; live trace: the skirt's light
+            vec4(0.f, 0.05f, 2.53f, 0.f) }; // live trace: amount (0 = off), lit cavity, facet floor depth under the top (mm), share of the baked glow kept
          // The lamp-off look atlas, in the Emission Map slot
          Texture *const envMap = m_ptable->GetImage(m_d.m_szEmissionMap);
          if (envMap)
@@ -1802,6 +1805,18 @@ void Primitive::Render(const unsigned int renderMask)
             if ((p = strstr(tuning, "bulbbright=")) && sscanf(p + 11, "%f", &v) == 1) params[12].z = v;
             if ((p = strstr(tuning, "bulbstretch=")) && sscanf(p + 12, "%f,%f", &e[0], &e[1]) == 2) { params[13].x = e[0]; params[13].y = e[1]; }
             if ((p = strstr(tuning, "bulboffset=")) && sscanf(p + 11, "%f,%f", &e[0], &e[1]) == 2) { params[13].z = e[0]; params[13].w = e[1]; }
+            if ((p = strstr(tuning, "bodyglow=")) && sscanf(p + 9, "%f", &v) == 1) params[14].x = max(v, 0.f);
+            if ((p = strstr(tuning, "bodythick=")) && sscanf(p + 10, "%f", &v) == 1) params[14].y = max(v, 0.5f);
+            if ((p = strstr(tuning, "bodyfwd=")) && sscanf(p + 8, "%f", &v) == 1) params[14].z = clamp(v, 0.f, 0.95f);
+            if ((p = strstr(tuning, "bodybulb=")) && sscanf(p + 9, "%f", &v) == 1) params[14].w = max(v, 0.5f);
+            if ((p = strstr(tuning, "bulbimage=")) && sscanf(p + 10, "%f", &v) == 1) params[15].x = max(v, 0.f);
+            if ((p = strstr(tuning, "bulbradius=")) && sscanf(p + 11, "%f", &v) == 1) params[15].y = max(v, 0.5f);
+            if ((p = strstr(tuning, "bulbcore=")) && sscanf(p + 9, "%f", &v) == 1) params[15].z = max(v, 0.f);
+            if ((p = strstr(tuning, "livetrace=")) && sscanf(p + 10, "%f", &v) == 1) params[16].x = max(v, 0.f);
+            if ((p = strstr(tuning, "cavity=")) && sscanf(p + 7, "%f", &v) == 1) params[16].y = max(v, 0.f);
+            if ((p = strstr(tuning, "floordepth=")) && sscanf(p + 11, "%f", &v) == 1) params[16].z = max(v, 0.2f);
+            if ((p = strstr(tuning, "keepbake=")) && sscanf(p + 9, "%f", &v) == 1) params[16].w = max(v, 0.f);
+            if ((p = strstr(tuning, "skirt=")) && sscanf(p + 6, "%f", &v) == 1) params[15].w = max(v, 0.f);
          };
          if (!m_d.m_tracedParams.empty())
             tune(m_d.m_tracedParams.c_str());
@@ -1837,19 +1852,19 @@ void Primitive::Render(const unsigned int renderMask)
             m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, color.x * color.w * tint[0] / tint2700[0],
                color.y * color.w * tint[1] / tint2700[1], color.z * color.w * tint[2] / tint2700[2], color.w);
          }
-         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 14);
+         m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 17);
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::insert_traced);
          // The lit insert's soft spill onto the art and coat around it: the same card, scaled up about its centre, drawn
          // first by the same technique in its spill mode. Not in reflections, and not with the lamp off.
          if (params[8].y > 0.f && params[8].z > 0.f && alpha > 0.f && !isReflectionPass)
          {
             params[8].x = 1.f;
-            m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 14);
+            m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 17);
             m_renderer->UpdateBasicShaderMatrix(Matrix3D::MatrixScale(params[8].y, params[8].y, 1.f) * m_fullMatrix);
             m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias + 0.1f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
             m_renderer->UpdateBasicShaderMatrix(m_fullMatrix, m_prevFullMatrixValid ? &m_prevFullMatrix : nullptr);
             params[8].x = 0.f;
-            m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 14);
+            m_renderer->m_renderDevice->m_basicShader->SetFloat4v(ShaderUniform::tracedParams, params, 17);
          }
       }
       else

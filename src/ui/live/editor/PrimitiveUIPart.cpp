@@ -70,6 +70,12 @@ constexpr TracedLookKey kLookKeys[] = {
    { "Frost", "frost", 0.f, 0.f, 1.f, 2, "A sanded cap: 0 = clear, more = the light under the cap blurs and the glints go soft, so the print over it reads more easily" },
    { "Facet Glow", "facetglow", 0.f, 0.f, 3.f, 2, "The bulb seen through the facets: the whole insert glows in rays that turn with the eye, brightest over the bulb (needs a facet map and a Bulb Depth). 0 = off" },
    { "Facet Glow Sharpness", "facetlobe", 6.f, 1.f, 60.f, 1, "Low = a milky plastic, the whole insert glows with soft rays; high = a clear one, only the facets turned to the eye light up" },
+   { "Body Glow", "bodyglow", 0.f, 0.f, 2.f, 3, "The bulb's light scattered inside a milky body: a glow under the top, hottest where the eye looks down the bulb's beam, sliding with the view (needs a Bulb Depth). 0 = off" },
+   { "Body Thickness (mm)", "bodythick", 6.35f, 0.5f, 12.f, 2, "How deep the glowing body reaches under the top" },
+   { "Body Forward Scatter", "bodyfwd", 0.6f, 0.f, 0.95f, 2, "0 = the body glows evenly; more = a hotter core over the bulb, a dimmer edge" },
+   { "Bulb Image", "bulbimage", 0.f, 0.f, 3.f, 2, "The bulb seen through each facet (after VPE's Insert Hybrid): only the facets aimed at the bulb light up, with a hot core that moves through them as the eye moves (needs a facet map and a Bulb Depth). 0 = off" },
+   { "Bulb Image Radius (mm)", "bulbradius", 5.f, 0.5f, 20.f, 1, "The bulb's size as the facets see it: larger = more facets light, a softer core" },
+   { "Live Trace", "livetrace", 0.f, 0.f, 3.f, 2, "Traces the clear insert for real per pixel: in at the top, off the facets (Fresnel, total internal reflection), down to a glowing bulb of the Bulb Image Radius at the Bulb Depth. Replaces the baked glow (keepbake= keeps a share). 0 = off" },
 };
 
 // The traced fields a slider marks as touched in Primitive::m_tracedTouched: one bit per field, the bulb fields then the look keys
