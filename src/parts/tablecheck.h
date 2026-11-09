@@ -43,6 +43,7 @@ enum class TableCheckId : uint8_t
    MissingResource, // Image or material name that is not in the table
    DuplicateName, // Parts sharing a name
    Collider, // Collidable part that can not collide
+   HeavyCollider, // Collidable primitive with many faces
    DragPoints, // Too few drag points, or two on the same spot
    SelfCrossing, // Outline that crosses itself
    UnusedMaterial, // Material not used by any part

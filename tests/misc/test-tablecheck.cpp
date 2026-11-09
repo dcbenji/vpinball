@@ -782,6 +782,51 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("heavy collidable primitives, ramps above the glass")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_glassTopHeight = table->m_glassBottomHeight = 210.f;
+      vector<Vertex3D_NoTex2> vertices(3);
+      vector<unsigned int> indices(3 * 6000);
+      for (size_t i = 0; i < indices.size(); i++)
+         indices[i] = static_cast<unsigned int>(i % 3);
+      for (const char *name : { "Room", "RoomToy", "RoomNoCollide", "Small", "RoomBackdrop" })
+      {
+         Primitive *const prim = AddTestPart<Primitive>(table, name);
+         prim->m_d.m_use3DMesh = true;
+         prim->m_mesh.m_vertices = vertices;
+         prim->m_mesh.m_indices = name == "Small"s ? vector<unsigned int> { 0, 1, 2 } : indices;
+         prim->m_d.m_collidable = name != "RoomNoCollide"s;
+         prim->m_d.m_toy = name == "RoomToy"s;
+         prim->m_desktopBackdrop = name == "RoomBackdrop"s; // Out of the playfield space: no physics
+      }
+      vector<TableIssue> issues = Issues(table, TableCheckId::HeavyCollider);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].part == table->GetParts()[0]);
+      CHECK(issues[0].message.starts_with("Collidable primitive 'Room' has 6000 collision faces"));
+      // Reduced for the physics: a high reduction factor brings it under the limit
+      static_cast<Primitive *>(table->GetParts()[0])->m_d.m_collision_reductionFactor = 1.f;
+      static_cast<Primitive *>(table->GetParts()[0])->m_mesh.m_vertices.resize(4000);
+      CHECK(Issues(table, TableCheckId::HeavyCollider).empty());
+
+      Ramp *const high = AddTestPart<Ramp>(table, "HighRamp");
+      high->m_d.m_collidable = true;
+      high->m_d.m_heighttop = 180.f;
+      high->m_d.m_heightbottom = 0.f;
+      Ramp *const low = AddTestPart<Ramp>(table, "LowRamp");
+      low->m_d.m_collidable = true;
+      low->m_d.m_heighttop = 100.f;
+      low->m_d.m_heightbottom = 0.f;
+      Ramp *const lid = AddTestPart<Ramp>(table, "Lid"); // A ceiling at the glass, not a ramp for the ball
+      lid->m_d.m_collidable = true;
+      lid->m_d.m_heighttop = lid->m_d.m_heightbottom = 200.f;
+      issues = Issues(table, TableCheckId::Glass);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].part == high);
+      CHECK(issues[0].message == "Ramp 'HighRamp' goes up to 180: a ball on it would hit the glass (at 210), raise the glass");
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();

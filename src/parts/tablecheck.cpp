@@ -53,6 +53,7 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::MissingResource: return "Missing images and materials";
    case TableCheckId::DuplicateName: return "Duplicate part names";
    case TableCheckId::Collider: return "Colliders that can not collide";
+   case TableCheckId::HeavyCollider: return "Heavy collidable primitives";
    case TableCheckId::DragPoints: return "Drag points";
    case TableCheckId::SelfCrossing: return "Self-crossing outlines";
    case TableCheckId::UnusedMaterial: return "Unused materials";
@@ -492,6 +493,37 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
       default: break;
       }
    }
+
+   // Collidable primitives with many faces: each face is a collider. The playfield mesh is the playfield itself. The physics reduce
+   // the mesh by the primitive's collision reduction factor (as Primitive::PhysicSetup does): the faces are counted after it
+   constexpr unsigned int maxColliderFaces = 5000;
+   for (IEditable *const part : parts)
+      if (part->GetItemType() == eItemPrimitive)
+      {
+         const Primitive *const prim = static_cast<const Primitive *>(part);
+         if (!prim->m_d.m_use3DMesh || !prim->m_d.m_collidable || prim->m_d.m_toy || prim->IsPlayfield() || HasNoPlayfieldPosition(part))
+            continue; // A part out of the playfield space (e.g. a backglass group) has no physics
+         const size_t vertices = prim->m_mesh.NumVertices();
+         double faces = static_cast<double>(prim->m_mesh.NumIndices() / 3);
+         if (const double reduced = max(pow(static_cast<double>(vertices), saturate(1.f - prim->m_d.m_collision_reductionFactor) * 0.25f + 0.75f), 420.0);
+             reduced < static_cast<double>(vertices))
+            faces = faces * reduced / static_cast<double>(vertices);
+         if (faces > maxColliderFaces)
+            add(Warning, TableCheckId::HeavyCollider,
+               std::format("Collidable primitive '{}' has {:.0f} collision faces: each face is a collider, which slows the physics (a simple collision mesh, more "
+                           "collision reduction, or Toy, helps)", part->GetName(), faces), part);
+      }
+
+   // Collidable ramps so high that a ball on them would hit the glass (the glass is the ceiling of the table). A ramp entirely at
+   // the glass is a ceiling itself (e.g. an invisible lid that keeps the ball down), not a ramp for the ball
+   constexpr float ballDiameter = 50.f; // Standard ball
+   const float glass = max(table.m_glassTopHeight, table.m_glassBottomHeight);
+   for (IEditable *const part : parts)
+      if (part->GetItemType() == eItemRamp && !HasNoPlayfieldPosition(part))
+         if (const auto &d = static_cast<const Ramp *>(part)->m_d;
+             d.m_collidable && max(d.m_heighttop, d.m_heightbottom) + ballDiameter > glass && min(d.m_heighttop, d.m_heightbottom) + ballDiameter <= glass)
+            add(Warning, TableCheckId::Glass,
+               std::format("Ramp '{}' goes up to {:.0f}: a ball on it would hit the glass (at {:.0f}), raise the glass", part->GetName(), max(d.m_heighttop, d.m_heightbottom), glass), part);
 
    // Drag points: too few, or two consecutive points on the same spot (a zero length segment, harmless: info)
    for (IEditable *const part : parts)
