@@ -8,6 +8,7 @@
 #include "parts/light.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
+#include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/editor/TableCheckPane.h"
 
@@ -22,6 +23,7 @@ const char *TableCheckFixOp::Label(const TableFix fix)
    case TableFix::ClearLightIntensity: return "Set Intensity to 0";
    case TableFix::ClearBackdropImage: return "Clear Backdrop Image";
    case TableFix::DeleteCollection: return "Delete Collection";
+   case TableFix::DeleteImage: return "Delete Image";
    case TableFix::None: break;
    }
    return "";
@@ -35,9 +37,17 @@ bool TableCheckFixOp::IsApplicable(const PinTable *table, const TableIssue &issu
    case TableFix::ClearLightIntensity:
       return issue.part != nullptr && table->HasPart(issue.part) && issue.part->GetItemType() == eItemLight && static_cast<const Light *>(issue.part)->m_d.m_intensity < 0.f;
    case TableFix::ClearBackdropImage: return issue.index >= 0 && issue.index < NUM_BG_SETS && !table->m_BG_image[issue.index].empty();
-   // The issue may be older than the table: a collection is deleted only if it is still in the table and still empty
+   // The issue may be older than the table: a collection or image is deleted only if it is still in the table and still unused
    case TableFix::DeleteCollection:
       return std::ranges::find(table->GetCollections(), issue.collection) != table->GetCollections().end() && issue.collection->GetParts().empty();
+   case TableFix::DeleteImage:
+   {
+      if (std::ranges::find(table->GetImageList(), issue.image) == table->GetImageList().end())
+         return false;
+      bool used = false;
+      ForEachResourceReference(*table, [&used, &issue](IEditable *, const char *, const string &name, const bool isImage) { used |= isImage && StrCompareNoCase(name, issue.image->m_name); });
+      return !used;
+   }
    case TableFix::None: break;
    }
    return false;
@@ -98,6 +108,56 @@ vector<IEditable *> TableCheckFixOp::Apply(PinTable *table, PinUndo &undo, const
          break;
       }
 
+      case TableFix::DeleteImage:
+      {
+         // While the image is out of the table, the undo records own it: undo puts the same object back at its place (so the textures
+         // the renderer made from it stay valid), redo takes it out again. It is deleted with the last record holding it, when out.
+         struct Detached
+         {
+            Detached(PinTable *t, Texture *i)
+               : table(t)
+               , image(i)
+            {
+               s_ownedImages++;
+            }
+            PinTable *const table;
+            Texture *const image;
+            bool inTable = true;
+            ~Detached()
+            {
+               s_ownedImages--;
+               if (!inTable)
+                  delete image;
+            }
+         };
+         const auto state = std::make_shared<Detached>(table, issue->image);
+         const auto snapshot = [state]() -> std::function<void()>
+         {
+            if (!state->inTable)
+               return [state]()
+               {
+                  state->table->DetachImage(state->image);
+                  state->inTable = false;
+               };
+            const auto &images = state->table->GetImageList();
+            return [state, at = static_cast<size_t>(std::ranges::find(images, state->image) - images.begin())]()
+            {
+               state->table->AttachImage(state->image, at);
+               state->inTable = true;
+            };
+         };
+         const size_t index = table->DetachImage(issue->image);
+         state->inTable = false;
+         undo.MarkForAction(
+            [state, index]()
+            {
+               state->table->AttachImage(state->image, index);
+               state->inTable = true;
+            },
+            snapshot);
+         break;
+      }
+
       case TableFix::None: break;
       }
    }
@@ -135,6 +195,14 @@ void TableCheckFixOp::Fix(EditorUI &editor, const vector<const TableIssue *> &is
       editor.m_renderer->ReinitRenderable(part->GetIRenderable());
       editor.m_player->m_physics->Update(part);
    }
+   // A deleted image or collection must not stay selected
+   const auto &images = editor.m_table->GetImageList();
+   std::erase_if(editor.m_multiSelImages, [&images](const Texture *image) { return std::ranges::find(images, image) == images.end(); });
+   if (editor.m_outlinerImageAnchor != nullptr && std::ranges::find(images, editor.m_outlinerImageAnchor) == images.end())
+      editor.m_outlinerImageAnchor = nullptr;
+   if ((editor.m_selection.GetType() == Selection::S_IMAGE && std::ranges::find(images, editor.m_selection.GetImage()) == images.end())
+      || (editor.m_selection.GetType() == Selection::S_COLLECTION && std::ranges::find(editor.m_table->GetCollections(), editor.m_selection.GetCollection()) == editor.m_table->GetCollections().end()))
+      editor.SetSelection(Selection());
    editor.Report(label);
 }
 

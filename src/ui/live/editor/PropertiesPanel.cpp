@@ -1231,6 +1231,7 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
    // Update the selection when a reimport replaced an image (the old object is deleted)
    const auto replaceImage = [&editor](Texture *oldImage, Texture *newImage)
    {
+      editor.m_undo.ClearRedo(); // The old image was deleted outside the undo system: a redo record may refer to it
       std::replace(editor.m_multiSelImages.begin(), editor.m_multiSelImages.end(), oldImage, newImage);
       if (editor.m_selection == Selection(oldImage))
          editor.m_selection = (newImage != nullptr) ? Selection(newImage) : Selection();
@@ -1350,6 +1351,7 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
                EditorUI &editor = m_editor;
                for (Texture *const tex : editor.m_multiSelImages)
                   editor.m_table->RemoveImage(tex);
+               editor.m_undo.ClearRedo(); // Not undoable: a redo record may refer to the deleted images
                editor.m_multiSelImages.clear();
                editor.m_outlinerImageAnchor = nullptr;
                editor.m_selection = Selection();

@@ -63,6 +63,7 @@ enum class TableFix : uint8_t
    ClearLightIntensity, // Set the negative intensity of the light to 0
    ClearBackdropImage, // Clear the backdrop image name of the view set 'index'
    DeleteCollection, // Delete the (empty) collection
+   DeleteImage, // Delete the (unused) image
 };
 
 struct TableIssue

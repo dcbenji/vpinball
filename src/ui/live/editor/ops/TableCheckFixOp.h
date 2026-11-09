@@ -32,6 +32,12 @@ public:
 
    // Editor op: applies the fixes as one labelled undo step (full edit mode only: an inspected live copy is not undoable)
    static void Fix(EditorUI &editor, const vector<const TableIssue *> &issues);
+
+   // Images deleted by a fix and held by undo records (freed with the last record holding them, when not back in the table)
+   static size_t OwnedImageCount() { return s_ownedImages; }
+
+private:
+   static inline size_t s_ownedImages = 0;
 };
 
 }

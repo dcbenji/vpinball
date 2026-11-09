@@ -542,6 +542,8 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
                : loadsCode         ? " (the script loads other code, which may use it)"s
                                    : ""s) };
       issue.image = image;
+      if (!script.dynamicNames && !loadsCode)
+         issue.fix = TableFix::DeleteImage;
       issues.push_back(std::move(issue));
    }
    for (Texture *const image : table.GetImageList())

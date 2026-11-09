@@ -367,6 +367,8 @@ public:
    void RemoveSound(VPX::Sound *const pps);
    Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
    void RemoveImage(Texture *const ppi);
+   size_t DetachImage(Texture *const image); // Takes the image out of the table without deleting it (the caller owns it), returns its index
+   void AttachImage(Texture *const image, size_t index); // Puts a detached image back at the given index (the table owns it again)
 
    Texture *GetImage(const string &szName) const;
    bool GetImageLink(const Texture *const ppi) const;

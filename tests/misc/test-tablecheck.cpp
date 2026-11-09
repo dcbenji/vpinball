@@ -684,6 +684,73 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("fix: delete unused images, undo and redo")
+   {
+      PinTable *const table = CreateTestTable();
+      table->SetupLookUpTables(true); // As in the live editor: GetImage only looks in the lookup table
+      const std::filesystem::path file = GetAssetPath() / "test000-default-table-Ref.webp";
+      Texture *const a = table->ImportImage(file, "ImageA"s);
+      Texture *const b = table->ImportImage(file, "ImageB"s);
+      Texture *const c = table->ImportImage(file, "ImageC"s);
+      REQUIRE((a && b && c));
+      table->m_image = "ImageB";
+
+      const vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].image == a);
+      CHECK(issues[0].fix == TableFix::DeleteImage);
+      CHECK(issues[1].image == c);
+
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues); // One undo step for both
+      REQUIRE(table->GetImageList().size() == 1);
+      CHECK(table->GetImage("ImageA"s) == nullptr);
+      CHECK(table->GetImage("ImageB"s) == b);
+      undo.Undo();
+      CHECK(table->GetImageList() == vector<Texture *> { a, b, c }); // The same images, at their place
+      CHECK(table->GetImage("ImageA"s) == a);
+      CHECK(table->GetImage("ImageC"s) == c);
+      undo.Redo();
+      CHECK(table->GetImageList() == vector<Texture *> { b });
+      CHECK(table->GetImage("ImageC"s) == nullptr);
+      undo.Undo();
+      CHECK(table->GetImageList() == vector<Texture *> { a, b, c });
+
+      // Not offered when the script builds image names from variables, or loads other code
+      for (const char *script : { "Sub Table1_Init\nWall1.Image = prefix & n\nEnd Sub\n", "LoadVPM \"01000000\", \"S11.VBS\", 1\n" })
+      {
+         table->m_script_text = script;
+         const vector<TableIssue> unused = Issues(table, TableCheckId::UnusedImage);
+         CHECK(unused.size() == 2);
+         for (const TableIssue &issue : unused)
+            CHECK(issue.fix == TableFix::None);
+      }
+
+      // Deleted outside the undo system after the undo (as the properties panel does): the redo record would detach a freed image
+      table->RemoveImage(a);
+      undo.ClearRedo();
+      CHECK_FALSE(undo.HasRedo());
+      CHECK(VPX::EditorUI::TableCheckFixOp::OwnedImageCount() == 0);
+      CHECK(table->GetImageList() == vector<Texture *> { b, c });
+      table->Release();
+   }
+
+   SUBCASE("fix: a deleted image is freed with the undo history")
+   {
+      PinTable *const table = CreateTestTable();
+      REQUIRE(table->ImportImage(GetAssetPath() / "test000-default-table-Ref.webp", "Lonely"s) != nullptr);
+      CHECK(VPX::EditorUI::TableCheckFixOp::OwnedImageCount() == 0);
+      {
+         PinUndo undo(table);
+         ApplyFixes(table, undo, Issues(table, TableCheckId::UnusedImage));
+         CHECK(table->GetImageList().empty());
+         CHECK(VPX::EditorUI::TableCheckFixOp::OwnedImageCount() == 1); // Held (and owned) by the undo record
+      } // The undo history is released here: it frees the image
+      CHECK(VPX::EditorUI::TableCheckFixOp::OwnedImageCount() == 0);
+      CHECK(table->GetImageList().empty());
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();
@@ -703,6 +770,57 @@ TEST_CASE("Table check")
          CHECK(count(true, check) == 1);
          CHECK(count(false, check) == 0); // Not reported: they need the script
       }
+      table->Release();
+   }
+
+   SUBCASE("fix: undo after the name was given to another object, and issues older than the table")
+   {
+      using VPX::EditorUI::TableCheckFixOp;
+      PinTable *const table = CreateTestTable();
+      table->SetupLookUpTables(true);
+      const std::filesystem::path file = GetAssetPath() / "test000-default-table-Ref.webp";
+      Texture *const image = table->ImportImage(file, "Foo"s);
+      REQUIRE(image != nullptr);
+      CComObject<Collection> *const collection = AddTestCollection(table, "Leftover");
+
+      // An image and a collection deleted by fixes, their names given to new ones, then undone: they are back with unique names
+      vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+      for (const TableIssue &issue : Issues(table, TableCheckId::EmptyCollection))
+         issues.push_back(issue);
+      REQUIRE(issues.size() == 2);
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues);
+      Texture *const imported = table->ImportImage(file, "Foo"s);
+      REQUIRE(imported != nullptr);
+      CComObject<Collection> *const added = AddTestCollection(table, "Leftover");
+      undo.Undo();
+      CHECK(image->m_name == "Foo_2");
+      CHECK(table->GetImage("Foo"s) == imported);
+      CHECK(table->GetImage("Foo_2"s) == image);
+      REQUIRE(table->GetCollections().size() == 2);
+      CHECK(added->m_name == "Leftover");
+      CHECK(collection->m_name == "Leftover_2");
+      CHECK_FALSE(table->IsNameUnique("Leftover_2"));
+
+      // An issue older than the table: an image used again, or a collection given a part, is not deleted
+      issues = Issues(table, TableCheckId::UnusedImage);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].image == image);
+      AddTestPart<Surface>(table, "Wall1")->m_d.m_szImage = "FOO_2";
+      CHECK_FALSE(TableCheckFixOp::IsApplicable(table, issues[0]));
+      CHECK(TableCheckFixOp::IsApplicable(table, issues[1]));
+      issues = Issues(table, TableCheckId::EmptyCollection);
+      REQUIRE(issues.size() == 2);
+      table->AddPartToCollection(collection, table->GetParts().back());
+      for (const TableIssue &issue : issues)
+         CHECK(TableCheckFixOp::IsApplicable(table, issue) == (issue.collection == added));
+
+      // A script edit since the check that sets an image from a computed name: the delete is no longer confirmed by a fresh check
+      const vector<TableIssue> images = Issues(table, TableCheckId::UnusedImage);
+      REQUIRE(images.size() == 1);
+      CHECK(TableCheckFixOp::Confirmed(table, { &images[0] }).size() == 1);
+      table->m_script_text = "Sub Table1_Init\nWall1.Image = img\nEnd Sub\n";
+      CHECK(TableCheckFixOp::Confirmed(table, { &images[0] }).empty());
       table->Release();
    }
 

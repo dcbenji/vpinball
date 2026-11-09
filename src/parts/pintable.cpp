@@ -5109,6 +5109,13 @@ Texture *PinTable::ImportImage(const std::filesystem::path &filename, const stri
 
 void PinTable::RemoveImage(Texture * const ppi)
 {
+   DetachImage(ppi);
+   delete ppi;
+}
+
+size_t PinTable::DetachImage(Texture *const ppi)
+{
+   const size_t index = std::ranges::find(m_vimage, ppi) - m_vimage.begin();
    RemoveFromVectorSingle(m_vimage, ppi);
 
    // The lookup table must not keep pointing at the deleted image: drop its entry, or hand it to another image of the same name
@@ -5120,8 +5127,20 @@ void PinTable::RemoveImage(Texture * const ppi)
       else
          m_textureMap.erase(it);
    }
+   return index;
+}
 
-   delete ppi;
+void PinTable::AttachImage(Texture *const image, const size_t index)
+{
+   // Its name may have been given to another image while it was out of the table (e.g. an import): it then gets a unique one, as
+   // a pack import does
+   for (int suffix = 2; GetImage(image->m_name) != nullptr; ++suffix)
+      if (const string name = image->m_name + '_' + std::to_string(suffix); GetImage(name) == nullptr)
+         image->m_name = name;
+   m_vimage.insert(m_vimage.begin() + min(index, m_vimage.size()), image);
+   // Same lookup table registration as ImportImage
+   if ((m_liveBaseTable || !m_textureMap.empty()) && m_textureMap.find(image->m_name) == m_textureMap.end())
+      m_textureMap[image->m_name] = image;
 }
 
 bool PinTable::IsMaterialNameUnique(const string &name) const
