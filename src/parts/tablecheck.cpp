@@ -424,7 +424,8 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
 
    vector<string> functions;
    vector<string> identifiers;
-   ParseScript(m_script_text, functions, identifiers,
+   if (options.script)
+      ParseScript(m_script_text, functions, identifiers,
       [&add](const string &functionName, int line) { add(Error, TableCheckId::ScriptDuplicate, "Duplicate declaration of '" + functionName + "' in script at line " + std::to_string(line)); });
 
    if (FindIndexOf(identifiers, "execute"s) != -1)

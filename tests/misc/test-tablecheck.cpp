@@ -363,6 +363,36 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("without the script checks")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_name = "Table1";
+      table->m_script_text = "Sub Dup\nEnd Sub\nSub Dup\nEnd Sub\nSub Gone_Hit\nEnd Sub\nSub Table1_Init\nPlaySound \"Missing\"\nEnd Sub\n";
+      const auto count = [table](const bool script, const TableCheckId check)
+      {
+         const vector<TableIssue> issues = table->CheckTable({ .extended = true, .script = script });
+         return std::ranges::count_if(issues, [check](const TableIssue &issue) { return issue.check == check; });
+      };
+      for (const TableCheckId check : { TableCheckId::ScriptDuplicate })
+      {
+         CHECK(count(true, check) == 1);
+         CHECK(count(false, check) == 0); // Not reported: they need the script
+      }
+      table->Release();
+   }
+
+   SUBCASE("summary: the counts and the check behind most errors and warnings")
+   {
+      const TableCheckSummary summary = TableCheckSummary::Of({ { TableIssueSeverity::Warning, TableCheckId::Glass, "a" }, { TableIssueSeverity::Warning, TableCheckId::Translucency, "b" },
+         { TableIssueSeverity::Warning, TableCheckId::Translucency, "c" }, { TableIssueSeverity::Info, TableCheckId::OutsidePlayfield, "d" },
+         { TableIssueSeverity::Info, TableCheckId::OutsidePlayfield, "e" }, { TableIssueSeverity::Info, TableCheckId::OutsidePlayfield, "f" } });
+      CHECK(summary.counts[1] == 3);
+      CHECK(summary.counts[2] == 3);
+      CHECK(summary.top == TableCheckId::Translucency); // Infos are not counted
+      CHECK(summary.topCount == 2);
+      CHECK(TableCheckSummary::Of({}).topCount == 0);
+   }
+
    SUBCASE("every check has a title")
    {
       for (int i = 0; i < static_cast<int>(TableCheckId::Count); i++)

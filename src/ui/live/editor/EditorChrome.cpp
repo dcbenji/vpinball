@@ -637,10 +637,29 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
    const float textH = ImGui::GetFontSize();
    const float textY = barMin.y + 0.5f * (height - textH);
    float rightLimit = barMax.x - pad;
+
+   // Issue counts of the table check on the right: a click shows the Table Check pane
+   if (!editor.m_table->IsLocked())
+   {
+      editor.m_tableCheckStatus.Update(editor);
+      const string text = ICON_LC_TRIANGLE_ALERT " " + editor.m_tableCheckStatus.Text();
+      const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+      const float x = rightLimit - size.x;
+      ImGui::SetCursorScreenPos(ImVec2(x, barMin.y));
+      if (ImGui::InvisibleButton("##TableCheckStatus", ImVec2(size.x, height)))
+         editor.ShowAreaEditor(AreaType::TableCheck);
+      if (const TableCheckSummary &summary = editor.m_tableCheckStatus.Summary(); summary.topCount > 0)
+         ImGui::SetItemTooltip("Table check, mostly '%s' (%d). %d infos too. Click to show the Table Check pane", TableCheckTitle(summary.top), summary.topCount, summary.counts[2]);
+      else
+         ImGui::SetItemTooltip("Table check (%d infos too): click to show the Table Check pane", summary.counts[2]);
+      draw->AddText(ImVec2(x, textY), ImGui::IsItemHovered() ? EditorTheme::Text : editor.m_tableCheckStatus.Color(), text.c_str());
+      rightLimit = x - 2.f * pad;
+   }
+
    if (hasReport)
    {
       const ImVec2 size = ImGui::CalcTextSize(editor.m_report.c_str());
-      const float x = barMax.x - pad - size.x;
+      const float x = rightLimit - size.x;
       const auto fade = [reportAlpha](ImU32 color) { return (color & 0x00FFFFFFu) | (static_cast<ImU32>(static_cast<float>((color >> 24) & 0xFFu) * reportAlpha) << 24); };
       draw->AddText(ImVec2(x, textY), fade(EditorTheme::Text), editor.m_report.c_str());
       rightLimit = x - 2.f * pad;

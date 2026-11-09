@@ -10,6 +10,8 @@
 #include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
 
+#include <chrono>
+
 namespace VPX::EditorUI
 {
 
@@ -27,12 +29,12 @@ const char *SeverityName(const TableIssueSeverity s) { return s == TableIssueSev
 
 }
 
-TableCheckPane::Signature TableCheckPane::CurrentSignature() const
+TableCheckStatus::Signature TableCheckStatus::CurrentSignature(const EditorUI &editor)
 {
-   const PinTable &table = *m_editor.m_table;
+   const PinTable &table = *editor.m_table;
    Signature sig;
    sig.table = &table;
-   sig.undoId = m_editor.m_undo.TopRecordId();
+   sig.undoId = editor.m_undo.TopRecordId();
    sig.parts = table.GetParts().size();
    sig.images = table.GetImageList().size();
    sig.materials = table.GetMaterialList().size();
@@ -43,16 +45,18 @@ TableCheckPane::Signature TableCheckPane::CurrentSignature() const
    return sig;
 }
 
-void TableCheckPane::Scan()
+vector<TableIssue> TableCheckPane::LiveCheck(const PinTable &table, const bool log, const bool script)
 {
-   const PinTable &table = *m_editor.m_table;
-   m_issues = table.CheckTable(LiveOptions);
+   const auto start = std::chrono::steady_clock::now();
+   TableCheckOptions options = LiveOptions;
+   options.script = script;
+   vector<TableIssue> issues = table.CheckTable(options);
    // Objects made by the player session (implicit playfield, runtime balls,...) are not part of the authored table
-   std::erase_if(m_issues, [&table](const TableIssue &issue) { return issue.part != nullptr && table.IsPlayerSessionObject(issue.part); });
-   std::ranges::stable_sort(m_issues, {}, [](const TableIssue &issue) { return static_cast<int>(issue.check); });
-   m_signature = CurrentSignature();
-   m_scanned = true;
-   m_pending = false;
+   std::erase_if(issues, [&table](const TableIssue &issue) { return issue.part != nullptr && table.IsPlayerSessionObject(issue.part); });
+   std::ranges::stable_sort(issues, {}, [](const TableIssue &issue) { return static_cast<int>(issue.check); });
+   if (log)
+      PLOGI << "Table check: " << issues.size() << " issues" << (script ? "" : " (without the script checks)") << ", checked in " << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() << " ms";
+   return issues;
 }
 
 void TableCheckPane::Select(const TableIssue &issue, const bool frame)
@@ -77,6 +81,80 @@ void TableCheckPane::Select(const TableIssue &issue, const bool frame)
          vp->FrameSelection();
 }
 
+void TableCheckStatus::SetLoaded(const PinTable *table, const TableCheckSummary &summary)
+{
+   s_loadedTable = table;
+   s_loadedSummary = summary;
+}
+
+void TableCheckStatus::Rescan(const EditorUI &editor, const bool log, const bool script)
+{
+   m_issues = TableCheckPane::LiveCheck(*editor.m_table, log, script);
+   m_summary = TableCheckSummary::Of(m_issues);
+   m_haveIssues = script; // Without the script checks, a pane asking for the issues checks the table again
+   m_pending = false;
+   m_signature = CurrentSignature(editor);
+}
+
+void TableCheckStatus::Update(const EditorUI &editor)
+{
+   const PinTable *const table = editor.m_table;
+   const PinTable *const base = table->m_liveBaseTable ? table->m_liveBaseTable : table;
+   if (m_table != base)
+   {
+      // A new table: the counts of the loading thread, or a first check
+      m_table = base;
+      if (s_loadedTable == base)
+      {
+         m_summary = s_loadedSummary;
+         m_issues.clear();
+         m_haveIssues = false;
+         m_pending = false;
+         m_signature = CurrentSignature(editor);
+         s_loadedTable = nullptr;
+      }
+      else
+         Rescan(editor, true, editor.m_table->m_script_text.size() <= TableCheckPane::MaxStartupScriptSize);
+      return;
+   }
+   // Checked again when the table changed, but not in the middle of a drag (the undo record of a drag is made when it starts), not
+   // while the script is being typed (once it paused for a while: a script revision per key), and not while a play test runs (the
+   // balls it makes and destroys change the parts). A big script is checked without the script checks, as at start-up
+   if (const Signature sig = CurrentSignature(editor); !(sig == m_signature))
+   {
+      if (sig.script != m_signature.script && sig.script != m_lastScriptRevision)
+      {
+         m_lastScriptRevision = sig.script;
+         m_lastScriptEdit = ImGui::GetTime();
+      }
+      m_pending = true;
+   }
+   if (m_pending && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::GetTime() - m_lastScriptEdit >= ScriptEditPause && !editor.m_player->IsPlaying(false))
+      Rescan(editor, false, editor.m_table->m_script_text.size() <= TableCheckPane::MaxStartupScriptSize);
+}
+
+const vector<TableIssue> &TableCheckStatus::GetIssues(const EditorUI &editor)
+{
+   if (!m_haveIssues)
+      Rescan(editor);
+   return m_issues;
+}
+
+string TableCheckStatus::Text() const
+{
+   string text;
+   static constexpr const char *names[2][2] = { { " error", " errors" }, { " warning", " warnings" } };
+   for (int s = 0; s < 2; ++s)
+      if (const int n = m_summary.counts[s]; n > 0)
+         text += (text.empty() ? "" : ", ") + std::to_string(n) + names[s][n == 1 ? 0 : 1];
+   return text.empty() ? "No errors or warnings"s : text;
+}
+
+ImU32 TableCheckStatus::Color() const
+{
+   return m_summary.counts[0] > 0 ? SeverityColor(TableIssueSeverity::Error) : m_summary.counts[1] > 0 ? SeverityColor(TableIssueSeverity::Warning) : EditorTheme::TextDim;
+}
+
 nlohmann::json TableCheckPane::SaveSetup() const { return { { "show", { m_show[0], m_show[1], m_show[2] } } }; }
 
 void TableCheckPane::LoadSetup(const nlohmann::json &j)
@@ -99,11 +177,9 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
    if (editor.m_table->IsLocked())
       return;
 
-   // Checked again when the table changed, but not in the middle of a drag (the undo record of a drag is made when it starts)
-   if (!m_scanned || !(CurrentSignature() == m_signature))
-      m_pending = true;
-   if (m_pending && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-      Scan();
+   TableCheckStatus &status = editor.m_tableCheckStatus;
+   status.Update(editor);
+   const vector<TableIssue> &issues = status.GetIssues(editor);
 
    const float dpi = editor.m_liveUI.GetDPI();
    char name[32];
@@ -119,14 +195,14 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
    ImGui::PushID(leafId);
 
    int counts[3] = {};
-   for (const TableIssue &issue : m_issues)
+   for (const TableIssue &issue : issues)
       ++counts[static_cast<int>(issue.severity)];
 
    // Header: editor type, check again, severity filters with their counts
    editor.RenderAreaTypeButton(leafId);
    ImGui::SameLine();
    if (IconButtonInk(ICON_LC_REFRESH_CW, "##TableCheckRescan"))
-      Scan();
+      status.Rescan(editor);
    ImGui::SetItemTooltip("Check the table again (it is also checked again when it changes)");
    for (int s = 0; s < 3; ++s)
    {
@@ -147,14 +223,14 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
    const float iconW = 20.f * dpi;
    bool anyShown = false;
    vector<const TableIssue *> rows;
-   for (size_t first = 0; first < m_issues.size();)
+   for (size_t first = 0; first < issues.size();)
    {
-      const TableCheckId check = m_issues[first].check;
+      const TableCheckId check = issues[first].check;
       size_t end = first;
       rows.clear();
-      for (; end < m_issues.size() && m_issues[end].check == check; ++end)
-         if (m_show[static_cast<int>(m_issues[end].severity)])
-            rows.push_back(&m_issues[end]);
+      for (; end < issues.size() && issues[end].check == check; ++end)
+         if (m_show[static_cast<int>(issues[end].severity)])
+            rows.push_back(&issues[end]);
       first = end;
       if (rows.empty())
          continue;
@@ -196,7 +272,7 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
    if (!anyShown)
    {
       ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-      ImGui::TextUnformatted(m_issues.empty() ? "No issue found" : "All issues are hidden by the filters above");
+      ImGui::TextUnformatted(issues.empty() ? "No issue found" : "All issues are hidden by the filters above");
       ImGui::PopStyleColor();
    }
    ImGui::EndChild();

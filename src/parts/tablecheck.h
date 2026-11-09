@@ -58,11 +58,35 @@ struct TableIssue
    Material *material = nullptr; // Material the issue is about, if any
 };
 
+// Issue counts per severity
+struct TableCheckSummary
+{
+   int counts[3] {}; // Errors, warnings, infos
+   TableCheckId top = TableCheckId::Count; // The check with the most errors and warnings, and their number
+   int topCount = 0;
+   static TableCheckSummary Of(const vector<TableIssue> &issues)
+   {
+      TableCheckSummary summary;
+      int perCheck[static_cast<int>(TableCheckId::Count)] {};
+      for (const TableIssue &issue : issues)
+      {
+         ++summary.counts[static_cast<int>(issue.severity)];
+         if (issue.severity != TableIssueSeverity::Info && ++perCheck[static_cast<int>(issue.check)] > summary.topCount)
+         {
+            summary.top = issue.check;
+            summary.topCount = perCheck[static_cast<int>(issue.check)];
+         }
+      }
+      return summary;
+   }
+};
+
 struct TableCheckOptions
 {
    bool sound = false; // Sound checks: they create an audio player (sound device settings) to read the sound formats
    bool totals = false; // Size totals of the sounds, images and primitives (Info issues)
    bool extended = false; // The table check's own checks (parts, resources,...), on top of the audit checks: AuditTable leaves them out
+   bool script = true; // The checks that read the script (the live editor leaves them out for a very big script)
 };
 
 // Calls fn for each image and material name stored by the parts (part, field label, name) and by the table settings (part is null)

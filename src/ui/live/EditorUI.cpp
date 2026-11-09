@@ -553,6 +553,7 @@ void EditorUI::StartFileOp(std::unique_ptr<AsyncFileOp> op)
                   table->GetSettings().SetIniPath(std::filesystem::path());
                   table->m_filename.clear();
                }
+               fileOp->check = TableCheckSummary::Of(TableCheckPane::LiveCheck(*table, true)); // The table is still private to this thread
                fileOp->table = table;
             }
             else
@@ -583,6 +584,8 @@ void EditorUI::FinishFileOp()
          }
          PinTable *const table = op->table;
          op->table = nullptr;
+         if (op->check)
+            TableCheckStatus::SetLoaded(table, *op->check);
          m_player->SetTable(table, Player::TableTransition::Replace); // The loaded table reference is adopted by the player
       }
       else

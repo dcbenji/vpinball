@@ -17,6 +17,7 @@
 #include "editor/PropertiesPanel.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ScriptPanel.h"
+#include "editor/TableCheckPane.h"
 #include "editor/ViewportPane.h"
 #include "editor/ops/LayerSpaceChangeOp.h"
 #include "editor/ops/ReferenceImageOp.h"
@@ -73,6 +74,7 @@ class EditorUI final
    friend class LayerSpaceChangeOp;
    friend class ReferenceImageOp;
    friend class TableCheckPane;
+   friend class TableCheckStatus;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -120,6 +122,7 @@ private:
    EditorChrome m_chrome;
    RendererInspectionModal m_inspectionModal;
    PartLibraryPanel m_partLibrary;
+   TableCheckStatus m_tableCheckStatus;
    ScriptPanel m_scriptPanel;
 
    Selection m_selection;
@@ -355,6 +358,7 @@ private:
       std::atomic<bool> completed { false };
       std::thread worker;
       PinTable *table = nullptr; // Loaded table (load ops only): reference adopted by the player on success, released on failure
+      std::optional<TableCheckSummary> check; // Issue counts of the loaded table, counted by the worker thread
       PinTable *saveTable = nullptr; // Table written by a save op (the startup table when saving from an inspection session)
       // 'Save As' restore data: filename and title to restore when the save fails
       bool restoreOnFailure = false;
