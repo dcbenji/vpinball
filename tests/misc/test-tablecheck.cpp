@@ -4,6 +4,7 @@
 #include "../vpx-test.h"
 
 #include "parts/pintable.h"
+#include "parts/ball.h"
 #include "parts/bumper.h"
 #include "parts/kicker.h"
 #include "parts/Material.h"
@@ -294,6 +295,30 @@ TEST_CASE("Table check")
       for (const TableIssue &issue : issues)
          CHECK(issue.severity == TableIssueSeverity::Error);
       CHECK(issues[0].message == "Collidable rubber 'ThinRubber' has no thickness");
+      table->Release();
+   }
+
+   SUBCASE("Where used lists every image reference of the parts and the table settings")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_name = "Table1";
+      REQUIRE(table->ImportImage(GetAssetPath() / "test000-default-table-Ref.webp", "Shared"s) != nullptr);
+      AddTestPart<Ball>(table, "Ball1")->m_d.m_imageDecal = "Shared";
+      AddTestPart<Surface>(table, "Wall1")->m_d.m_szSideImage = "shared"; // Names are not case sensitive
+      AddTestPart<Bumper>(table, "Bumper1")->m_d.m_szImage = "Other";
+      table->m_imageColorGrade = "Shared";
+      table->m_BG_image[BG_FSS] = "Shared";
+      vector<WhereUsedInfo> users;
+      table->ShowWhereImageUsed(users, table->GetImageList()[0]);
+      REQUIRE(users.size() == 4);
+      CHECK(users[0].whereUsedObjectname == "Ball1");
+      CHECK(users[0].whereUsedPropertyName == "Decal Image");
+      CHECK(users[1].whereUsedObjectname == "Wall1");
+      CHECK(users[1].whereUsedPropertyName == "Side Image");
+      CHECK(users[2].whereUsedObjectname == "Table1");
+      CHECK(users[2].whereUsedPropertyName == "Color Grade Image");
+      CHECK(users[3].whereUsedObjectname == "Table1");
+      CHECK(users[3].whereUsedPropertyName == "Full Single Screen Backdrop Image");
       table->Release();
    }
 

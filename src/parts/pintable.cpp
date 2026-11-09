@@ -7095,132 +7095,20 @@ void PinTable::ShowWhereImagesUsed(vector<WhereUsedInfo> &vWhereUsed)
 
 void PinTable::ShowWhereImageUsed(vector<WhereUsedInfo> &vWhereUsed, Texture *const ppi)
 {
-   const string &searchObjectName = ppi->m_name; //searchObjectName will be an image or material that we want to find table objects that are using it.
+   const string &searchObjectName = ppi->m_name; //searchObjectName will be an image that we want to find table objects that are using it.
 
-   for (const auto pEdit : m_vedit)
-   {
-      if (pEdit == nullptr)
-         continue;
-
-      WhereUsedInfo whereUsed;
-
-      auto insertUser = [&](const string &field, const string &propertyName)
+   // The parts and the table settings (see ForEachResourceReference, also used by the table check)
+   ForEachResourceReference(*this,
+      [&](const IEditable *part, const char *field, const string &name, const bool isImage)
       {
-         if (StrCompareNoCase(field, searchObjectName))
-         {
-            whereUsed.searchObjectName = searchObjectName;
-            whereUsed.whereUsedObjectname = pEdit->GetName();
-            whereUsed.whereUsedPropertyName = propertyName;
-            vWhereUsed.push_back(whereUsed);
-         }
-      };
-
-      switch (pEdit->GetItemType())
-      {
-      case eItemDispReel:
-      {
-         const DispReel *const pReel = (const DispReel *)pEdit;
-         insertUser(pReel->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemPrimitive:
-      {
-         const Primitive *const pPrim = (const Primitive *)pEdit;
-         insertUser(pPrim->m_d.m_szImage, "Image"s);
-         insertUser(pPrim->m_d.m_szNormalMap, "Normal Map"s);
-         break;
-      }
-      case eItemRamp:
-      {
-         const Ramp *const pRamp = (const Ramp *)pEdit;
-         insertUser(pRamp->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemSurface:
-      {
-         const Surface *const pSurf = (const Surface *)pEdit;
-         insertUser(pSurf->m_d.m_szImage, "Top Image"s);
-         insertUser(pSurf->m_d.m_szSideImage, "Side Image"s);
-         break;
-      }
-      case eItemDecal:
-      {
-         const Decal *const pDecal = (const Decal *)pEdit;
-         insertUser(pDecal->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemFlasher:
-      {
-         const Flasher *const pFlash = (const Flasher *)pEdit;
-         insertUser(pFlash->m_d.m_szImageA, "Image A"s);
-         insertUser(pFlash->m_d.m_szImageB, "Image B"s);
-         break;
-      }
-      case eItemFlipper:
-      {
-         const Flipper *const pFlip = (const Flipper *)pEdit;
-         insertUser(pFlip->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemHitTarget:
-      {
-         const HitTarget *const pHit = (const HitTarget *)pEdit;
-         insertUser(pHit->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemLight:
-      {
-         const Light *const pLight = (const Light *)pEdit;
-         insertUser(pLight->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemPlunger:
-      {
-         const Plunger *const pPlung = (const Plunger *)pEdit;
-         insertUser(pPlung->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemRubber:
-      {
-         const Rubber *const pRub = (const Rubber *)pEdit;
-         insertUser(pRub->m_d.m_szImage, "Image"s);
-         break;
-      }
-      case eItemSpinner:
-      {
-         const Spinner *const pSpin = (const Spinner *)pEdit;
-         insertUser(pSpin->m_d.m_szImage, "Image"s);
-         break;
-      }
-      default:
-      {
-         break;
-      }
-      }
-   }
-
-   // The table itself also references images
-   {
-      WhereUsedInfo whereUsed;
-      const string& tableName = m_name;
-
-      auto insertUser = [&](const string &propertyName)
-      {
+         if (!isImage || !StrCompareNoCase(name, searchObjectName))
+            return;
+         WhereUsedInfo whereUsed;
          whereUsed.searchObjectName = searchObjectName;
-         whereUsed.whereUsedObjectname = tableName;
-         whereUsed.whereUsedPropertyName = propertyName;
+         whereUsed.whereUsedObjectname = part != nullptr ? part->GetName() : m_name;
+         whereUsed.whereUsedPropertyName = field;
          vWhereUsed.push_back(whereUsed);
-      };
-
-      if (StrCompareNoCase(m_image, searchObjectName))
-         insertUser("Playfield Image"s);
-      if (StrCompareNoCase(m_ballImage, searchObjectName))
-         insertUser("Ball Image"s);
-      if (StrCompareNoCase(m_ballImageDecal, searchObjectName))
-         insertUser("Ball Decal"s);
-      if (StrCompareNoCase(m_envImage, searchObjectName))
-         insertUser("Environment Image"s);
-   }
+      });
 }
 
 void PinTable::ShowWhereMaterialsUsed(vector<WhereUsedInfo> &vWhereUsed)
