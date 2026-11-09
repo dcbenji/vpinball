@@ -6,6 +6,13 @@
 #include "parts/pintable.h"
 #include "parts/ball.h"
 #include "parts/bumper.h"
+#include "parts/decal.h"
+#include "parts/dispreel.h"
+#include "parts/flipper.h"
+#include "parts/hittarget.h"
+#include "parts/plunger.h"
+#include "parts/spinner.h"
+#include "renderer/Texture.h"
 #include "parts/kicker.h"
 #include "parts/Material.h"
 #include "parts/primitive.h"
@@ -265,7 +272,8 @@ TEST_CASE("Table check")
       wall->m_d.m_szTopMaterial = "UsedMat";
       wall->m_d.m_szPhysicsMaterial = "NoPhysicsMat"; // Not used: the wall overwrites the physics of its material
       table->m_playfieldMaterial = "NoSuchMat";
-      for (const char *name : { "UsedMat", "UnusedMat" })
+      table->m_script_text = "Sub Table1_Init\nWall1.Material = \"ScriptMat\"\nEnd Sub\n";
+      for (const char *name : { "UsedMat", "UnusedMat", "ScriptMat" })
       {
          Material *const mat = new Material();
          mat->m_name = name;
@@ -548,6 +556,134 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("unused images: every reference site counts")
+   {
+      PinTable *const table = CreateTestTable();
+      // One image per place that can name an image: each one is used, except 'Unused'
+      vector<std::pair<string, std::function<void(const string &)>>> sites;
+      const auto site = [&sites](const string &name, std::function<void(const string &)> set) { sites.emplace_back(name, std::move(set)); };
+      site("BallImage", [table](const string &n) { AddTestPart<Ball>(table, "Ball1")->m_d.m_szImage = n; });
+      site("BallDecal", [table](const string &n) { static_cast<Ball *>(table->GetParts().back())->m_d.m_imageDecal = n; });
+      site("DecalImage", [table](const string &n) { AddTestPart<Decal>(table, "Decal1")->m_d.m_szImage = n; });
+      site("ReelImage", [table](const string &n) { AddTestPart<DispReel>(table, "Reel1")->m_d.m_szImage = n; });
+      site("FlasherA", [table](const string &n) { AddTestPart<Flasher>(table, "Flasher1")->m_d.m_szImageA = n; });
+      site("FlasherB", [table](const string &n) { static_cast<Flasher *>(table->GetParts().back())->m_d.m_szImageB = n; });
+      site("FlipperImage", [table](const string &n) { AddTestPart<Flipper>(table, "Flipper1")->m_d.m_szImage = n; });
+      site("TargetImage", [table](const string &n) { AddTestPart<HitTarget>(table, "Target1")->m_d.m_szImage = n; });
+      site("LightImage", [table](const string &n) { AddTestPart<Light>(table, "Light1")->m_d.m_szImage = n; });
+      site("PlungerImage", [table](const string &n) { AddTestPart<Plunger>(table, "Plunger1")->m_d.m_szImage = n; });
+      site("PrimImage", [table](const string &n) { AddTestPart<Primitive>(table, "Prim1")->m_d.m_szImage = n; });
+      site("PrimNormal", [table](const string &n) { static_cast<Primitive *>(table->GetParts().back())->m_d.m_szNormalMap = n; });
+      site("RampImage", [table](const string &n) { AddTestPart<Ramp>(table, "Ramp1")->m_d.m_szImage = n; });
+      site("RubberImage", [table](const string &n) { AddTestPart<Rubber>(table, "Rubber1")->m_d.m_szImage = n; });
+      site("SpinnerImage", [table](const string &n) { AddTestPart<Spinner>(table, "Spinner1")->m_d.m_szImage = n; });
+      site("WallTop", [table](const string &n) { AddTestPart<Surface>(table, "Wall1")->m_d.m_szImage = n; });
+      site("WallSide", [table](const string &n) { static_cast<Surface *>(table->GetParts().back())->m_d.m_szSideImage = n; });
+      site("Playfield", [table](const string &n) { table->m_image = n; });
+      site("TableBall", [table](const string &n) { table->m_ballImage = n; });
+      site("TableBallDecal", [table](const string &n) { table->m_ballImageDecal = n; });
+      site("Environment", [table](const string &n) { table->m_envImage = n; });
+      site("ColorGrade", [table](const string &n) { table->m_imageColorGrade = n; });
+      site("Screenshot", [table](const string &n) { table->m_screenShot = n; });
+      site("BackdropDesktop", [table](const string &n) { table->m_BG_image[BG_DESKTOP] = n; });
+      site("BackdropCabinet", [table](const string &n) { table->m_BG_image[BG_FULLSCREEN] = n; });
+      site("BackdropFSS", [table](const string &n) { table->m_BG_image[BG_FSS] = n; });
+      site("InBlurb", [table](const string &n) { table->m_blurb = "Rules: ![](" + n + ")"; });
+      site("InDescription", [table](const string &n) { table->m_description = "![shot](" + n + " \"title\")"; });
+      site("InScript", [table](const string &n) { table->m_script_text = "Sub Table1_Init\nPrim1.Image = \"" + n + "\" ' a comment\nEnd Sub\n"; });
+      const std::filesystem::path file = GetAssetPath() / "test000-default-table-Ref.webp";
+      for (const auto &[name, set] : sites)
+      {
+         REQUIRE(table->ImportImage(file, name) != nullptr);
+         set(name);
+      }
+      Texture *const unused = table->ImportImage(file, "Unused"s);
+      REQUIRE(unused != nullptr);
+      table->m_blurb += " ](Unused2) Unused"; // Not a link to 'Unused'
+      table->m_script_text += "' \"Unused\" in a comment\n";
+
+      vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].image == unused);
+      CHECK(issues[0].severity == TableIssueSeverity::Info);
+      CHECK(issues[0].message == "Image 'Unused' is not used by any part, table setting, table description or script string");
+
+      // The image users listed by the Win32 and live editor 'Where used' come from the same list
+      for (Texture *const image : table->GetImageList())
+      {
+         vector<WhereUsedInfo> users;
+         table->ShowWhereImageUsed(users, image);
+         const bool listed = image->m_name == "InBlurb" || image->m_name == "InDescription" || image->m_name == "InScript" || image == unused;
+         CHECK_MESSAGE(users.empty() == listed, image->m_name);
+      }
+
+      CHECK(Issues(table, TableCheckId::LargeImage).empty());
+      unused->m_width = 8192;
+      issues = Issues(table, TableCheckId::LargeImage);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].image == unused);
+      table->Release();
+   }
+
+   SUBCASE("unused images: names the script builds")
+   {
+      PinTable *const table = CreateTestTable();
+      const std::filesystem::path file = GetAssetPath() / "test000-default-table-Ref.webp";
+      for (const char *name : { "Digit3", "Ball2", "Lamp_on", "Plain" })
+         REQUIRE(table->ImportImage(file, name) != nullptr);
+      const auto unused = [table]()
+      {
+         vector<string> names;
+         for (const TableIssue &issue : Issues(table, TableCheckId::UnusedImage))
+            names.push_back(issue.image->m_name);
+         return names;
+      };
+
+      // A literal joined to something else is the start or the end of a name: the images it may build count as used
+      table->m_script_text = "Sub Table1_Init\ns = \"Digit\" & n : Reel.Image = s\nTable1.BallImage = \"ball\" & n\nLight1.Image = n & \"_on\"\nEnd Sub\n";
+      CHECK(unused() == vector<string> { "Plain" });
+      table->m_script_text = "Function DigitImg(n)\nDigitImg = \"Digit\" + CStr(n)\nEnd Function\nSub Table1_Init\nReel.Image = DigitImg(n)\nEnd Sub\n";
+      CHECK(unused() == vector<string> { "Ball2", "Lamp_on", "Plain" });
+
+      // Names built from variables only, LoadTexture: any image may be used, the issue says so
+      for (const char *script : { "Sub Table1_Init\nPrim1.SideImage=prefix & n\nEnd Sub\n", "Table1.EnvironmentImage = a + b\n", "Set img = LoadTexture(\"x\", path)\n",
+              "\tREM nothing\nSet img = LoadTexture(\"x\", path)\n" })
+      {
+         table->m_script_text = script;
+         const vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+         REQUIRE(issues.size() == 4);
+         CHECK(issues[0].message.find("the script builds image names") != string::npos);
+      }
+      // An image property set from anything but a single literal (a constant, a variable, Split, Replace, a function result): any image
+      // may be used, no delete is offered
+      for (const char *script : { "Const P = \"Digit\"\nSub Show(reel, n)\nDim img : img = P & n\nreel.Image = img\nEnd Sub\n",
+              "imgs = Split(\"d0,d1,d2\", \",\")\nobj.Image = imgs(n)\n", "obj.Image = Replace(base, \"off\", \"on\")\n", "Reel.Image = DigitImg(n)\n" })
+      {
+         table->m_script_text = script;
+         const vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+         REQUIRE(issues.size() == 4);
+         for (const TableIssue &issue : issues)
+         {
+            CHECK(issue.fix == TableFix::None);
+            CHECK(issue.message.find("the script builds image names") != string::npos);
+         }
+      }
+      // A script that loads other code
+      table->m_script_text = "ExecuteGlobal GetTextFile(\"core.vbs\")\n";
+      REQUIRE(Issues(table, TableCheckId::UnusedImage).size() == 4);
+      CHECK(Issues(table, TableCheckId::UnusedImage)[0].message.find("the script loads other code") != string::npos);
+
+      // Not image names: a concatenation in a comment or a REM line, an image property of a longer name
+      for (const char *script : { "' Light1.Image = \"Digit\" & i\n", "Light1.ImageCount = a & b\n", "  Rem LoadTexture x\n", "\tREM\tLoadTexture x\n", "REM\n" })
+      {
+         table->m_script_text = script;
+         const vector<TableIssue> issues = Issues(table, TableCheckId::UnusedImage);
+         REQUIRE(issues.size() == 4);
+         CHECK(issues[0].message.find("the script") == string::npos);
+      }
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();
@@ -555,13 +691,14 @@ TEST_CASE("Table check")
       Timer *const timer = AddTestPart<Timer>(table, "Lonely");
       timer->m_timerEnabled = true;
       AddTestCollection(table, "Leftover");
+      REQUIRE(table->ImportImage(GetAssetPath() / "test000-default-table-Ref.webp", "Unused"s) != nullptr);
       table->m_script_text = "Sub Dup\nEnd Sub\nSub Dup\nEnd Sub\nSub Gone_Hit\nEnd Sub\nSub Table1_Init\nPlaySound \"Missing\"\nEnd Sub\n";
       const auto count = [table](const bool script, const TableCheckId check)
       {
          const vector<TableIssue> issues = table->CheckTable({ .extended = true, .script = script });
          return std::ranges::count_if(issues, [check](const TableIssue &issue) { return issue.check == check; });
       };
-      for (const TableCheckId check : { TableCheckId::ScriptDuplicate, TableCheckId::TimerSub, TableCheckId::EmptyCollection })
+      for (const TableCheckId check : { TableCheckId::ScriptDuplicate, TableCheckId::TimerSub, TableCheckId::EmptyCollection, TableCheckId::UnusedImage })
       {
          CHECK(count(true, check) == 1);
          CHECK(count(false, check) == 0); // Not reported: they need the script

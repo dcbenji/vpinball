@@ -110,7 +110,7 @@ vector<const TableIssue *> TableCheckFixOp::Confirmed(const PinTable *table, con
    vector<const TableIssue *> confirmed;
    for (const TableIssue *const issue : issues)
       if (std::ranges::any_of(fresh, [issue](const TableIssue &f)
-             { return f.fix == issue->fix && f.part == issue->part && f.collection == issue->collection && f.index == issue->index; }))
+             { return f.fix == issue->fix && f.part == issue->part && f.image == issue->image && f.collection == issue->collection && f.index == issue->index; }))
          confirmed.push_back(issue);
    return confirmed;
 }

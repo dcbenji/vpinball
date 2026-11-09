@@ -12,6 +12,7 @@ class Collection;
 class IEditable;
 class Material;
 class PinTable;
+class Texture;
 
 enum class TableIssueSeverity : uint8_t
 {
@@ -43,6 +44,8 @@ enum class TableCheckId : uint8_t
    DragPoints, // Too few drag points, or two on the same spot
    SelfCrossing, // Outline that crosses itself
    UnusedMaterial, // Material not used by any part
+   UnusedImage, // Image not used by any part, table setting, table description or script string
+   LargeImage, // Image over 4096 pixels
    EmptyCollection, // Collection without parts
    Sound, // Sound format
    Backdrop, // Backdrop image not in the table
@@ -69,6 +72,7 @@ struct TableIssue
    string message; // Without the severity
    IEditable *part = nullptr; // Part the issue is about, if any
    Material *material = nullptr; // Material the issue is about, if any
+   Texture *image = nullptr; // Image the issue is about, if any
    Collection *collection = nullptr; // Collection the issue is about, if any
    int index = -1; // Backdrop view set (ViewSetupID) of a backdrop issue
    TableFix fix = TableFix::None;
@@ -106,6 +110,7 @@ struct TableCheckOptions
 };
 
 // Calls fn for each image and material name stored by the parts (part, field label, name) and by the table settings (part is null)
+// (the script, which may name images in its strings, is not part of it)
 void ForEachResourceReference(const PinTable &table, const std::function<void(IEditable *part, const char *field, const string &name, bool isImage)> &fn);
 
 // The audit text of the Win32 editor and the '-audit' command: one line per issue, prefixed by ". Error: " or ". Warning: "

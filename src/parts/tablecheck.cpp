@@ -54,6 +54,8 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::DragPoints: return "Drag points";
    case TableCheckId::SelfCrossing: return "Self-crossing outlines";
    case TableCheckId::UnusedMaterial: return "Unused materials";
+   case TableCheckId::UnusedImage: return "Unused images";
+   case TableCheckId::LargeImage: return "Large images";
    case TableCheckId::EmptyCollection: return "Empty collections";
    case TableCheckId::Sound: return "Sounds";
    case TableCheckId::Backdrop: return "Backdrop images";
@@ -174,6 +176,101 @@ bool SegmentsCross(const Vertex2D &a, const Vertex2D &b, const Vertex2D &c, cons
    return ((d1 > 0.f && d2 < 0.f) || (d1 < 0.f && d2 > 0.f)) && ((d3 > 0.f && d4 < 0.f) || (d3 < 0.f && d4 > 0.f));
 }
 
+// What the script says about image names: its string literals (lower case); the literals it joins to other strings (names built
+// at run time, e.g. "Digit" & n: the images whose name starts, or ends, with such a part count as used); and whether it builds
+// image names in a way these do not show (an image property set from a concatenation, or LoadTexture)
+struct ScriptImageUse
+{
+   ankerl::unordered_dense::set<string> strings;
+   vector<string> prefixes, suffixes; // Literals followed, or preceded, by a concatenation (& or +)
+   bool dynamicNames = false;
+};
+
+bool IsIdentifierChar(const char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+// The image name properties of the parts and the table (the script can set them by name)
+constexpr const char *imageProperties[] = { ".image", ".imagea", ".imageb", ".sideimage", ".normalmap", ".frontdecal", ".ballimage", ".ballfrontdecal",
+   ".environmentimage", ".colorgradeimage", ".backdropimage_dt", ".backdropimage_fs", ".backdropimage_fss" };
+
+ScriptImageUse ScanScriptImageUse(const string &script)
+{
+   ScriptImageUse use;
+   const string text = lowerCase(script);
+   string code;
+   vector<string> literals; // Of the line
+   for (size_t lineStart = 0; lineStart < text.size();)
+   {
+      size_t lineEnd = text.find('\n', lineStart);
+      if (lineEnd == string::npos)
+         lineEnd = text.size();
+      // The code of the line up to a comment, its string literals ("" is a quote inside a literal) replaced by ""
+      code.clear();
+      literals.clear();
+      for (size_t i = lineStart; i < lineEnd && text[i] != '\''; ++i)
+      {
+         if (text[i] != '"')
+         {
+            code += text[i];
+            continue;
+         }
+         string literal;
+         for (++i; i < lineEnd; ++i)
+         {
+            if (text[i] == '"' && i + 1 < lineEnd && text[i + 1] == '"')
+               literal += text[++i];
+            else if (text[i] == '"')
+               break;
+            else
+               literal += text[i];
+         }
+         literals.push_back(std::move(literal));
+         code += "\"\"";
+      }
+      // A REM comment (Rem then a space, a tab or nothing)
+      if (const size_t first = code.find_first_not_of(" \t"); first != string::npos && code.compare(first, 3, "rem") == 0
+         && (first + 3 == code.size() || code[first + 3] == ' ' || code[first + 3] == '\t'))
+      {
+         code.clear();
+         literals.clear();
+      }
+      // The literals joined to something else (spaces skipped): parts of a built name
+      for (size_t pos = code.find("\"\""), index = 0; pos != string::npos; pos = code.find("\"\"", pos + 2), ++index)
+      {
+         use.strings.insert(literals[index]);
+         if (literals[index].empty())
+            continue;
+         const size_t next = code.find_first_not_of(" \t", pos + 2);
+         const size_t prev = pos == 0 ? string::npos : code.find_last_not_of(" \t", pos - 1);
+         if (next != string::npos && (code[next] == '&' || code[next] == '+'))
+            use.prefixes.push_back(literals[index]);
+         if (prev != string::npos && (code[prev] == '&' || code[prev] == '+'))
+            use.suffixes.push_back(literals[index]);
+      }
+      for (size_t pos = code.find("loadtexture"); pos != string::npos && !use.dynamicNames; pos = code.find("loadtexture", pos + 1))
+         use.dynamicNames = (pos == 0 || !IsIdentifierChar(code[pos - 1])) && (pos + 11 >= code.size() || !IsIdentifierChar(code[pos + 11]));
+      for (const char *const property : imageProperties)
+      {
+         const size_t len = strlen(property);
+         for (size_t pos = code.find(property); pos != string::npos && !use.dynamicNames; pos = code.find(property, pos + 1))
+         {
+            size_t next = pos + len;
+            if (next < code.size() && IsIdentifierChar(code[next]))
+               continue; // A longer name
+            while (next < code.size() && (code[next] == ' ' || code[next] == '\t'))
+               ++next;
+            if (next >= code.size() || code[next] != '=')
+               continue;
+            // Anything but a single literal (a variable, a constant, a function result, a concatenation) is a name the script computes
+            const size_t value = code.find_first_not_of(" \t", next + 1);
+            const size_t after = value == string::npos ? string::npos : code.find_first_not_of(" \t", value + 2);
+            use.dynamicNames = value == string::npos || code.compare(value, 2, "\"\"") != 0 || (after != string::npos && (code[after] == '&' || code[after] == '+'));
+         }
+      }
+      lineStart = lineEnd + 1;
+   }
+   return use;
+}
+
 string PartLabel(const IEditable *part) { return part != nullptr ? "Part '" + part->GetName() + '\'' : "Table"s; }
 
 }
@@ -239,7 +336,9 @@ namespace
 {
 
 // The checks of the parts
-void CheckParts(const PinTable &table, vector<TableIssue> &issues)
+// loadsCode: the script loads other code (LoadVPM, ExecuteGlobal,...), which may use anything by name
+// scriptChecks: the checks that read the script (unused images)
+void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool loadsCode, const bool scriptChecks)
 {
    const auto add = [&issues](const TableIssueSeverity severity, const TableCheckId check, string message, IEditable *part = nullptr)
    { issues.push_back({ severity, check, std::move(message), part }); };
@@ -294,7 +393,7 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues)
    }
 
    // Image and material names that are not in the table (backdrop images are reported by the backdrop check)
-   ankerl::unordered_dense::set<string> imageNames, materialNames, usedMaterials;
+   ankerl::unordered_dense::set<string> imageNames, materialNames, usedImages, usedMaterials;
    for (const Texture *const image : table.GetImageList())
       imageNames.insert(lowerCase(image->m_name));
    for (const Material *const material : table.GetMaterialList())
@@ -305,8 +404,7 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues)
          if (part != nullptr && table.IsPlayerSessionObject(part))
             return;
          const string key = lowerCase(name);
-         if (!isImage)
-            usedMaterials.insert(key);
+         (isImage ? usedImages : usedMaterials).insert(key);
          if (StrCompareNoCase(name, g_szNoneSelection) || (isImage && string(field).ends_with("Backdrop Image")) || (isImage ? imageNames : materialNames).contains(key))
             return;
          add(Warning, TableCheckId::MissingResource, PartLabel(part) + " uses " + (isImage ? "image '" : "material '") + name + "' (" + field + "), which is not in the table", part);
@@ -409,10 +507,50 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues)
          add(Warning, TableCheckId::SelfCrossing, "The outline of part '" + part->GetName() + "' crosses itself", part);
    }
 
-   // Materials nothing refers to
+   const ScriptImageUse script = scriptChecks ? ScanScriptImageUse(table.m_script_text) : ScriptImageUse();
+
+   // Materials nothing refers to (no part, table setting or script string)
    for (Material *const material : table.GetMaterialList())
-      if (!usedMaterials.contains(lowerCase(material->m_name)))
+      if (const string key = lowerCase(material->m_name); !usedMaterials.contains(key) && !script.strings.contains(key))
          issues.push_back({ Info, TableCheckId::UnusedMaterial, "Material '" + material->m_name + "' is not used by any part or table setting (the script may still use it)", nullptr, material });
+
+   // Images nothing refers to: no part, table setting, image link of the table description (Markdown '](name)'), script string or
+   // part of a name the script builds
+   const auto built = [&script](const string &key)
+   {
+      return std::ranges::any_of(script.prefixes, [&key](const string &p) { return key.starts_with(p); })
+         || std::ranges::any_of(script.suffixes, [&key](const string &p) { return key.ends_with(p); });
+   };
+   const string notes = lowerCase(table.m_blurb + '\n' + table.m_description);
+   const auto linked = [&notes](const string &key)
+   {
+      for (size_t pos = notes.find("](" + key); pos != string::npos; pos = notes.find("](" + key, pos + 1))
+         if (const size_t end = pos + 2 + key.size(); end < notes.size() && (notes[end] == ')' || notes[end] == ' '))
+            return true;
+      return false;
+   };
+   for (Texture *const image : table.GetImageList())
+   {
+      if (!scriptChecks)
+         break;
+      const string key = lowerCase(image->m_name);
+      if (usedImages.contains(key) || script.strings.contains(key) || linked(key) || built(key))
+         continue;
+      TableIssue issue { Info, TableCheckId::UnusedImage,
+         "Image '" + image->m_name + "' is not used by any part, table setting, table description or script string"
+            + (script.dynamicNames ? " (the script builds image names: check it before deleting the image)"s
+               : loadsCode         ? " (the script loads other code, which may use it)"s
+                                   : ""s) };
+      issue.image = image;
+      issues.push_back(std::move(issue));
+   }
+   for (Texture *const image : table.GetImageList())
+      if (image->m_width > 4096 || image->m_height > 4096)
+      {
+         TableIssue issue { Info, TableCheckId::LargeImage, std::format("Image '{}' is {}x{}: an image over 4096 pixels needs a lot of memory and may be downsized on some GPUs", image->m_name, image->m_width.load(), image->m_height.load()) };
+         issue.image = image;
+         issues.push_back(std::move(issue));
+      }
 }
 
 }
@@ -579,7 +717,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
    }
 
    if (options.extended)
-      CheckParts(*this, issues);
+      CheckParts(*this, issues, loadsCode, options.script);
 
    // Collections without parts (leftovers). One whose name the script uses (as a name, 'For Each x In Collection' is valid on an empty
    // one, or in a string, e.g. for Eval) stays, and so does any when the script loads other code

@@ -63,6 +63,12 @@ vector<TableIssue> TableCheckPane::LiveCheck(const PinTable &table, const bool l
 void TableCheckPane::Select(const TableIssue &issue, const bool frame)
 {
    EditorUI &editor = m_editor;
+   if (issue.image != nullptr)
+   {
+      if (std::ranges::find(editor.m_table->GetImageList(), issue.image) != editor.m_table->GetImageList().end())
+         editor.SetSelection(Selection(issue.image));
+      return;
+   }
    if (issue.material != nullptr)
    {
       if (std::ranges::find(editor.m_table->GetMaterialList(), issue.material) != editor.m_table->GetMaterialList().end())
