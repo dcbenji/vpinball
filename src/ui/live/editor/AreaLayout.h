@@ -28,6 +28,7 @@ enum class AreaType : uint8_t
    ViewportBackdrop = 5,
    ViewportPreview = 6,
    Blueprint = 7,
+   TableCheck = 8,
    Count
 };
 

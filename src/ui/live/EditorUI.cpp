@@ -22,6 +22,7 @@
 #include "editor/parts/EditorUIPartRegistry.h"
 #include "IconsLucide.h"
 #include "editor/LiveRenderContext.h"
+#include "editor/TableCheckPane.h"
 #include "editor/ViewportPane.h"
 
 #include "imgui/imgui_internal.h"
@@ -2908,6 +2909,7 @@ const char *EditorUI::AreaTypeName(const AreaType type)
       : type == AreaType::ViewportBackdrop ? "Desktop Backdrop"
       : type == AreaType::ViewportPreview  ? "Render Preview"
       : type == AreaType::Blueprint        ? "Blueprint"
+      : type == AreaType::TableCheck       ? "Table Check"
                                            : AreaTypeJsonName(type);
 }
 
@@ -2923,6 +2925,7 @@ const char *EditorUI::AreaTypeIcon(const AreaType type)
    case AreaType::ViewportBackdrop: return ICON_LC_IMAGE;
    case AreaType::ViewportPreview: return ICON_LC_PLAY;
    case AreaType::Blueprint: return ICON_LC_RULER;
+   case AreaType::TableCheck: return ICON_LC_TRIANGLE_ALERT;
    case AreaType::Count: break;
    }
    return "";
@@ -2931,7 +2934,8 @@ const char *EditorUI::AreaTypeIcon(const AreaType type)
 bool EditorUI::IsAreaTypeImplemented(const AreaType type)
 {
    // The area types a leaf may take through the editor type switcher (the others are added with their views)
-   return type == AreaType::Outliner || type == AreaType::Properties || IsViewportType(type) || type == AreaType::PartLibrary || type == AreaType::Script || type == AreaType::Blueprint;
+   return type == AreaType::Outliner || type == AreaType::Properties || IsViewportType(type) || type == AreaType::PartLibrary || type == AreaType::Script || type == AreaType::Blueprint
+      || type == AreaType::TableCheck;
 }
 
 std::unique_ptr<EditorAreaView> EditorUI::CreateAreaView(const AreaType type)
@@ -2946,6 +2950,7 @@ std::unique_ptr<EditorAreaView> EditorUI::CreateAreaView(const AreaType type)
    case AreaType::Blueprint: return std::make_unique<BlueprintPane>(*this);
    case AreaType::PartLibrary: return std::make_unique<PartLibraryPane>(*this);
    case AreaType::Script: return std::make_unique<ScriptPane>(*this);
+   case AreaType::TableCheck: return std::make_unique<TableCheckPane>(*this);
    default: return nullptr;
    }
 }

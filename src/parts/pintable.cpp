@@ -4840,6 +4840,7 @@ void PinTable::SetDirtyScript(SaveDirtyState sds)
 {
    const SaveDirtyState prevDirtyState = GetDirtyState();
    m_sdsDirtyScript = sds;
+   m_scriptRevision++;
    CheckDirty(prevDirtyState);
 }
 

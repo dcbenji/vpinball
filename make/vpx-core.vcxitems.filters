@@ -645,6 +645,9 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/SurfaceUIPart.cpp">
       <Filter>ui\live\editor\parts</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/TableCheckPane.cpp">
+      <Filter>ui\live\editor</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/TextBoxUIPart.cpp">
       <Filter>ui\live\editor\parts</Filter>
     </ClCompile>
@@ -1813,6 +1816,9 @@
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/SurfaceUIPart.h">
       <Filter>ui\live\editor\parts</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/TableCheckPane.h">
+      <Filter>ui\live\editor</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/TextBoxUIPart.h">
       <Filter>ui\live\editor\parts</Filter>

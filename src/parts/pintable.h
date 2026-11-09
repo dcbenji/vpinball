@@ -391,6 +391,7 @@ public:
 
    // Expected by CodeViewer
    void SetDirtyScript(SaveDirtyState sds);
+   uint32_t GetScriptRevision() const { return m_scriptRevision; } // Changes with each script edit (SetDirtyScript)
 
    void ExportMesh(ObjLoader &loader) final;
 
@@ -866,6 +867,7 @@ private:
    // prop domain is rewritten by undo bookkeeping and the script domain by the script editor savepoint.
    SaveDirtyState m_sdsDirtyProp = SaveDirtyState::Clean;
    SaveDirtyState m_sdsDirtyScript = SaveDirtyState::Clean;
+   uint32_t m_scriptRevision = 0;
    SaveDirtyState m_sdsNonUndoableDirty = SaveDirtyState::Clean;
    void CheckDirty(SaveDirtyState prevDirtyState);
 

@@ -2,7 +2,7 @@
 
 // Table check: the problems found in a table (script, timers, lights, resources,...), as a list of issues.
 // PinTable::CheckTable runs the checks (headless, the table is not modified). AuditTable formats them as text for
-// the Win32 editor and the '-audit' command.
+// the Win32 editor and the '-audit' command, the live editor lists them in its Table Check pane.
 
 #pragma once
 

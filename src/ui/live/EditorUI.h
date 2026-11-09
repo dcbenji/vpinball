@@ -72,6 +72,7 @@ class EditorUI final
    friend class SetOriginOp;
    friend class LayerSpaceChangeOp;
    friend class ReferenceImageOp;
+   friend class TableCheckPane;
 
 public:
    EditorUI(LiveUI &liveUI);
