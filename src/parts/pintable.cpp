@@ -5188,7 +5188,7 @@ PinBinary *PinTable::GetImageLinkBinary(const int id)
 void PinTable::ParseScript(const string& script, vector<string>& functions, vector<string>& identifiers, const std::function<void(const string&, int)>& onDuplicate) const
 {
    // Ultra basic parser to get a (somewhat) valid list of referenced parts
-   const char *const szText = m_script_text.c_str();
+   const char *const szText = script.c_str();
    const char *wordStart = nullptr;
    const char *wordPos = szText;
    string inClass;

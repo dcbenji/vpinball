@@ -53,8 +53,6 @@ string FormatTableAudit(const vector<TableIssue> &issues)
       }
       listed = true;
       ss << (issue.severity == TableIssueSeverity::Error ? ". Error: " : issue.severity == TableIssueSeverity::Warning ? ". Warning: " : ". ") << issue.message << "\r\n";
-      if (issue.check == TableCheckId::Sound)
-         ss << ' '; // Legacy text of the sound check
    }
    if (!listed)
       ss << "No issue identified.\r\n";
@@ -100,7 +98,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
       Textbox *const textbox = type == eItemTextbox ? (Textbox *)part : nullptr;
 
       // Referencing a static object from script (ok if it is for reading properties, not for writing)
-      if (type == eItemPrimitive && prim->m_d.m_staticRendering && FindIndexOf(identifiers, prim->GetName()) != -1)
+      if (type == eItemPrimitive && prim->m_d.m_staticRendering && FindIndexOf(identifiers, lowerCase(prim->GetName())) != -1)
          add(Warning, TableCheckId::StaticReferenced, "Primitive '" + prim->GetName() + "' seems to be referenced from the script while it is marked as static (most properties of a static object may not be modified at runtime).", part);
 
       if (type == eItemTextbox && (textbox->m_d.m_isDMD || StrFindNoCase(textbox->m_d.m_text, "DMD"s) != string::npos))
@@ -198,7 +196,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          add(Warning, TableCheckId::VPM, "VPM controller is used but vpmInit is not called. pause/resume/exit will likely exhibit bugs and physic outputs won't be supported.");
    }
 
-   if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmTimer"s) != -1))
+   if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmtimer"s) != -1))
       add(Warning, TableCheckId::VPM, "script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.");
 
    if (options.sound)

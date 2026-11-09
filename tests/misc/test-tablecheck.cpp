@@ -94,6 +94,7 @@ TEST_CASE("Table check")
                               ". Warning: Ball uses legacy 'spherical mapping', it will be rendered like a 2D object and therefore will look bad in VR, stereo or headtracking\r\n"
                               ". Warning: Playfield had an invalid friction (-1), it was set to 0 (save the table to keep the fix)\r\n"
                               ". Warning: Primitive 'staticprim' seems to be referenced from the script while it is marked as static (most properties of a static object may not be modified at runtime).\r\n"
+                              ". Warning: Primitive 'StaticMixed' seems to be referenced from the script while it is marked as static (most properties of a static object may not be modified at runtime).\r\n"
                               ". Warning: Primitive 'TransPrim' uses translucency (lighting from below) while it is fully opaque. Translucency will be discarded.\r\n"
                               ". Warning: legacy Textbox 'DMDText' is used for DMD rendering. It should be replaced by a flasher to get better rendering.\r\n"
                               ". Warning: Part 'FastTimer' uses a timer with a very short period of 10ms, below a 60FPS framerate. This will likely cause stutters and the table will not support 'frame pacing'.\r\n"
@@ -102,8 +103,9 @@ TEST_CASE("Table check")
                               ". Error: Flasher 'Flasher1' uses the deprecated 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.\r\n"
                               ". Warning: VPM controller is used but table is missing a Timer object named 'PinMAMETimer'.\r\n"
                               ". Warning: VPM controller is used but vpmInit is not called. pause/resume/exit will likely exhibit bugs and physic outputs won't be supported.\r\n"
+                              ". Warning: script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.\r\n"
                               ". Error: sound 'StereoHit' is used for playfield physical sound but has multiple channels (not mono).\r\n"
-                              " . Total sound size: 52 B\r\n"
+                              ". Total sound size: 52 B\r\n"
                               ". Total image size: 0 B in VPX file, at least 0 B in GPU memory when played\r\n"
                               ". Warning: Desktop backdrop image 'MissingBG' is not present in the table (renders black)\r\n"
                               ". Total number of faces used in primitives: 0, needing 0 B in GPU memory when played\r\n";
@@ -136,7 +138,7 @@ TEST_CASE("Table check")
       // The live scan leaves out the sound checks (they create an audio player) and the size totals
       CHECK(find(TableCheckId::Sound) == issues.end());
       CHECK(find(TableCheckId::Totals) == issues.end());
-      CHECK(issues.size() == 15);
+      CHECK(issues.size() == 17);
 
       const auto light = find(TableCheckId::LightIntensity);
       REQUIRE(light != issues.end());
@@ -162,6 +164,20 @@ TEST_CASE("Table check")
 
       const vector<TableIssue> withTotals = table->CheckTable({ .totals = true });
       CHECK(std::ranges::count_if(withTotals, [](const TableIssue &i) { return i.check == TableCheckId::Totals && i.severity == TableIssueSeverity::Info; }) == 3);
+      table->Release();
+   }
+
+   SUBCASE("script parsing reads the given script, identifiers are lower case")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_script_text = "Sub Other\nEnd Sub\n";
+      vector<string> functions, identifiers;
+      int duplicates = 0;
+      table->ParseScript("Sub Dup\nEnd Sub\nSub Dup\nEnd Sub\nMyPart.X = 1\n", functions, identifiers, [&duplicates](const string &, int) { duplicates++; });
+      CHECK(duplicates == 1);
+      CHECK(FindIndexOf(functions, ".dup"s) != -1);
+      CHECK(FindIndexOf(functions, ".other"s) == -1);
+      CHECK(FindIndexOf(identifiers, "mypart"s) != -1);
       table->Release();
    }
 
