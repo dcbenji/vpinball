@@ -50,6 +50,7 @@ enum class TableCheckId : uint8_t
    UnusedImage, // Image not used by any part, table setting, table description or script string
    LargeImage, // Image over 4096 pixels
    EmptyCollection, // Collection without parts
+   CollectionEvents, // Collection events the script handles but that are not fired
    Sound, // Sound format
    Backdrop, // Backdrop image not in the table
    Totals, // Size totals (sounds, images, primitives)

@@ -827,6 +827,37 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("collection events the script handles")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_script_text = "Sub Posts_Hit(idx)\nEnd Sub\nSub Rubbers_Hit(idx)\nEnd Sub\nSub Quiet_Helper\nEnd Sub\n"; // Quiet_Helper: not an event
+      CComObject<Collection> *const posts = AddTestCollection(table, "Posts");
+      posts->m_fireEvents = false;
+      CComObject<Collection> *const rubbers = AddTestCollection(table, "Rubbers");
+      rubbers->m_fireEvents = true;
+      CComObject<Collection> *const quiet = AddTestCollection(table, "Quiet");
+      quiet->m_fireEvents = false;
+      Rubber *const silent = AddTestPart<Rubber>(table, "SilentRubber");
+      silent->m_d.m_hitEvent = false;
+      Surface *const wall = AddTestPart<Surface>(table, "HitWall");
+      wall->m_d.m_hitEvent = true;
+      Kicker *const kicker = AddTestPart<Kicker>(table, "Kicker1");
+      for (IEditable *part : { static_cast<IEditable *>(silent), static_cast<IEditable *>(wall), static_cast<IEditable *>(kicker) })
+      {
+         table->AddPartToCollection(rubbers, part);
+         table->AddPartToCollection(posts, part);
+         table->AddPartToCollection(quiet, part);
+      }
+      const vector<TableIssue> issues = Issues(table, TableCheckId::CollectionEvents);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].collection == posts);
+      CHECK(issues[0].severity == TableIssueSeverity::Warning);
+      CHECK(issues[0].message == "Collection 'Posts' does not fire events: the script's sub 'posts_hit' never runs");
+      CHECK(issues[1].part == silent);
+      CHECK(issues[1].severity == TableIssueSeverity::Info);
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();

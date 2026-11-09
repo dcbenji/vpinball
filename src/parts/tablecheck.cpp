@@ -60,6 +60,7 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::UnusedImage: return "Unused images";
    case TableCheckId::LargeImage: return "Large images";
    case TableCheckId::EmptyCollection: return "Empty collections";
+   case TableCheckId::CollectionEvents: return "Collection events";
    case TableCheckId::Sound: return "Sounds";
    case TableCheckId::Backdrop: return "Backdrop images";
    case TableCheckId::Totals: return "Totals";
@@ -849,6 +850,40 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          if (!used && !loadsCode)
             issues.back().fix = TableFix::DeleteCollection;
       }
+
+   // Collections whose events the script handles ('<collection>_<event>' sub) but which do not fire events; for a Hit sub, the members
+   // whose own hit events are off (their hits never reach the collection)
+   static constexpr const char *collectionEvents[] = { "init", "hit", "slingshot", "timer", "spin", "unhit", "dropped", "raised" }; // ICollectionEvents
+   for (CComObject<Collection> *const collection : m_vcollection)
+   {
+      if (!options.extended)
+         break;
+      const string prefix = '.' + lowerCase(collection->m_name) + '_';
+      const auto sub = std::ranges::find_if(functions,
+         [&prefix](const string &f)
+         {
+            return f.starts_with(prefix)
+               && std::find(std::begin(collectionEvents), std::end(collectionEvents), f.substr(prefix.size())) != std::end(collectionEvents);
+         });
+      if (sub == functions.end())
+         continue;
+      if (!collection->m_fireEvents)
+      {
+         add(Warning, TableCheckId::CollectionEvents, "Collection '" + collection->m_name + "' does not fire events: the script's sub '" + sub->substr(1) + "' never runs");
+         issues.back().collection = collection;
+         continue;
+      }
+      if (FindIndexOf(functions, prefix + "hit") == -1)
+         continue;
+      for (IEditable *const part : collection->GetParts())
+      {
+         const ItemTypeEnum type = part->GetItemType();
+         if (type != eItemSurface && type != eItemRubber && type != eItemPrimitive && type != eItemRamp)
+            continue; // Parts that always fire their hit events, or have none
+         if (const BaseProperty *const base = BaseOf(part); base != nullptr && !base->m_hitEvent)
+            add(Info, TableCheckId::CollectionEvents, "Part '" + part->GetName() + "' is in collection '" + collection->m_name + "', whose Hit sub the script has, but its hit events are off", part);
+      }
+   }
 
    if (options.sound)
    {
