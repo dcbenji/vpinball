@@ -46,6 +46,9 @@ enum class TableCheckId : uint8_t
    HeavyCollider, // Collidable primitive with many faces
    DragPoints, // Too few drag points, or two on the same spot
    SelfCrossing, // Outline that crosses itself
+   DepthBias, // Overlapping flashers at the same height and depth bias
+   DuplicatePart, // Parts of the same type at the same place with the same shape
+   Kicker, // Kickers smaller than the ball, or overlapping a collidable wall or rubber
    UnusedMaterial, // Material not used by any part
    UnusedImage, // Image not used by any part, table setting, table description or script string
    LargeImage, // Image over 4096 pixels

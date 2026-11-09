@@ -9,6 +9,7 @@
 #include "parts/decal.h"
 #include "parts/dispreel.h"
 #include "parts/flipper.h"
+#include "parts/gate.h"
 #include "parts/hittarget.h"
 #include "parts/plunger.h"
 #include "parts/spinner.h"
@@ -855,6 +856,75 @@ TEST_CASE("Table check")
       CHECK(issues[0].message == "Collection 'Posts' does not fire events: the script's sub 'posts_hit' never runs");
       CHECK(issues[1].part == silent);
       CHECK(issues[1].severity == TableIssueSeverity::Info);
+      table->Release();
+   }
+
+   SUBCASE("flashers that may flicker, duplicate parts, kickers")
+   {
+      PinTable *const table = CreateTestTable();
+      AddTestPart<Flasher>(table, "F1");
+      Flasher *const f2 = AddTestPart<Flasher>(table, "F2");
+      f2->m_curve.TranslatePoints(Vertex2D(10.f, 0.f));
+      Flasher *const biased = AddTestPart<Flasher>(table, "Biased");
+      biased->m_d.m_depthBias = -10.f;
+      Flasher *const hidden = AddTestPart<Flasher>(table, "Hidden");
+      hidden->m_d.m_isVisible = false;
+      Flasher *const farFlasher = AddTestPart<Flasher>(table, "Far");
+      farFlasher->m_curve.TranslatePoints(Vertex2D(1000.f, 0.f));
+      vector<TableIssue> issues = Issues(table, TableCheckId::DepthBias);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].part == f2);
+      CHECK(issues[0].severity == TableIssueSeverity::Info);
+      CHECK(issues[0].message == "Flasher 'F2' overlaps flasher 'F1' at the same height and depth bias: they may flicker, give one a different depth bias");
+      Flasher *const additive = AddTestPart<Flasher>(table, "Additive");
+      additive->m_d.m_addBlend = FlasherData::AB_ADD; // Order independent: not reported
+      CHECK(Issues(table, TableCheckId::DepthBias).size() == 1);
+      CHECK(Issues(table, TableCheckId::DuplicatePart).empty()); // Stacked flashers are not duplicates
+
+      AddTestPart<Bumper>(table, "Bumper1");
+      Bumper *const copy = AddTestPart<Bumper>(table, "Bumper2");
+      AddTestPart<Bumper>(table, "Bumper3")->m_d.m_vCenter.x = 500.f;
+      for (const char *name : { "Shadow1", "Shadow2" }) // Visual parts stacked on purpose
+         AddTestPart<Primitive>(table, name)->m_d.m_collidable = false;
+      // Baked collidable meshes with the same transform and size but other vertices (e.g. mirrored sides)
+      for (const float x : { -10.f, 10.f })
+      {
+         Primitive *const side = AddTestPart<Primitive>(table, x < 0.f ? "SideLeft" : "SideRight");
+         side->m_d.m_use3DMesh = true;
+         side->m_mesh.m_vertices.resize(3);
+         side->m_mesh.m_vertices[1].x = x;
+         side->m_mesh.m_indices = { 0, 1, 2 };
+      }
+      // Stacked colliders: walls at other heights, gates on other surfaces
+      for (const float bottom : { 0.f, 50.f })
+      {
+         Surface *const level = AddTestPart<Surface>(table, bottom == 0.f ? "LowerWall" : "UpperWall");
+         level->m_d.m_collidable = true;
+         level->m_d.m_heightbottom = bottom;
+         level->m_d.m_heighttop = bottom + 50.f;
+      }
+      AddTestPart<Gate>(table, "LowerGate");
+      AddTestPart<Gate>(table, "UpperGate")->m_d.m_szSurface = "UpperWall";
+      issues = Issues(table, TableCheckId::DuplicatePart);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].part == copy);
+      CHECK(issues[0].message == "Part 'Bumper2' is at the same place, with the same shape, as 'Bumper1' (a duplicate?)");
+
+      Kicker *const tinyKicker = AddTestPart<Kicker>(table, "Small");
+      tinyKicker->m_d.m_vCenter = Vertex2D(100.f, 1000.f);
+      tinyKicker->m_d.m_radius = 10.f;
+      Kicker *const scoop = AddTestPart<Kicker>(table, "Scoop");
+      scoop->m_d.m_vCenter = Vertex2D(500.f, 1500.f);
+      scoop->m_d.m_radius = 30.f;
+      Surface *const wall = AddTestPart<Surface>(table, "ScoopWall");
+      wall->m_d.m_collidable = true;
+      SetPoints(wall->m_curve, { { 520.f, 1400.f }, { 600.f, 1400.f }, { 600.f, 1600.f }, { 520.f, 1600.f } });
+      issues = Issues(table, TableCheckId::Kicker);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].part == tinyKicker);
+      CHECK(issues[0].message == "Kicker 'Small' (radius 10.0) is smaller than the ball (radius 25)");
+      CHECK(issues[1].part == scoop);
+      CHECK(issues[1].message == "Kicker 'Scoop' overlaps collidable wall 'ScoopWall'");
       table->Release();
    }
 

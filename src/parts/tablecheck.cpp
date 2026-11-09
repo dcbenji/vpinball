@@ -56,6 +56,9 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::HeavyCollider: return "Heavy collidable primitives";
    case TableCheckId::DragPoints: return "Drag points";
    case TableCheckId::SelfCrossing: return "Self-crossing outlines";
+   case TableCheckId::DepthBias: return "Depth bias";
+   case TableCheckId::DuplicatePart: return "Duplicate parts";
+   case TableCheckId::Kicker: return "Kickers";
    case TableCheckId::UnusedMaterial: return "Unused materials";
    case TableCheckId::UnusedImage: return "Unused images";
    case TableCheckId::LargeImage: return "Large images";
@@ -585,6 +588,149 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
                crossed = SegmentsCross(v[i], v[(i + 1) % n], v[j], v[(j + 1) % n]);
       if (crossed)
          add(Warning, TableCheckId::SelfCrossing, "The outline of part '" + part->GetName() + "' crosses itself", part);
+   }
+
+   // Visible flashers at the same height, with the same depth bias, that overlap: they are drawn in no defined order and may flicker
+   // (z-fighting). Additive flashers are left out (their order does not change the result). There is no right value to set automatically
+   struct FlasherBounds
+   {
+      Flasher *flasher;
+      Vertex2D min, max;
+   };
+   vector<FlasherBounds> flashers;
+   for (IEditable *const part : parts)
+      if (part->GetItemType() == eItemFlasher && static_cast<const Flasher *>(part)->m_d.m_isVisible && static_cast<const Flasher *>(part)->m_d.m_addBlend == FlasherData::AB_NONE
+         && !part->m_desktopBackdrop)
+      {
+         Flasher *const flasher = static_cast<Flasher *>(part);
+         if (!flasher->m_curve.GetPoints().empty())
+            flashers.push_back({ flasher, flasher->m_curve.GetMinBound(), flasher->m_curve.GetMaxBound() });
+      }
+   for (size_t i = 1; i < flashers.size(); ++i)
+      for (size_t j = 0; j < i; ++j)
+      {
+         const FlasherBounds &a = flashers[i], &b = flashers[j];
+         if (fabsf(a.flasher->m_d.m_height - b.flasher->m_d.m_height) < 0.01f && a.flasher->m_d.m_depthBias == b.flasher->m_d.m_depthBias && a.min.x < b.max.x
+            && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y)
+         {
+            add(Info, TableCheckId::DepthBias,
+               "Flasher '" + a.flasher->GetName() + "' overlaps flasher '" + b.flasher->GetName() + "' at the same height and depth bias: they may flicker, give one a different depth bias",
+               a.flasher);
+            break;
+         }
+      }
+
+   // Collidable parts of the same type at the same place with the same shape: left over copies that collide twice (doubled bumpers kick
+   // twice). Visual parts are often stacked on purpose (baked meshes, shadows), so only colliders are compared
+   ankerl::unordered_dense::map<string, IEditable *> placed;
+   for (IEditable *const part : parts)
+   {
+      const ItemTypeEnum type = part->GetItemType();
+      const BaseProperty *const base = BaseOf(part);
+      if (HasNoPlayfieldPosition(part) || base == nullptr || !base->m_collidable || type == eItemLight || type == eItemDecal
+         || (type == eItemPrimitive && static_cast<const Primitive *>(part)->m_d.m_toy))
+         continue;
+      string key = std::format("{} {} {} {}", static_cast<int>(type), part->GetCenter().x, part->GetCenter().y, part->GetRotate());
+      if (const DragPointCurve *const curve = OutlineOf(part))
+         for (const auto &p : curve->GetPoints())
+            key += std::format(" {} {} {}", p->GetX(), p->GetY(), p->GetZ());
+      // The heights, sizes and surface: stacked walls, or a gate on an upper playfield above another one, are not duplicates
+      switch (type)
+      {
+      case eItemSurface: key += std::format(" {} {}", static_cast<const Surface *>(part)->m_d.m_heightbottom, static_cast<const Surface *>(part)->m_d.m_heighttop); break;
+      case eItemRubber: key += std::format(" {} {}", static_cast<const Rubber *>(part)->m_d.m_height, static_cast<const Rubber *>(part)->m_d.m_thickness); break;
+      case eItemRamp:
+      {
+         const auto &d = static_cast<const Ramp *>(part)->m_d;
+         key += std::format(" {} {} {} {} {}", d.m_heightbottom, d.m_heighttop, d.m_widthbottom, d.m_widthtop, static_cast<int>(d.m_type));
+         break;
+      }
+      case eItemBumper: key += std::format(" {} {}", static_cast<const Bumper *>(part)->m_d.m_radius, static_cast<const Bumper *>(part)->m_d.m_szSurface); break;
+      case eItemKicker: key += std::format(" {} {}", static_cast<const Kicker *>(part)->m_d.m_radius, static_cast<const Kicker *>(part)->m_d.m_szSurface); break;
+      case eItemTrigger:
+      {
+         const auto &d = static_cast<const Trigger *>(part)->m_d;
+         key += std::format(" {} {} {}", d.m_radius, static_cast<int>(d.m_shape), d.m_szSurface);
+         break;
+      }
+      case eItemGate: key += std::format(" {} {} {}", static_cast<const Gate *>(part)->m_d.m_length, static_cast<const Gate *>(part)->m_d.m_height, static_cast<const Gate *>(part)->m_d.m_szSurface); break;
+      case eItemSpinner:
+         key += std::format(" {} {} {}", static_cast<const Spinner *>(part)->m_d.m_length, static_cast<const Spinner *>(part)->m_d.m_height, static_cast<const Spinner *>(part)->m_d.m_szSurface);
+         break;
+      case eItemFlipper:
+      {
+         const auto &d = static_cast<const Flipper *>(part)->m_d;
+         key += std::format(" {} {} {} {} {} {} {}", d.m_height, d.m_BaseRadius, d.m_EndRadius, d.m_FlipperRadiusMax, d.m_StartAngle, d.m_EndAngle, d.m_szSurface);
+         break;
+      }
+      case eItemPlunger: key += std::format(" {} {}", static_cast<const Plunger *>(part)->m_d.m_height, static_cast<const Plunger *>(part)->m_d.m_szSurface); break;
+      case eItemHitTarget:
+      {
+         const auto &d = static_cast<const HitTarget *>(part)->m_d;
+         key += std::format(" {} {} {} {} {}", d.m_vPosition.z, d.m_vSize.x, d.m_vSize.y, d.m_vSize.z, static_cast<int>(d.m_targetType));
+         break;
+      }
+      default: break;
+      }
+      if (type == eItemPrimitive)
+      {
+         const auto &d = static_cast<const Primitive *>(part)->m_d;
+         key += std::format(" {} {} {} {} {} {}", d.m_vPosition.x, d.m_vPosition.y, d.m_vPosition.z, d.m_vSize.x, d.m_vSize.y, d.m_vSize.z);
+         for (const float v : d.m_aRotAndTra)
+            key += std::format(" {}", v);
+         // The mesh: its size and bounds (baked parts often share an identity transform, with different meshes)
+         const Mesh &mesh = static_cast<const Primitive *>(part)->m_mesh;
+         Vertex3Ds lo(FLT_MAX, FLT_MAX, FLT_MAX), hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+         for (const Vertex3D_NoTex2 &v : mesh.m_vertices)
+         {
+            lo = Vertex3Ds(min(lo.x, v.x), min(lo.y, v.y), min(lo.z, v.z));
+            hi = Vertex3Ds(max(hi.x, v.x), max(hi.y, v.y), max(hi.z, v.z));
+         }
+         key += std::format(" {} {} {} {} {} {} {} {} {}", d.m_use3DMesh, mesh.NumVertices(), mesh.NumIndices(), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+      }
+      if (const auto [it, inserted] = placed.try_emplace(std::move(key), part); !inserted)
+         add(Warning, TableCheckId::DuplicatePart, "Part '" + part->GetName() + "' is at the same place, with the same shape, as '" + it->second->GetName() + "' (a duplicate?)", part);
+   }
+
+   // Kickers smaller than the ball, or overlapping a collidable wall or rubber (the ball is caught while it touches the other collider)
+   constexpr float ballRadius = 25.f; // Standard ball
+   vector<std::pair<const IEditable *, vector<RenderVertex>>> walls; // Closed outlines of the collidable walls and rubbers, made when a kicker needs them
+   bool wallsMade = false;
+   for (IEditable *const part : parts)
+   {
+      if (part->GetItemType() != eItemKicker || HasNoPlayfieldPosition(part))
+         continue;
+      const auto &d = static_cast<const Kicker *>(part)->m_d;
+      if (d.m_radius > 0.f && d.m_radius < ballRadius)
+         add(Info, TableCheckId::Kicker, std::format("Kicker '{}' (radius {:.1f}) is smaller than the ball (radius {:.0f})", part->GetName(), d.m_radius, ballRadius), part);
+      if (!wallsMade)
+         for (IEditable *const other : parts)
+         {
+            const ItemTypeEnum type = other->GetItemType();
+            if ((type == eItemSurface && static_cast<const Surface *>(other)->m_d.m_collidable) || (type == eItemRubber && static_cast<const Rubber *>(other)->m_d.m_collidable))
+            {
+               walls.emplace_back(other, vector<RenderVertex>());
+               OutlineOf(other)->GetRgVertex(walls.back().second, true, 16.f);
+            }
+         }
+      wallsMade = true;
+      for (const auto &[wall, outline] : walls)
+      {
+         const float reach = d.m_radius + (wall->GetItemType() == eItemRubber ? 0.5f * static_cast<float>(static_cast<const Rubber *>(wall)->m_d.m_thickness) : 0.f);
+         bool overlaps = false;
+         for (size_t i = 0; i < outline.size() && !overlaps; ++i)
+         {
+            // Distance from the kicker center to the segment
+            const Vertex2D &a = outline[i], &b = outline[(i + 1) % outline.size()];
+            const Vertex2D ab = b - a, ac = d.m_vCenter - a;
+            const float len2 = ab.x * ab.x + ab.y * ab.y;
+            const float t = len2 > 0.f ? clamp((ab.x * ac.x + ab.y * ac.y) / len2, 0.f, 1.f) : 0.f;
+            const float dx = a.x + t * ab.x - d.m_vCenter.x, dy = a.y + t * ab.y - d.m_vCenter.y;
+            overlaps = dx * dx + dy * dy < reach * reach;
+         }
+         if (overlaps)
+            add(Info, TableCheckId::Kicker, "Kicker '" + part->GetName() + "' overlaps collidable " + (wall->GetItemType() == eItemRubber ? "rubber '" : "wall '") + wall->GetName() + '\'', part);
+      }
    }
 
    const ScriptStrings script = scriptChecks ? ScanScriptStrings(table.m_script_text) : ScriptStrings();
