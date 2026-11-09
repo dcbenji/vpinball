@@ -110,6 +110,9 @@
     <ClCompile Include="../../tests/misc/test-table-io.cpp">
       <Filter>misc</Filter>
     </ClCompile>
+    <ClCompile Include="../../tests/misc/test-tablecheck.cpp">
+      <Filter>misc</Filter>
+    </ClCompile>
     <ClCompile Include="../../tests/misc/test-tbn-shader.cpp">
       <Filter>misc</Filter>
     </ClCompile>
