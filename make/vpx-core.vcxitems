@@ -900,6 +900,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/parts/Sound.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/parts/spinner.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/parts/surface.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/parts/tablecheck.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/parts/textbox.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/parts/timer.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/parts/trigger.cpp" />
@@ -1854,6 +1855,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/parts/Sound.h" />
     <ClInclude Include="$(SolutionDir)/../../src/parts/spinner.h" />
     <ClInclude Include="$(SolutionDir)/../../src/parts/surface.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/parts/tablecheck.h" />
     <ClInclude Include="$(SolutionDir)/../../src/parts/textbox.h" />
     <ClInclude Include="$(SolutionDir)/../../src/parts/timer.h" />
     <ClInclude Include="$(SolutionDir)/../../src/parts/trigger.h" />

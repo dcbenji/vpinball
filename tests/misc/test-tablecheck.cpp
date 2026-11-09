@@ -10,6 +10,7 @@
 #include "parts/textbox.h"
 #include "parts/flasher.h"
 #include "parts/Sound.h"
+#include "parts/tablecheck.h"
 
 #include "doctest.h"
 
@@ -124,5 +125,49 @@ TEST_CASE("Table check")
       CHECK(table->AuditTable(false)
          == "Table audit:\r\nNo issue identified.\r\n" + totals + ". Warning: Full Single Screen backdrop image 'MissingFSS' is not present in the table (renders black)\r\n" + faces);
       table->Release();
+   }
+
+   SUBCASE("issues name their check, severity and part")
+   {
+      PinTable *const table = CreateAuditTestTable();
+      const vector<TableIssue> issues = table->CheckTable({});
+      const auto find = [&issues](TableCheckId check) { return std::ranges::find_if(issues, [check](const TableIssue &i) { return i.check == check; }); };
+
+      // The live scan leaves out the sound checks (they create an audio player) and the size totals
+      CHECK(find(TableCheckId::Sound) == issues.end());
+      CHECK(find(TableCheckId::Totals) == issues.end());
+      CHECK(issues.size() == 15);
+
+      const auto light = find(TableCheckId::LightIntensity);
+      REQUIRE(light != issues.end());
+      CHECK(light->severity == TableIssueSeverity::Error);
+      CHECK(light->part == table->GetParts()[5]);
+      CHECK(light->message == "Light 'NegLight' has a negative intensity.");
+      CHECK(std::ranges::count_if(issues, [](const TableIssue &i) { return i.check == TableCheckId::LightIntensity; }) == 2);
+
+      const auto prim = find(TableCheckId::StaticReferenced);
+      REQUIRE(prim != issues.end());
+      CHECK(prim->severity == TableIssueSeverity::Warning);
+      CHECK(prim->part == table->GetParts()[0]);
+      CHECK(find(TableCheckId::FastTimer)->part == table->GetParts()[4]);
+      CHECK(find(TableCheckId::VideoCap)->part == table->GetParts()[6]);
+      CHECK(find(TableCheckId::ScriptDuplicate)->part == nullptr);
+      CHECK(find(TableCheckId::Backdrop)->message == "Desktop backdrop image 'MissingBG' is not present in the table (renders black)");
+
+      const vector<TableIssue> withSound = table->CheckTable({ .sound = true });
+      const auto sound = std::ranges::find_if(withSound, [](const TableIssue &i) { return i.check == TableCheckId::Sound; });
+      REQUIRE(sound != withSound.end());
+      CHECK(sound->severity == TableIssueSeverity::Error);
+      CHECK(withSound.size() == issues.size() + 1);
+
+      const vector<TableIssue> withTotals = table->CheckTable({ .totals = true });
+      CHECK(std::ranges::count_if(withTotals, [](const TableIssue &i) { return i.check == TableCheckId::Totals && i.severity == TableIssueSeverity::Info; }) == 3);
+      table->Release();
+   }
+
+   SUBCASE("every check has a title")
+   {
+      for (int i = 0; i < static_cast<int>(TableCheckId::Count); i++)
+         CHECK(string(TableCheckTitle(static_cast<TableCheckId>(i))) != "");
    }
 }

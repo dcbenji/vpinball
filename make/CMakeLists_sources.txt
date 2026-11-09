@@ -181,7 +181,9 @@ set(VPX_SOURCES
    src/parts/spinner.cpp
    src/parts/spinner.h
    src/parts/surface.cpp
+   src/parts/tablecheck.cpp
    src/parts/surface.h
+   src/parts/tablecheck.h
    src/parts/textbox.cpp
    src/parts/textbox.h
    src/parts/timer.cpp

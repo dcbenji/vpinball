@@ -24,6 +24,8 @@
 #include <utility>
 
 class Light;
+struct TableIssue;
+struct TableCheckOptions;
 
 class TableHash;
 
@@ -379,6 +381,7 @@ public:
 
    void ParseScript(const string &script, vector<string> &functions, vector<string> &identifiers, const std::function<void(const string &, int)>& onDuplicate) const;
    string AuditTable(bool log) const;
+   vector<TableIssue> CheckTable(const TableCheckOptions &options) const; // Problems found in the table (see tablecheck.h): AuditTable formats them
    void SanitizePhysicsData(); // Fix invalid physics values of a loaded table, noted for the audit
    vector<string> m_loadFixes; // Invalid data fixed when the table was loaded (reported by AuditTable)
 

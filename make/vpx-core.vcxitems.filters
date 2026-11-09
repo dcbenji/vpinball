@@ -366,6 +366,9 @@
     <ClCompile Include="$(SolutionDir)/../../src/parts/surface.cpp">
       <Filter>parts</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/parts/tablecheck.cpp">
+      <Filter>parts</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/parts/textbox.cpp">
       <Filter>parts</Filter>
     </ClCompile>
@@ -1473,6 +1476,9 @@
       <Filter>parts</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/parts/surface.h">
+      <Filter>parts</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/parts/tablecheck.h">
       <Filter>parts</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/parts/textbox.h">
