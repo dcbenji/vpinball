@@ -751,6 +751,37 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("script references: event subs of missing objects, missing sounds, images and materials")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_name = "Table1"; // The table's own events (Table1_Init, Table1_KeyDown) are not reported
+      AddTestPart<Bumper>(table, "Bumper1");
+      AddTestCollection(table, "Col1");
+      table->m_vsound.push_back(new VPX::Sound("Knocker", "knocker.wav", MakeStereoWav()));
+      REQUIRE(table->ImportImage(GetAssetPath() / "test000-default-table-Ref.webp", "Img1"s) != nullptr);
+      table->m_script_text = "Sub Bumper1_Hit\nEnd Sub\nSub Gone_Hit\nEnd Sub\nSub OldTimer_Timer\nEnd Sub\nSub Col1_Hit(idx)\nEnd Sub\n"
+                             "Sub Table1_KeyDown(k)\nEnd Sub\nSub Do_Something\nEnd Sub\n"
+                             "Sub Table1_Init\nPlaySound \"Knocker\"\nPlaySoundAt \"Missing1\", Bumper1\nStopSound(\"Missing2\")\nPlaySound \"missing1\"\n"
+                             "PlaySoundAtLevelStatic (\"Rubber_\" & Int(Rnd*9)+1), 1, Bumper1\nBumper1.Image = \"NoImage\"\nBumper1.Material = \"NoMat\"\n"
+                             "Wall1.Image = \"img1\" ' PlaySound \"InComment\"\nPlaySound \"\"\nEnd Sub\nSub PlaySoundAt(name, obj)\nPlaySound name\nEnd Sub\n"
+                             "Sub Ghost_Init\nEnd Sub\nSub Shadow_Timer\nEnd Sub\nSub Frame_Update\nShadow_Timer\nEnd Sub\n"; // Shadow_Timer: called by name
+      const vector<TableIssue> events = Issues(table, TableCheckId::EventSub);
+      REQUIRE(events.size() == 3);
+      CHECK(events[0].message == "The script has a sub 'gone_hit' for the hit event of 'gone', which is not in the table");
+      CHECK(events[1].message == "The script has a sub 'oldtimer_timer' for the timer event of 'oldtimer', which is not in the table");
+      CHECK(events[2].message == "The script has a sub 'ghost_init' for the init event of 'ghost', which is not in the table");
+
+      const vector<TableIssue> names = Issues(table, TableCheckId::ScriptReference);
+      REQUIRE(names.size() == 4);
+      CHECK(names[0].message == "The script plays sound 'Missing1', which is not in the table");
+      CHECK(names[1].message == "The script plays sound 'Missing2', which is not in the table");
+      CHECK(names[2].message == "The script sets image 'NoImage', which is not in the table");
+      CHECK(names[3].message == "The script sets material 'NoMat', which is not in the table");
+      for (const TableIssue &issue : names)
+         CHECK(issue.severity == TableIssueSeverity::Warning);
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();
@@ -765,7 +796,8 @@ TEST_CASE("Table check")
          const vector<TableIssue> issues = table->CheckTable({ .extended = true, .script = script });
          return std::ranges::count_if(issues, [check](const TableIssue &issue) { return issue.check == check; });
       };
-      for (const TableCheckId check : { TableCheckId::ScriptDuplicate, TableCheckId::TimerSub, TableCheckId::EmptyCollection, TableCheckId::UnusedImage })
+      for (const TableCheckId check : { TableCheckId::ScriptDuplicate, TableCheckId::TimerSub, TableCheckId::EmptyCollection, TableCheckId::UnusedImage, TableCheckId::EventSub,
+              TableCheckId::ScriptReference })
       {
          CHECK(count(true, check) == 1);
          CHECK(count(false, check) == 0); // Not reported: they need the script

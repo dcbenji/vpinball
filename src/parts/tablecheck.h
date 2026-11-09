@@ -33,6 +33,8 @@ enum class TableCheckId : uint8_t
    TextboxDMD, // Legacy textbox used as a DMD
    FastTimer, // Timer faster than 60 FPS
    TimerSub, // Enabled timer without a sub in the script
+   EventSub, // Event sub of an object that is not in the table
+   ScriptReference, // Sound, image or material named by the script that is not in the table
    Translucency, // Translucency on an opaque primitive
    LightIntensity, // Negative light intensity
    VideoCap, // Deprecated flasher VideoCap API

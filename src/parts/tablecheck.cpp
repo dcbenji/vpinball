@@ -43,6 +43,8 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::TextboxDMD: return "Textbox used as DMD";
    case TableCheckId::FastTimer: return "Fast timers";
    case TableCheckId::TimerSub: return "Timers without a sub";
+   case TableCheckId::EventSub: return "Event subs of missing objects";
+   case TableCheckId::ScriptReference: return "Missing names used by the script";
    case TableCheckId::Translucency: return "Translucency on opaque primitives";
    case TableCheckId::LightIntensity: return "Light intensity";
    case TableCheckId::VideoCap: return "Flasher VideoCap API";
@@ -176,14 +178,19 @@ bool SegmentsCross(const Vertex2D &a, const Vertex2D &b, const Vertex2D &c, cons
    return ((d1 > 0.f && d2 < 0.f) || (d1 < 0.f && d2 > 0.f)) && ((d3 > 0.f && d4 < 0.f) || (d3 < 0.f && d4 > 0.f));
 }
 
-// What the script says about image names: its string literals (lower case); the literals it joins to other strings (names built
-// at run time, e.g. "Digit" & n: the images whose name starts, or ends, with such a part count as used); and whether it builds
-// image names in a way these do not show (an image property set from a concatenation, or LoadTexture)
-struct ScriptImageUse
+// What the script says about resource names:
+// - its string literals (lower case);
+// - the literals it joins to other strings (names built at run time, e.g. "Digit" & n: the images whose name starts, or ends,
+//   with such a part count as used);
+// - whether it builds image names in a way these do not show (an image property set from a concatenation, or LoadTexture);
+// - the names given as a literal to PlaySound / StopSound (and the script's own sound helpers named PlaySound...), to an image
+//   property and to a material property (original letter case, once each; a literal joined to something else is skipped)
+struct ScriptStrings
 {
    ankerl::unordered_dense::set<string> strings;
    vector<string> prefixes, suffixes; // Literals followed, or preceded, by a concatenation (& or +)
-   bool dynamicNames = false;
+   bool dynamicImageNames = false;
+   vector<string> sounds, images, materials;
 };
 
 bool IsIdentifierChar(const char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; }
@@ -192,12 +199,44 @@ bool IsIdentifierChar(const char c) { return isalnum(static_cast<unsigned char>(
 constexpr const char *imageProperties[] = { ".image", ".imagea", ".imageb", ".sideimage", ".normalmap", ".frontdecal", ".ballimage", ".ballfrontdecal",
    ".environmentimage", ".colorgradeimage", ".backdropimage_dt", ".backdropimage_fs", ".backdropimage_fss" };
 
-ScriptImageUse ScanScriptImageUse(const string &script)
+ScriptStrings ScanScriptStrings(const string &script)
 {
-   ScriptImageUse use;
+   ScriptStrings use;
+   ankerl::unordered_dense::set<string> named[3]; // Sounds, images, materials already listed
    const string text = lowerCase(script);
    string code;
-   vector<string> literals; // Of the line
+   vector<string> literals; // Of the line, in original letter case
+   // The literal given at code position pos (spaces skipped), if it is not joined to something else
+   const auto literalAt = [&code, &literals](size_t pos) -> const string *
+   {
+      while (pos < code.size() && (code[pos] == ' ' || code[pos] == '\t'))
+         ++pos;
+      if (code.compare(pos, 2, "\"\"") != 0)
+         return nullptr;
+      const size_t index = std::count(code.begin(), code.begin() + pos, '"') / 2;
+      const size_t next = code.find_first_not_of(" \t", pos + 2);
+      return next != string::npos && (code[next] == '&' || code[next] == '+') ? nullptr : &literals[index];
+   };
+   const auto addName = [&use, &named](const int kind, const string &name)
+   {
+      if (!name.empty() && named[kind].insert(lowerCase(name)).second)
+         (kind == 0 ? use.sounds : kind == 1 ? use.images : use.materials).push_back(name);
+   };
+   // Property assignments '.<property> = ...' of the line: calls fn with the position after the '='
+   const auto forEachAssignment = [&code](const char *property, const std::function<void(size_t)> &fn)
+   {
+      const size_t len = strlen(property);
+      for (size_t pos = code.find(property); pos != string::npos; pos = code.find(property, pos + 1))
+      {
+         size_t next = pos + len;
+         if (next < code.size() && IsIdentifierChar(code[next]))
+            continue; // A longer name
+         while (next < code.size() && (code[next] == ' ' || code[next] == '\t'))
+            ++next;
+         if (next < code.size() && code[next] == '=')
+            fn(next + 1);
+      }
+   };
    for (size_t lineStart = 0; lineStart < text.size();)
    {
       size_t lineEnd = text.find('\n', lineStart);
@@ -217,11 +256,11 @@ ScriptImageUse ScanScriptImageUse(const string &script)
          for (++i; i < lineEnd; ++i)
          {
             if (text[i] == '"' && i + 1 < lineEnd && text[i + 1] == '"')
-               literal += text[++i];
+               literal += script[++i];
             else if (text[i] == '"')
                break;
             else
-               literal += text[i];
+               literal += script[i];
          }
          literals.push_back(std::move(literal));
          code += "\"\"";
@@ -236,36 +275,44 @@ ScriptImageUse ScanScriptImageUse(const string &script)
       // The literals joined to something else (spaces skipped): parts of a built name
       for (size_t pos = code.find("\"\""), index = 0; pos != string::npos; pos = code.find("\"\"", pos + 2), ++index)
       {
-         use.strings.insert(literals[index]);
-         if (literals[index].empty())
+         const string literal = lowerCase(literals[index]);
+         use.strings.insert(literal);
+         if (literal.empty())
             continue;
          const size_t next = code.find_first_not_of(" \t", pos + 2);
          const size_t prev = pos == 0 ? string::npos : code.find_last_not_of(" \t", pos - 1);
          if (next != string::npos && (code[next] == '&' || code[next] == '+'))
-            use.prefixes.push_back(literals[index]);
+            use.prefixes.push_back(literal);
          if (prev != string::npos && (code[prev] == '&' || code[prev] == '+'))
-            use.suffixes.push_back(literals[index]);
+            use.suffixes.push_back(literal);
       }
-      for (size_t pos = code.find("loadtexture"); pos != string::npos && !use.dynamicNames; pos = code.find("loadtexture", pos + 1))
-         use.dynamicNames = (pos == 0 || !IsIdentifierChar(code[pos - 1])) && (pos + 11 >= code.size() || !IsIdentifierChar(code[pos + 11]));
+      for (size_t pos = code.find("loadtexture"); pos != string::npos && !use.dynamicImageNames; pos = code.find("loadtexture", pos + 1))
+         use.dynamicImageNames = (pos == 0 || !IsIdentifierChar(code[pos - 1])) && (pos + 11 >= code.size() || !IsIdentifierChar(code[pos + 11]));
       for (const char *const property : imageProperties)
-      {
-         const size_t len = strlen(property);
-         for (size_t pos = code.find(property); pos != string::npos && !use.dynamicNames; pos = code.find(property, pos + 1))
+         forEachAssignment(property,
+            [&](size_t pos)
+            {
+               // Anything but a single literal (a variable, a constant, a function result, a concatenation) is a name the script computes
+               if (const string *const name = literalAt(pos))
+                  addName(1, *name);
+               else
+                  use.dynamicImageNames = true;
+            });
+      forEachAssignment(".material", [&](size_t pos) { if (const string *const name = literalAt(pos)) addName(2, *name); });
+      // Sound calls: an identifier starting with playsound or stopsound, then its first argument
+      for (const char *const call : { "playsound", "stopsound" })
+         for (size_t pos = code.find(call); pos != string::npos; pos = code.find(call, pos + 1))
          {
-            size_t next = pos + len;
-            if (next < code.size() && IsIdentifierChar(code[next]))
-               continue; // A longer name
-            while (next < code.size() && (code[next] == ' ' || code[next] == '\t'))
+            if (pos > 0 && (IsIdentifierChar(code[pos - 1]) || code[pos - 1] == '.'))
+               continue; // Part of another name, or a method of an object
+            size_t next = pos;
+            while (next < code.size() && IsIdentifierChar(code[next]))
                ++next;
-            if (next >= code.size() || code[next] != '=')
-               continue;
-            // Anything but a single literal (a variable, a constant, a function result, a concatenation) is a name the script computes
-            const size_t value = code.find_first_not_of(" \t", next + 1);
-            const size_t after = value == string::npos ? string::npos : code.find_first_not_of(" \t", value + 2);
-            use.dynamicNames = value == string::npos || code.compare(value, 2, "\"\"") != 0 || (after != string::npos && (code[after] == '&' || code[after] == '+'));
+            while (next < code.size() && (code[next] == ' ' || code[next] == '\t' || code[next] == '('))
+               ++next;
+            if (const string *const name = literalAt(next))
+               addName(0, *name);
          }
-      }
       lineStart = lineEnd + 1;
    }
    return use;
@@ -337,7 +384,7 @@ namespace
 
 // The checks of the parts
 // loadsCode: the script loads other code (LoadVPM, ExecuteGlobal,...), which may use anything by name
-// scriptChecks: the checks that read the script (unused images)
+// scriptChecks: the checks that read the script (unused images, names used by the script)
 void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool loadsCode, const bool scriptChecks)
 {
    const auto add = [&issues](const TableIssueSeverity severity, const TableCheckId check, string message, IEditable *part = nullptr)
@@ -507,7 +554,7 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
          add(Warning, TableCheckId::SelfCrossing, "The outline of part '" + part->GetName() + "' crosses itself", part);
    }
 
-   const ScriptImageUse script = scriptChecks ? ScanScriptImageUse(table.m_script_text) : ScriptImageUse();
+   const ScriptStrings script = scriptChecks ? ScanScriptStrings(table.m_script_text) : ScriptStrings();
 
    // Materials nothing refers to (no part, table setting or script string)
    for (Material *const material : table.GetMaterialList())
@@ -538,11 +585,11 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
          continue;
       TableIssue issue { Info, TableCheckId::UnusedImage,
          "Image '" + image->m_name + "' is not used by any part, table setting, table description or script string"
-            + (script.dynamicNames ? " (the script builds image names: check it before deleting the image)"s
-               : loadsCode         ? " (the script loads other code, which may use it)"s
-                                   : ""s) };
+            + (script.dynamicImageNames ? " (the script builds image names: check it before deleting the image)"s
+               : loadsCode              ? " (the script loads other code, which may use it)"s
+                                        : ""s) };
       issue.image = image;
-      if (!script.dynamicNames && !loadsCode)
+      if (!script.dynamicImageNames && !loadsCode)
          issue.fix = TableFix::DeleteImage;
       issues.push_back(std::move(issue));
    }
@@ -553,6 +600,20 @@ void CheckParts(const PinTable &table, vector<TableIssue> &issues, const bool lo
          issue.image = image;
          issues.push_back(std::move(issue));
       }
+
+   // Names the script gives as literals that are not in the table
+   ankerl::unordered_dense::set<string> soundNames;
+   for (const VPX::Sound *const sound : table.m_vsound)
+      soundNames.insert(lowerCase(sound->GetName()));
+   for (const string &name : script.sounds)
+      if (!soundNames.contains(lowerCase(name)))
+         issues.push_back({ Warning, TableCheckId::ScriptReference, "The script plays sound '" + name + "', which is not in the table" });
+   for (const string &name : script.images)
+      if (!imageNames.contains(lowerCase(name)))
+         issues.push_back({ Warning, TableCheckId::ScriptReference, "The script sets image '" + name + "', which is not in the table" });
+   for (const string &name : script.materials)
+      if (!materialNames.contains(lowerCase(name)))
+         issues.push_back({ Warning, TableCheckId::ScriptReference, "The script sets material '" + name + "', which is not in the table" });
 }
 
 }
@@ -716,6 +777,27 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          "Part '" + part->GetName() + "' has an enabled timer but the script has no '" + part->GetName() + "_Timer' sub" + (loadsCode ? " (the script loads other code, which may have it)" : ""), part);
       if (!loadsCode)
          issues.back().fix = TableFix::DisableTimer;
+   }
+
+   // Event subs ('<object>_<event>') of objects that are not in the table: left behind by a renamed or deleted part, they never run.
+   // ParseScript gives the subs in lower case
+   static constexpr const char *partEvents[] = { "init", "hit", "unhit", "timer", "spin", "dropped", "raised", "slingshot", "animate", "limiteos", "limitbos", "collide" };
+   ankerl::unordered_dense::set<string> objectNames { lowerCase(m_name) };
+   for (const auto part : m_vedit)
+      objectNames.insert(lowerCase(part->GetName()));
+   for (const auto collection : m_vcollection)
+      objectNames.insert(lowerCase(collection->m_name));
+   for (const string &function : functions)
+   {
+      if (!options.extended)
+         break;
+      const size_t sep = function.rfind('_');
+      if (function[0] != '.' || sep == string::npos || sep < 2) // Class methods start with their class name
+         continue;
+      const string object = function.substr(1, sep - 1), event = function.substr(sep + 1);
+      // A sub the script calls by its name is a plain sub, not an event handler (e.g. a '<name>_Timer' sub called by a frame timer)
+      if (std::find(std::begin(partEvents), std::end(partEvents), event) != std::end(partEvents) && !objectNames.contains(object) && FindIndexOf(identifiers, function.substr(1)) == -1)
+         add(Warning, TableCheckId::EventSub, "The script has a sub '" + function.substr(1) + "' for the " + event + " event of '" + object + "', which is not in the table");
    }
 
    if (options.extended)
