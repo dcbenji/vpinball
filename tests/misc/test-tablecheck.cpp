@@ -4,7 +4,13 @@
 #include "../vpx-test.h"
 
 #include "parts/pintable.h"
+#include "parts/bumper.h"
+#include "parts/kicker.h"
+#include "parts/Material.h"
 #include "parts/primitive.h"
+#include "parts/ramp.h"
+#include "parts/rubber.h"
+#include "parts/surface.h"
 #include "parts/light.h"
 #include "parts/timer.h"
 #include "parts/textbox.h"
@@ -25,6 +31,21 @@ template <class T> T *AddTestPart(PinTable *table, const char *name)
    table->AddPart(part);
    part->Release();
    return part;
+}
+
+// The issues of one check (live options)
+vector<TableIssue> Issues(const PinTable *table, const TableCheckId check)
+{
+   vector<TableIssue> issues = table->CheckTable({ .extended = true });
+   std::erase_if(issues, [check](const TableIssue &issue) { return issue.check != check; });
+   return issues;
+}
+
+void SetPoints(DragPointCurve &curve, const vector<Vertex2D> &points)
+{
+   curve.ClearPoints();
+   for (const Vertex2D &p : points)
+      curve.PushPoint(std::make_unique<DragPoint>(&curve, p.x, p.y, 0.f, false));
 }
 
 // A minimal PCM WAV file with 2 channels
@@ -178,6 +199,142 @@ TEST_CASE("Table check")
       CHECK(FindIndexOf(functions, ".dup"s) != -1);
       CHECK(FindIndexOf(functions, ".other"s) == -1);
       CHECK(FindIndexOf(identifiers, "mypart"s) != -1);
+      table->Release();
+   }
+
+   SUBCASE("parts outside the playfield")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_right = 1000.f;
+      table->m_bottom = 2000.f;
+      Bumper *const inside = AddTestPart<Bumper>(table, "Inside");
+      Bumper *const outside = AddTestPart<Bumper>(table, "Outside");
+      outside->m_d.m_vCenter = Vertex2D(-200.f, 500.f);
+      // Visual parts the ball never touches (here a backbox light and a cabinet mesh, in playfield space): left out
+      Light *const light = AddTestPart<Light>(table, "BackLight");
+      light->m_d.m_vCenter = Vertex2D(500.f, 3000.f);
+      light->m_d.m_shape = ShapeCircle;
+      Primitive *const cabinet = AddTestPart<Primitive>(table, "CabinetMesh");
+      cabinet->m_d.m_vPosition = Vertex3Ds(-500.f, 500.f, 0.f);
+      cabinet->m_d.m_collidable = false;
+      Primitive *const block = AddTestPart<Primitive>(table, "OffBlock");
+      block->m_d.m_vPosition = Vertex3Ds(-500.f, 500.f, 0.f);
+      block->m_d.m_collidable = true;
+      const vector<TableIssue> issues = Issues(table, TableCheckId::OutsidePlayfield);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].part == outside);
+      CHECK(issues[0].severity == TableIssueSeverity::Warning);
+      CHECK(issues[0].message == "Part 'Outside' is outside the playfield: 200 past the left edge");
+      CHECK(issues[1].part == block);
+      CHECK(issues[1].severity == TableIssueSeverity::Info); // A collidable primitive: also often off the playfield on purpose
+      CHECK(inside != nullptr);
+      table->Release();
+   }
+
+   SUBCASE("missing and unused images and materials")
+   {
+      PinTable *const table = CreateTestTable();
+      Surface *const wall = AddTestPart<Surface>(table, "Wall1");
+      wall->m_d.m_szSideImage = "NoSuchImage";
+      wall->m_d.m_szTopMaterial = "UsedMat";
+      wall->m_d.m_szPhysicsMaterial = "NoPhysicsMat"; // Not used: the wall overwrites the physics of its material
+      table->m_playfieldMaterial = "NoSuchMat";
+      for (const char *name : { "UsedMat", "UnusedMat" })
+      {
+         Material *const mat = new Material();
+         mat->m_name = name;
+         table->AddMaterial(mat);
+      }
+      const vector<TableIssue> missing = Issues(table, TableCheckId::MissingResource);
+      REQUIRE(missing.size() == 2);
+      CHECK(missing[0].part == wall);
+      CHECK(missing[0].message == "Part 'Wall1' uses image 'NoSuchImage' (Side Image), which is not in the table");
+      CHECK(missing[1].part == nullptr);
+      CHECK(missing[1].message == "Table uses material 'NoSuchMat' (Playfield Material), which is not in the table");
+      const vector<TableIssue> unused = Issues(table, TableCheckId::UnusedMaterial);
+      REQUIRE(unused.size() == 1);
+      CHECK(unused[0].severity == TableIssueSeverity::Info);
+      CHECK(unused[0].material == table->GetMaterialList()[1]);
+      wall->m_d.m_overwritePhysics = false;
+      CHECK(Issues(table, TableCheckId::MissingResource).size() == 3);
+      table->Release();
+   }
+
+   SUBCASE("duplicate part names")
+   {
+      PinTable *const table = CreateTestTable();
+      AddTestPart<Bumper>(table, "Bumper1");
+      Bumper *const second = AddTestPart<Bumper>(table, "Bumper2");
+      second->GetIScriptable()->m_name = "BUMPER1"; // As loaded from an old file: names are not case sensitive for the script
+      const vector<TableIssue> issues = Issues(table, TableCheckId::DuplicateName);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].severity == TableIssueSeverity::Error);
+      CHECK(issues[1].part == second);
+      table->Release();
+   }
+
+   SUBCASE("colliders that can not collide")
+   {
+      PinTable *const table = CreateTestTable();
+      Surface *const wall = AddTestPart<Surface>(table, "FlatWall"); // Still collides with its top: not reported
+      wall->m_d.m_collidable = true;
+      wall->m_d.m_heighttop = wall->m_d.m_heightbottom = 0.f;
+      Rubber *const rubber = AddTestPart<Rubber>(table, "ThinRubber");
+      rubber->m_d.m_collidable = true;
+      rubber->m_d.m_thickness = 0;
+      AddTestPart<Bumper>(table, "NoBumper")->m_d.m_radius = 0.f;
+      AddTestPart<Kicker>(table, "NoKicker")->m_d.m_radius = 0.f;
+      Ramp *const ramp = AddTestPart<Ramp>(table, "NoRamp");
+      ramp->m_d.m_collidable = true;
+      ramp->m_d.m_type = RampTypeFlat;
+      ramp->m_d.m_widthbottom = ramp->m_d.m_widthtop = 0.f;
+      AddTestPart<Bumper>(table, "GoodBumper");
+      const vector<TableIssue> issues = Issues(table, TableCheckId::Collider);
+      REQUIRE(issues.size() == 4);
+      for (const TableIssue &issue : issues)
+         CHECK(issue.severity == TableIssueSeverity::Error);
+      CHECK(issues[0].message == "Collidable rubber 'ThinRubber' has no thickness");
+      table->Release();
+   }
+
+   SUBCASE("drag points and self crossing outlines")
+   {
+      PinTable *const table = CreateTestTable();
+      Ramp *const ramp = AddTestPart<Ramp>(table, "OnePoint");
+      ramp->m_curve.ClearPoints();
+      ramp->m_curve.PushPoint(std::make_unique<DragPoint>(&ramp->m_curve, 0.f, 0.f, 0.f, false));
+      Surface *const twin = AddTestPart<Surface>(table, "TwinPoints");
+      SetPoints(twin->m_curve, { { 0.f, 0.f }, { 100.f, 0.f }, { 100.f, 0.f }, { 100.f, 100.f }, { 0.f, 100.f } });
+      Surface *const bowtie = AddTestPart<Surface>(table, "Bowtie");
+      SetPoints(bowtie->m_curve, { { 0.f, 0.f }, { 100.f, 100.f }, { 100.f, 0.f }, { 0.f, 100.f } });
+      Surface *const square = AddTestPart<Surface>(table, "Square");
+      SetPoints(square->m_curve, { { 0.f, 0.f }, { 100.f, 0.f }, { 100.f, 100.f }, { 0.f, 100.f } });
+
+      const vector<TableIssue> points = Issues(table, TableCheckId::DragPoints);
+      REQUIRE(points.size() == 2);
+      CHECK(points[0].part == ramp);
+      CHECK(points[0].severity == TableIssueSeverity::Error);
+      CHECK(points[0].message == "Part 'OnePoint' has only 1 drag point (at least 2 needed)");
+      CHECK(points[1].part == twin);
+      CHECK(points[1].severity == TableIssueSeverity::Info); // Harmless
+      CHECK(points[1].message == "Part 'TwinPoints': drag points 2 and 3 are on the same spot (zero length segment)");
+
+      const vector<TableIssue> crossing = Issues(table, TableCheckId::SelfCrossing);
+      REQUIRE(crossing.size() == 1);
+      CHECK(crossing[0].part == bowtie);
+      table->Release();
+   }
+
+   SUBCASE("the audit text leaves out the table check's own checks")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_ballSphericalMapping = false;
+      AddTestPart<Bumper>(table, "Bumper1");
+      Bumper *const second = AddTestPart<Bumper>(table, "Bumper2");
+      second->GetIScriptable()->m_name = "BUMPER1";
+      CHECK(table->AuditTable(false).find("same name") == string::npos);
+      CHECK(table->AuditTable(false).find("No issue identified.") != string::npos);
+      CHECK(Issues(table, TableCheckId::DuplicateName).size() == 2);
       table->Release();
    }
 

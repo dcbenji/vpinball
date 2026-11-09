@@ -4,13 +4,29 @@
 #include "tablecheck.h"
 
 #include "audio/AudioPlayer.h"
+#include "math/MeshUtils.h"
+#include "parts/ball.h"
+#include "parts/bumper.h"
+#include "parts/decal.h"
+#include "parts/dispreel.h"
 #include "parts/flasher.h"
+#include "parts/flipper.h"
+#include "parts/gate.h"
+#include "parts/hittarget.h"
+#include "parts/kicker.h"
 #include "parts/light.h"
+#include "parts/Material.h"
+#include "parts/PartGroup.h"
+#include "parts/plunger.h"
 #include "parts/primitive.h"
+#include "parts/ramp.h"
+#include "parts/rubber.h"
 #include "parts/Sound.h"
+#include "parts/spinner.h"
 #include "parts/surface.h"
 #include "parts/textbox.h"
 #include "parts/timer.h"
+#include "parts/trigger.h"
 #include "renderer/Texture.h"
 
 const char *TableCheckTitle(const TableCheckId check)
@@ -29,6 +45,13 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::LightIntensity: return "Light intensity";
    case TableCheckId::VideoCap: return "Flasher VideoCap API";
    case TableCheckId::VPM: return "VPinMAME setup";
+   case TableCheckId::OutsidePlayfield: return "Outside the playfield";
+   case TableCheckId::MissingResource: return "Missing images and materials";
+   case TableCheckId::DuplicateName: return "Duplicate part names";
+   case TableCheckId::Collider: return "Colliders that can not collide";
+   case TableCheckId::DragPoints: return "Drag points";
+   case TableCheckId::SelfCrossing: return "Self-crossing outlines";
+   case TableCheckId::UnusedMaterial: return "Unused materials";
    case TableCheckId::Sound: return "Sounds";
    case TableCheckId::Backdrop: return "Backdrop images";
    case TableCheckId::Totals: return "Totals";
@@ -57,6 +80,338 @@ string FormatTableAudit(const vector<TableIssue> &issues)
    if (!listed)
       ss << "No issue identified.\r\n";
    return "Table audit:\r\n" + ss.str();
+}
+
+namespace
+{
+
+// The data block of the parts that have the common properties (image, material, physics material)
+const BaseProperty *BaseOf(const IEditable *part)
+{
+   switch (part->GetItemType())
+   {
+   case eItemBall: return &static_cast<const Ball *>(part)->m_d;
+   case eItemBumper: return &static_cast<const Bumper *>(part)->m_d;
+   case eItemDecal: return &static_cast<const Decal *>(part)->m_d;
+   case eItemDispReel: return &static_cast<const DispReel *>(part)->m_d;
+   case eItemFlipper: return &static_cast<const Flipper *>(part)->m_d;
+   case eItemGate: return &static_cast<const Gate *>(part)->m_d;
+   case eItemHitTarget: return &static_cast<const HitTarget *>(part)->m_d;
+   case eItemKicker: return &static_cast<const Kicker *>(part)->m_d;
+   case eItemLight: return &static_cast<const Light *>(part)->m_d;
+   case eItemPlunger: return &static_cast<const Plunger *>(part)->m_d;
+   case eItemPrimitive: return &static_cast<const Primitive *>(part)->m_d;
+   case eItemRamp: return &static_cast<const Ramp *>(part)->m_d;
+   case eItemRubber: return &static_cast<const Rubber *>(part)->m_d;
+   case eItemSpinner: return &static_cast<const Spinner *>(part)->m_d;
+   case eItemSurface: return &static_cast<const Surface *>(part)->m_d;
+   case eItemTrigger: return &static_cast<const Trigger *>(part)->m_d;
+   default: return nullptr;
+   }
+}
+
+// The outline a part uses (its drag points), if any
+const DragPointCurve *OutlineOf(const IEditable *part)
+{
+   switch (part->GetItemType())
+   {
+   case eItemSurface: return &static_cast<const Surface *>(part)->m_curve;
+   case eItemRamp: return &static_cast<const Ramp *>(part)->m_curve;
+   case eItemRubber: return &static_cast<const Rubber *>(part)->m_curve;
+   case eItemFlasher: return &static_cast<const Flasher *>(part)->m_curve;
+   case eItemLight: return static_cast<const Light *>(part)->m_d.m_shape == ShapeCustom ? &static_cast<const Light *>(part)->m_curve : nullptr;
+   case eItemTrigger:
+   {
+      const TriggerShape shape = static_cast<const Trigger *>(part)->m_d.m_shape;
+      return shape != TriggerStar && shape != TriggerButton ? &static_cast<const Trigger *>(part)->m_curve : nullptr; // Star and button triggers are round
+   }
+   default: return nullptr;
+   }
+}
+
+// Closed outlines: the last drag point joins the first
+bool IsClosedOutline(const IEditable *part) { return part->GetItemType() != eItemRamp; }
+
+// Parts that are often put off the playfield on purpose (cabinet parts, toys, backglass lights and flashers)
+bool IsOftenOffPlayfield(const IEditable *part)
+{
+   switch (part->GetItemType())
+   {
+   case eItemPrimitive:
+   case eItemLight:
+   case eItemFlasher:
+   case eItemDecal: return true;
+   default: return false;
+   }
+}
+
+bool HasNoPlayfieldPosition(const IEditable *part)
+{
+   if (part->m_desktopBackdrop || (part->GetPartGroup() != nullptr && part->GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD))
+      return true;
+   switch (part->GetItemType())
+   {
+   case eItemPartGroup:
+   case eItemLightSeq:
+   case eItemTimer:
+   case eItemBall:
+   case eItemTextbox:
+   case eItemDispReel: return true;
+   default: return false;
+   }
+}
+
+// Proper crossing of two segments (shared end points and touching do not count)
+bool SegmentsCross(const Vertex2D &a, const Vertex2D &b, const Vertex2D &c, const Vertex2D &d)
+{
+   if (max(a.x, b.x) < min(c.x, d.x) || max(c.x, d.x) < min(a.x, b.x) || max(a.y, b.y) < min(c.y, d.y) || max(c.y, d.y) < min(a.y, b.y))
+      return false;
+   const auto cross = [](const Vertex2D &o, const Vertex2D &p, const Vertex2D &q) { return (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x); };
+   const float d1 = cross(a, b, c), d2 = cross(a, b, d), d3 = cross(c, d, a), d4 = cross(c, d, b);
+   return ((d1 > 0.f && d2 < 0.f) || (d1 < 0.f && d2 > 0.f)) && ((d3 > 0.f && d4 < 0.f) || (d3 < 0.f && d4 > 0.f));
+}
+
+string PartLabel(const IEditable *part) { return part != nullptr ? "Part '" + part->GetName() + '\'' : "Table"s; }
+
+}
+
+void ForEachResourceReference(const PinTable &table, const std::function<void(IEditable *part, const char *field, const string &name, bool isImage)> &fn)
+{
+   for (IEditable *const part : table.GetParts())
+   {
+      const auto img = [&](const char *field, const string &name) { if (!name.empty()) fn(part, field, name, true); };
+      const auto mat = [&](const char *field, const string &name) { if (!name.empty()) fn(part, field, name, false); };
+      if (const BaseProperty *const base = BaseOf(part))
+      {
+         img(part->GetItemType() == eItemSurface ? "Top Image" : "Image", base->m_szImage);
+         mat("Material", base->m_szMaterial);
+         if (!base->m_overwritePhysics) // Else the part's own physics values are used, not the material's
+            mat("Physics Material", base->m_szPhysicsMaterial);
+      }
+      switch (part->GetItemType())
+      {
+      case eItemBall: img("Decal Image", static_cast<const Ball *>(part)->m_d.m_imageDecal); break;
+      case eItemBumper:
+      {
+         const auto &d = static_cast<const Bumper *>(part)->m_d;
+         mat("Cap Material", d.m_szCapMaterial);
+         mat("Base Material", d.m_szBaseMaterial);
+         mat("Skirt Material", d.m_szSkirtMaterial);
+         mat("Ring Material", d.m_szRingMaterial);
+         break;
+      }
+      case eItemFlasher:
+         img("Image A", static_cast<const Flasher *>(part)->m_d.m_szImageA);
+         img("Image B", static_cast<const Flasher *>(part)->m_d.m_szImageB);
+         break;
+      case eItemFlipper: mat("Rubber Material", static_cast<const Flipper *>(part)->m_d.m_szRubberMaterial); break;
+      case eItemPrimitive: img("Normal Map", static_cast<const Primitive *>(part)->m_d.m_szNormalMap); break;
+      case eItemSurface:
+      {
+         const auto &d = static_cast<const Surface *>(part)->m_d;
+         img("Side Image", d.m_szSideImage);
+         mat("Top Material", d.m_szTopMaterial);
+         mat("Side Material", d.m_szSideMaterial);
+         mat("Slingshot Material", d.m_szSlingShotMaterial);
+         break;
+      }
+      default: break;
+      }
+   }
+   const auto img = [&](const char *field, const string &name) { if (!name.empty()) fn(nullptr, field, name, true); };
+   img("Playfield Image", table.m_image);
+   img("Ball Image", table.m_ballImage);
+   img("Ball Decal", table.m_ballImageDecal);
+   img("Environment Image", table.m_envImage);
+   img("Color Grade Image", table.m_imageColorGrade);
+   img("Screenshot", table.m_screenShot);
+   img("Desktop Backdrop Image", table.m_BG_image[BG_DESKTOP]);
+   img("Cabinet Backdrop Image", table.m_BG_image[BG_FULLSCREEN]);
+   img("Full Single Screen Backdrop Image", table.m_BG_image[BG_FSS]);
+   if (!table.m_playfieldMaterial.empty())
+      fn(nullptr, "Playfield Material", table.m_playfieldMaterial, false);
+}
+
+namespace
+{
+
+// The checks of the parts
+void CheckParts(const PinTable &table, vector<TableIssue> &issues)
+{
+   const auto add = [&issues](const TableIssueSeverity severity, const TableCheckId check, string message, IEditable *part = nullptr)
+   { issues.push_back({ severity, check, std::move(message), part }); };
+   constexpr TableIssueSeverity Error = TableIssueSeverity::Error, Warning = TableIssueSeverity::Warning, Info = TableIssueSeverity::Info;
+
+   // The parts of the authored table (not the objects made by a running player session)
+   vector<IEditable *> parts;
+   parts.reserve(table.GetParts().size());
+   for (IEditable *const part : table.GetParts())
+      if (!table.IsPlayerSessionObject(part))
+         parts.push_back(part);
+
+   // Parts outside the playfield rectangle, with a 5% margin
+   if (table.m_right > table.m_left && table.m_bottom > table.m_top)
+   {
+      const float marginX = 0.05f * (table.m_right - table.m_left), marginY = 0.05f * (table.m_bottom - table.m_top);
+      for (IEditable *const part : parts)
+      {
+         if (HasNoPlayfieldPosition(part))
+            continue;
+         // Visual parts the ball never touches (lights, flashers, decals, primitives that do not collide) are often put off the
+         // playfield on purpose (backbox, backglass, cabinet, room), also in playfield space: left out
+         if (const BaseProperty *const base = BaseOf(part); IsOftenOffPlayfield(part) && (base == nullptr || !base->m_collidable))
+            continue;
+         float minX = FLT_MAX, maxX = -FLT_MAX, minY = FLT_MAX, maxY = -FLT_MAX;
+         const auto include = [&](const float x, const float y)
+         {
+            minX = min(minX, x);
+            maxX = max(maxX, x);
+            minY = min(minY, y);
+            maxY = max(maxY, y);
+         };
+         const DragPointCurve *const curve = OutlineOf(part);
+         if (curve != nullptr && !curve->GetPoints().empty())
+            for (const auto &p : curve->GetPoints())
+               include(p->GetX(), p->GetY());
+         else
+            include(part->GetCenter().x, part->GetCenter().y);
+         string where;
+         const auto side = [&where](const char *edge, const float over) { where += (where.empty() ? "" : ", ") + std::format("{:.0f} past the {} edge", over, edge); };
+         if (table.m_left - minX > marginX)
+            side("left", table.m_left - minX);
+         if (maxX - table.m_right > marginX)
+            side("right", maxX - table.m_right);
+         if (table.m_top - minY > marginY)
+            side("top", table.m_top - minY);
+         if (maxY - table.m_bottom > marginY)
+            side("bottom", maxY - table.m_bottom);
+         if (!where.empty())
+            add(IsOftenOffPlayfield(part) ? Info : Warning, TableCheckId::OutsidePlayfield, "Part '" + part->GetName() + "' is outside the playfield: " + where, part);
+      }
+   }
+
+   // Image and material names that are not in the table (backdrop images are reported by the backdrop check)
+   ankerl::unordered_dense::set<string> imageNames, materialNames, usedMaterials;
+   for (const Texture *const image : table.GetImageList())
+      imageNames.insert(lowerCase(image->m_name));
+   for (const Material *const material : table.GetMaterialList())
+      materialNames.insert(lowerCase(material->m_name));
+   ForEachResourceReference(table,
+      [&](IEditable *part, const char *field, const string &name, const bool isImage)
+      {
+         if (part != nullptr && table.IsPlayerSessionObject(part))
+            return;
+         const string key = lowerCase(name);
+         if (!isImage)
+            usedMaterials.insert(key);
+         if (StrCompareNoCase(name, g_szNoneSelection) || (isImage && string(field).ends_with("Backdrop Image")) || (isImage ? imageNames : materialNames).contains(key))
+            return;
+         add(Warning, TableCheckId::MissingResource, PartLabel(part) + " uses " + (isImage ? "image '" : "material '") + name + "' (" + field + "), which is not in the table", part);
+      });
+
+   // Script names are case insensitive: parts sharing a name can not all be reached from the script
+   ankerl::unordered_dense::map<string, int> nameCounts;
+   for (IEditable *const part : parts)
+      if (!part->GetName().empty())
+         ++nameCounts[lowerCase(part->GetName())];
+   for (IEditable *const part : parts)
+      if (const int n = part->GetName().empty() ? 0 : nameCounts[lowerCase(part->GetName())]; n > 1)
+         add(Error, TableCheckId::DuplicateName, std::format("Part '{}' has the same name as {} other part{} (the script reaches only one of them)", part->GetName(), n - 1, n == 2 ? "" : "s"), part);
+
+   // Collidable parts that can not collide: no width, no thickness, no radius (a wall with no height still collides with its top)
+   for (IEditable *const part : parts)
+   {
+      const string name = part->GetName();
+      switch (part->GetItemType())
+      {
+      case eItemRamp:
+         // Only a flat ramp is judged by its widths (wire ramps use their wire), and only when both ends have none
+         if (const auto &d = static_cast<const Ramp *>(part)->m_d; d.m_collidable && d.m_type == RampTypeFlat && d.m_widthbottom <= 0.f && d.m_widthtop <= 0.f)
+            add(Error, TableCheckId::Collider, "Collidable flat ramp '" + name + "' has no width at either end", part);
+         break;
+      case eItemRubber:
+         if (const auto &d = static_cast<const Rubber *>(part)->m_d; d.m_collidable && d.m_thickness <= 0)
+            add(Error, TableCheckId::Collider, "Collidable rubber '" + name + "' has no thickness", part);
+         break;
+      case eItemBumper:
+         if (static_cast<const Bumper *>(part)->m_d.m_radius <= 0.f)
+            add(Error, TableCheckId::Collider, "Bumper '" + name + "' has no radius", part);
+         break;
+      case eItemKicker:
+         if (static_cast<const Kicker *>(part)->m_d.m_radius <= 0.f)
+            add(Error, TableCheckId::Collider, "Kicker '" + name + "' has no radius", part);
+         break;
+      default: break;
+      }
+   }
+
+   // Drag points: too few, or two consecutive points on the same spot (a zero length segment, harmless: info)
+   for (IEditable *const part : parts)
+   {
+      const DragPointCurve *const curve = OutlineOf(part);
+      if (curve == nullptr)
+         continue;
+      const auto &pts = curve->GetPoints();
+      const int n = static_cast<int>(pts.size());
+      if (n < curve->GetMinimumPoints())
+      {
+         add(Error, TableCheckId::DragPoints, std::format("Part '{}' has only {} drag point{} (at least {} needed)", part->GetName(), n, n == 1 ? "" : "s", curve->GetMinimumPoints()), part);
+         continue;
+      }
+      int zero = 0, first = -1;
+      for (int i = 0; i < (IsClosedOutline(part) ? n : n - 1); ++i)
+      {
+         const int j = (i + 1) % n;
+         if (pts[i]->GetX() == pts[j]->GetX() && pts[i]->GetY() == pts[j]->GetY() && pts[i]->GetZ() == pts[j]->GetZ())
+         {
+            if (first < 0)
+               first = i;
+            ++zero;
+         }
+      }
+      if (zero == 1)
+         add(Info, TableCheckId::DragPoints, std::format("Part '{}': drag points {} and {} are on the same spot (zero length segment)", part->GetName(), first + 1, (first + 1) % n + 1), part);
+      else if (zero > 1)
+         add(Info, TableCheckId::DragPoints, std::format("Part '{}' has {} zero length segments (first: drag points {} and {})", part->GetName(), zero, first + 1, (first + 1) % n + 1), part);
+   }
+
+   // Closed outlines that cross themselves. The curve is smoothed coarsely (straight lines between the points show a fold), an outline
+   // still too long to check is reported as such
+   constexpr size_t maxVertices = 1200;
+   vector<RenderVertex> v;
+   for (IEditable *const part : parts)
+   {
+      const DragPointCurve *const curve = OutlineOf(part);
+      if (curve == nullptr || !IsClosedOutline(part) || static_cast<int>(curve->GetPoints().size()) < max(3, curve->GetMinimumPoints()))
+         continue;
+      for (const float accuracy : { 16.f, 256.f, 4096.f }) // A higher value flattens more (the default is 4)
+      {
+         v.clear();
+         curve->GetRgVertex(v, true, accuracy);
+         if (v.size() <= maxVertices)
+            break;
+      }
+      const size_t n = v.size();
+      if (n > maxVertices)
+      {
+         add(Info, TableCheckId::SelfCrossing, "Part '" + part->GetName() + "': outline too long to check for crossings", part);
+         continue;
+      }
+      bool crossed = false;
+      for (size_t i = 0; n >= 4 && i < n && !crossed; ++i)
+         for (size_t j = i + 2; j < n && !crossed; ++j)
+            if (!(i == 0 && j == n - 1)) // Neighbours across the closing segment
+               crossed = SegmentsCross(v[i], v[(i + 1) % n], v[j], v[(j + 1) % n]);
+      if (crossed)
+         add(Warning, TableCheckId::SelfCrossing, "The outline of part '" + part->GetName() + "' crosses itself", part);
+   }
+
+   // Materials nothing refers to
+   for (Material *const material : table.GetMaterialList())
+      if (!usedMaterials.contains(lowerCase(material->m_name)))
+         issues.push_back({ Info, TableCheckId::UnusedMaterial, "Material '" + material->m_name + "' is not used by any part or table setting (the script may still use it)", nullptr, material });
+}
+
 }
 
 vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
@@ -198,6 +553,9 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
 
    if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmtimer"s) != -1))
       add(Warning, TableCheckId::VPM, "script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.");
+
+   if (options.extended)
+      CheckParts(*this, issues);
 
    if (options.sound)
    {

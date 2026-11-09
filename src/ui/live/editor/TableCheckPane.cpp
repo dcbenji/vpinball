@@ -58,6 +58,12 @@ void TableCheckPane::Scan()
 void TableCheckPane::Select(const TableIssue &issue, const bool frame)
 {
    EditorUI &editor = m_editor;
+   if (issue.material != nullptr)
+   {
+      if (std::ranges::find(editor.m_table->GetMaterialList(), issue.material) != editor.m_table->GetMaterialList().end())
+         editor.SetSelection(Selection(issue.material));
+      return;
+   }
    if (issue.part == nullptr)
       return;
    // The issue may be older than the table: only a part that is still in it is selected
@@ -154,7 +160,11 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
          continue;
       anyShown = true;
       const string header = string(TableCheckTitle(check)) + "  (" + std::to_string(rows.size()) + ")###TableCheckGroup" + std::to_string(static_cast<int>(check));
-      if (!ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth))
+      // A group starts open when it has an error, or warnings and only a few rows: a long list, or infos alone, is a summary row to expand
+      const bool hasError = std::ranges::any_of(rows, [](const TableIssue *issue) { return issue->severity == TableIssueSeverity::Error; });
+      const bool hasWarning = std::ranges::any_of(rows, [](const TableIssue *issue) { return issue->severity == TableIssueSeverity::Warning; });
+      const bool openByDefault = hasError || (hasWarning && rows.size() <= 10);
+      if (!ImGui::TreeNodeEx(header.c_str(), (openByDefault ? ImGuiTreeNodeFlags_DefaultOpen : 0) | ImGuiTreeNodeFlags_SpanAvailWidth))
          continue;
       ImGuiListClipper clipper;
       clipper.Begin(static_cast<int>(rows.size()), rowH + ImGui::GetStyle().ItemSpacing.y);

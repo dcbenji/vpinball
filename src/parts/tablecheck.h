@@ -6,7 +6,11 @@
 
 #pragma once
 
+#include <functional>
+
 class IEditable;
+class Material;
+class PinTable;
 
 enum class TableIssueSeverity : uint8_t
 {
@@ -30,6 +34,13 @@ enum class TableCheckId : uint8_t
    LightIntensity, // Negative light intensity
    VideoCap, // Deprecated flasher VideoCap API
    VPM, // VPinMAME controller setup
+   OutsidePlayfield, // Part outside the playfield
+   MissingResource, // Image or material name that is not in the table
+   DuplicateName, // Parts sharing a name
+   Collider, // Collidable part that can not collide
+   DragPoints, // Too few drag points, or two on the same spot
+   SelfCrossing, // Outline that crosses itself
+   UnusedMaterial, // Material not used by any part
    Sound, // Sound format
    Backdrop, // Backdrop image not in the table
    Totals, // Size totals (sounds, images, primitives)
@@ -44,13 +55,18 @@ struct TableIssue
    TableCheckId check = TableCheckId::Count;
    string message; // Without the severity
    IEditable *part = nullptr; // Part the issue is about, if any
+   Material *material = nullptr; // Material the issue is about, if any
 };
 
 struct TableCheckOptions
 {
    bool sound = false; // Sound checks: they create an audio player (sound device settings) to read the sound formats
    bool totals = false; // Size totals of the sounds, images and primitives (Info issues)
+   bool extended = false; // The table check's own checks (parts, resources,...), on top of the audit checks: AuditTable leaves them out
 };
+
+// Calls fn for each image and material name stored by the parts (part, field label, name) and by the table settings (part is null)
+void ForEachResourceReference(const PinTable &table, const std::function<void(IEditable *part, const char *field, const string &name, bool isImage)> &fn);
 
 // The audit text of the Win32 editor and the '-audit' command: one line per issue, prefixed by ". Error: " or ". Warning: "
 string FormatTableAudit(const vector<TableIssue> &issues);

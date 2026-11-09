@@ -26,7 +26,7 @@ public:
    void LoadSetup(const nlohmann::json &j) override;
 
    // The checks run by the live editor: no audio player (sound checks), no size totals
-   static constexpr TableCheckOptions LiveOptions {};
+   static constexpr TableCheckOptions LiveOptions { .extended = true };
 
 private:
    void Scan();
