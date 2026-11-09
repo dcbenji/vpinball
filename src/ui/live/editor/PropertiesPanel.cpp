@@ -1028,6 +1028,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
                   if (col == collection)
                   {
                      editor.m_table->RemoveCollection(col);
+                     editor.m_undo.ClearRedo(); // Not undoable: a redo record may refer to the collection
                      break;
                   }
                editor.m_selection = Selection();

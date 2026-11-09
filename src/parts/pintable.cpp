@@ -465,6 +465,24 @@ void PinTable::RemoveCollection(CComObject<Collection> *collection)
    m_vremovedCollection.push_back(collection);
 }
 
+void PinTable::RestoreCollection(CComObject<Collection> *collection, const size_t index)
+{
+   const int idx = FindIndexOf(m_vremovedCollection, collection);
+   assert(idx != -1);
+   if (idx == -1)
+      return;
+   m_vremovedCollection.erase(m_vremovedCollection.begin() + idx); // The reference kept by the removed list goes back to the collection list
+   m_vcollection.insert(m_vcollection.begin() + min(index, m_vcollection.size()), collection);
+   // Its name may have been given to another object while it was out of the table (e.g. a new collection): it then gets a unique one,
+   // as a restored image does
+   const string name = collection->m_name;
+   for (int suffix = 2; !IsNameUnique(collection->m_name); ++suffix)
+      collection->m_name = TruncateToUTF16Length(name, MAXNAMEBUFFER - 5) + '_' + std::to_string(suffix);
+   m_scriptableNames.insert(lowerCase(collection->m_name));
+   if (m_tableEditor)
+      m_tableEditor->OnScriptableAdded((IScriptable *)collection, false);
+}
+
 void PinTable::RenameCollection(Collection *collection, const string &newName)
 {
    assert(!collection->m_name.empty());

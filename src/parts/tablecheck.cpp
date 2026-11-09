@@ -7,6 +7,7 @@
 #include "math/MeshUtils.h"
 #include "parts/ball.h"
 #include "parts/bumper.h"
+#include "parts/Collection.h"
 #include "parts/decal.h"
 #include "parts/dispreel.h"
 #include "parts/flasher.h"
@@ -41,6 +42,7 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::StaticReferenced: return "Static parts used by the script";
    case TableCheckId::TextboxDMD: return "Textbox used as DMD";
    case TableCheckId::FastTimer: return "Fast timers";
+   case TableCheckId::TimerSub: return "Timers without a sub";
    case TableCheckId::Translucency: return "Translucency on opaque primitives";
    case TableCheckId::LightIntensity: return "Light intensity";
    case TableCheckId::VideoCap: return "Flasher VideoCap API";
@@ -52,6 +54,7 @@ const char *TableCheckTitle(const TableCheckId check)
    case TableCheckId::DragPoints: return "Drag points";
    case TableCheckId::SelfCrossing: return "Self-crossing outlines";
    case TableCheckId::UnusedMaterial: return "Unused materials";
+   case TableCheckId::EmptyCollection: return "Empty collections";
    case TableCheckId::Sound: return "Sounds";
    case TableCheckId::Backdrop: return "Backdrop images";
    case TableCheckId::Totals: return "Totals";
@@ -507,8 +510,11 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          add(Warning, TableCheckId::Translucency, "Primitive '" + prim->GetName() + "' uses translucency (lighting from below) while it is fully opaque. Translucency will be discarded.", part);
 
       if (type == eItemLight && light->m_d.m_intensity < 0.f)
+      {
          add(Error, TableCheckId::LightIntensity, "Light '" + light->GetName() + "' has a negative intensity.", part);
-      if (type == eItemLight && light->m_d.m_intensity_scale < 0.f)
+         issues.back().fix = TableFix::ClearLightIntensity;
+      }
+      if (type == eItemLight && light->m_d.m_intensity_scale < 0.f) // Set by the script (it is not saved with the table): no fix
          add(Error, TableCheckId::LightIntensity, "Light '" + light->GetName() + "' has a negative intensity scale.", part);
 
       // Disabled as this is now enforced in the rendering
@@ -555,8 +561,40 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
    if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmtimer"s) != -1))
       add(Warning, TableCheckId::VPM, "script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.");
 
+   // Enabled timers without a '<name>_Timer' sub: they run for nothing. A script that loads other code (LoadVPM, ExecuteGlobal,
+   // Execute, GetRef) may define the sub there (e.g. the VPinMAME scripts): the issue is then an info, and the timer is not disabled
+   // by the fix. The timer of a part in a collection that fires events also fires the collection's Timer event: not reported.
+   const bool loadsCode = std::ranges::any_of(std::initializer_list<string> { "loadvpm"s, "loadvpmalt"s, "executeglobal"s, "execute"s, "getref"s },
+      [&identifiers](const string &id) { return FindIndexOf(identifiers, id) != -1; });
+   for (const auto part : m_vedit)
+   {
+      if (!options.extended || !options.script || !part->m_timerEnabled || IsPlayerSessionObject(part) || std::ranges::any_of(part->m_vCollection, [](const Collection *c) { return c->m_fireEvents; }))
+         continue;
+      if (FindIndexOf(functions, '.' + lowerCase(part->GetName()) + "_timer") != -1)
+         continue;
+      add(loadsCode ? Info : Warning, TableCheckId::TimerSub,
+         "Part '" + part->GetName() + "' has an enabled timer but the script has no '" + part->GetName() + "_Timer' sub" + (loadsCode ? " (the script loads other code, which may have it)" : ""), part);
+      if (!loadsCode)
+         issues.back().fix = TableFix::DisableTimer;
+   }
+
    if (options.extended)
       CheckParts(*this, issues);
+
+   // Collections without parts (leftovers). One whose name the script uses (as a name, 'For Each x In Collection' is valid on an empty
+   // one, or in a string, e.g. for Eval) stays, and so does any when the script loads other code
+   const string lowerScript = options.extended ? lowerCase(m_script_text) : string();
+   for (CComObject<Collection> *const collection : m_vcollection)
+      if (options.extended && options.script && collection->GetParts().empty())
+      {
+         const string name = lowerCase(collection->m_name);
+         const bool used = FindIndexOf(identifiers, name) != -1 || lowerScript.find('"' + name + '"') != string::npos;
+         add(Info, TableCheckId::EmptyCollection,
+            "Collection '" + collection->m_name + "' is empty" + (used ? " (the script uses its name)" : loadsCode ? " (the script loads other code, which may use it)" : ""));
+         issues.back().collection = collection;
+         if (!used && !loadsCode)
+            issues.back().fix = TableFix::DeleteCollection;
+      }
 
    if (options.sound)
    {
@@ -600,7 +638,11 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
    static const char* const bgSetNames[NUM_BG_SETS] = { "Desktop", "Cabinet", "Full Single Screen" };
    for (unsigned int i = 0; i < NUM_BG_SETS; ++i)
       if (const string& bg = m_BG_image[i]; !bg.empty() && !StrCompareNoCase(bg, g_szNoneSelection) && GetImage(bg) == nullptr)
+      {
          add(Warning, TableCheckId::Backdrop, string(bgSetNames[i]) + " backdrop image '" + bg + "' is not present in the table (renders black)");
+         issues.back().index = static_cast<int>(i);
+         issues.back().fix = TableFix::ClearBackdropImage;
+      }
 
    if (options.totals)
    {

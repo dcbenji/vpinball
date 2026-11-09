@@ -8,6 +8,7 @@
 
 #include <functional>
 
+class Collection;
 class IEditable;
 class Material;
 class PinTable;
@@ -30,6 +31,7 @@ enum class TableCheckId : uint8_t
    StaticReferenced, // Static part referenced from the script
    TextboxDMD, // Legacy textbox used as a DMD
    FastTimer, // Timer faster than 60 FPS
+   TimerSub, // Enabled timer without a sub in the script
    Translucency, // Translucency on an opaque primitive
    LightIntensity, // Negative light intensity
    VideoCap, // Deprecated flasher VideoCap API
@@ -41,6 +43,7 @@ enum class TableCheckId : uint8_t
    DragPoints, // Too few drag points, or two on the same spot
    SelfCrossing, // Outline that crosses itself
    UnusedMaterial, // Material not used by any part
+   EmptyCollection, // Collection without parts
    Sound, // Sound format
    Backdrop, // Backdrop image not in the table
    Totals, // Size totals (sounds, images, primitives)
@@ -49,6 +52,16 @@ enum class TableCheckId : uint8_t
 
 const char *TableCheckTitle(TableCheckId check);
 
+// The one click fix of an issue, set by the check only when it is safe (the live editor applies it, see TableCheckFixOp)
+enum class TableFix : uint8_t
+{
+   None,
+   DisableTimer, // Untick the timer of the part
+   ClearLightIntensity, // Set the negative intensity of the light to 0
+   ClearBackdropImage, // Clear the backdrop image name of the view set 'index'
+   DeleteCollection, // Delete the (empty) collection
+};
+
 struct TableIssue
 {
    TableIssueSeverity severity = TableIssueSeverity::Warning;
@@ -56,6 +69,9 @@ struct TableIssue
    string message; // Without the severity
    IEditable *part = nullptr; // Part the issue is about, if any
    Material *material = nullptr; // Material the issue is about, if any
+   Collection *collection = nullptr; // Collection the issue is about, if any
+   int index = -1; // Backdrop view set (ViewSetupID) of a backdrop issue
+   TableFix fix = TableFix::None;
 };
 
 // Issue counts per severity

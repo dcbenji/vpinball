@@ -5,6 +5,7 @@
 #include "EditorTheme.h"
 #include "ViewportPane.h"
 #include "OutlinerPanel.h"
+#include "ops/TableCheckFixOp.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/IconsLucide.h"
 #include "ui/live/ImGuiHelpers.h"
@@ -217,6 +218,25 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
       ImGui::SetItemTooltip("%s: %d. Click to %s them", SeverityName(sev), counts[s], m_show[s] ? "hide" : "show");
    }
 
+   // Fixes run on the edited table with undo: not on the live copy of an inspected play session (no undo, only some changes are saved back)
+   // Fixes also wait for a list as recent as the table: after a change (e.g. a script edit, checked again once the typing paused)
+   const bool canFix = !editor.IsInspectMode() && !status.IsPending();
+   const char *const noFixTooltip = editor.IsInspectMode() ? "Fixes are only available when editing the table, not while inspecting a play session"
+                                                           : "The table changed: fixes are available once it is checked again";
+   vector<TableIssue> fixRequest; // Applied after the list is drawn (the fix checks the table again, which rebuilds the issues)
+   const auto fixButton = [&](const char *label, const char *id, const float right, const vector<const TableIssue *> &fixes, const string &tooltip)
+   {
+      const float width = ImGui::CalcTextSize(label).x + 2.f * ImGui::GetStyle().FramePadding.x;
+      ImGui::SameLine(right - width);
+      ImGui::BeginDisabled(!canFix);
+      if (ImGui::SmallButton((string(label) + id).c_str()))
+         for (const TableIssue *const issue : fixes)
+            fixRequest.push_back(*issue);
+      ImGui::EndDisabled();
+      ImGui::SetItemTooltip("%s", canFix ? tooltip.c_str() : noFixTooltip);
+      return width;
+   };
+
    // The issues, one collapsible group per check. Only the rows in view are drawn (a table may have hundreds of issues)
    ImGui::BeginChild("##TableCheckList", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
    const float rowH = ImGui::GetTextLineHeightWithSpacing() + 2.f * dpi;
@@ -240,7 +260,20 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
       const bool hasError = std::ranges::any_of(rows, [](const TableIssue *issue) { return issue->severity == TableIssueSeverity::Error; });
       const bool hasWarning = std::ranges::any_of(rows, [](const TableIssue *issue) { return issue->severity == TableIssueSeverity::Warning; });
       const bool openByDefault = hasError || (hasWarning && rows.size() <= 10);
-      if (!ImGui::TreeNodeEx(header.c_str(), (openByDefault ? ImGuiTreeNodeFlags_DefaultOpen : 0) | ImGuiTreeNodeFlags_SpanAvailWidth))
+      const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+      const bool open = ImGui::TreeNodeEx(header.c_str(), (openByDefault ? ImGuiTreeNodeFlags_DefaultOpen : 0) | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap);
+      // Fix All: the issues of the group with the same fix, as one undo step
+      vector<const TableIssue *> groupFixes;
+      for (const TableIssue *const issue : rows)
+         if (issue->fix != TableFix::None && (groupFixes.empty() || issue->fix == groupFixes.front()->fix))
+            groupFixes.push_back(issue);
+      if (groupFixes.size() > 1)
+      {
+         ImGui::PushID(static_cast<int>(check));
+         fixButton("Fix All", "##TableCheckFixAll", right, groupFixes, string(TableCheckFixOp::Label(groupFixes.front()->fix)) + ": the " + std::to_string(groupFixes.size()) + " issues of this group, as one undo step");
+         ImGui::PopID();
+      }
+      if (!open)
          continue;
       ImGuiListClipper clipper;
       clipper.Begin(static_cast<int>(rows.size()), rowH + ImGui::GetStyle().ItemSpacing.y);
@@ -253,15 +286,22 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
             const float rowW = ImGui::GetContentRegionAvail().x;
             const auto part = issue.part != nullptr ? editor.m_editableMap.find(issue.part) : editor.m_editableMap.end();
             const bool selectedRow = part != editor.m_editableMap.end() && editor.IsPartSelected(part->second);
-            const bool clicked = ImGui::Selectable("##row", selectedRow, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0.f, rowH));
+            const bool clicked = ImGui::Selectable("##row", selectedRow, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap, ImVec2(0.f, rowH));
             const bool hovered = ImGui::IsItemHovered();
+            float textRight = rowPos.x + rowW;
+            bool fixHovered = false; // The button shows its own tooltip, not the row's
+            if (issue.fix != TableFix::None)
+            {
+               textRight -= fixButton("Fix", "##TableCheckFix", ImGui::GetCursorPosX() + rowW, { &issue }, TableCheckFixOp::Label(issue.fix)) + 4.f * dpi;
+               fixHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+            }
             ImDrawList *const drawList = ImGui::GetWindowDrawList();
             const float textY = rowPos.y + 0.5f * (rowH - ImGui::GetTextLineHeight());
             drawList->AddText(ImVec2(rowPos.x + 4.f * dpi, textY), SeverityColor(issue.severity), SeverityIcon(issue.severity));
-            drawList->PushClipRect(ImVec2(rowPos.x + iconW, rowPos.y), ImVec2(rowPos.x + rowW, rowPos.y + rowH), true);
+            drawList->PushClipRect(ImVec2(rowPos.x + iconW, rowPos.y), ImVec2(textRight, rowPos.y + rowH), true);
             drawList->AddText(ImVec2(rowPos.x + iconW, textY), issue.part != nullptr ? EditorTheme::Text : EditorTheme::TextDim, issue.message.c_str());
             drawList->PopClipRect();
-            if (hovered && ImGui::GetDragDropPayload() == nullptr)
+            if (hovered && !fixHovered && ImGui::GetDragDropPayload() == nullptr)
                ImGui::SetTooltip("%s", issue.message.c_str());
             if (clicked)
                Select(issue, ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left));
@@ -280,6 +320,15 @@ void TableCheckPane::RenderPane(const AreaRect &rect, const int leafId)
    ImGui::PopID();
    ImGui::End();
    ImGui::PopStyleVar(3);
+
+   if (!fixRequest.empty())
+   {
+      vector<const TableIssue *> fixes;
+      for (const TableIssue &issue : fixRequest)
+         fixes.push_back(&issue);
+      TableCheckFixOp::Fix(editor, fixes);
+      status.Rescan(editor);
+   }
 }
 
 }

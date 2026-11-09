@@ -992,6 +992,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ops/SetOriginOp.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/SpinnerUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/SurfaceUIPart.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ops/TableCheckFixOp.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/TableCheckPane.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/TextBoxUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/TimerUIPart.cpp" />
@@ -1971,6 +1972,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ops/SetOriginOp.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/SpinnerUIPart.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/SurfaceUIPart.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ops/TableCheckFixOp.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/TableCheckPane.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/TextBoxUIPart.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/TimerUIPart.h" />

@@ -30,6 +30,9 @@ public:
    // Redoes the last undone record, returning the editor state captured when it was undone (empty if none)
    std::any Redo();
    void Discard();
+   // Drops the redo records: to be called by an edit made outside the undo system (e.g. deleting an asset), since the redo records
+   // may refer to the state before it
+   void ClearRedo();
 
    // History labels for the undo history (index 0: the next record to undo / redo, then going away from it)
    void SetLabel(const string &label); // Complete label of the last record (being recorded, or just ended) (e.g. "Move 3 parts")
@@ -59,7 +62,6 @@ public:
 private:
    static constexpr size_t NoCleanPoint = static_cast<size_t>(-1);
    std::any ApplyRecord(UndoRecord &record, bool buildInverse, std::unique_ptr<UndoRecord> &inverse);
-   void ClearRedo();
    static bool IsInvertible(const UndoRecord &record);
    void UpdateDirtyAfterMove();
 

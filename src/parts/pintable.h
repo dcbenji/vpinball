@@ -564,6 +564,7 @@ private:
 public:
    void AddCollection(CComObject<Collection> *collection);
    void RemoveCollection(CComObject<Collection> *collection);
+   void RestoreCollection(CComObject<Collection> *collection, size_t index); // Puts a removed collection back in the list at the given index (undo of a removal)
    void RenameCollection(Collection *collection, const string &newName);
    void MoveCollectionUp(CComObject<Collection> *pcol);
    void MoveCollectionDown(CComObject<Collection> *pcol);

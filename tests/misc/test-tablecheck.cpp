@@ -18,6 +18,9 @@
 #include "parts/flasher.h"
 #include "parts/Sound.h"
 #include "parts/tablecheck.h"
+#include "parts/Collection.h"
+#include "core/pinundo.h"
+#include "ui/live/editor/ops/TableCheckFixOp.h"
 
 #include "doctest.h"
 
@@ -47,6 +50,28 @@ void SetPoints(DragPointCurve &curve, const vector<Vertex2D> &points)
    curve.ClearPoints();
    for (const Vertex2D &p : points)
       curve.PushPoint(std::make_unique<DragPoint>(&curve, p.x, p.y, 0.f, false));
+}
+
+// Applies the fixes of the issues as one undo record
+void ApplyFixes(PinTable *table, PinUndo &undo, const vector<TableIssue> &issues)
+{
+   vector<const TableIssue *> fixes;
+   for (const TableIssue &issue : issues)
+      fixes.push_back(&issue);
+   undo.BeginUndo();
+   VPX::EditorUI::TableCheckFixOp::Apply(table, undo, fixes);
+   undo.EndUndo();
+}
+
+CComObject<Collection> *AddTestCollection(PinTable *table, const char *name)
+{
+   CComObject<Collection> *collection;
+   CComObject<Collection>::CreateInstance(&collection);
+   collection->AddRef();
+   collection->m_name = name;
+   table->AddCollection(collection);
+   collection->Release();
+   return collection;
 }
 
 // A minimal PCM WAV file with 2 channels
@@ -363,17 +388,180 @@ TEST_CASE("Table check")
       table->Release();
    }
 
+   SUBCASE("fix: disable an enabled timer without a sub, undo and redo")
+   {
+      using VPX::EditorUI::TableCheckFixOp;
+      PinTable *const table = CreateTestTable();
+      table->m_script_text = "Sub Busy_Timer\nEnd Sub\n";
+      Timer *const lonely = AddTestPart<Timer>(table, "Lonely");
+      Timer *const busy = AddTestPart<Timer>(table, "Busy");
+      for (Timer *timer : { lonely, busy })
+      {
+         timer->m_timerEnabled = true;
+         timer->m_timerInterval = 100;
+      }
+      AddTestPart<Timer>(table, "Off")->m_timerEnabled = false;
+
+      vector<TableIssue> issues = Issues(table, TableCheckId::TimerSub);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].part == lonely);
+      CHECK(issues[0].fix == TableFix::DisableTimer);
+      CHECK(issues[0].message == "Part 'Lonely' has an enabled timer but the script has no 'Lonely_Timer' sub");
+
+      // An issue older than the table is not fixed: a fresh check must still offer the fix (here the script got the sub meanwhile)
+      CHECK(TableCheckFixOp::Confirmed(table, { &issues[0] }).size() == 1);
+      table->m_script_text = "Sub Busy_Timer\nEnd Sub\nSub Lonely_Timer\nEnd Sub\n";
+      CHECK(TableCheckFixOp::Confirmed(table, { &issues[0] }).empty());
+      table->m_script_text = "Sub Busy_Timer\nEnd Sub\n";
+
+      // Never applied to the live copy of a play test (no undo, its objects belong to its base table)
+      PinTable *const base = CreateTestTable();
+      table->m_liveBaseTable = base;
+      {
+         PinUndo liveUndo(table);
+         ApplyFixes(table, liveUndo, issues);
+      }
+      CHECK(lonely->m_timerEnabled);
+      table->m_liveBaseTable = nullptr;
+      base->Release();
+
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues);
+      CHECK_FALSE(lonely->m_timerEnabled);
+      CHECK(busy->m_timerEnabled);
+      CHECK(Issues(table, TableCheckId::TimerSub).empty());
+      CHECK_FALSE(TableCheckFixOp::IsApplicable(table, issues[0])); // Already fixed
+      undo.Undo();
+      CHECK(lonely->m_timerEnabled);
+      undo.Redo();
+      CHECK_FALSE(lonely->m_timerEnabled);
+
+      // A script that loads other code may define the sub there (e.g. the VPinMAME scripts): an info, not fixed
+      busy->m_timerEnabled = false;
+      lonely->m_timerEnabled = true;
+      for (const char *script : { "LoadVPM \"01000000\", \"S11.VBS\", 1\n", "ExecuteGlobal code\n", "Execute code\n", "Set f = GetRef(\"Other\")\n" })
+      {
+         table->m_script_text = script;
+         issues = Issues(table, TableCheckId::TimerSub);
+         REQUIRE(issues.size() == 1);
+         CHECK(issues[0].fix == TableFix::None);
+         CHECK(issues[0].severity == TableIssueSeverity::Info);
+      }
+
+      // The timer of a part in a collection that fires events also fires the collection's Timer event (e.g. Coll_Timer(idx))
+      table->m_script_text = "Sub Table1_Init\nEnd Sub\n";
+      CComObject<Collection> *const timers = AddTestCollection(table, "Timers");
+      table->AddPartToCollection(timers, lonely);
+      timers->m_fireEvents = true;
+      CHECK(Issues(table, TableCheckId::TimerSub).empty());
+      timers->m_fireEvents = false;
+      CHECK(Issues(table, TableCheckId::TimerSub).size() == 1);
+      table->Release();
+   }
+
+   SUBCASE("fix: negative light intensity to 0, undo and redo")
+   {
+      PinTable *const table = CreateTestTable();
+      Light *const light = AddTestPart<Light>(table, "NegLight");
+      light->m_d.m_intensity = -2.f;
+      light->m_d.m_intensity_scale = -1.f;
+      const vector<TableIssue> issues = Issues(table, TableCheckId::LightIntensity);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].fix == TableFix::ClearLightIntensity);
+      CHECK(issues[1].fix == TableFix::None); // The intensity scale is set by the script, it is not saved with the table
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues);
+      CHECK(light->m_d.m_intensity == 0.f);
+      undo.Undo();
+      CHECK(light->m_d.m_intensity == -2.f);
+      CHECK_FALSE(undo.HasUndo());
+      undo.Redo();
+      CHECK(light->m_d.m_intensity == 0.f);
+      table->Release();
+   }
+
+   SUBCASE("fix: clear a missing backdrop image, undo and redo")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_BG_image[BG_FULLSCREEN] = "MissingCabinet";
+      const vector<TableIssue> issues = Issues(table, TableCheckId::Backdrop);
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0].index == BG_FULLSCREEN);
+      CHECK(issues[0].fix == TableFix::ClearBackdropImage);
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues);
+      CHECK(table->m_BG_image[BG_FULLSCREEN].empty());
+      CHECK(Issues(table, TableCheckId::Backdrop).empty());
+      undo.Undo();
+      CHECK(table->m_BG_image[BG_FULLSCREEN] == "MissingCabinet");
+      undo.Redo();
+      CHECK(table->m_BG_image[BG_FULLSCREEN].empty());
+      undo.Undo();
+      CHECK(table->m_BG_image[BG_FULLSCREEN] == "MissingCabinet");
+      table->Release();
+   }
+
+   SUBCASE("fix: delete an empty collection, undo and redo")
+   {
+      PinTable *const table = CreateTestTable();
+      table->m_script_text = "Sub Table1_Init\nFor Each x In Used\nNext\nEnd Sub\n";
+      CComObject<Collection> *const leftover = AddTestCollection(table, "Leftover");
+      CComObject<Collection> *const full = AddTestCollection(table, "Full");
+      CComObject<Collection> *const used = AddTestCollection(table, "Used");
+      table->AddPartToCollection(full, AddTestPart<Bumper>(table, "Bumper1"));
+
+      const vector<TableIssue> issues = Issues(table, TableCheckId::EmptyCollection);
+      REQUIRE(issues.size() == 2);
+      CHECK(issues[0].collection == leftover);
+      CHECK(issues[0].fix == TableFix::DeleteCollection);
+      CHECK(issues[1].collection == used);
+      CHECK(issues[1].fix == TableFix::None); // The script uses its name
+
+      PinUndo undo(table);
+      ApplyFixes(table, undo, issues);
+      REQUIRE(table->GetCollections().size() == 2);
+      CHECK(table->GetCollections()[0] == full);
+      CHECK(table->IsNameUnique("Leftover"));
+      undo.Undo();
+      REQUIRE(table->GetCollections().size() == 3);
+      CHECK(table->GetCollections()[0] == leftover); // Back at its place, with its name
+      CHECK_FALSE(table->IsNameUnique("Leftover"));
+      undo.Redo();
+      CHECK(table->GetCollections().size() == 2);
+      undo.Undo();
+      CHECK(table->GetCollections()[0] == leftover);
+
+      // Deleted again outside the undo system (as the properties panel does): the redo record would remove it a second time
+      table->RemoveCollection(leftover);
+      undo.ClearRedo();
+      CHECK_FALSE(undo.HasRedo());
+      CHECK(table->GetCollections().size() == 2);
+
+      // Not offered when the script names the collection in a string, or loads other code
+      CComObject<Collection> *const evaled = AddTestCollection(table, "Evaled");
+      table->m_script_text = "Sub Table1_Init\nSet c = Eval(\"Evaled\")\nEnd Sub\n";
+      for (const TableIssue &issue : Issues(table, TableCheckId::EmptyCollection))
+         CHECK(issue.fix == (issue.collection == evaled ? TableFix::None : TableFix::DeleteCollection));
+      table->m_script_text = "ExecuteGlobal code\n";
+      for (const TableIssue &issue : Issues(table, TableCheckId::EmptyCollection))
+         CHECK(issue.fix == TableFix::None);
+      table->Release();
+   }
+
    SUBCASE("without the script checks")
    {
       PinTable *const table = CreateTestTable();
       table->m_name = "Table1";
+      Timer *const timer = AddTestPart<Timer>(table, "Lonely");
+      timer->m_timerEnabled = true;
+      AddTestCollection(table, "Leftover");
       table->m_script_text = "Sub Dup\nEnd Sub\nSub Dup\nEnd Sub\nSub Gone_Hit\nEnd Sub\nSub Table1_Init\nPlaySound \"Missing\"\nEnd Sub\n";
       const auto count = [table](const bool script, const TableCheckId check)
       {
          const vector<TableIssue> issues = table->CheckTable({ .extended = true, .script = script });
          return std::ranges::count_if(issues, [check](const TableIssue &issue) { return issue.check == check; });
       };
-      for (const TableCheckId check : { TableCheckId::ScriptDuplicate })
+      for (const TableCheckId check : { TableCheckId::ScriptDuplicate, TableCheckId::TimerSub, TableCheckId::EmptyCollection })
       {
          CHECK(count(true, check) == 1);
          CHECK(count(false, check) == 0); // Not reported: they need the script

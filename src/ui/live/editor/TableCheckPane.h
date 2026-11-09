@@ -56,6 +56,7 @@ public:
    string Text() const; // Errors and warnings, e.g. "2 errors, 5 warnings"
    int InfoCount() const { return m_summary.counts[2]; }
    const TableCheckSummary &Summary() const { return m_summary; }
+   bool IsPending() const { return m_pending; } // The table changed since the issues were made: it will be checked again
    ImU32 Color() const; // Of the most severe issue
 
 private:
