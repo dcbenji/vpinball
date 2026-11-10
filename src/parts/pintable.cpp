@@ -5227,6 +5227,8 @@ void PinTable::ParseScript(const string& script, vector<string>& functions, vect
 {
    // Ultra basic parser to get a (somewhat) valid list of referenced parts
    const char *const szText = script.c_str();
+   // Hashed lookups of the names found so far (the vectors keep the order in which they are found)
+   ankerl::unordered_dense::set<string> knownFunctions(functions.begin(), functions.end()), knownIdentifiers(identifiers.begin(), identifiers.end());
    const char *wordStart = nullptr;
    const char *wordPos = szText;
    string inClass;
@@ -5279,12 +5281,12 @@ void PinTable::ParseScript(const string& script, vector<string>& functions, vect
                      else if (nextIsFunc)
                      {
                         //ss << "- " << word << ", line=" << (line + 1) << ", class=" << inClass << "\r\n";
-                        if (FindIndexOf(functions, inClass + '.' + word) != -1)
+                        if (!knownFunctions.insert(inClass + '.' + word).second)
                            onDuplicate(word, line);
                         else
                            functions.push_back(inClass + '.' + word);
                      }
-                     else if (FindIndexOf(identifiers, word) == -1)
+                     else if (knownIdentifiers.insert(word).second)
                         identifiers.push_back(word);
                   }
                   nextIsFunc = false;

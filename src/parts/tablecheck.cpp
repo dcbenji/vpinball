@@ -810,8 +810,10 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
    if (options.script)
       ParseScript(m_script_text, functions, identifiers,
       [&add](const string &functionName, int line) { add(Error, TableCheckId::ScriptDuplicate, "Duplicate declaration of '" + functionName + "' in script at line " + std::to_string(line)); });
+   // Hashed lookups of the script names (a big table script holds thousands of them, the checks look many of them up)
+   const ankerl::unordered_dense::set<string> identifierSet(identifiers.begin(), identifiers.end()), functionSet(functions.begin(), functions.end());
 
-   if (FindIndexOf(identifiers, "execute"s) != -1)
+   if (identifierSet.contains("execute"s))
       add(Warning, TableCheckId::ScriptExecute, "Scripts seems to use the 'Execute' command. This command triggers computer security checks and will likely cause stutters during play.");
 
    if (m_glassBottomHeight > m_glassTopHeight)
@@ -837,7 +839,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
       Textbox *const textbox = type == eItemTextbox ? (Textbox *)part : nullptr;
 
       // Referencing a static object from script (ok if it is for reading properties, not for writing)
-      if (type == eItemPrimitive && prim->m_d.m_staticRendering && FindIndexOf(identifiers, lowerCase(prim->GetName())) != -1)
+      if (type == eItemPrimitive && prim->m_d.m_staticRendering && identifierSet.contains(lowerCase(prim->GetName())))
          add(Warning, TableCheckId::StaticReferenced, "Primitive '" + prim->GetName() + "' seems to be referenced from the script while it is marked as static (most properties of a static object may not be modified at runtime).", part);
 
       if (type == eItemTextbox && (textbox->m_d.m_isDMD || StrFindNoCase(textbox->m_d.m_text, "DMD"s) != string::npos))
@@ -906,7 +908,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
    }
 
    // The flasher VideoCap API (capturing the window of an external application) is deprecated in favor of plugins and may be removed in a future version
-   if (FindIndexOf(identifiers, "videocapwidth"s) != -1 || FindIndexOf(identifiers, "videocapheight"s) != -1 || FindIndexOf(identifiers, "videocapupdate"s) != -1)
+   if (identifierSet.contains("videocapwidth"s) || identifierSet.contains("videocapheight"s) || identifierSet.contains("videocapupdate"s))
    {
       // Name the flashers referenced as '<name>.VideoCap...' (whole name, case insensitive like VBScript), or the script for an indirect use
       const string script = lowerCase(m_script_text);
@@ -930,27 +932,27 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          add(Error, TableCheckId::VideoCap, "script uses the deprecated Flasher 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.");
    }
 
-   if ((FindIndexOf(identifiers, "loadvpm"s) != -1) || (FindIndexOf(identifiers, "loadvpmalt"s) != -1))
+   if ((identifierSet.contains("loadvpm"s)) || (identifierSet.contains("loadvpmalt"s)))
    {
       if (!hasPinMameTimer)
          add(Warning, TableCheckId::VPM, "VPM controller is used but table is missing a Timer object named 'PinMAMETimer'.");
-      if (FindIndexOf(identifiers, "vpminit"s) == -1)
+      if (!identifierSet.contains("vpminit"s))
          add(Warning, TableCheckId::VPM, "VPM controller is used but vpmInit is not called. pause/resume/exit will likely exhibit bugs and physic outputs won't be supported.");
    }
 
-   if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmtimer"s) != -1))
+   if (!hasPulseTimer && (identifierSet.contains("vpmtimer"s)))
       add(Warning, TableCheckId::VPM, "script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.");
 
    // Enabled timers without a '<name>_Timer' sub: they run for nothing. A script that loads other code (LoadVPM, ExecuteGlobal,
    // Execute, GetRef) may define the sub there (e.g. the VPinMAME scripts): the issue is then an info, and the timer is not disabled
    // by the fix. The timer of a part in a collection that fires events also fires the collection's Timer event: not reported.
    const bool loadsCode = std::ranges::any_of(std::initializer_list<string> { "loadvpm"s, "loadvpmalt"s, "executeglobal"s, "execute"s, "getref"s },
-      [&identifiers](const string &id) { return FindIndexOf(identifiers, id) != -1; });
+      [&identifierSet](const string &id) { return identifierSet.contains(id); });
    for (const auto part : m_vedit)
    {
       if (!options.extended || !options.script || !part->m_timerEnabled || IsPlayerSessionObject(part) || std::ranges::any_of(part->m_vCollection, [](const Collection *c) { return c->m_fireEvents; }))
          continue;
-      if (FindIndexOf(functions, '.' + lowerCase(part->GetName()) + "_timer") != -1)
+      if (functionSet.contains('.' + lowerCase(part->GetName()) + "_timer"))
          continue;
       add(loadsCode ? Info : Warning, TableCheckId::TimerSub,
          "Part '" + part->GetName() + "' has an enabled timer but the script has no '" + part->GetName() + "_Timer' sub" + (loadsCode ? " (the script loads other code, which may have it)" : ""), part);
@@ -975,7 +977,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          continue;
       const string object = function.substr(1, sep - 1), event = function.substr(sep + 1);
       // A sub the script calls by its name is a plain sub, not an event handler (e.g. a '<name>_Timer' sub called by a frame timer)
-      if (std::find(std::begin(partEvents), std::end(partEvents), event) != std::end(partEvents) && !objectNames.contains(object) && FindIndexOf(identifiers, function.substr(1)) == -1)
+      if (std::find(std::begin(partEvents), std::end(partEvents), event) != std::end(partEvents) && !objectNames.contains(object) && !identifierSet.contains(function.substr(1)))
          add(Warning, TableCheckId::EventSub, "The script has a sub '" + function.substr(1) + "' for the " + event + " event of '" + object + "', which is not in the table");
    }
 
@@ -989,7 +991,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
       if (options.extended && options.script && collection->GetParts().empty())
       {
          const string name = lowerCase(collection->m_name);
-         const bool used = FindIndexOf(identifiers, name) != -1 || lowerScript.find('"' + name + '"') != string::npos;
+         const bool used = identifierSet.contains(name) || lowerScript.find('"' + name + '"') != string::npos;
          add(Info, TableCheckId::EmptyCollection,
             "Collection '" + collection->m_name + "' is empty" + (used ? " (the script uses its name)" : loadsCode ? " (the script loads other code, which may use it)" : ""));
          issues.back().collection = collection;
@@ -1019,7 +1021,7 @@ vector<TableIssue> PinTable::CheckTable(const TableCheckOptions &options) const
          issues.back().collection = collection;
          continue;
       }
-      if (FindIndexOf(functions, prefix + "hit") == -1)
+      if (!functionSet.contains(prefix + "hit"))
          continue;
       for (IEditable *const part : collection->GetParts())
       {
