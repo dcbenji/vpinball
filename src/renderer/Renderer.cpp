@@ -504,12 +504,8 @@ Renderer::~Renderer()
    m_vsmTransSampler = nullptr;
    m_vsmPageTableSampler = nullptr;
    m_shadowCacheSampler = nullptr; // owns m_shadowCacheTex
-   if (bgfx::isValid(m_vsmPoolTex))
-      bgfx::destroy(m_vsmPoolTex);
-   if (bgfx::isValid(m_vsmTransTex))
-      bgfx::destroy(m_vsmTransTex);
-   if (bgfx::isValid(m_vsmPageTableTex))
-      bgfx::destroy(m_vsmPageTableTex);
+   // The pool, transmittance and page table textures are owned by their samplers (released above): no explicit destroy
+   m_vsmPoolTex = m_vsmTransTex = m_vsmPageTableTex = BGFX_INVALID_HANDLE;
 #endif
    for (int window = 0; window <= VPXWindowId::VPXWINDOW_Topper; window++)
       m_ancillaryWndHdrRT[window] = nullptr;
@@ -1466,7 +1462,20 @@ void Renderer::CreateVSMPagePoolTargets()
    if (!bgfx::isValid(m_vsmPoolTex) || m_vsmPoolTexLayers != m_vsmPoolPages)
    {
       if (bgfx::isValid(m_vsmPoolTex))
-         bgfx::destroy(m_vsmPoolTex);
+      {
+         // The old pool texture is owned by its sampler (released with it, once the frames that sample it are done): destroying
+         // the handle here as well destroyed it twice, and a recycled handle could be another texture by then
+         m_vsmPoolTex = BGFX_INVALID_HANDLE;
+         // Every resident page is lost with the old pool: the maps re-render from scratch (within the per frame page budget)
+         for (VSM::LightMap& map : m_vsmLights)
+         {
+            std::fill(map.phys.begin(), map.phys.end(), 0);
+            std::fill(map.dirty.begin(), map.dirty.end(), uint8_t(1));
+         }
+         std::fill(m_vsmPageTableData.begin(), m_vsmPageTableData.end(), 0.f);
+         m_vsmPageTableDirty = true;
+         PLOGI << "VSM page pool: " << m_vsmPoolTexLayers << " -> " << m_vsmPoolPages << " pages (" << m_vsmPoolPages * 192 / 1024 << " MB)";
+      }
       m_vsmPoolTex = bgfx::createTexture2D(VSM::PAGE_DIM, VSM::PAGE_DIM, false, static_cast<uint16_t>(m_vsmPoolPages), bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT);
       bgfx::setName(m_vsmPoolTex, "VSM Page Pool");
       m_vsmPoolTexLayers = m_vsmPoolPages;
@@ -1476,9 +1485,7 @@ void Renderer::CreateVSMPagePoolTargets()
       m_vsmPoolSampler = std::make_shared<Sampler>(m_renderDevice, "VSM Page Pool"s, SurfaceType::RT_DEFAULT, m_vsmPoolTex, bgfx::TextureFormat::D32F, VSM::PAGE_DIM, VSM::PAGE_DIM, true);
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_pool, m_vsmPoolSampler);
       // Transmittance layer of each page (cleared with the page: no translucent caster = absorbance 0)
-      m_vsmTransSampler = nullptr;
-      if (bgfx::isValid(m_vsmTransTex))
-         bgfx::destroy(m_vsmTransTex);
+      m_vsmTransSampler = nullptr; // owns m_vsmTransTex
       // The nearness (alpha) is normalized over the light's whole depth range: 8 bits step ~9 VPU on a ~2400 VPU room key,
       // beyond the 2 VPU self-tint margin, so a tilted plastic tinted itself in bands. 16 bit unorm (half float fallback)
       // keeps it well under; the main pass margin also covers the step (pbrShadowParams.z)
@@ -1497,7 +1504,20 @@ void Renderer::CreateVSMPagePoolTargets()
       m_vsmTransSampler = std::make_shared<Sampler>(m_renderDevice, "VSM Page Transmittance"s, SurfaceType::RT_DEFAULT, m_vsmTransTex, m_vsmTransFormat, VSM::PAGE_DIM, VSM::PAGE_DIM, true);
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_trans, m_vsmTransSampler);
    }
-   if (!bgfx::isValid(m_vsmPageTableTex))
+   // The page table (4 MB) only once a light casts shadows (until then a 1x1 placeholder: fs_pbr never reads it without a slot)
+   const bool fullTable = m_vsmPoolPages > VSM::PLACEHOLDER_PAGES;
+   if (bgfx::isValid(m_vsmPageTableTex) && fullTable && m_vsmPageTableData.empty())
+   {
+      m_vsmPageTableSampler = nullptr; // owns m_vsmPageTableTex
+      m_vsmPageTableTex = BGFX_INVALID_HANDLE;
+   }
+   if (!bgfx::isValid(m_vsmPageTableTex) && !fullTable)
+   {
+      m_vsmPageTableTex = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
+      m_vsmPageTableSampler = std::make_shared<Sampler>(m_renderDevice, "VSM Page Table"s, SurfaceType::RT_DEFAULT, m_vsmPageTableTex, bgfx::TextureFormat::RGBA32F, 1, 1, true);
+      m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_pagetables, m_vsmPageTableSampler);
+   }
+   else if (!bgfx::isValid(m_vsmPageTableTex))
    {
       constexpr int ptH = VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W; // 32 * 4096 / 512 = 256
       m_vsmPageTableTex = bgfx::createTexture2D(VSM::PAGETABLE_W, ptH, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
@@ -1724,9 +1744,36 @@ void Renderer::PreparePBRFrame()
 // lights additionally re-render the pages under dynamic casters every frame.
 void Renderer::UpdateVirtualShadowMaps()
 {
-   m_vsmPoolPages = m_table->GetSettings().GetPlayer_PBRShadowPoolPages();
+   // Pool layers are a texture array: at most the device's layer count (2048 on current desktop and Apple GPUs)
+   m_vsmPoolMax = std::min(m_table->GetSettings().GetPlayer_PBRShadowPoolPages(), (int)std::max(bgfx::getCaps()->limits.maxTextureLayers, 64u));
    m_vsmVirtRes = m_table->GetSettings().GetPlayer_PBRShadowMapSize();
    m_vsmMaxLights = std::clamp(m_table->GetSettings().GetPlayer_PBRShadowMaxLights(), 1, VSM::MAX_LIGHTS);
+   // Pool sized to the table, not to the setting (now a maximum): 192 KB of VRAM per page, a 2048 page pool is 384 MB that a
+   // table without shadowed lights never uses. Demand = 24 pages per cube light + the ortho budget per light above the glass
+   // (see orthoBudget below) + the parked-light warm headroom, in steps of 256 pages, for the lights that get slots; a 2 page
+   // placeholder for the samplers without any shadowed light (bgfx creates a 1 layer texture as a plain 2D texture, not the array
+   // fs_pbr declares). Grows when the demand does (a light made shadow-capable at runtime), never shrinks; a resize drops every
+   // resident page (CreateVSMPagePoolTargets)
+   {
+      const int orthoBudget = std::max(16, std::min(m_vsmPoolMax, 1024) / 8);
+      // The lights that end up with slots: the most important shadow-capable ones (the slot set), so demand counts those
+      vector<std::pair<float, int>> cand; // importance, pages
+      for (IEditable* const part : m_table->GetParts())
+         if (part->GetItemType() == eItemLight)
+         {
+            const Light* const l = static_cast<const Light*>(part);
+            if (l->m_d.m_type == LightType::PBR && l->m_d.m_visible && !l->m_desktopBackdrop && l->m_d.m_shadows >= ShadowMode::PBR_STATIC_SHADOWS)
+               cand.emplace_back(VSM::SlotImportance(l->m_d.m_intensity, l->m_d.m_falloff), // as the slot policy ranks them
+                  l->GetCurrentHeight() > m_table->m_glassTopHeight ? orthoBudget + orthoBudget / 4 + 16 : 6 * VSM::CUBE_FACE_GRID * VSM::CUBE_FACE_GRID);
+         }
+      std::stable_sort(cand.begin(), cand.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+      const int shadowed = std::min((int)cand.size(), m_vsmMaxLights);
+      int demand = 0;
+      for (int i = 0; i < shadowed; i++)
+         demand += cand[i].second;
+      const int want = shadowed == 0 ? VSM::PLACEHOLDER_PAGES : std::min(m_vsmPoolMax, (demand + 64 + 255) / 256 * 256);
+      m_vsmPoolPages = std::min(std::max(m_vsmPoolTexLayers, want), m_vsmPoolMax);
+   }
    m_pbrShadowFast = m_table->GetSettings().GetPlayer_PBRShadowFastFilter();
    m_pbrDimLightCutoff = m_table->GetSettings().GetPlayer_PBRDimLightCutoff();
    m_vsmPageBudget = m_table->GetSettings().GetPlayer_PBRShadowPagesPerFrame();
@@ -2016,7 +2063,7 @@ void Renderer::UpdateVirtualShadowMaps()
          float pageWorld = side * VSM::PAGE_DIM / (float)m_vsmVirtRes;
          // Fair share of the pool: a full virtual resolution ortho map over the table (2000+ pages at 8192) would take every
          // physical page, leaving the other shadowed lights (GI cube maps) without any and so unshadowed. Coarser pages then.
-         const float orthoPages = (r - l) * (t - b) / (pageWorld * pageWorld), orthoBudget = (float)std::max(16, m_vsmPoolPages / 8);
+         const float orthoPages = (r - l) * (t - b) / (pageWorld * pageWorld), orthoBudget = (float)std::max(16, std::min(m_vsmPoolMax, 1024) / 8); // 128 pages: kept from the 1024 page pool (the room key shadow resolution does not change with the pool size)
          if (orthoPages > orthoBudget)
             pageWorld *= sqrtf(orthoPages / orthoBudget);
          const int gridW = std::clamp((int)ceilf((r - l) / pageWorld), 1, VSM::MAX_ORTHO_GRID);
@@ -2248,7 +2295,7 @@ void Renderer::UpdateVirtualShadowMaps()
    }
 
    // Upload the page table once per frame when allocation changed (begin-of-frame on the render thread)
-   if (m_vsmPageTableDirty)
+   if (m_vsmPageTableDirty && !m_vsmPageTableData.empty())
    {
       m_vsmPageTableDirty = false;
       const bgfx::TextureHandle tex = m_vsmPageTableTex;
@@ -2306,7 +2353,8 @@ void Renderer::UpdatePBRShadowCache()
    // The sampler always holds an array texture (a 1x1 placeholder until the cache has layers): the opaque PBR variants declare it
    if (!bgfx::isValid(m_shadowCacheTex))
    {
-      m_shadowCacheTex = bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+      // 2 layers: bgfx creates a 1 layer texture as a plain 2D texture, a type mismatch with fs_pbr's array sampler (Metal validates it)
+      m_shadowCacheTex = bgfx::createTexture2D(1, 1, false, 2, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
       m_shadowCacheSampler = std::make_shared<Sampler>(m_renderDevice, "PBR Shadow Cache"s, SurfaceType::RT_DEFAULT, m_shadowCacheTex, bgfx::TextureFormat::RGBA8, 1, 1, true);
       shader->SetTexture(ShaderUniform::tex_pbr_shadow_cache, m_shadowCacheSampler);
       m_shadowCacheLayers = 0;

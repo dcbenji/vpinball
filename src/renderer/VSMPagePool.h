@@ -27,6 +27,7 @@ constexpr int CUBE_FACE_GRID = 2; // virtual pages per cube-face edge -> 4 pages
 constexpr int MAX_ORTHO_GRID = 64; // max pages per edge of an ortho virtual map (64 pages = 8192 texels)
 constexpr int PAGETABLE_STRIDE = MAX_ORTHO_GRID * MAX_ORTHO_GRID; // page-table texels reserved per light
 constexpr int PAGETABLE_W = 512; // tex_vsm_pagetables texture width in texels (height 256 holds 32 lights)
+constexpr int PLACEHOLDER_PAGES = 2; // pool size without any shadowed light: an array texture (bgfx makes 1 layer a plain 2D texture)
 constexpr int LAYOUT_ORTHO = 0; // ortho virtual map: gridW x gridH pages over the fitted light-space box
 constexpr int LAYOUT_CUBE = 2; // cube virtual map: 6 faces of CUBE_FACE_GRID^2 pages (layout ids kept for fs_pbr)
 
@@ -122,11 +123,12 @@ private:
 // parked, and stay there. A parked light keeps its slot however long it rests (a flasher between shows keeps its warm map and
 // bake; an expiry handed resting flashers' slots to GI lights, so every show knocked a GI shadow out for the expiry time and
 // flashers firing together went unshadowed). A light that stays dark for good keeps its slot too: hide it to free it.
-// The renderer passes the authored intensity (Light m_d.m_intensity), never one scaled by the script's IntensityScale
+// The renderer ranks by it for the slot set and the pool demand, with the authored intensity (Light m_d.m_intensity), never one
+// scaled by the script's IntensityScale
 inline float SlotImportance(float intensity, float range) { return std::max(intensity, 0.f) * std::max(range, 1.f); }
 
 // The slot set: member[i] = 1 for the 'cap' most important of these lights (importance, then index order: the caller's part order).
-// The renderer never offers a member's slot to PickSlot (see below).
+// The renderer never offers a member's slot to PickSlot (see below), and sizes the pool for the members.
 std::vector<uint8_t> SlotSetMembers(const std::vector<float>& importance, int cap);
 
 constexpr float SLOT_LIT_SWAP_RATIO = 2.f;

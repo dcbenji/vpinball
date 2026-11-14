@@ -463,7 +463,8 @@ private:
    std::vector<RenderTarget*> m_vsmTouchedRTs; // page RTs written this frame (scene pass dependencies)
    uint64_t m_vsmFrame = 0; // marking frame stamp for pool LRU
    uint64_t m_vsmSlotPageFrame[VSM::MAX_LIGHTS] {}; // per shadow slot: the last VSM frame a page of its map was rendered (the cache bakes complete maps of earlier frames only)
-   int m_vsmPoolPages = 1024; // physical pool size in pages (Player_PBRShadowPoolPages)
+   int m_vsmPoolPages = 1; // physical pool size in pages: the shadowed lights' demand, at most m_vsmPoolMax (VSM::PLACEHOLDER_PAGES: no shadowed light)
+   int m_vsmPoolMax = 1024; // Player_PBRShadowPoolPages, clamped to the device's texture array layers
    int m_vsmVirtRes = 8192; // ortho virtual map edge in texels (Player_PBRShadowMapSize)
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
    uint64_t m_vsmLastLitSwap = 0; // usec of the last lit-to-lit slot swap (VSM::PickSlot rate limit)
