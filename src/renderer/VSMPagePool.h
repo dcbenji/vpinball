@@ -228,8 +228,10 @@ struct Caster
    bool isStatic = false;
    bool active = true; // false: never drawn in the shadow pass (invisible wall): marks no page
    bool noBounds = false; // not culled per page (no bounds, or bounds that may not hold what it draws): drawn into every page
+   uint8_t shown = 1; // static casters: the visibility flags of what it draws in the shadow pass
    Vertex3Ds boundsMin, boundsMax;
    unsigned int version = 0;
+   unsigned int visSerial = 0; // static casters: bumped (with version) when 'shown' changes: their pages in every map are re-rendered
 };
 
 // Per light page coverage of every caster, cached: static casters are marked once per map (light, position, layout, grid,
@@ -244,8 +246,11 @@ public:
    int UpdateOrtho(const void* light, const Vertex3Ds& lightPos, const Matrix3D& lightView, float l, float r, float b, float t, int gridW, int gridH, int dilate,
       unsigned int casterSerial, const std::vector<Caster>& casters);
 
-   // needed[vp] = 1 for the pages of the active casters; dirty[vp] |= 1 for those of the active dynamic casters when dynamicTier
-   void Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty) const;
+   // needed[vp] = 1 for the pages of the active casters; dirty[vp] |= 1 for those of the active dynamic casters when dynamicTier,
+   // and for the pages a static caster covered or covers since its visibility changed (Caster::visSerial; its old and new
+   // coverage, dilated and tight). Returns true when such pages were dirtied (the light's static content changed: its static
+   // cache bake is stale). Only those pages re-render: the other pages stay resident and visible meanwhile
+   bool Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty);
 
    // True when the caster's (undilated) coverage includes the virtual page
    bool InPage(size_t caster, int vpage) const
@@ -265,6 +270,9 @@ private:
    std::vector<unsigned int> m_version; // caster version each entry was marked at
    std::vector<uint32_t> m_cube, m_cubeTight; // cube layout: page bit masks, PCF dilated / undilated
    std::vector<PageRect> m_ortho, m_orthoTight; // ortho layout: page rects, PCF dilated / undilated
+   std::vector<unsigned int> m_visSerial; // caster visibility serial each entry was marked at
+   uint32_t m_pendingCube = 0; // pages of toggled static casters, applied by the next Mark
+   std::vector<PageRect> m_pendingOrtho;
 };
 
 // Marks the virtual pages of the 6 cube faces for a near light. A caster crossing a face plane

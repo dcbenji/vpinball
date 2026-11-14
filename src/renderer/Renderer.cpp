@@ -1681,6 +1681,24 @@ bool Renderer::IsStaticShadowCaster(const IEditable* const part) const
    default: return false; // flipper, hittarget, gate, spinner, plunger, trigger animate
    }
 }
+
+// What a static caster draws in the shadow pass depends on these visibility flags (see the parts' SHADOW_MAP branches): one bit each
+uint8_t Renderer::StaticShadowCasterVisibility(const IEditable* const part)
+{
+   switch (part->GetItemType())
+   {
+   case eItemSurface: return (static_cast<const Surface*>(part)->m_d.m_sideVisible ? 1 : 0) | (static_cast<const Surface*>(part)->m_d.m_topBottomVisible ? 2 : 0);
+   case eItemRamp: return static_cast<const Ramp*>(part)->m_d.m_visible ? 1 : 0;
+   case eItemPrimitive: return static_cast<const Primitive*>(part)->m_d.m_visible ? 1 : 0;
+   case eItemRubber: return static_cast<const Rubber*>(part)->m_d.m_visible ? 1 : 0;
+   case eItemBumper:
+   {
+      const BumperData& d = static_cast<const Bumper*>(part)->m_d;
+      return (d.m_baseVisible ? 1 : 0) | (d.m_capVisible ? 2 : 0) | (d.m_skirtVisible ? 4 : 0) | (d.m_ringVisible ? 8 : 0);
+   }
+   default: return 1;
+   }
+}
 #endif
 
 // Translucent casters (PBR materials with a transmission, or with opacity) tint the light instead of
@@ -1835,6 +1853,7 @@ void Renderer::UpdateVirtualShadowMaps()
             VSM::Caster c;
             c.part = part;
             c.isStatic = IsStaticShadowCaster(part);
+            c.shown = StaticShadowCasterVisibility(part);
             c.boundsMin = GetShadowCasterBoundsMin(part, c.boundsMax);
             c.noBounds = (c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f)
                || !IsPageCullableShadowCaster(part);
@@ -1847,11 +1866,35 @@ void Renderer::UpdateVirtualShadowMaps()
       m_vsmCasterParts = m_table->GetParts();
       m_vsmCasterSerial++;
    }
+   // A static caster that a script shows or hides changes the static pages it covers (they render once) and the cache bakes of their
+   // lights: its visibility serial and version move, so each light's coverage re-marks it and re-renders the pages it covered or
+   // covers (VSM::Coverage::Mark), and those lights rebake. Other pages stay resident: shadows elsewhere do not blink, however often
+   // a script toggles it
    for (VSM::Caster& c : m_vsmCasters)
    {
       IEditable* const part = static_cast<IEditable*>(c.part);
       // Invisible walls never draw in the shadow pass (see Surface::Render): keep their whole-table bounds from marking pages
       c.active = part->GetItemType() != eItemSurface || static_cast<const Surface*>(part)->m_d.m_sideVisible || static_cast<const Surface*>(part)->m_d.m_topBottomVisible;
+      if (c.isStatic && c.shown != StaticShadowCasterVisibility(part))
+      {
+         c.shown = StaticShadowCasterVisibility(part);
+         c.visSerial++;
+         c.version++;
+         // Shown: its bounds now (a part hidden at load has none); hidden: the old ones (its old pages re-render)
+         Vertex3Ds bMax;
+         const Vertex3Ds bMin = GetShadowCasterBoundsMin(part, bMax);
+         if (bMin.x <= bMax.x && bMin.y <= bMax.y && bMin.z <= bMax.z)
+         {
+            c.boundsMin = bMin;
+            c.boundsMax = bMax;
+            c.noBounds = (bMin.x == 0.f && bMin.y == 0.f && bMin.z == 0.f && bMax.x == 0.f && bMax.y == 0.f && bMax.z == 0.f) || !IsPageCullableShadowCaster(part);
+         }
+         static int toggleLogs = 0;
+         if (toggleLogs++ < 20)
+         {
+            PLOGI << "VSM: static shadow caster " << part->GetName() << " visibility changed: its pages re-render";
+         }
+      }
       // Dynamic casters every frame; a static one without bounds (hidden at load: its part gave none) until it shows
       if (!c.isStatic || (c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f))
       {
@@ -2112,7 +2155,8 @@ void Renderer::UpdateVirtualShadowMaps()
          const int dilate = 1 + (int)ceilf(0.02f * std::max(gridW, gridH));
          VSM::Coverage& cov = m_vsmCoverage[index];
          cov.UpdateOrtho(light, lPos, view, l, r, b, t, gridW, gridH, dilate, m_vsmCasterSerial, casters);
-         cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data());
+         if (cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data()))
+            light->m_pbrShadowStaticEdits++;
       }
       else
       {
@@ -2142,7 +2186,8 @@ void Renderer::UpdateVirtualShadowMaps()
          // Caster coverage (cached per light and caster, cube page bit masks), same PCF bleed ring as the ortho maps
          VSM::Coverage& cov = m_vsmCoverage[index];
          cov.UpdateCube(light, lPos, zNear, m_vsmCasterSerial, casters);
-         cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data());
+         if (cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data()))
+            light->m_pbrShadowStaticEdits++;
       }
 
       // Alloc/free against the marked coverage, then enqueue the dirty pages
@@ -2552,7 +2597,8 @@ void Renderer::UpdatePBRShadowCache()
       const Vertex3Ds pos(l->m_d.m_vCenter.x, l->m_d.m_vCenter.y, l->GetCurrentHeight());
       if (e.baked
          && (e.pos.x != pos.x || e.pos.y != pos.y || e.pos.z != pos.z || e.range != PBRLightRange(l) || e.penumbra != (float)PBRPenumbraHalfUnits(l) * 0.5f
-            || e.sphereRadius != PBRLightSphereRadius(l) || e.mode != (int)l->m_d.m_shadows || e.serial != m_vsmRebuildSerial))
+            || e.sphereRadius != PBRLightSphereRadius(l) || e.mode != (int)l->m_d.m_shadows || e.serial != m_vsmRebuildSerial
+            || e.staticEdits != l->m_pbrShadowStaticEdits))
          e.baked = false;
       const int slot = l->m_pbrShadowSlot;
       const bool hasMap = slot >= 0 && slot < m_vsmMaxLights && (l->m_pbrShadowLayout == VSM::LAYOUT_CUBE || l->m_pbrShadowLayout == VSM::LAYOUT_ORTHO);
@@ -2631,6 +2677,7 @@ void Renderer::UpdatePBRShadowCache()
             e.sphereRadius = sphereRadius;
             e.mode = (int)l->m_d.m_shadows;
             e.serial = m_vsmRebuildSerial;
+            e.staticEdits = l->m_pbrShadowStaticEdits;
 #ifdef VPX_TEST_BUILD
             m_pbrShadowCacheBakes++;
 #endif

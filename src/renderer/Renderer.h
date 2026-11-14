@@ -444,6 +444,7 @@ private:
    void CreateVSMPagePoolTargets(); // Lazily create the physical page pool texture array and its per-layer render targets
    Vertex3Ds GetShadowCasterBoundsMin(IEditable* part, Vertex3Ds& boundsMax) const; // World AABB of a shadow caster part
    bool IsStaticShadowCaster(const IEditable* part) const; // True for casters that also draw under SHADOW_MAP|STATIC_ONLY
+   static uint8_t StaticShadowCasterVisibility(const IEditable* part); // the visibility flags of what a static caster draws in the shadow pass
 
    static constexpr int MAX_PBR_SHADOW_LIGHTS = 32; // shadowed-light cap (shadowIndex+1 packed in 8 bits of the light record)
    VSM::PagePool m_vsmPool{ 256 }; // physical page pool (one depth-array layer per page)
@@ -500,7 +501,7 @@ private:
       Vertex3Ds pos; // light state the bake was made for
       float range = 0.f, penumbra = 0.f, sphereRadius = 0.f;
       int mode = -1;
-      unsigned int serial = 0;
+      unsigned int serial = 0, staticEdits = 0;
    };
    static constexpr int SHADOW_CACHE_LAYER_SIZE = 2048; // cache layer edge (texels, RGBA8: 16 MB per layer)
    std::vector<ShadowCacheEntry> m_shadowCache;

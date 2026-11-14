@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache, page culling, shadow cache receivers
+// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache, page culling, static caster toggles, shadow cache receivers
 
 #include "core/stdafx.h"
 #include "../vpx-test.h"
@@ -541,4 +541,81 @@ TEST_CASE("VSM static shadow cache receivers: the board only")
    // The playfield mesh counts static or not, but not outside playfield space or hidden in the mode
    CHECK(VSM::IsShadowCacheReceiver(true, false, true, true, table, boardLo, boardHi));
    CHECK_FALSE(VSM::IsShadowCacheReceiver(true, false, true, false, table, boardLo, boardHi));
+}
+
+// A script toggling a static caster re-renders only the pages it covered and covers, in every map: no table wide blink
+TEST_CASE("VSM static caster toggled every frame: only its pages re-render, shadows elsewhere stay")
+{
+   // Two static casters on opposite sides of the light; a script toggles A every frame (Caster::visSerial + version, as the
+   // renderer does). Each frame: Mark, then the dirty pages 'render' (cleared). B's pages must never be dirtied (they stay
+   // resident and visible), A's are, and Mark reports the static change (the light's cache bake is stale)
+   const auto box = [](float x, float y, float z, float s)
+   {
+      VSM::Caster c;
+      c.isStatic = true;
+      c.boundsMin = Vertex3Ds(x - s, y - s, z);
+      c.boundsMax = Vertex3Ds(x + s, y + s, z + 30.f);
+      return c;
+   };
+   const Vertex3Ds lightPos(500.f, 1000.f, 60.f);
+   std::vector<VSM::Caster> casters { box(900.f, 1000.f, 0.f, 10.f), box(100.f, 1000.f, 0.f, 10.f) }; // A (+x), B (-x)
+   int light = 0;
+   const auto run = [&](VSM::Coverage& cov, int entries, const std::function<void()>& update)
+   {
+      std::vector<uint8_t> needed(entries), dirty(entries, 0), pagesA(entries, 0), pagesB(entries, 0);
+      update();
+      CHECK_FALSE(cov.Mark(casters, true, needed.data(), dirty.data())); // first marking: no static change
+      // Each caster's own pages (its coverage alone)
+      std::vector<VSM::Caster> only = casters;
+      only[1].active = false;
+      cov.Mark(only, false, pagesA.data(), dirty.data());
+      only[0].active = false;
+      only[1].active = true;
+      cov.Mark(only, false, pagesB.data(), dirty.data());
+      int bOnly = 0;
+      for (int vp = 0; vp < entries; vp++)
+         bOnly += pagesB[vp] && !pagesA[vp];
+      REQUIRE(bOnly > 0);
+      for (int frame = 0; frame < 60; frame++)
+      {
+         casters[0].shown ^= 1;
+         casters[0].visSerial++;
+         casters[0].version++;
+         update();
+         std::fill(dirty.begin(), dirty.end(), uint8_t(0)); // last frame's dirty pages rendered
+         CHECK(cov.Mark(casters, false, needed.data(), dirty.data()));
+         int dirtyA = 0;
+         for (int vp = 0; vp < entries; vp++)
+         {
+            if (pagesB[vp] && !pagesA[vp])
+            {
+               CHECK(dirty[vp] == 0); // B's shadow stays
+               CHECK(needed[vp] == 1);
+            }
+            dirtyA += dirty[vp] != 0;
+            if (dirty[vp])
+               CHECK(pagesA[vp] == 1); // only A's pages (dilated coverage) re-render
+         }
+         CHECK(dirtyA > 0);
+      }
+      // A frame without a toggle: nothing static dirtied
+      update();
+      std::fill(dirty.begin(), dirty.end(), uint8_t(0));
+      CHECK_FALSE(cov.Mark(casters, false, needed.data(), dirty.data()));
+      CHECK(std::count(dirty.begin(), dirty.end(), uint8_t(0)) == entries);
+   };
+
+   SUBCASE("cube")
+   {
+      VSM::Coverage cov;
+      run(cov, 6 * VSM::CUBE_FACE_GRID * VSM::CUBE_FACE_GRID, [&]() { cov.UpdateCube(&light, lightPos, 2.f, 1, casters); });
+   }
+   SUBCASE("ortho")
+   {
+      VSM::Coverage cov;
+      const Vertex3Ds keyPos(500.f, 1000.f, 2400.f);
+      const Matrix3D view = Matrix3D::MatrixLookAtRH(keyPos, Vertex3Ds(500.f, 1000.f, 0.f), Vertex3Ds(0.f, -1.f, 0.f));
+      constexpr int gw = 9, gh = 16;
+      run(cov, gw * gh, [&]() { cov.UpdateOrtho(&light, keyPos, view, -700.f, 700.f, -1300.f, 1300.f, gw, gh, 1, 1, casters); });
+   }
 }

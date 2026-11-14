@@ -156,6 +156,9 @@ bool Coverage::Rekey(const void* light, const Vertex3Ds& pos, int layout, int gr
    m_cubeTight.assign(layout == LAYOUT_CUBE ? casterCount : 0, 0u);
    m_ortho.assign(layout == LAYOUT_CUBE ? 0 : casterCount, PageRect {});
    m_orthoTight.assign(layout == LAYOUT_CUBE ? 0 : casterCount, PageRect {});
+   m_visSerial.assign(casterCount, 0u);
+   m_pendingCube = 0; // the map is rebuilt with a new key
+   m_pendingOrtho.clear();
    return true;
 }
 
@@ -168,10 +171,16 @@ int Coverage::UpdateCube(const void* light, const Vertex3Ds& lightPos, float zNe
       const Caster& c = casters[i];
       if (m_version[i] == c.version)
          continue;
+      const bool toggled = m_version[i] != ~0u && m_visSerial[i] != c.visSerial; // not on a fresh key (the whole map renders)
+      if (toggled)
+         m_pendingCube |= m_cube[i] | m_cubeTight[i];
       // Allocation: one page ring of PCF bleed (taps reach up to 8/(grid*PAGE_DIM) of a face, under a page, see fs_pbr filterRadius clamp)
       m_cube[i] = CubePageMask(lightPos, zNear, c.boundsMin, c.boundsMax, 1);
       m_cubeTight[i] = c.noBounds ? ~0u : CubePageMask(lightPos, zNear, c.boundsMin, c.boundsMax, 0);
+      if (toggled)
+         m_pendingCube |= m_cube[i] | m_cubeTight[i];
       m_version[i] = c.version;
+      m_visSerial[i] = c.visSerial;
       marked++;
    }
    return marked;
@@ -187,6 +196,15 @@ int Coverage::UpdateOrtho(const void* light, const Vertex3Ds& lightPos, const Ma
       const Caster& c = casters[i];
       if (m_version[i] == c.version)
          continue;
+      const bool toggled = m_version[i] != ~0u && m_visSerial[i] != c.visSerial;
+      const auto pend = [this, i]()
+      {
+         for (const PageRect& pr : { m_ortho[i], m_orthoTight[i] })
+            if (!pr.Empty())
+               m_pendingOrtho.push_back(pr);
+      };
+      if (toggled)
+         pend();
       m_ortho[i] = PageRect {};
       m_orthoTight[i] = PageRect { 0, 0, (int16_t)(gridW - 1), (int16_t)(gridH - 1) };
       if (c.boundsMin.x <= c.boundsMax.x && c.boundsMin.y <= c.boundsMax.y && c.boundsMin.z <= c.boundsMax.z)
@@ -195,14 +213,18 @@ int Coverage::UpdateOrtho(const void* light, const Vertex3Ds& lightPos, const Ma
          if (!c.noBounds)
             m_orthoTight[i] = OrthoPageRect(lightView, l, r, b, t, c.boundsMin, c.boundsMax, gridW, gridH, 0);
       }
+      if (toggled)
+         pend();
       m_version[i] = c.version;
+      m_visSerial[i] = c.visSerial;
       marked++;
    }
    return marked;
 }
 
-void Coverage::Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty) const
+bool Coverage::Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty)
 {
+   const bool staticDirty = m_pendingCube != 0 || !m_pendingOrtho.empty();
    if (m_layout == LAYOUT_CUBE)
    {
       uint32_t neededMask = 0, dirtyMask = 0;
@@ -213,6 +235,7 @@ void Coverage::Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_
             if (dynamicTier && !casters[i].isStatic)
                dirtyMask |= m_cube[i];
          }
+      dirtyMask |= m_pendingCube;
       for (int vp = 0; vp < 6 * CUBE_FACE_GRID * CUBE_FACE_GRID; vp++)
       {
          needed[vp] = (neededMask >> vp) & 1u;
@@ -229,7 +252,12 @@ void Coverage::Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_
             if (dynamicTier && !casters[i].isStatic)
                m_ortho[i].Fill(dirty, m_gridW);
          }
+      for (const PageRect& pr : m_pendingOrtho)
+         pr.Fill(dirty, m_gridW);
    }
+   m_pendingCube = 0;
+   m_pendingOrtho.clear();
+   return staticDirty;
 }
 
 void MarkCubePages(const Vertex3Ds& lightPos, float zNear, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int faceGrid, int dilate, uint8_t* needed)
