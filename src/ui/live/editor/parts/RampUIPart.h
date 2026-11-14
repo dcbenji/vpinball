@@ -27,6 +27,7 @@ private:
    void InsertPointOnCurve(const Vertex2D& pos) override;
    bool HasPointAutoTexture() const override { return true; }
    void UpdatePointZField(PropertyPane& props, DragPoint* point) override;
+   void UpdateSectionsSection(PropertyPane& props);
 };
 
 }

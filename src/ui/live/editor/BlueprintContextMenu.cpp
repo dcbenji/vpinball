@@ -15,6 +15,7 @@
 #include "parts/Collection.h"
 #include "parts/PartGroup.h"
 #include "parts/pintable.h"
+#include "parts/ramp.h"
 #include "renderer/RenderDevice.h"
 #include "ui/EditorClipboard.h"
 
@@ -91,6 +92,32 @@ void BlueprintPane::RenderContextMenu()
                   c->DeletePoint(point);
                }
             });
+      if (owner->GetItemType() == eItemRamp && curve != nullptr)
+      {
+         // Ramp sections: the start edge (first point) as an entry interface, the clicked / selected consecutive interior points as a hairpin
+         Ramp* const ramp = static_cast<Ramp*>(owner);
+         int first = INT_MAX, last = -1;
+         for (const DragPoint* point : targets)
+         {
+            first = min(first, curve->GetPointIndex(point));
+            last = max(last, curve->GetPointIndex(point));
+         }
+         const bool consecutive = first >= 0 && (last - first + 1) == (int)targets.size();
+         const auto sectionOp = [&editor, owner](const std::function<void()>& op)
+         {
+            editor.m_undo.BeginUndo();
+            editor.m_undo.MarkForUndo(owner);
+            editor.m_undo.EndUndo();
+            op();
+            editor.m_renderer->ReinitRenderable(owner->GetIRenderable());
+            editor.m_player->m_physics->Update(owner);
+         };
+         ImGui::Separator();
+         if (ImGui::MenuItem("Make Ramp Entry Interface", nullptr, false, curve->GetPointIndex(clickedPoint) == 0 && ramp->CanAddEntryInterface()))
+            sectionOp([ramp]() { ramp->AddEntryInterface(); });
+         if (ImGui::MenuItem("Make Hairpin Section", nullptr, false, consecutive && ramp->CanAddHairpin(first, last)))
+            sectionOp([ramp, first, last]() { ramp->AddHairpin(first, last); });
+      }
       ImGui::EndDisabled();
    }
    else

@@ -80,6 +80,10 @@ public:
    template <class T> void InputInt(T* obj, const string& label, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip = nullptr);
    template <class T>
    void SliderInt(T* obj, const string& label, int minValue, int maxValue, const std::function<int(const T*)>& getter, const std::function<void(T*, int)>& setter, const char* tooltip = nullptr);
+   // Float slider in the part's own units (no unit conversion); Ctrl+click types a value
+   template <class T>
+   void SliderFloat(T* obj, const string& label, float minValue, float maxValue, const char* format, const std::function<float(const T*)>& getter,
+      const std::function<void(T*, float)>& setter, const char* tooltip = nullptr);
    // Action on the part(s), recorded like a field edit (one undo step)
    template <class T> void Button(T* obj, const string& label, const std::function<void(T*)>& action, const char* tooltip = nullptr);
    template <class T>
@@ -424,6 +428,31 @@ inline void PropertyPane::SliderInt(
    int value = getter(sync.display);
    ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
    if (ImGui::SliderInt(("##" + label).c_str(), &value, minValue, maxValue))
+   {
+      setter(sync.display, value);
+      for (const CoTarget<T>& target : targets)
+         setter(target.display, value);
+      m_modified = m_modifyFieldId;
+   }
+   ImGui::PopItemFlag();
+   WidgetTooltip(tooltip);
+   EndSyncField(sync, targets, getter, setter, value);
+   ImGui::PopID();
+}
+
+template <class T>
+inline void PropertyPane::SliderFloat(T* obj, const string& label, const float minValue, const float maxValue, const char* format, const std::function<float(const T*)>& getter,
+   const std::function<void(T*, float)>& setter, const char* tooltip)
+{
+   assert(m_inSection);
+   m_modifyFieldId++;
+   PropertyLabel(label, tooltip);
+   const SyncField<T> sync = BeginSyncField(obj);
+   const vector<CoTarget<T>> targets = GetCoTargets(sync, obj);
+   ImGui::PushID(label.c_str());
+   float value = getter(sync.display);
+   ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, IsMixed(getter, sync.display, targets));
+   if (ImGui::SliderFloat(("##" + label).c_str(), &value, minValue, maxValue, format))
    {
       setter(sync.display, value);
       for (const CoTarget<T>& target : targets)
