@@ -2725,6 +2725,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                m_boxSelectActive = true;
          }
       }
+      CircleWallOp::Drag(m_editor, UnprojectToPlane(ImGui::GetMousePos(), 0.f)); // Radius of a round wall being placed
       if (!modalMouse && m_boxSelectActive)
       {
          if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
