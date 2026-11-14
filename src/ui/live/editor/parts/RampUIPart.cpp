@@ -314,14 +314,14 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
             m_part, "Bow (VPU)"s, 0.f, 40.f, "%.1f", //
             [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBow : 0.f; }, //
             [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBow = max(0.f, v); },
-            "How far the flap dips below the straight line between its two ends (0 = flat flap). Capped so the front edge starts at most about 6 deg downhill and the flap goes at most 5 VPU below the foot");
+            "How far the flap dips below the straight line between its two ends (0 = flat flap). Capped so the front edge starts at most about 6 deg downhill and the flap goes at most 5 VPU below the playfield (its front edge lies on the playfield)");
          props.SliderFloat<Ramp>(
             m_part, "Bow Position"s, 0.f, 1.f, "%.2f", //
             [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBowPos : 0.5f; }, //
             [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBowPos = clamp(v, 0.f, 1.f); },
             "Where along the flap its low point sits: 0 = at the front edge on the playfield, 1 = at the landing point (used range 0.1 to 0.9)");
          if (st.m_applied)
-            ImGui::TextWrapped("Front edge %.1f deg %s, bow %.1f VPU, %.1f VPU below the foot at most", fabsf(st.m_entryAngle), st.m_entryAngle < 0.f ? "downhill" : "uphill", st.m_bow, st.m_sink);
+            ImGui::TextWrapped("Front edge %.1f deg %s, bow %.1f VPU, %.1f VPU below the playfield at most", fabsf(st.m_entryAngle), st.m_entryAngle < 0.f ? "downhill" : "uphill", st.m_bow, st.m_sink);
       }
       else if (section.m_kind == RampSection::Hairpin)
       {
