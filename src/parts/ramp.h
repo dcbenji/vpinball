@@ -51,6 +51,7 @@ struct RampSectionStatus
    float m_radius = 0.f; // hairpin: radius used (limited by the leg lengths)
    float m_minRadius = 0.f; // hairpin: smallest radius that does not fold the inside (half the widest ramp width + 1)
    float m_legGap = 0.f; // hairpin: clear gap between the two legs' walls (VPU)
+   int m_outerFaces = 0; // hairpin: outside faces used (raised above the section's count where fewer would fold the floor)
    float m_bow = 0.f; // flap: bow used after the caps
    float m_flapUp = 0.f; // flap: landing distance used
    float m_entryAngle = 0.f; // flap: slope of its front edge (degrees, negative = downhill)

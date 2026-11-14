@@ -439,6 +439,31 @@ namespace
       return out;
    }
 
+   // Whether a hairpin corner's floor folds with these face counts: rows step along the arc, each side snapped to its own count, and every
+   // quad between consecutive rows must keep the turn's orientation for both of its diagonals (a coarse outside chord can cut inside the
+   // inside wall, which inverts the quad). Centre at the origin, arc from angle 0.
+   bool ArcFolds(const float radius, const float width, const float sweep, const int outer, const int inner)
+   {
+      const int steps = max(outer, inner);
+      const float sgn = (sweep > 0.f) ? 1.f : -1.f;
+      const auto pt = [=](int j, int count, float r)
+      {
+         const int k = (int)lroundf((float)j * (float)count / (float)steps);
+         const float a = sweep * (float)k / (float)count;
+         return Vertex2D(r * cosf(a), r * sinf(a));
+      };
+      const auto area = [](const Vertex2D &a, const Vertex2D &b, const Vertex2D &c) { return Cross2(b - a, c - a); };
+      const float ro = radius + 0.5f * width, ri = radius - 0.5f * width;
+      for (int j = 0; j < steps; j++)
+      {
+         const Vertex2D o0 = pt(j, outer, ro), o1 = pt(j + 1, outer, ro), i0 = pt(j, inner, ri), i1 = pt(j + 1, inner, ri);
+         for (const float t : { area(o0, o1, i1), area(o0, i1, i0), area(o0, o1, i0), area(o1, i1, i0) })
+            if (t * sgn < -1e-3f)
+               return true;
+      }
+      return false;
+   }
+
    // Flap bow shape: 0 at both ends, 1 at the low point f (fraction of the flap length), flat tangent there
    float FlapBowShape(const float u, const float f)
    {
@@ -586,7 +611,27 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
          vector<float> weights;
          for (const float t : turns)
             weights.push_back(fabsf(t));
-         const vector<int> outer = SplitFaces(clamp(s.m_outerFaces, 1, 256), weights), inner = SplitFaces(clamp(s.m_innerFaces, 1, 256), weights);
+         vector<int> outer = SplitFaces(clamp(s.m_outerFaces, 1, 256), weights);
+         const vector<int> inner = SplitFaces(clamp(s.m_innerFaces, 1, 256), weights);
+         // Raise each corner's outside count until its floor does not fold (checked at both ramp widths: the narrower one is the worse)
+         int outerTotal = 0;
+         bool folds = false;
+         for (size_t c = 0; c < turns.size(); c++)
+         {
+            while (outer[c] < 256 && (ArcFolds(plan.radius, m_d.m_widthbottom, turns[c], outer[c], inner[c]) || ArcFolds(plan.radius, m_d.m_widthtop, turns[c], outer[c], inner[c])))
+               outer[c]++;
+            folds |= ArcFolds(plan.radius, m_d.m_widthbottom, turns[c], outer[c], inner[c]) || ArcFolds(plan.radius, m_d.m_widthtop, turns[c], outer[c], inner[c]);
+            outerTotal += outer[c];
+         }
+         if (status)
+            (*status)[si].m_outerFaces = outerTotal;
+         if (folds)
+         {
+            report(si, "The floor would fold with these face counts: give the inside more faces"s);
+            continue;
+         }
+         if (outerTotal > max(s.m_outerFaces, (int)turns.size()))
+            report(si, "Outside faces raised to " + std::to_string(outerTotal) + " so the floor does not fold over the inside wall");
          for (size_t c = 0; c < turns.size(); c++)
          {
             const Vertex2D p = cpPos(s.m_first + (int)c);
