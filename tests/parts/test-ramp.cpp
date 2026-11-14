@@ -628,3 +628,28 @@ TEST_CASE("Ramp sections")
 
    table->Release();
 }
+
+TEST_CASE("Ramp sections: ramps of a table saved by master have none and build the plain way")
+{
+   CComObject<PinTable>* table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(GetAssetPath() / "ramp-master-4529d3ea4.vpx", feedback)));
+   int ramps = 0;
+   for (IEditable* part : table->GetParts())
+      if (part->GetItemType() == eItemRamp)
+      {
+         ramps++;
+         const Ramp* const ramp = static_cast<Ramp*>(part);
+         CHECK(ramp->m_d.m_sections.empty());
+         int cvertex = 0;
+         bool* walls = reinterpret_cast<bool*>(1);
+         const Vertex2D* const v = ramp->GetRampVertex(cvertex, nullptr, nullptr, nullptr, nullptr, HIT_SHAPE_DETAIL_LEVEL, true, &walls);
+         CHECK(walls == nullptr);
+         delete[] v;
+         CHECK_FALSE(HasTag(SavePartToStream(part), "RSEC"));
+      }
+   CHECK(ramps == 2);
+   table->Release();
+}
