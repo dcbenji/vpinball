@@ -673,6 +673,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
       bool cp;
       int arc; // index into arcs, -1 for none
       int step; // 0 .. arc steps
+      float plainLength; // where this vertex falls along the plain curve: heights and widths follow the plain ramp, so a section only changes its own stretch
    };
    struct Arc
    {
@@ -683,6 +684,10 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
    };
    vector<PathVertex> path;
    vector<Arc> arcs;
+   vector<float> plainCum(vv.size(), 0.f);
+   for (size_t i = 1; i < vv.size(); i++)
+      plainCum[i] = plainCum[i - 1] + (Vertex2D(vv[i].x, vv[i].y) - Vertex2D(vv[i - 1].x, vv[i - 1].y)).Length();
+   const float plainTotal = plainCum.back();
    {
       int v = 0;
       const auto push = [&path](const PathVertex &pv)
@@ -695,7 +700,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
       {
          const int vA = cpVert[plan.first - 1], vB = cpVert[plan.last + 1];
          for (; v <= vA; v++)
-            push({ vv[v], vv[v].controlPoint, -1, 0 });
+            push({ vv[v], vv[v].controlPoint, -1, 0, plainCum[v] });
          const size_t start = path.size();
          for (const Corner &corner : plan.corners)
          {
@@ -705,33 +710,78 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
             for (int j = 0; j <= steps; j++)
             {
                const float a = corner.a0 + corner.sweep * (float)j / (float)steps;
-               push({ Vertex3Ds(corner.c.x + plan.radius * cosf(a), corner.c.y + plan.radius * sinf(a), 0.f), false, arcIndex, j });
+               push({ Vertex3Ds(corner.c.x + plan.radius * cosf(a), corner.c.y + plan.radius * sinf(a), 0.f), false, arcIndex, j, 0.f });
             }
          }
-         // Height offsets (point z) interpolate by length between the two ends of the replaced stretch
-         const Vertex2D a(vv[vA].x, vv[vA].y), b(vv[vB].x, vv[vB].y);
-         float total = 0.f;
-         Vertex2D prev = a;
-         for (size_t i = start; i < path.size(); i++)
+         // Where the generated stretch falls along the plain curve: each arc's tangent points (on the straight legs) are projected onto
+         // the plain curve, the vertices between two such anchors are spread by length. So the legs keep the plain ramp's heights and
+         // only the arcs differ (they are shorter than the corners they cut). Point z follows the plain curve at the same place.
+         const auto project = [&vv, &plainCum, vA, vB](const Vertex2D &p)
          {
-            total += (Vertex2D(path[i].p.x, path[i].p.y) - prev).Length();
-            prev = Vertex2D(path[i].p.x, path[i].p.y);
+            float best = FLT_MAX, len = plainCum[vA];
+            for (int k = vA; k < vB; k++)
+            {
+               const Vertex2D a(vv[k].x, vv[k].y), ab = Vertex2D(vv[k + 1].x, vv[k + 1].y) - a;
+               const float len2 = ab.LengthSquared();
+               const float t = (len2 > 1e-12f) ? clamp((p - a).Dot(ab) / len2, 0.f, 1.f) : 0.f;
+               const float d = (p - (a + ab * t)).LengthSquared();
+               if (d < best)
+               {
+                  best = d;
+                  len = plainCum[k] + (plainCum[k + 1] - plainCum[k]) * t;
+               }
+            }
+            return len;
+         };
+         const auto plainZ = [&vv, &plainCum, vA, vB](float len)
+         {
+            int k = vA;
+            while (k < vB - 1 && plainCum[k + 1] < len)
+               k++;
+            const float span = plainCum[k + 1] - plainCum[k];
+            const float t = (span > 1e-6f) ? clamp((len - plainCum[k]) / span, 0.f, 1.f) : 0.f;
+            return vv[k].z + (vv[k + 1].z - vv[k].z) * t;
+         };
+         {
+            vector<std::pair<size_t, float>> anchors { { start - 1, plainCum[vA] } };
+            for (size_t i = start; i < path.size(); i++)
+               if (path[i].arc >= 0 && (path[i].step == 0 || path[i].step == arcs[path[i].arc].steps))
+                  anchors.emplace_back(i, max(anchors.back().second, project(Vertex2D(path[i].p.x, path[i].p.y))));
+            const Vertex2D b(vv[vB].x, vv[vB].y);
+            const size_t endIndex = path.size(); // vB is pushed next, at this index
+            anchors.emplace_back(endIndex, max(anchors.back().second, plainCum[vB]));
+            const auto posOf = [&path, &b, endIndex](size_t i) { return (i == endIndex) ? b : Vertex2D(path[i].p.x, path[i].p.y); };
+            for (size_t n = 0; n + 1 < anchors.size(); n++)
+            {
+               const auto [i0, l0] = anchors[n];
+               const auto [i1, l1] = anchors[n + 1];
+               float total = 0.f;
+               for (size_t i = i0; i < i1; i++)
+                  total += (posOf(i + 1) - posOf(i)).Length();
+               float acc = 0.f;
+               for (size_t i = i0 + 1; i < i1; i++)
+               {
+                  acc += (posOf(i) - posOf(i - 1)).Length();
+                  path[i].plainLength = l0 + (l1 - l0) * ((total > 0.f) ? acc / total : 0.f);
+               }
+               if (i1 < endIndex)
+                  path[i1].plainLength = l1;
+            }
+            for (size_t i = start; i < path.size(); i++)
+               path[i].p.z = plainZ(path[i].plainLength);
          }
-         total += (b - prev).Length();
-         float acc = 0.f;
-         prev = a;
-         for (size_t i = start; i < path.size(); i++)
+         // The corner points of the range are no longer on the path: their displayed height is the plain ramp's there
+         for (int k = plan.first; k <= plan.last; k++)
          {
-            acc += (Vertex2D(path[i].p.x, path[i].p.y) - prev).Length();
-            prev = Vertex2D(path[i].p.x, path[i].p.y);
-            path[i].p.z = vv[vA].z + (vv[vB].z - vv[vA].z) * ((total > 0.f) ? acc / total : 0.f);
+            const RenderVertex3D &cv = vv[cpVert[k]];
+            AssignHeightToControlPoint(cv, cv.z + ((plainTotal > 0.f) ? plainCum[cpVert[k]] / plainTotal : 0.f) * (m_d.m_heighttop - m_d.m_heightbottom) + m_d.m_heightbottom);
          }
          v = vB;
          if (status)
             (*status)[plan.section].m_applied = true;
       }
       for (; v < (int)vv.size(); v++)
-         push({ vv[v], vv[v].controlPoint, -1, 0 });
+         push({ vv[v], vv[v].controlPoint, -1, 0, plainCum[v] });
    }
    const int cvertex = (int)path.size();
    if (cvertex < 2)
@@ -746,11 +796,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
    rows.ratio.resize(cvertex);
    rows.cross.resize(cvertex);
    rows.wall.assign(cvertex, true);
-   vector<float> widths(cvertex), lengths(cvertex);
-   float totallength = 0.f;
-   for (int i = 0; i < cvertex - 1; i++)
-      totallength += (Vertex2D(path[i].p.x, path[i].p.y) - Vertex2D(path[i + 1].p.x, path[i + 1].p.y)).Length();
-   float currentlength = 0.f;
+   vector<float> widths(cvertex);
    for (int i = 0; i < cvertex; i++)
    {
       const Vertex3Ds &vprev = path[(i > 0) ? i - 1 : i].p;
@@ -791,9 +837,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
             }
          }
       }
-      currentlength += (Vertex2D(vprev.x, vprev.y) - Vertex2D(vmiddle.x, vmiddle.y)).Length();
-      lengths[i] = currentlength;
-      const float percentage = (totallength != 0.f) ? currentlength / totallength : 0.f;
+      const float percentage = (plainTotal != 0.f) ? path[i].plainLength / plainTotal : 0.f;
       widths[i] = percentage * (m_d.m_widthtop - m_d.m_widthbottom) + m_d.m_widthbottom;
       rows.height[i] = vmiddle.z + percentage * (m_d.m_heighttop - m_d.m_heightbottom) + m_d.m_heightbottom;
       if (path[i].cp)
@@ -1056,6 +1100,30 @@ void Ramp::ShiftSectionAnchors(int index, int delta)
 
 float Ramp::GetSurfaceHeight(float x, float y) const
 {
+   if (HasActiveSections())
+   {
+      // The surface parts placed on the ramp sit on is the sectioned floor (flap, hairpin arcs): nearest point on its centre line
+      SectionRows rows;
+      if (BuildSectionedRows(rows, nullptr))
+      {
+         const Vertex2D p(x, y);
+         float best = FLT_MAX, height = rows.height[0];
+         for (size_t i = 0; i + 1 < rows.middle.size(); i++)
+         {
+            const Vertex2D a = rows.middle[i], ab = rows.middle[i + 1] - a;
+            const float len2 = ab.LengthSquared();
+            const float t = (len2 > 1e-12f) ? clamp((p - a).Dot(ab) / len2, 0.f, 1.f) : 0.f;
+            const float d = (p - (a + ab * t)).LengthSquared();
+            if (d < best)
+            {
+               best = d;
+               height = rows.height[i] + (rows.height[i + 1] - rows.height[i]) * t;
+            }
+         }
+         return height;
+      }
+   }
+
    vector<RenderVertex3D> vvertex;
    GetCentralCurve(vvertex);
 

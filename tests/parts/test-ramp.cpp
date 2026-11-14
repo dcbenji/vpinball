@@ -426,9 +426,26 @@ TEST_CASE("Ramp sections")
          zMin = min(zMin, r.height[i]);
       CHECK(zMin >= -5.f - 1e-3f);
 
+      // Parts placed on the ramp follow the flap (it fills the corner at the foot), and the plain ramp past the landing
+      const RampSection flapCopy = flap;
+      ramp->m_d.m_sections.clear();
+      const float plainFoot = ramp->GetSurfaceHeight(500.f, 1500.f), plainUp = ramp->GetSurfaceHeight(500.f, 1300.f);
+      REQUIRE(ramp->AddEntryInterface());
+      ramp->m_d.m_sections.back() = flapCopy;
+      const Rows flapRows = GetRows(ramp);
+      float footRow = 0.f;
+      for (int i = 0; i < flapRows.n; i++)
+         if (fabsf(flapRows.right[i].y - 1500.f) < 0.01f)
+            footRow = flapRows.height[i];
+      CHECK(footRow > plainFoot + 1.f);
+      CHECK(ramp->GetSurfaceHeight(500.f, 1500.f) == doctest::Approx(footRow).epsilon(1e-3));
+      CHECK(ramp->GetSurfaceHeight(500.f, 1300.f) == doctest::Approx(plainUp).epsilon(1e-3));
+      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) <= 0.5f);
+      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) >= -5.f);
+
       // A large bow is capped: front edge at most ~6 deg downhill, at most 5 VPU below the foot
-      flap.m_flapBow = 40.f;
-      flap.m_flapBowPos = 0.1f;
+      ramp->m_d.m_sections.back().m_flapBow = 40.f;
+      ramp->m_d.m_sections.back().m_flapBowPos = 0.1f;
       r = GetRows(ramp);
       const RampSectionStatus capped = ramp->GetSectionStatus()[0];
       CHECK(capped.m_bow < 40.f);
@@ -480,6 +497,16 @@ TEST_CASE("Ramp sections")
          }
       }
       CHECK_FALSE(folded);
+
+      // Heights outside the hairpin are the plain ramp's (the section only changes its own stretch), for the rows and for parts on the ramp
+      {
+         const vector<RampSection> keep = ramp->m_d.m_sections;
+         ramp->m_d.m_sections.clear();
+         const float plainLeg = ramp->GetSurfaceHeight(700.f, 1300.f), plainFoot = ramp->GetSurfaceHeight(500.f, 1300.f);
+         ramp->m_d.m_sections = keep;
+         CHECK(ramp->GetSurfaceHeight(700.f, 1300.f) == doctest::Approx(plainLeg).epsilon(1e-3));
+         CHECK(ramp->GetSurfaceHeight(500.f, 1300.f) == doctest::Approx(plainFoot).epsilon(1e-3));
+      }
 
       // Radius under half the width + 1 is refused; a radius larger than the legs allow is limited, then refused once under that
       hp.m_radius = 30.f;
