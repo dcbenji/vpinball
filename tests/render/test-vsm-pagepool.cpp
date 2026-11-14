@@ -479,3 +479,34 @@ TEST_CASE("VSM light row: layout, ortho projection, upload only on change")
    CHECK(texel(VSM::MAX_LIGHTS - 1, 4).w == 5.f);
    CHECK(VSM::PAGETABLE_ROWS == VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W);
 }
+
+// 64 shadow slots: the slot index + 1 is packed in 8 bits of the light record (fs_pbr: (shadowInfo >> 4) & 255) and the page
+// table texture is 512 texels wide, one 4096 texel stride per slot (fs_pbr: ivec2(idx & 511, idx >> 9))
+TEST_CASE("VSM 64 slots fit the light record and the page table")
+{
+   CHECK(VSM::MAX_LIGHTS == 64);
+   CHECK(VSM::MAX_LIGHTS + 1 <= 255);
+   const int rows = VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W;
+   CHECK(rows == 512);
+   const int lastIdx = (VSM::MAX_LIGHTS - 1) * VSM::PAGETABLE_STRIDE + VSM::PAGETABLE_STRIDE - 1;
+   CHECK((lastIdx >> 9) < rows);
+   // light record w (a float), decoded as fs_pbr does (int(w), exact: w < 2^24 since the penumbra code is <= 255): every slot,
+   // mode and layout survives with every penumbra code. The former decode int(floor(w + 0.5)) read an odd mode back one higher
+   // once w >= 2^23 (code >= 128): w + 0.5 rounds to even in fp32
+   for (int code = 0; code <= 255; code++)
+      for (const int slot : { 0, VSM::MAX_LIGHTS - 1 })
+         for (int mode = 0; mode <= 4; mode++)
+         {
+            const int shadowInfo = mode | ((slot + 1) << 4) | (VSM::LAYOUT_CUBE << 12) | (code << 16);
+            const float w = (float)shadowInfo;
+            REQUIRE((double)w == (double)shadowInfo);
+            const int back = (int)w;
+            CHECK(((back >> 4) & 255) - 1 == slot);
+            CHECK((back & 15) == mode);
+            CHECK(((back >> 12) & 15) == VSM::LAYOUT_CUBE);
+            CHECK((back >> 16) == code);
+         }
+   volatile float half = 0.5f; // the old decode, on a case it got wrong (code 128, mode 1)
+   const int odd = 1 | (1 << 4) | (VSM::LAYOUT_CUBE << 12) | (128 << 16);
+   CHECK(((int)floorf((float)odd + half) & 15) == 2);
+}

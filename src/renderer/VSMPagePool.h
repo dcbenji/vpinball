@@ -22,18 +22,18 @@
 namespace VSM
 {
 constexpr int PAGE_DIM = 128; // physical page edge in texels (one array layer per page); named PAGE_DIM since PAGE_SIZE is a system macro on some platforms
-constexpr int MAX_LIGHTS = 32; // max shadowed lights (index+1 packed in 8 bits of the light record)
+constexpr int MAX_LIGHTS = 64; // max shadowed lights (index+1 packed in 8 bits of the light record)
 constexpr int CUBE_FACE_GRID = 2; // virtual pages per cube-face edge -> 4 pages per face, 24 per light
 constexpr int MAX_ORTHO_GRID = 64; // max pages per edge of an ortho virtual map (64 pages = 8192 texels)
 constexpr int PAGETABLE_STRIDE = MAX_ORTHO_GRID * MAX_ORTHO_GRID; // page-table texels reserved per light
-constexpr int PAGETABLE_W = 512; // tex_vsm_pagetables texture width in texels (height 256 holds 32 lights)
+constexpr int PAGETABLE_W = 512; // tex_vsm_pagetables texture width in texels (height 512 holds 64 lights; fs_pbr addresses it as idx & 511, idx >> 9)
 constexpr int PAGETABLE_ROWS = MAX_LIGHTS * PAGETABLE_STRIDE / PAGETABLE_W; // page-table rows; the texture has one more: the light row
 constexpr int PLACEHOLDER_PAGES = 2; // pool size without any shadowed light: an array texture (bgfx makes 1 layer a plain 2D texture)
 constexpr int LIGHT_ROW_TEXELS = 8; // per light texels in the light row (fs_pbr pbr_vsm_light: s * 8 + k at row PAGETABLE_ROWS)
 static_assert(MAX_LIGHTS * LIGHT_ROW_TEXELS <= PAGETABLE_W, "the light row holds every slot");
 static_assert(MAX_ORTHO_GRID < 128, "fs_pbr unpacks the ortho grid as across * 128 + down");
 // fs_pbr hard-codes these (PBR_VSM_STRIDE, PBR_VSM_CUBE_GRID, PBR_VSM_LIGHT_ROW, 'idx & 511, idx >> 9', the light row's 8 texels per slot)
-static_assert(PAGETABLE_STRIDE == 4096 && CUBE_FACE_GRID == 2 && PAGETABLE_ROWS == 256 && PAGETABLE_W == 512 && LIGHT_ROW_TEXELS == 8, "update fs_pbr's VSM constants");
+static_assert(PAGETABLE_STRIDE == 4096 && CUBE_FACE_GRID == 2 && PAGETABLE_ROWS == 512 && PAGETABLE_W == 512 && LIGHT_ROW_TEXELS == 8, "update fs_pbr's VSM constants");
 
 // The light row of tex_vsm_pagetables (fs_pbr pbr_vsm_light): per slot s, texels s * 8 + 0..2 = the ortho view-projection's
 // x, y, z outputs (column k of VPX's row vector matrix: fs_pbr sc.k = dot(t_k, (p, 1))), 3 = (pages across * 128 + pages down,

@@ -1519,7 +1519,7 @@ void Renderer::CreateVSMPagePoolTargets()
    }
    else if (!bgfx::isValid(m_vsmPageTableTex))
    {
-      constexpr int ptH = VSM::PAGETABLE_ROWS; // 32 * 4096 / 512 = 256, plus the light row (UploadVSMLightRow)
+      constexpr int ptH = VSM::PAGETABLE_ROWS; // 64 * 4096 / 512 = 512, plus the light row (UploadVSMLightRow)
       m_vsmPageTableTex = bgfx::createTexture2D(VSM::PAGETABLE_W, ptH + 1, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
       bgfx::setName(m_vsmPageTableTex, "VSM Page Table");
       m_vsmPageTableSampler = std::make_shared<Sampler>(m_renderDevice, "VSM Page Table"s, SurfaceType::RT_DEFAULT, m_vsmPageTableTex, bgfx::TextureFormat::RGBA32F,

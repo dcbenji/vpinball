@@ -152,7 +152,7 @@ PropBool(Player, SSRefl, "Additive Screen Space Reflection"s, "Add global reflec
 PropBool(Player, PBR, "PBR Materials"s, "Enable the physically based rendering path for parts using a PBR material (BGFX only)"s, true);
 PropInt(Player, PBRShadowMapSize, "PBR Shadow Map Size"s, "Virtual resolution in texels of each ortho PBR light's shadow map (paged: only caster-covered pages are allocated)"s, 2048, 16384, 8192);
 PropInt(Player, PBRShadowPoolPages, "PBR Shadow Pool Pages"s, "Maximum number of 128x128 physical pages shared by all shadowed PBR lights (192 KB of GPU memory each); the pool is sized to what the table's shadowed lights need, up to this"s, 64, 2048, 2048);
-PropInt(Player, PBRShadowMaxLights, "PBR Shadow Max Lights"s, "Maximum number of PBR lights with virtual shadow maps"s, 1, 32, 32);
+PropInt(Player, PBRShadowMaxLights, "PBR Shadow Max Lights"s, "Maximum number of PBR lights with virtual shadow maps"s, 1, 64, 64);
 PropInt(Player, PBRShadowPagesPerFrame, "PBR Shadow Pages Per Frame"s, "Maximum number of shadow map pages rendered per frame (bakes and dynamic updates amortize over frames)"s, 1, 128, 32);
 PropBool(Player, PBRShadowFastFilter, "PBR Fast Shadow Filter"s, "Cheaper PBR soft shadows with the same look: the 4 outer filter taps first (the other 12 only where they disagree, in a penumbra), and no shadow lookup for a light too faint at the pixel for its shadow to show"s, true);
 PropFloat(Player, PBRDimLightCutoff, "PBR Dim Light Cutoff"s, "Speed-up for scenes with many lights: a light whose unshadowed irradiance luminance at a pixel is under this value only adds its diffuse there (no specular, coat reflection or shadow). 0 = off, 2 is barely visible"s, 0.f, 16.f, 0.f);

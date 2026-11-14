@@ -123,16 +123,16 @@ SAMPLER2DARRAY(tex_vsm_pool, 3);     // VSM physical page pool: depth texture ar
 SAMPLER2D     (tex_vsm_pagetables, 5); // VSM page table: physical layer+1 per virtual page (0 = not resident)
 SAMPLER2DARRAY(tex_vsm_trans, 6);    // VSM page pool transmittance: translucent casters' absorbance (rgb) and nearness (a, 16 bit)
 
-// Per shadowed light (VSM index s) parameters: the last row of tex_vsm_pagetables (row 256, VSM::PAGETABLE_ROWS), 8 texels per
+// Per shadowed light (VSM index s) parameters: the last row of tex_vsm_pagetables (row 512, VSM::PAGETABLE_ROWS), 8 texels per
 // light (VSM::LIGHT_ROW_TEXELS), written by the renderer when they change (Renderer::UploadVSMLightRow). They were uniform arrays
-// (32 x 7 vec4), re-applied and copied with every draw's uniforms:
+// (64 x 7 vec4), re-applied and copied with every draw's uniforms:
 // 0-2: ortho view-projection, one texel per clip output (sc.k = dot(t_k, vec4(p, 1)): the columns of VPX's row vector matrix)
 // 3: ortho map: x: pages across * 128 + pages down, y: depth range, z/w: world->virtual-uv scale (1/ortho box extents)
 // 4: static shadow cache: cache uv = table xy * x + (y, z), w = cache layer + 1 (0 = not cached)
 // The shadow filters: an ortho light's fetches texels 0-3 per pixel, a cube light's none (its page-table base is
 // slot * PBR_VSM_STRIDE and its face grid a constant; the per-slot fetches cost Ripley's Redux ~0.2 ms of GPU at 1440 in the
 // first layout). The playfield draw fetches texel 4 once per shadowed cube light (its static shadow cache entry)
-#define PBR_VSM_LIGHT_ROW 256
+#define PBR_VSM_LIGHT_ROW 512
 #define PBR_VSM_STRIDE 4096    // VSM::PAGETABLE_STRIDE
 #define PBR_VSM_CUBE_GRID 2.0  // VSM::CUBE_FACE_GRID
 vec4 pbr_vsm_light(const int s, const int k) { return texelFetch(tex_vsm_pagetables, ivec2(s * 8 + k, PBR_VSM_LIGHT_ROW), 0); }
@@ -723,7 +723,8 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
       // Shadowed light record: w packs mode (bits 0-3), VSM index + 1 (bits 4-11, 0 = no map),
       // layout (bits 12-15, 0 = ortho, 2 = cube) and the penumbra radius quantized in 0.5 VPU units (bits 16+)
       vec3 shadow = vec3_splat(1.0);
-      const int shadowInfo = int(floor(lRad.w + 0.5));
+      // w is an exact integer below 2^24 (penumbra code <= 255): truncate. floor(w + 0.5) rounds an odd w >= 2^23 up in fp32
+      const int shadowInfo = int(lRad.w);
       const int shadowMode = shadowInfo & 15;
       const int shadowIndex = ((shadowInfo >> 4) & 255) - 1;
       const int shadowLayout = (shadowInfo >> 12) & 15;
