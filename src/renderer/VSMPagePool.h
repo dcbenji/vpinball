@@ -134,6 +134,70 @@ int PickSlot(int slotCount, const uint8_t* slotFree, const float* parkedImportan
 // 'dilate' inflates the marked page rect on each side (PCF penumbra bleed). Sets needed[py*gridW+px].
 void MarkOrthoPages(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate, uint8_t* needed);
 
+// Page coverage of one caster, as a rect of an ortho map's page grid (empty when x1 < x0) or a bit mask of a cube map's
+// 6 * CUBE_FACE_GRID^2 pages (bit = virtual page index). Same pages as MarkOrthoPages / MarkCubePages.
+struct PageRect
+{
+   int16_t x0 = 0, y0 = 0, x1 = -1, y1 = -1;
+   bool Empty() const { return x1 < x0 || y1 < y0; }
+   bool Contains(int x, int y) const { return x >= x0 && x <= x1 && y >= y0 && y <= y1; }
+   void Fill(uint8_t* pages, int gridW) const
+   {
+      for (int y = y0; y <= y1; y++)
+         for (int x = x0; x <= x1; x++)
+            pages[y * gridW + x] |= 1; // |=: keeps a dirty page's fresh bit (2)
+   }
+};
+static_assert(6 * CUBE_FACE_GRID * CUBE_FACE_GRID <= 32, "cube page masks are 32 bit");
+PageRect OrthoPageRect(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate);
+uint32_t CubePageMask(const Vertex3Ds& lightPos, float zNear, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int dilate);
+
+// A shadow caster as the coverage marking sees it: world bounds and a version bumped when they change (dynamic casters)
+struct Caster
+{
+   void* part = nullptr;
+   bool isStatic = false;
+   bool active = true; // false: never drawn in the shadow pass (invisible wall): marks no page
+   bool noBounds = false; // the part gave no bounds (collapsed to the origin): drawn into every page
+   Vertex3Ds boundsMin, boundsMax;
+   unsigned int version = 0;
+};
+
+// Per light page coverage of every caster, cached: static casters are marked once per map (light, position, layout, grid,
+// caster list) instead of every frame (~0.1 ms per shadowed light per frame on Ripley's Redux), only casters whose version
+// moved are re-marked. Holds the PCF-dilated coverage (page allocation) and the undilated one (the pages a caster can
+// rasterize into: per page caster culling).
+class Coverage
+{
+public:
+   // Both return the number of casters (re)marked
+   int UpdateCube(const void* light, const Vertex3Ds& lightPos, float zNear, unsigned int casterSerial, const std::vector<Caster>& casters);
+   int UpdateOrtho(const void* light, const Vertex3Ds& lightPos, const Matrix3D& lightView, float l, float r, float b, float t, int gridW, int gridH, int dilate,
+      unsigned int casterSerial, const std::vector<Caster>& casters);
+
+   // needed[vp] = 1 for the pages of the active casters; dirty[vp] |= 1 for those of the active dynamic casters when dynamicTier
+   void Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty) const;
+
+   // True when the caster's (undilated) coverage includes the virtual page
+   bool InPage(size_t caster, int vpage) const
+   {
+      if (caster >= m_version.size())
+         return true;
+      return m_layout == LAYOUT_CUBE ? ((m_cubeTight[caster] >> vpage) & 1u) != 0 : m_orthoTight[caster].Contains(vpage % m_gridW, vpage / m_gridW);
+   }
+
+private:
+   bool Rekey(const void* light, const Vertex3Ds& pos, int layout, int gridW, int gridH, unsigned int casterSerial, size_t casterCount);
+
+   const void* m_light = nullptr;
+   Vertex3Ds m_pos;
+   int m_layout = -1, m_gridW = 0, m_gridH = 0;
+   unsigned int m_casterSerial = 0;
+   std::vector<unsigned int> m_version; // caster version each entry was marked at
+   std::vector<uint32_t> m_cube, m_cubeTight; // cube layout: page bit masks, PCF dilated / undilated
+   std::vector<PageRect> m_ortho, m_orthoTight; // ortho layout: page rects, PCF dilated / undilated
+};
+
 // Marks the virtual pages of the 6 cube faces for a near light. A caster crossing a face plane
 // conservatively marks that whole face; otherwise each corner projects with the same formulas as
 // pbr_shadow_cube_lookup and the covered page range is marked. Sets needed[f*g*g + py*g + px].

@@ -104,7 +104,7 @@ int PickSlot(int slotCount, const uint8_t* slotFree, const float* parkedImportan
    return best;
 }
 
-void MarkOrthoPages(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate, uint8_t* needed)
+PageRect OrthoPageRect(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate)
 {
    float px0 = FLT_MAX, px1 = -FLT_MAX, py0 = FLT_MAX, py1 = -FLT_MAX;
    for (int c = 0; c < 8; c++)
@@ -116,11 +116,120 @@ void MarkOrthoPages(const Matrix3D& lightView, float l, float r, float b, float 
       py0 = std::min(py0, (t - v.y) / (t - b) * gridH);
       py1 = std::max(py1, (t - v.y) / (t - b) * gridH);
    }
-   const int x0 = std::max(0, (int)floorf(px0) - dilate), x1 = std::min(gridW - 1, (int)ceilf(px1) - 1 + dilate);
-   const int y0 = std::max(0, (int)floorf(py0) - dilate), y1 = std::min(gridH - 1, (int)ceilf(py1) - 1 + dilate);
-   for (int y = y0; y <= y1; y++)
-      for (int x = x0; x <= x1; x++)
-         needed[y * gridW + x] = 1;
+   PageRect rect;
+   rect.x0 = (int16_t)std::max(0, (int)floorf(px0) - dilate);
+   rect.x1 = (int16_t)std::min(gridW - 1, (int)ceilf(px1) - 1 + dilate);
+   rect.y0 = (int16_t)std::max(0, (int)floorf(py0) - dilate);
+   rect.y1 = (int16_t)std::min(gridH - 1, (int)ceilf(py1) - 1 + dilate);
+   return rect;
+}
+
+void MarkOrthoPages(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate, uint8_t* needed)
+{
+   OrthoPageRect(lightView, l, r, b, t, boundsMin, boundsMax, gridW, gridH, dilate).Fill(needed, gridW);
+}
+
+uint32_t CubePageMask(const Vertex3Ds& lightPos, float zNear, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int dilate)
+{
+   constexpr int count = 6 * CUBE_FACE_GRID * CUBE_FACE_GRID;
+   uint8_t pages[count] = {};
+   MarkCubePages(lightPos, zNear, boundsMin, boundsMax, CUBE_FACE_GRID, dilate, pages);
+   uint32_t mask = 0;
+   for (int i = 0; i < count; i++)
+      mask |= (uint32_t)pages[i] << i;
+   return mask;
+}
+
+bool Coverage::Rekey(const void* light, const Vertex3Ds& pos, int layout, int gridW, int gridH, unsigned int casterSerial, size_t casterCount)
+{
+   if (m_light == light && m_pos.x == pos.x && m_pos.y == pos.y && m_pos.z == pos.z && m_layout == layout && m_gridW == gridW && m_gridH == gridH
+      && m_casterSerial == casterSerial && m_version.size() == casterCount)
+      return false;
+   m_light = light;
+   m_pos = pos;
+   m_layout = layout;
+   m_gridW = gridW;
+   m_gridH = gridH;
+   m_casterSerial = casterSerial;
+   m_version.assign(casterCount, ~0u);
+   m_cube.assign(layout == LAYOUT_CUBE ? casterCount : 0, 0u);
+   m_cubeTight.assign(layout == LAYOUT_CUBE ? casterCount : 0, 0u);
+   m_ortho.assign(layout == LAYOUT_CUBE ? 0 : casterCount, PageRect {});
+   m_orthoTight.assign(layout == LAYOUT_CUBE ? 0 : casterCount, PageRect {});
+   return true;
+}
+
+int Coverage::UpdateCube(const void* light, const Vertex3Ds& lightPos, float zNear, unsigned int casterSerial, const std::vector<Caster>& casters)
+{
+   Rekey(light, lightPos, LAYOUT_CUBE, CUBE_FACE_GRID, CUBE_FACE_GRID, casterSerial, casters.size());
+   int marked = 0;
+   for (size_t i = 0; i < casters.size(); i++)
+   {
+      const Caster& c = casters[i];
+      if (m_version[i] == c.version)
+         continue;
+      // Allocation: one page ring of PCF bleed (taps reach up to 8/(grid*PAGE_DIM) of a face, under a page, see fs_pbr filterRadius clamp)
+      m_cube[i] = CubePageMask(lightPos, zNear, c.boundsMin, c.boundsMax, 1);
+      m_cubeTight[i] = c.noBounds ? ~0u : CubePageMask(lightPos, zNear, c.boundsMin, c.boundsMax, 0);
+      m_version[i] = c.version;
+      marked++;
+   }
+   return marked;
+}
+
+int Coverage::UpdateOrtho(const void* light, const Vertex3Ds& lightPos, const Matrix3D& lightView, float l, float r, float b, float t, int gridW, int gridH, int dilate,
+   unsigned int casterSerial, const std::vector<Caster>& casters)
+{
+   Rekey(light, lightPos, LAYOUT_ORTHO, gridW, gridH, casterSerial, casters.size());
+   int marked = 0;
+   for (size_t i = 0; i < casters.size(); i++)
+   {
+      const Caster& c = casters[i];
+      if (m_version[i] == c.version)
+         continue;
+      m_ortho[i] = PageRect {};
+      m_orthoTight[i] = PageRect { 0, 0, (int16_t)(gridW - 1), (int16_t)(gridH - 1) };
+      if (c.boundsMin.x <= c.boundsMax.x && c.boundsMin.y <= c.boundsMax.y && c.boundsMin.z <= c.boundsMax.z)
+      {
+         m_ortho[i] = OrthoPageRect(lightView, l, r, b, t, c.boundsMin, c.boundsMax, gridW, gridH, dilate);
+         if (!c.noBounds)
+            m_orthoTight[i] = OrthoPageRect(lightView, l, r, b, t, c.boundsMin, c.boundsMax, gridW, gridH, 0);
+      }
+      m_version[i] = c.version;
+      marked++;
+   }
+   return marked;
+}
+
+void Coverage::Mark(const std::vector<Caster>& casters, bool dynamicTier, uint8_t* needed, uint8_t* dirty) const
+{
+   if (m_layout == LAYOUT_CUBE)
+   {
+      uint32_t neededMask = 0, dirtyMask = 0;
+      for (size_t i = 0; i < casters.size() && i < m_cube.size(); i++)
+         if (casters[i].active)
+         {
+            neededMask |= m_cube[i];
+            if (dynamicTier && !casters[i].isStatic)
+               dirtyMask |= m_cube[i];
+         }
+      for (int vp = 0; vp < 6 * CUBE_FACE_GRID * CUBE_FACE_GRID; vp++)
+      {
+         needed[vp] = (neededMask >> vp) & 1u;
+         dirty[vp] |= (dirtyMask >> vp) & 1u;
+      }
+   }
+   else
+   {
+      std::fill(needed, needed + m_gridW * m_gridH, uint8_t(0));
+      for (size_t i = 0; i < casters.size() && i < m_ortho.size(); i++)
+         if (casters[i].active)
+         {
+            m_ortho[i].Fill(needed, m_gridW);
+            if (dynamicTier && !casters[i].isStatic)
+               m_ortho[i].Fill(dirty, m_gridW);
+         }
+   }
 }
 
 void MarkCubePages(const Vertex3Ds& lightPos, float zNear, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int faceGrid, int dilate, uint8_t* needed)

@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy
+// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache
 
 #include "core/stdafx.h"
 #include "../vpx-test.h"
@@ -239,4 +239,112 @@ TEST_CASE("VSM slot policy: lit swap")
    CHECK(VSM::PickSlot(n, freeSlot, noParked, 40.f, lit) == 1);
    const float parked[n] = { -1.f, -1.f, 0.f }; // a parked light less important than the taker goes before any lit swap
    CHECK(VSM::PickSlot(n, freeSlot, parked, 1.f, lit) == 2);
+}
+
+static std::vector<VSM::Caster> RandomCasters(std::mt19937& rng, int count, const Vertex3Ds& around, float spread)
+{
+   std::uniform_real_distribution<float> pos(-spread, spread), size(1.f, spread * 0.3f);
+   std::vector<VSM::Caster> casters(count);
+   for (int i = 0; i < count; i++)
+   {
+      VSM::Caster& c = casters[i];
+      c.isStatic = (i % 4) != 0; // every 4th one dynamic
+      const Vertex3Ds p(around.x + pos(rng), around.y + pos(rng), std::max(0.f, around.z * 0.5f + pos(rng) * 0.3f));
+      const Vertex3Ds h(size(rng), size(rng), size(rng) * 0.5f);
+      c.boundsMin = p - h;
+      c.boundsMax = p + h;
+   }
+   return casters;
+}
+
+TEST_CASE("VSM coverage cache")
+{
+   std::mt19937 rng(11);
+   const Vertex3Ds lightPos(500.f, 1000.f, 60.f);
+   std::vector<VSM::Caster> casters = RandomCasters(rng, 200, lightPos, 300.f);
+   constexpr int entries = 6 * VSM::CUBE_FACE_GRID * VSM::CUBE_FACE_GRID;
+   VSM::Coverage cov;
+   int light = 0;
+
+   // Same pages as marking every caster with MarkCubePages (the per frame marking it replaces)
+   const auto reference = [&](bool dynamicTier, std::vector<uint8_t>& needed, std::vector<uint8_t>& dirty)
+   {
+      needed.assign(entries, 0);
+      dirty.assign(entries, 0);
+      std::vector<uint8_t> tmp(entries);
+      for (const VSM::Caster& c : casters)
+      {
+         if (!c.active)
+            continue;
+         std::fill(tmp.begin(), tmp.end(), uint8_t(0));
+         VSM::MarkCubePages(lightPos, 2.f, c.boundsMin, c.boundsMax, VSM::CUBE_FACE_GRID, 1, tmp.data());
+         for (int i = 0; i < entries; i++)
+         {
+            needed[i] |= tmp[i];
+            if (dynamicTier && !c.isStatic)
+               dirty[i] |= tmp[i];
+         }
+      }
+   };
+   const auto check = [&](bool dynamicTier)
+   {
+      std::vector<uint8_t> refNeeded, refDirty, needed(entries, 7), dirty(entries, 0);
+      reference(dynamicTier, refNeeded, refDirty);
+      cov.Mark(casters, dynamicTier, needed.data(), dirty.data());
+      CHECK(needed == refNeeded);
+      CHECK(dirty == refDirty);
+   };
+
+   CHECK(cov.UpdateCube(&light, lightPos, 2.f, 1, casters) == 200); // first use: every caster marked
+   check(false);
+   check(true);
+   CHECK(cov.UpdateCube(&light, lightPos, 2.f, 1, casters) == 0); // nothing moved: nothing re-marked
+
+   // A dynamic caster moves: only it is re-marked, and the result still matches a full marking
+   casters[4].boundsMin.x += 150.f;
+   casters[4].boundsMax.x += 150.f;
+   casters[4].version++;
+   CHECK(cov.UpdateCube(&light, lightPos, 2.f, 1, casters) == 1);
+   check(true);
+
+   // A hidden caster (invisible wall) marks nothing, without a re-mark
+   casters[5].active = false;
+   CHECK(cov.UpdateCube(&light, lightPos, 2.f, 1, casters) == 0);
+   check(false);
+
+   // The dirty fresh bit (2) of a page survives the dynamic dirty marking
+   {
+      std::vector<uint8_t> needed(entries), dirty(entries, 2);
+      cov.Mark(casters, true, needed.data(), dirty.data());
+      for (int i = 0; i < entries; i++)
+         CHECK((dirty[i] & 2) != 0);
+   }
+
+   // Key changes re-mark everything: light moved, other light in the slot, caster list rebuilt
+   CHECK(cov.UpdateCube(&light, lightPos + Vertex3Ds(1.f, 0.f, 0.f), 2.f, 1, casters) == 200);
+   CHECK(cov.UpdateCube(&light, lightPos, 2.f, 1, casters) == 200);
+   int other = 0;
+   CHECK(cov.UpdateCube(&other, lightPos, 2.f, 1, casters) == 200);
+   CHECK(cov.UpdateCube(&other, lightPos, 2.f, 2, casters) == 200);
+   check(true);
+
+   // Ortho layout: same pages as MarkOrthoPages
+   const Vertex3Ds center(500.f, 1000.f, 0.f);
+   const Vertex3Ds keyPos(500.f, 1000.f, 2400.f);
+   const Matrix3D view = Matrix3D::MatrixLookAtRH(keyPos, center, Vertex3Ds(0.f, -1.f, 0.f));
+   const float l = -700.f, r = 700.f, b = -1300.f, t = 1300.f;
+   constexpr int gw = 9, gh = 16;
+   CHECK(cov.UpdateOrtho(&light, keyPos, view, l, r, b, t, gw, gh, 2, 2, casters) == 200);
+   CHECK(cov.UpdateOrtho(&light, keyPos, view, l, r, b, t, gw, gh, 2, 2, casters) == 0);
+   std::vector<uint8_t> refNeeded(gw * gh, 0), refDirty(gw * gh, 0), needed(gw * gh, 5), dirty(gw * gh, 0);
+   for (const VSM::Caster& c : casters)
+      if (c.active)
+      {
+         VSM::MarkOrthoPages(view, l, r, b, t, c.boundsMin, c.boundsMax, gw, gh, 2, refNeeded.data());
+         if (!c.isStatic)
+            VSM::MarkOrthoPages(view, l, r, b, t, c.boundsMin, c.boundsMax, gw, gh, 2, refDirty.data());
+      }
+   cov.Mark(casters, true, needed.data(), dirty.data());
+   CHECK(needed == refNeeded);
+   CHECK(dirty == refDirty);
 }

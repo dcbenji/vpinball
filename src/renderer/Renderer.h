@@ -468,6 +468,10 @@ private:
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
    uint64_t m_vsmLastLitSwap = 0; // usec of the last lit-to-lit slot swap (VSM::PickSlot rate limit)
    bool m_vsmCapWarned = false; // logged once: more shadowed lights than slots
+   std::vector<VSM::Caster> m_vsmCasters; // shadow caster whitelist with world bounds (static ones computed once per content change)
+   vector<IEditable*> m_vsmCasterParts; // the part list the caster list was built from (a part deleted and another added in one frame keep the count)
+   unsigned int m_vsmCasterSerial = 0; // bumped on every caster list rebuild
+   std::vector<VSM::Coverage> m_vsmCoverage; // per shadow slot: cached page coverage of every caster
    float m_pbrDimLightCutoff = 0.f; // PBR dim light cutoff (Player_PBRDimLightCutoff), 0 = off
    bool m_pbrShadowFast = true; // shadow filter early-out + importance gate (Player_PBRShadowFastFilter)
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame

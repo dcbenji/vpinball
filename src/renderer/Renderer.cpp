@@ -1532,10 +1532,29 @@ Vertex3Ds Renderer::GetShadowCasterBoundsMin(IEditable* const part, Vertex3Ds& b
    boundsMax = Vertex3Ds(-FLT_MAX, -FLT_MAX, -FLT_MAX);
    switch (part->GetItemType())
    {
+   case eItemPrimitive:
+   {
+      // The 8 corners of the mesh's local box under the draw matrix: Primitive::GetBoundingVertices transforms only the min and
+      // max corners, which under a rotation is not a bound of the mesh
+      Primitive* const p = static_cast<Primitive*>(part);
+      if (p->m_d.m_visible && p->m_mesh.NumVertices() > 0)
+      {
+         p->m_mesh.UpdateBounds();
+         const Matrix3D& m = p->RecalculateMatrices();
+         const Vertex3Ds& lo = p->m_mesh.m_minAABound;
+         const Vertex3Ds& hi = p->m_mesh.m_maxAABound;
+         for (int i = 0; i < 8; i++)
+         {
+            const Vertex3Ds v = m.MultiplyVectorNoPerspective(Vertex3Ds(i & 1 ? hi.x : lo.x, i & 2 ? hi.y : lo.y, i & 4 ? hi.z : lo.z));
+            boundsMin = Vertex3Ds(min(boundsMin.x, v.x), min(boundsMin.y, v.y), min(boundsMin.z, v.z));
+            boundsMax = Vertex3Ds(max(boundsMax.x, v.x), max(boundsMax.y, v.y), max(boundsMax.z, v.z));
+         }
+      }
+      break;
+   }
    case eItemSurface:
    case eItemRamp:
    case eItemRubber:
-   case eItemPrimitive:
    {
       vector<Vertex3Ds> bounds;
       bounds.reserve(8);
@@ -1722,43 +1741,66 @@ void Renderer::UpdateVirtualShadowMaps()
    for (vec4& v : m_vsmBox)
       v = vec4(0.f, 0.f, 0.f, 0.f);
 
-   // Caster whitelist + per-frame bounds cache (mirrors the SHADOW_MAP branches of the parts)
-   struct Caster
+   // Caster whitelist + bounds cache (mirrors the SHADOW_MAP branches of the parts). Rebuilt on a content change; static casters
+   // keep their bounds (Ramp::GetBoundingVertices rebuilds the ramp's vertices: too slow per caster per frame), dynamic ones
+   // refresh theirs every frame and bump their version when they moved, so the per-light coverage re-marks only them
+   // The cached list holds raw part pointers: rebuilt whenever the part list differs (element-wise: ~1,300 pointer compares on
+   // Ripley's Redux), so a deleted part is never dereferenced, whatever the editor or a tool did without a content invalidation
+   if (contentDirty || m_vsmCasterParts != m_table->GetParts() || m_vsmCasterSerial == 0)
    {
-      IEditable* part;
-      bool isStatic;
-      Vertex3Ds boundsMin, boundsMax;
-   };
-   vector<Caster> casters;
-   for (IEditable* const part : m_table->GetParts())
-   {
-      switch (part->GetItemType())
+      m_vsmCasters.clear();
+      for (IEditable* const part : m_table->GetParts())
       {
-      case eItemPrimitive:
-      case eItemRamp:
-      case eItemRubber:
-      case eItemSurface:
-      case eItemFlipper:
-      case eItemHitTarget:
-      case eItemBumper:
-      case eItemGate:
-      case eItemSpinner:
-      case eItemPlunger:
-      case eItemTrigger:
-      {
-         // Invisible walls never draw in the shadow pass (see Surface::Render): keep their whole-table bounds from marking pages
-         if (part->GetItemType() == eItemSurface && !static_cast<const Surface*>(part)->m_d.m_sideVisible && !static_cast<const Surface*>(part)->m_d.m_topBottomVisible)
+         switch (part->GetItemType())
+         {
+         case eItemPrimitive:
+         case eItemRamp:
+         case eItemRubber:
+         case eItemSurface:
+         case eItemFlipper:
+         case eItemHitTarget:
+         case eItemBumper:
+         case eItemGate:
+         case eItemSpinner:
+         case eItemPlunger:
+         case eItemTrigger:
+         {
+            VSM::Caster c;
+            c.part = part;
+            c.isStatic = IsStaticShadowCaster(part);
+            c.boundsMin = GetShadowCasterBoundsMin(part, c.boundsMax);
+            c.noBounds = c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f;
+            m_vsmCasters.push_back(c);
             break;
-         Caster c;
-         c.part = part;
-         c.isStatic = IsStaticShadowCaster(part);
-         c.boundsMin = GetShadowCasterBoundsMin(part, c.boundsMax);
-         casters.push_back(c);
-         break;
+         }
+         default: break;
+         }
       }
-      default: break;
+      m_vsmCasterParts = m_table->GetParts();
+      m_vsmCasterSerial++;
+   }
+   for (VSM::Caster& c : m_vsmCasters)
+   {
+      IEditable* const part = static_cast<IEditable*>(c.part);
+      // Invisible walls never draw in the shadow pass (see Surface::Render): keep their whole-table bounds from marking pages
+      c.active = part->GetItemType() != eItemSurface || static_cast<const Surface*>(part)->m_d.m_sideVisible || static_cast<const Surface*>(part)->m_d.m_topBottomVisible;
+      // Dynamic casters every frame; a static one without bounds (hidden at load: its part gave none) until it shows
+      if (!c.isStatic || (c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f))
+      {
+         Vertex3Ds bMax;
+         const Vertex3Ds bMin = GetShadowCasterBoundsMin(part, bMax);
+         if (bMin.x != c.boundsMin.x || bMin.y != c.boundsMin.y || bMin.z != c.boundsMin.z || bMax.x != c.boundsMax.x || bMax.y != c.boundsMax.y || bMax.z != c.boundsMax.z)
+         {
+            c.boundsMin = bMin;
+            c.boundsMax = bMax;
+            c.noBounds = bMin.x == 0.f && bMin.y == 0.f && bMin.z == 0.f && bMax.x == 0.f && bMax.y == 0.f && bMax.z == 0.f;
+            c.version++;
+         }
       }
    }
+   const vector<VSM::Caster>& casters = m_vsmCasters;
+   if ((int)m_vsmCoverage.size() != VSM::MAX_LIGHTS)
+      m_vsmCoverage.assign(VSM::MAX_LIGHTS, VSM::Coverage {});
 
    // Emits one depth-only caster pass: whitelisted caster parts drawn under the given view-projection
    const unsigned int prevMask = m_render_mask;
@@ -1771,7 +1813,6 @@ void Renderer::UpdateVirtualShadowMaps()
       int index; // shadow slot (per-light uniform array index)
    };
    vector<PageJob> jobs;
-   vector<uint8_t> markTmp;
    bool indexUsed[VSM::MAX_LIGHTS] = {};
 
    // A shadowed light that goes dark (a flasher between fires, a lamp in an off phase) keeps its index and its resident
@@ -1991,27 +2032,13 @@ void Renderer::UpdateVirtualShadowMaps()
          m_vsmParams[index] = vec4((float)map.ptBase, (float)gridW, (float)gridH, zf - zn);
          m_vsmBox[index] = vec4(1.f / (r - l), 1.f / (t - b), zn, 0.f); // z: near depth (translucent caster linear depth start)
 
-         // Mark caster coverage; dynamic casters of a dynamic-tier light also dirty their pages
-         std::fill(map.needed.begin(), map.needed.end(), uint8_t(0));
-         markTmp.assign(map.EntryCount(), 0);
-         for (const Caster& caster : casters)
-         {
-            if (caster.boundsMin.x > caster.boundsMax.x || caster.boundsMin.y > caster.boundsMax.y || caster.boundsMin.z > caster.boundsMax.z)
-               continue;
-            std::fill(markTmp.begin(), markTmp.end(), uint8_t(0));
-            // PCF taps reach up to 0.02 of the map (see fs_pbr filterRadius clamp); non-resident pages
-            // count as lit, so the marked band must cover caster bounds + max penumbra or the soft edge
-            // is clipped to the page grid
-            const int dilate = 1 + (int)ceilf(0.02f * std::max(gridW, gridH));
-            VSM::MarkOrthoPages(view, l, r, b, t, caster.boundsMin, caster.boundsMax, gridW, gridH, dilate, markTmp.data());
-            const bool dynDirty = dynamicTier && !caster.isStatic;
-            for (int i = 0; i < (int)map.needed.size(); i++)
-            {
-               map.needed[i] |= markTmp[i];
-               if (dynDirty)
-                  map.dirty[i] |= markTmp[i];
-            }
-         }
+         // Mark caster coverage (cached per light and caster); dynamic casters of a dynamic-tier light also dirty their pages.
+         // PCF taps reach up to 0.02 of the map (see fs_pbr filterRadius clamp); non-resident pages count as lit, so the
+         // marked band must cover caster bounds + max penumbra or the soft edge is clipped to the page grid
+         const int dilate = 1 + (int)ceilf(0.02f * std::max(gridW, gridH));
+         VSM::Coverage& cov = m_vsmCoverage[index];
+         cov.UpdateOrtho(light, lPos, view, l, r, b, t, gridW, gridH, dilate, m_vsmCasterSerial, casters);
+         cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data());
       }
       else
       {
@@ -2037,22 +2064,10 @@ void Renderer::UpdateVirtualShadowMaps()
          light->m_pbrShadowLayout = VSM::LAYOUT_CUBE;
          m_vsmParams[index] = vec4((float)map.ptBase, (float)VSM::CUBE_FACE_GRID, (float)VSM::CUBE_FACE_GRID, zFar);
 
-         std::fill(map.needed.begin(), map.needed.end(), uint8_t(0));
-         markTmp.assign(map.EntryCount(), 0);
-         for (const Caster& caster : casters)
-         {
-            std::fill(markTmp.begin(), markTmp.end(), uint8_t(0));
-            // Same PCF bleed as the ortho maps: taps reach up to 8/(grid*PAGE_DIM) of a face
-            // (see fs_pbr filterRadius clamp), under a page, so one page ring covers it
-            VSM::MarkCubePages(lPos, zNear, caster.boundsMin, caster.boundsMax, VSM::CUBE_FACE_GRID, 1, markTmp.data());
-            const bool dynDirty = dynamicTier && !caster.isStatic;
-            for (int i = 0; i < (int)map.needed.size(); i++)
-            {
-               map.needed[i] |= markTmp[i];
-               if (dynDirty)
-                  map.dirty[i] |= markTmp[i];
-            }
-         }
+         // Caster coverage (cached per light and caster, cube page bit masks), same PCF bleed ring as the ortho maps
+         VSM::Coverage& cov = m_vsmCoverage[index];
+         cov.UpdateCube(light, lPos, zNear, m_vsmCasterSerial, casters);
+         cov.Mark(casters, dynamicTier, map.needed.data(), map.dirty.data());
       }
 
       // Alloc/free against the marked coverage, then enqueue the dirty pages
@@ -2170,8 +2185,9 @@ void Renderer::UpdateVirtualShadowMaps()
          shadowView->m_mvp.SetProj(eye, job.proj);
       }
       shadowView->SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true); // the page's view (a cabinet part of the last page left it on the cabinet's)
-      for (const Caster& caster : casters)
-         RenderItem(caster.part, true);
+      for (const VSM::Caster& caster : casters)
+         if (caster.active)
+            RenderItem(static_cast<IEditable*>(caster.part), true);
       // Translucent casters (PBR plastics with a transmission, clear parts) do not block: they tint and attenuate the light
       // through the page's transmittance layer, max blended (strongest absorbance, nearest caster), depth tested against
       // the opaque casters. Linear depth is normalized over the light's depth range (ortho: near..far, cube: 0..far).
@@ -2187,13 +2203,13 @@ void Renderer::UpdateVirtualShadowMaps()
          m_renderDevice->SetRenderState(RenderState::SRCBLEND, RenderState::ONE);
          m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::ONE);
          m_render_mask |= SHADOW_TRANS;
-         for (const Caster& caster : casters)
-            switch (caster.part->GetItemType())
+         for (const VSM::Caster& caster : casters)
+            switch (caster.active ? static_cast<IEditable*>(caster.part)->GetItemType() : eItemInvalid)
             {
             case eItemPrimitive:
             case eItemRamp:
             case eItemRubber:
-            case eItemSurface: RenderItem(caster.part, true); break;
+            case eItemSurface: RenderItem(static_cast<IEditable*>(caster.part), true); break;
             default: break;
             }
       }
