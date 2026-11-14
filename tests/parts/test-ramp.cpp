@@ -527,6 +527,14 @@ TEST_CASE("Ramp sections")
       CHECK_FALSE(st[0].m_message.empty());
       ramp->m_curve.GetPoints()[2]->SetX(700.f);
 
+      // A point inserted on the bridge of the U joins the range and is a straight run, not a refusal
+      ramp->m_curve.InsertPoint(2, std::make_unique<DragPoint>(&ramp->m_curve, 600.f, 1000.f, 0.f, false));
+      CHECK(hp.m_first == 1);
+      CHECK(hp.m_last == 3);
+      CHECK(ramp->GetSectionStatus()[0].m_applied);
+      ramp->m_curve.DeletePoint(ramp->m_curve.GetPoints()[2].get());
+      CHECK(hp.m_last == 2);
+
       // Inserting a point before the hairpin moves its range with its points; deleting one of its points shrinks it
       ramp->m_curve.InsertPoint(1, std::make_unique<DragPoint>(&ramp->m_curve, 500.f, 1250.f, 0.f, false));
       CHECK(hp.m_first == 2);
