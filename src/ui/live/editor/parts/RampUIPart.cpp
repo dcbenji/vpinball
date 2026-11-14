@@ -248,7 +248,7 @@ void RampUIPart::UpdatePropertyPane(PropertyPane& props)
    props.TimerSection(m_part);
 }
 
-// Section i of the ramp when it is of the given kind (index based: co-edited ramps without the same section are left alone)
+// Section i of the ramp when it is of the given kind (the panel edits one ramp at a time)
 static RampSection* SectionAt(Ramp* ramp, size_t i, int kind) { return (i < ramp->m_d.m_sections.size() && ramp->m_d.m_sections[i].m_kind == kind) ? &ramp->m_d.m_sections[i] : nullptr; }
 static const RampSection* SectionAt(const Ramp* ramp, size_t i, int kind)
 {
@@ -266,6 +266,25 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
       props.EndSection();
       return;
    }
+   if (props.IsMultiEdit())
+   {
+      // Sections are addressed by index and point range: they are only edited on one ramp at a time
+      ImGui::TextWrapped("Select a single ramp to edit its sections.");
+      props.EndSection();
+      return;
+   }
+   // During play: sections are made and removed on the startup table only (stop play first); a slider's copy button is offered only
+   // when the other version of the ramp has the same section
+   PinTable* const table = m_part->GetPTable();
+   const bool inPlay = table->m_liveBaseTable != nullptr;
+   const Ramp* other = nullptr;
+   if (inPlay)
+   {
+      IEditable* const startup = table->GetStartupFromLive<IEditable>(static_cast<IEditable*>(m_part));
+      other = (ramp == m_part) ? (startup ? static_cast<const Ramp*>(startup) : nullptr) : m_part;
+      ImGui::TextWrapped("Stop play to add or remove sections.");
+   }
+   ImGui::BeginDisabled(inPlay);
 
    // Creation: the start edge of the ramp as an interface; the selected interior point(s) as a hairpin
    ImGui::BeginDisabled(!ramp->CanAddEntryInterface());
@@ -290,6 +309,7 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
       m_part, "Make Hairpin Section"s, [first, last](Ramp* r) { r->AddHairpin(first, last); },
       "Turn the selected interior point(s) of the path into a hairpin: each corner becomes an arc of one radius, with separate face counts for the outside and inside walls (point edit mode: select the corner point, or the consecutive corner points of a U-turn)");
    ImGui::EndDisabled();
+   ImGui::EndDisabled();
 
    const vector<RampSectionStatus> status = ramp->GetSectionStatus();
    for (size_t i = 0; i < ramp->m_d.m_sections.size(); i++)
@@ -297,6 +317,10 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
       const RampSection& section = ramp->m_d.m_sections[i];
       const RampSectionStatus& st = status[i];
       ImGui::PushID((int)i);
+      const bool otherHas = !inPlay
+         || (other != nullptr && i < other->m_d.m_sections.size() && other->m_d.m_sections[i].m_kind == section.m_kind && other->m_d.m_sections[i].m_first == section.m_first
+            && other->m_d.m_sections[i].m_last == section.m_last);
+      props.SetSyncSuppressed(!otherHas);
       if (section.m_kind == RampSection::EntryFlap)
       {
          props.Separator("Entry Interface"s);
@@ -319,7 +343,7 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
             m_part, "Bow Position"s, 0.f, 1.f, "%.2f", //
             [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBowPos : 0.5f; }, //
             [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBowPos = clamp(v, 0.f, 1.f); },
-            "Where along the flap its low point sits: 0 = at the front edge on the playfield, 1 = at the landing point (used range 0.1 to 0.9)");
+            "Where along the flap its low point sits: 0 = at the front edge on the playfield, 1 = at the landing point. Values under 0.1 act as 0.1 and values over 0.9 as 0.9 (the curve needs room on both sides of its low point)");
          if (st.m_applied)
             ImGui::TextWrapped("Front edge %.1f deg %s, bow %.1f VPU, %.1f VPU below the playfield at most", fabsf(st.m_entryAngle), st.m_entryAngle < 0.f ? "downhill" : "uphill", st.m_bow, st.m_sink);
       }
@@ -356,6 +380,8 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
          ImGui::TextWrapped("%s%s", st.m_applied ? "" : "Not applied: ", st.m_message.c_str());
          ImGui::PopStyleColor();
       }
+      props.SetSyncSuppressed(false);
+      ImGui::BeginDisabled(inPlay);
       props.Button<Ramp>(
          m_part, "Remove Section"s,
          [i, kind = section.m_kind](Ramp* r)
@@ -363,6 +389,7 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
             if (SectionAt(r, i, kind))
                r->m_d.m_sections.erase(r->m_d.m_sections.begin() + i);
          });
+      ImGui::EndDisabled();
       ImGui::PopID();
    }
    props.EndSection();
