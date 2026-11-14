@@ -15,6 +15,49 @@ class HitObject;
 class HitTriangle;
 class MeshBuffer;
 
+// A typed stretch of a flat ramp whose generated geometry replaces the plain ramp's there (render and physics alike).
+// Saved as one skippable RSEC record each, only when present: a ramp without sections saves and builds exactly as before.
+struct RampSection
+{
+   enum Kind : int
+   {
+      EntryFlap = 1, // range starts at point 0: a shallow lead-in flap from the playfield onto the ramp
+      Hairpin = 2, // range of interior points: each corner becomes an arc of the section radius
+   };
+   static constexpr int kVersion = 1;
+
+   int m_kind = EntryFlap;
+   int m_first = 0; // first and last control point index of the range the section replaces
+   int m_last = 0;
+
+   // Entry flap
+   float m_flapAhead = 60.f; // how far ahead of the ramp foot it starts on the playfield (VPU, >= 0)
+   float m_flapUp = 60.f; // how far up the ramp it lands (VPU along the path)
+   float m_flapBow = 0.f; // how far the flap dips below the straight line between its two ends (VPU, >= 0)
+   float m_flapBowPos = 0.5f; // where its low point sits, 0 = front edge .. 1 = landing (clamped to 0.1 .. 0.9)
+
+   // Hairpin
+   float m_radius = 50.f; // radius at the path centre (VPU)
+   int m_outerFaces = 12; // faces of the outside wall over the whole section
+   int m_innerFaces = 9; // faces of the inside wall over the whole section
+
+   bool operator==(const RampSection &other) const = default;
+};
+
+// What the geometry builder made of one section (for the editor): whether it applies, the values it used after its clamps, and why not
+struct RampSectionStatus
+{
+   bool m_applied = false;
+   float m_radius = 0.f; // hairpin: radius used (limited by the leg lengths)
+   float m_minRadius = 0.f; // hairpin: smallest radius that does not fold the inside (half the widest ramp width + 1)
+   float m_legGap = 0.f; // hairpin: clear gap between the two legs' walls (VPU)
+   float m_bow = 0.f; // flap: bow used after the caps
+   float m_flapUp = 0.f; // flap: landing distance used
+   float m_entryAngle = 0.f; // flap: slope of its front edge (degrees, negative = downhill)
+   float m_sink = 0.f; // flap: deepest point below the ramp foot (VPU)
+   string m_message;
+};
+
 class RampData final : public BaseProperty
 {
 public:
@@ -36,6 +79,8 @@ public:
    float m_depthBias;      // for determining depth sorting
 
    bool m_imageWalls;
+
+   vector<RampSection> m_sections; // only applied to flat ramps
 };
 
 class Ramp :
@@ -63,6 +108,7 @@ public:
    Ramp()
       : m_curve(this, 2)
    {
+      m_curve.SetIndexShiftListener([this](int index, int delta) { ShiftSectionAnchors(index, delta); });
       m_d.m_collidable = true;
       m_d.m_visible = true;
       m_d.m_depthBias = 0.0f;
@@ -122,8 +168,22 @@ public:
 
    // Computes the vertices and additional information for the ramp shape.
    // Also refreshes the drag points' m_calcHeight display cache (derived value, written through the owned DragPoint pointers)
-   Vertex2D *GetRampVertex(
-      int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy, const bool inc_width) const;
+   // ppWall (optional) receives, for a ramp built with sections, a per vertex flag: a wall segment exists between two consecutive
+   // vertices only when both are flagged. It is set to nullptr when every segment has walls (all ramps without sections).
+   Vertex2D *GetRampVertex(int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy,
+      const bool inc_width, bool **const ppWall = nullptr) const;
+
+   // Sections are applied only to flat ramps; with any section, render and physics use the same fixed sampling
+   bool HasActiveSections() const { return !m_d.m_sections.empty() && m_d.m_type == RampTypeFlat; }
+   // Runs the section geometry builder and reports, per section, what it did
+   vector<RampSectionStatus> GetSectionStatus() const;
+   // Keeps section ranges on the same points when a point is inserted (delta +1) or deleted (delta -1) at index
+   void ShiftSectionAnchors(int index, int delta);
+   // Section creation (editor): false when refused (not a flat ramp, already present, not interior / consecutive / free points)
+   bool CanAddEntryInterface() const;
+   bool AddEntryInterface();
+   bool CanAddHairpin(int first, int last) const;
+   bool AddHairpin(int first, int last);
 
    RampData m_d;
 
@@ -171,6 +231,15 @@ private:
    }
 
    void PrepareHabitrail();
+
+   struct SectionRows
+   {
+      vector<Vertex2D> right, left, middle; // right = middle + width/2 * normal (first half of GetRampVertex's outline)
+      vector<float> height, ratio;
+      vector<bool> cross, wall;
+   };
+   bool BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *status) const;
+   bool m_physicsSectioned = false; // set while PhysicSetup builds a sectioned ramp: zero length joints are skipped
 
    // Updates the m_calcHeight display cache of matching drag points (derived value, written through the owned DragPoint pointers)
    void AssignHeightToControlPoint(const RenderVertex3D &v, const float height) const;
