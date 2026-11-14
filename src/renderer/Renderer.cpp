@@ -1519,12 +1519,13 @@ void Renderer::CreateVSMPagePoolTargets()
    }
    else if (!bgfx::isValid(m_vsmPageTableTex))
    {
-      constexpr int ptH = VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W; // 32 * 4096 / 512 = 256
-      m_vsmPageTableTex = bgfx::createTexture2D(VSM::PAGETABLE_W, ptH, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
+      constexpr int ptH = VSM::PAGETABLE_ROWS; // 32 * 4096 / 512 = 256, plus the light row (UploadVSMLightRow)
+      m_vsmPageTableTex = bgfx::createTexture2D(VSM::PAGETABLE_W, ptH + 1, false, 1, bgfx::TextureFormat::RGBA32F, BGFX_TEXTURE_NONE);
       bgfx::setName(m_vsmPageTableTex, "VSM Page Table");
       m_vsmPageTableSampler = std::make_shared<Sampler>(m_renderDevice, "VSM Page Table"s, SurfaceType::RT_DEFAULT, m_vsmPageTableTex, bgfx::TextureFormat::RGBA32F,
-         VSM::PAGETABLE_W, ptH, true);
+         VSM::PAGETABLE_W, ptH + 1, true);
       m_vsmPageTableData.assign(VSM::PAGETABLE_W * ptH * 4, 0.f);
+      m_vsmLightRow.clear();
       m_vsmPageTableDirty = true;
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_pagetables, m_vsmPageTableSampler);
    }
@@ -1734,6 +1735,7 @@ void Renderer::PreparePBRFrame()
 
    UpdateVirtualShadowMaps();
    UpdatePBRShadowCache();
+   UploadVSMLightRow();
    BuildPBRLightList();
 }
 
@@ -2304,9 +2306,6 @@ void Renderer::UpdateVirtualShadowMaps()
          { bgfx::updateTexture2D(tex, 0, 0, 0, 0, VSM::PAGETABLE_W, ptH, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
    }
 
-   m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matShadowVP, m_vsmShadowVP, VSM::MAX_LIGHTS);
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMParams, m_vsmParams, VSM::MAX_LIGHTS);
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::pbrVSMBox, m_vsmBox, VSM::MAX_LIGHTS);
    // Shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate), plain floats: pbrShadowParams.w = tap mode, pbrDimParams.y = gate.
    // The PBRShadowFastFilter setting (default on) = tap mode 1 (4 corner taps first, the other 12 only in a penumbra) + importance gate 0.5
    // (no shadow lookup for a light whose unshadowed irradiance luminance at the pixel is under it); off = the full 16 tap filter
@@ -2326,6 +2325,18 @@ static float PBRLightRange(const Light* const light) { return max(light->m_d.m_f
 static float PBRLightSphereRadius(const Light* const light) { return max(light->m_d.m_bulbRadius, 0.f); }
 static int PBRPenumbraHalfUnits(const Light* const light) { return clamp(static_cast<int>(light->m_d.m_bulbRadius * 2.f + 0.5f), 4, 255); }
 
+// The per light VSM parameters (ortho view-projection, map params, ortho box) and static shadow cache entries are read by fs_pbr from
+// the light row of the page table texture (pbr_vsm_light), not from uniform arrays: 64 x 7 vec4 (7 KB) of uniforms were copied into
+// every draw's command and re-applied with every draw on the render thread. Uploaded at the start of the frame, only when changed
+// (no slot without the full page table: m_vsmPageTableData is empty while the table is the 1x1 placeholder).
+void Renderer::UploadVSMLightRow()
+{
+   if (m_vsmPageTableData.empty() || !VSM::PackLightRow(m_vsmLightRow, m_vsmShadowVP, m_vsmParams, m_vsmBox, m_vsmCacheTable))
+      return;
+   m_renderDevice->AddBeginOfFrameCmd([tex = m_vsmPageTableTex, data = m_vsmLightRow]()
+      { bgfx::updateTexture2D(tex, 0, 0, 0, VSM::PAGETABLE_ROWS, VSM::PAGETABLE_W, 1, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
+}
+
 // Static shadow cache. A light whose cube map holds static casters only (PBR_STATIC_SHADOWS, PBR_STATIC_N_BALL_SHADOWS: flippers,
 // targets, gates, spinners, plunger, triggers and the ball are not in it) and that does not move has a fixed filtered shadow at
 // every point of a static receiver: the cube filter of fs_pbr (pbr_cube_shadow) gives the same rgb frame after frame, a GI bulb
@@ -2337,7 +2348,7 @@ static int PBRPenumbraHalfUnits(const Light* const light) { return clamp(static_
 //   playfield mesh is drawn over the tile (vs/fs_pbr SHADOW_BAKE) evaluating pbr_cube_shadow with the inputs the live path
 //   gives it. One light per frame; published the frame after (every pass of the bake frame has run by then).
 // - Live: fs_pbr reads the tile for the playfield draw (pbrShadowCacheDraw) and the lights with a published bake
-//   (pbrShadowCache[VSM index]); texels without a bake (off the mesh, steep faces, tile gutters) and every other receiver run the
+//   (the light row entry of its VSM index); texels without a bake (off the mesh, steep faces, tile gutters) and every other receiver run the
 //   live filter. The ball shadows (mode 3) stay live on top.
 // Settings: Player.PBRShadowCache (default on; off is bit-identical to the live path), Player.PBRShadowCacheLayers = cache layers at
 // most (2048^2 RGBA8, 16 MB each, default 8); lights that do not fit keep the live filter. Every static cube light is cached, at
@@ -2363,7 +2374,7 @@ void Renderer::UpdatePBRShadowCache()
    vec4 table[VSM::MAX_LIGHTS];
    for (vec4& v : table)
       v = vec4(0.f, 0.f, 0.f, 0.f);
-   const auto publish = [shader, &table]() { shader->SetVector(ShaderUniform::pbrShadowCache, table, VSM::MAX_LIGHTS); };
+   const auto publish = [this, &table]() { std::copy(table, table + VSM::MAX_LIGHTS, m_vsmCacheTable); };
    if (!m_shadowCacheOn)
    {
       publish();
@@ -2542,7 +2553,7 @@ void Renderer::UpdatePBRShadowCache()
          shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, bakePenumbra, 0.f, 0.f);
          shader->SetVector(ShaderUniform::pbrShadowBakeMap, e.map.x, e.map.y, e.map.z, 0.f);
          shader->SetVector(ShaderUniform::pbrShadowBakeRect, (float)e.x0 / (float)L, (float)e.y0 / (float)L, (float)(e.x0 + e.w) / (float)L, (float)(e.y0 + e.h) / (float)L);
-         // The light's pbrVSMParams entry (UpdateVirtualShadowMaps leaves a parked light's empty)
+         // The light's cube map params (UpdateVirtualShadowMaps leaves a parked light's empty)
          shader->SetVector(ShaderUniform::pbrShadowBakeVSM, (float)map.ptBase, (float)VSM::CUBE_FACE_GRID, (float)VSM::CUBE_FACE_GRID, max(l->m_d.m_falloff, 60.f));
          // Same view as the playfield draw (its vertex normal goes through the view transforms to the world, as in the live path)
          const PartGroupData::SpaceReference prevSpaceRef = m_activeView->m_mvpSpaceReference;

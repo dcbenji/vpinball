@@ -459,7 +459,10 @@ private:
    std::vector<VSM::LightMap> m_vsmLights; // per-shadowIndex virtual maps
    Matrix3D m_vsmShadowVP[VSM::MAX_LIGHTS]; // ortho light view-projection per shadowed light
    vec4 m_vsmParams[VSM::MAX_LIGHTS]; // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
-   vec4 m_vsmBox[VSM::MAX_LIGHTS]; // x: 1/boxW, y: 1/boxH, z/w: unused
+   vec4 m_vsmBox[VSM::MAX_LIGHTS]; // x: 1/boxW, y: 1/boxH, z: ortho near depth, w: unused
+   vec4 m_vsmCacheTable[VSM::MAX_LIGHTS] {}; // static shadow cache entry per shadowed light (UpdatePBRShadowCache)
+   std::vector<float> m_vsmLightRow; // the light row of tex_vsm_pagetables last uploaded (VSM::PackLightRow)
+   void UploadVSMLightRow(); // per light VSM params + shadow cache entries -> the page table's light row, when they changed
    std::vector<RenderTarget*> m_vsmTouchedRTs; // page RTs written this frame (scene pass dependencies)
    uint64_t m_vsmFrame = 0; // marking frame stamp for pool LRU
    uint64_t m_vsmSlotPageFrame[VSM::MAX_LIGHTS] {}; // per shadow slot: the last VSM frame a page of its map was rendered (the cache bakes complete maps of earlier frames only)

@@ -123,9 +123,19 @@ SAMPLER2DARRAY(tex_vsm_pool, 3);     // VSM physical page pool: depth texture ar
 SAMPLER2D     (tex_vsm_pagetables, 5); // VSM page table: physical layer+1 per virtual page (0 = not resident)
 SAMPLER2DARRAY(tex_vsm_trans, 6);    // VSM page pool transmittance: translucent casters' absorbance (rgb) and nearness (a, 16 bit)
 
-uniform mat4 matShadowVP[32];   // ortho virtual map view-projection per shadowed light
-uniform vec4 pbrVSMParams[32];  // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
-uniform vec4 pbrVSMBox[32];     // x/y: world->virtual-uv scale (1/ortho box extents), z: ortho near depth (used CPU side)
+// Per shadowed light (VSM index s) parameters: the last row of tex_vsm_pagetables (row 256, VSM::PAGETABLE_ROWS), 8 texels per
+// light (VSM::LIGHT_ROW_TEXELS), written by the renderer when they change (Renderer::UploadVSMLightRow). They were uniform arrays
+// (32 x 7 vec4), re-applied and copied with every draw's uniforms:
+// 0-2: ortho view-projection, one texel per clip output (sc.k = dot(t_k, vec4(p, 1)): the columns of VPX's row vector matrix)
+// 3: ortho map: x: pages across * 128 + pages down, y: depth range, z/w: world->virtual-uv scale (1/ortho box extents)
+// 4: static shadow cache: cache uv = table xy * x + (y, z), w = cache layer + 1 (0 = not cached)
+// The shadow filters: an ortho light's fetches texels 0-3 per pixel, a cube light's none (its page-table base is
+// slot * PBR_VSM_STRIDE and its face grid a constant; the per-slot fetches cost Ripley's Redux ~0.2 ms of GPU at 1440 in the
+// first layout). The playfield draw fetches texel 4 once per shadowed cube light (its static shadow cache entry)
+#define PBR_VSM_LIGHT_ROW 256
+#define PBR_VSM_STRIDE 4096    // VSM::PAGETABLE_STRIDE
+#define PBR_VSM_CUBE_GRID 2.0  // VSM::CUBE_FACE_GRID
+vec4 pbr_vsm_light(const int s, const int k) { return texelFetch(tex_vsm_pagetables, ivec2(s * 8 + k, PBR_VSM_LIGHT_ROW), 0); }
 uniform vec4 pbrDimParams;      // x: dim light cutoff T (PBRDimLightCutoff): a light under T unshadowed irradiance luminance at the pixel only adds its diffuse (no specular, coat reflection or shadow), 0 = off; y: shadow importance gate (PBRShadowFastFilter), 0 = off
 uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z/w: page render linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness quantization step, w: shadow tap mode
 // Static shadow cache (Renderer::UpdatePBRShadowCache): per cached light, its cube shadow (rgb, as pbr_cube_shadow returns it)
@@ -134,7 +144,6 @@ uniform vec4 pbrShadowParams;   // x: 1/page size, y: slope-scaled depth bias, z
 #ifndef TRANSPARENT
 SAMPLER2DARRAY(tex_pbr_shadow_cache, 7);
 #endif
-uniform vec4 pbrShadowCache[32]; // per shadowed light (VSM index): cache uv = table xy * x + (y, z), w = cache layer + 1 (0 = not cached)
 uniform vec4 pbrShadowCacheDraw; // x: 1 = this draw (the playfield) reads the cache, 0 = live filter only; y/z/w: flasher shadows (pbr_direct_light)
 #define PBR_SHADOW_CACHE_MIN_NZ 0.7 // receivers steeper than ~45 deg are not cached (a wall shares the table xy of its floor)
 #ifdef SHADOW_BAKE
@@ -142,7 +151,7 @@ uniform vec4 pbrShadowBakeLight;  // the baked light: xyz position, w range (as 
 uniform vec4 pbrShadowBakeParams; // x: light source sphere radius, y: penumbra radius (light record quantization)
 uniform vec4 pbrShadowBakeMap;    // table xy -> layer uv: xy * x + (y, z)
 uniform vec4 pbrShadowBakeRect;   // the light's tile in the layer (uv min xy, max xy): the rest of the layer is left as is
-uniform vec4 pbrShadowBakeVSM;    // the light's pbrVSMParams entry (a parked light has none in the frame's array)
+uniform vec4 pbrShadowBakeVSM;    // the light's cube map params (as pbr_cube_shadow takes them)
 #endif
 
 #ifdef TRANSPARENT
@@ -480,7 +489,7 @@ float pbr_aa_roughness(const vec3 n, const float roughness)
 
 // Cube virtual shadow map lookup of one light at a receiver: the soft (PCSS-lite, 16 tap Poisson disk rotated by vsmRot) opaque shadow times the
 // translucent casters' tint, 1 = lit. Shared by the live path (pbr_direct_light) and the shadow cache bake (SHADOW_BAKE below),
-// so a cached shadow is the same function of the receiver. vsmP = the light's pbrVSMParams entry, lPos = (position, range),
+// so a cached shadow is the same function of the receiver. vsmP = the light's map (x: page-table texel base, y/z: face grid), lPos = (position, range),
 // wNg = the geometric normal (either facing: the lookup goes to the light's side), gNdotLraw = dot(wNg, l) and dist2 = the clamped
 // squared distance of pbr_direct_light, vsmRot = the kernel rotation (cos, sin). Derivative free (safe in UV-space rasterization and in non uniform control flow).
 vec3 pbr_cube_shadow(const vec4 vsmP, const vec4 lPos, const float lightRadius, const vec3 wPos, const vec3 wNg, const float gNdotLraw, const float dist2, const vec2 vsmRot)
@@ -726,12 +735,15 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
          // Ortho virtual map: project once, then each PCF tap resolves its own page through the
          // page table (a tap landing in a non-resident page counts as lit: pages without casters
          // are never allocated)
-         const vec4 sc = mul(matShadowVP[shadowIndex], vec4(wPos, 1.0));
+         const vec4 wPos1 = vec4(wPos, 1.0);
+         const vec3 sc = vec3(dot(pbr_vsm_light(shadowIndex, 0), wPos1), dot(pbr_vsm_light(shadowIndex, 1), wPos1), dot(pbr_vsm_light(shadowIndex, 2), wPos1));
          const vec2 suv = sc.xy * vec2(0.5, -0.5) + 0.5;
          BRANCH if (sc.z > 0.0 && all(greaterThanEqual(suv, vec2_splat(0.0))) && all(lessThanEqual(suv, vec2_splat(1.0))))
          {
-            const vec4 vsmP = pbrVSMParams[shadowIndex];
-            const vec4 vsmB = pbrVSMBox[shadowIndex];
+            const vec4 o3 = pbr_vsm_light(shadowIndex, 3);
+            const float gridW = floor(o3.x * (1.0 / 128.0));
+            const vec4 vsmP = vec4(float(shadowIndex * PBR_VSM_STRIDE), gridW, o3.x - gridW * 128.0, o3.y);
+            const vec2 vsmB = o3.zw;
             const vec2 grid = vsmP.yz;
             // Slope-scaled depth bias plus a constant term to fight self-shadowing acne
             const float bias = pbrShadowParams.y * (1.0 - NdotLs) / max(NdotLs, 0.1) + 0.25 * pbrShadowParams.x;
@@ -780,14 +792,17 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
          // tile gutters) fall back to the live filter, as do steep receivers (a wall shares its floor's table xy).
          bool cached = false;
          #ifndef TRANSPARENT
-         BRANCH if (pbrShadowCacheDraw.x > 0.0 && pbrShadowCache[shadowIndex].w > 0.0 && abs(wNg.z) > PBR_SHADOW_CACHE_MIN_NZ)
+         BRANCH if (pbrShadowCacheDraw.x > 0.0 && abs(wNg.z) > PBR_SHADOW_CACHE_MIN_NZ)
          {
-            const vec4 sc = pbrShadowCache[shadowIndex];
-            const vec4 cs = texture2DArrayLod(tex_pbr_shadow_cache, vec3(wPos.xy * sc.x + vec2(sc.y, sc.z), sc.w - 1.0), 0.0);
-            if (cs.a > 0.999)
+            const vec4 sc = pbr_vsm_light(shadowIndex, 4);
+            BRANCH if (sc.w > 0.0)
             {
-               shadow = cs.rgb;
-               cached = true;
+               const vec4 cs = texture2DArrayLod(tex_pbr_shadow_cache, vec3(wPos.xy * sc.x + vec2(sc.y, sc.z), sc.w - 1.0), 0.0);
+               if (cs.a > 0.999)
+               {
+                  shadow = cs.rgb;
+                  cached = true;
+               }
             }
          }
          #endif
@@ -805,7 +820,7 @@ vec3 pbr_direct_light(const vec3 wN, const vec3 wNc, const vec3 wNg, const vec3 
             skipShadow = pbrShadowCacheDraw.z > 1.5;
          }
          BRANCH if (!cached && !skipShadow)
-            shadow = pbr_cube_shadow(pbrVSMParams[shadowIndex], lPos, penumbra, wPos, wNg, gNdotLraw, dist2, vsmRot);
+            shadow = pbr_cube_shadow(vec4(float(shadowIndex * PBR_VSM_STRIDE), PBR_VSM_CUBE_GRID, PBR_VSM_CUBE_GRID, 0.0), lPos, penumbra, wPos, wNg, gNdotLraw, dist2, vsmRot);
       }
       BRANCH if (shadowMode == 1 || shadowMode >= 3) // RAYTRACED_BALL_SHADOWS or PBR ball shadow tiers
          shadow *= get_light_ball_shadow(lPos.xyz, -dl, sqrt(dist2));

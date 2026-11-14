@@ -425,3 +425,57 @@ TEST_CASE("VSM page culling matches the page projections")
    for (int vpage = 0; vpage < 24; vpage++)
       CHECK(cov.InPage(0, vpage));
 }
+
+// The per light VSM params live in the light row of the page table texture (fs_pbr pbr_vsm_light), no longer in uniform arrays:
+// the layout fs_pbr reads, the row vector product it evaluates (r0 * x + r1 * y + r2 * z + r3 = the CPU's view * proj applied to
+// p), and the change detection that gates the upload
+TEST_CASE("VSM light row: layout, ortho projection, upload only on change")
+{
+   std::mt19937 rng(7);
+   std::uniform_real_distribution<float> u(-2.f, 2.f);
+   std::vector<Matrix3D> vp(VSM::MAX_LIGHTS);
+   std::vector<vec4> params(VSM::MAX_LIGHTS), box(VSM::MAX_LIGHTS), cache(VSM::MAX_LIGHTS);
+   for (int s = 0; s < VSM::MAX_LIGHTS; s++)
+   {
+      for (int r = 0; r < 4; r++)
+         for (int c = 0; c < 4; c++)
+            vp[s].m[r][c] = u(rng);
+      params[s] = vec4((float)(s * VSM::PAGETABLE_STRIDE), (float)(1 + s % VSM::MAX_ORTHO_GRID), (float)(VSM::MAX_ORTHO_GRID - s % 7), u(rng));
+      box[s] = vec4(u(rng), u(rng), u(rng), 0.f);
+      cache[s] = vec4(u(rng), u(rng), u(rng), (float)(s % 3));
+   }
+   std::vector<float> row;
+   REQUIRE(VSM::PackLightRow(row, vp.data(), params.data(), box.data(), cache.data()));
+   REQUIRE(row.size() == (size_t)VSM::PAGETABLE_W * 4);
+   const auto texel = [&row](int s, int k) { const float* t = row.data() + (s * VSM::LIGHT_ROW_TEXELS + k) * 4; return vec4(t[0], t[1], t[2], t[3]); };
+   for (int s = 0; s < VSM::MAX_LIGHTS; s++)
+   {
+      for (int i = 0; i < 8; i++)
+      {
+         const Vertex3Ds p(u(rng) * 500.f, u(rng) * 500.f, u(rng) * 100.f);
+         const vec4 c0 = texel(s, 0), c1 = texel(s, 1), c2 = texel(s, 2);
+         const auto dot1 = [&p](const vec4& c) { return c.x * p.x + c.y * p.y + c.z * p.z + c.w; };
+         const Vertex3Ds sc(dot1(c0), dot1(c1), dot1(c2));
+         const Vertex3Ds ref = vp[s].MultiplyVectorNoPerspective(p);
+         CHECK(sc.x == doctest::Approx(ref.x).epsilon(1e-5));
+         CHECK(sc.y == doctest::Approx(ref.y).epsilon(1e-5));
+         CHECK(sc.z == doctest::Approx(ref.z).epsilon(1e-5));
+      }
+      // fs_pbr's unpacking of the ortho grid (floor(x / 128), x - 128 * that) gives the grid back exactly
+      const float gx = texel(s, 3).x, gw = floorf(gx * (1.f / 128.f));
+      CHECK(gw == params[s].y);
+      CHECK(gx - gw * 128.f == params[s].z);
+      CHECK(texel(s, 3).y == params[s].w);
+      CHECK(texel(s, 3).z == box[s].x);
+      CHECK(texel(s, 3).w == box[s].y);
+      CHECK(texel(s, 4).z == cache[s].z);
+      CHECK(texel(s, 4).w == cache[s].w);
+      CHECK(texel(s, 5).x == 0.f);
+   }
+   // unchanged -> no upload; one changed entry -> upload
+   CHECK_FALSE(VSM::PackLightRow(row, vp.data(), params.data(), box.data(), cache.data()));
+   cache[VSM::MAX_LIGHTS - 1].w = 5.f;
+   CHECK(VSM::PackLightRow(row, vp.data(), params.data(), box.data(), cache.data()));
+   CHECK(texel(VSM::MAX_LIGHTS - 1, 4).w == 5.f);
+   CHECK(VSM::PAGETABLE_ROWS == VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W);
+}

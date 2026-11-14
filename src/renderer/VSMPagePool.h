@@ -27,7 +27,42 @@ constexpr int CUBE_FACE_GRID = 2; // virtual pages per cube-face edge -> 4 pages
 constexpr int MAX_ORTHO_GRID = 64; // max pages per edge of an ortho virtual map (64 pages = 8192 texels)
 constexpr int PAGETABLE_STRIDE = MAX_ORTHO_GRID * MAX_ORTHO_GRID; // page-table texels reserved per light
 constexpr int PAGETABLE_W = 512; // tex_vsm_pagetables texture width in texels (height 256 holds 32 lights)
+constexpr int PAGETABLE_ROWS = MAX_LIGHTS * PAGETABLE_STRIDE / PAGETABLE_W; // page-table rows; the texture has one more: the light row
 constexpr int PLACEHOLDER_PAGES = 2; // pool size without any shadowed light: an array texture (bgfx makes 1 layer a plain 2D texture)
+constexpr int LIGHT_ROW_TEXELS = 8; // per light texels in the light row (fs_pbr pbr_vsm_light: s * 8 + k at row PAGETABLE_ROWS)
+static_assert(MAX_LIGHTS * LIGHT_ROW_TEXELS <= PAGETABLE_W, "the light row holds every slot");
+static_assert(MAX_ORTHO_GRID < 128, "fs_pbr unpacks the ortho grid as across * 128 + down");
+// fs_pbr hard-codes these (PBR_VSM_STRIDE, PBR_VSM_CUBE_GRID, PBR_VSM_LIGHT_ROW, 'idx & 511, idx >> 9', the light row's 8 texels per slot)
+static_assert(PAGETABLE_STRIDE == 4096 && CUBE_FACE_GRID == 2 && PAGETABLE_ROWS == 256 && PAGETABLE_W == 512 && LIGHT_ROW_TEXELS == 8, "update fs_pbr's VSM constants");
+
+// The light row of tex_vsm_pagetables (fs_pbr pbr_vsm_light): per slot s, texels s * 8 + 0..2 = the ortho view-projection's
+// x, y, z outputs (column k of VPX's row vector matrix: fs_pbr sc.k = dot(t_k, (p, 1))), 3 = (pages across * 128 + pages down,
+// depth range, 1/box width, 1/box height), 4 = static shadow cache entry, 5-7 unused. Cube lights need none of it in fs_pbr (page
+// table base = slot * PAGETABLE_STRIDE, grid = CUBE_FACE_GRID). Returns true when the row differs from 'row' (which is updated),
+// so the caller uploads only changes.
+inline bool PackLightRow(std::vector<float>& row, const Matrix3D* const vp, const vec4* const params, const vec4* const box, const vec4* const cache)
+{
+   std::vector<float> next(PAGETABLE_W * 4, 0.f);
+   for (int s = 0; s < MAX_LIGHTS; s++)
+   {
+      float* const t = next.data() + s * LIGHT_ROW_TEXELS * 4;
+      for (int k = 0; k < 3; k++)
+         for (int r = 0; r < 4; r++)
+            t[k * 4 + r] = vp[s].m[r][k];
+      t[12] = params[s].y * 128.f + params[s].z; // grid <= MAX_ORTHO_GRID (64): exact
+      t[13] = params[s].w;
+      t[14] = box[s].x;
+      t[15] = box[s].y;
+      t[16] = cache[s].x;
+      t[17] = cache[s].y;
+      t[18] = cache[s].z;
+      t[19] = cache[s].w;
+   }
+   if (next == row)
+      return false;
+   row.swap(next);
+   return true;
+}
 constexpr int LAYOUT_ORTHO = 0; // ortho virtual map: gridW x gridH pages over the fitted light-space box
 constexpr int LAYOUT_CUBE = 2; // cube virtual map: 6 faces of CUBE_FACE_GRID^2 pages (layout ids kept for fs_pbr)
 

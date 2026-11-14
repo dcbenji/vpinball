@@ -391,12 +391,8 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrProbeParams, 1), // x/y: influence range of probe0/1 (0 = unbound), z: SSR suppression weight mu, w: refraction probe bound
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrResolveParams, 1), // x: SSR fade start roughness, y: fade end, z: max pooling radius (low res texels), w: firefly clamp factor
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrProbeLods, 1), // x/y: max mip level of reflection probe0/1, z: max mip level of the refraction probe
-   SHADER_UNIFORM(ShaderUniformType::Float4x4, matShadowVP, 32), // ortho virtual shadow map view-projection, per shadowed light
-   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMParams, 32), // per shadowed light: x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range
-   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrVSMBox, 32), // per shadowed light: x/y: world->virtual-uv scale (1/ortho box extents)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrDimParams, 1), // x: dim light cutoff (0 = off), y: shadow importance gate (main pass, 0 = off)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowParams, 1), // x: 1/page size, y: slope-scaled depth bias, z/w: page linear depth start + 1/range (SHADOW_TRANS); main pass z: transmittance nearness step, w: shadow tap mode (0 = 16 taps, 1 = 4 taps first, 2 = 4 taps only)
-   SHADER_UNIFORM(ShaderUniformType::Float4v, pbrShadowCache, 32), // per shadowed light: static shadow cache uv = table xy * x + (y, z), w: cache layer + 1 (0 = not cached)
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowCacheDraw, 1), // x: 1 = this draw (the playfield) reads the static shadow cache
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeLight, 1), // shadow cache bake: light position, range
    SHADER_UNIFORM(ShaderUniformType::Float4, pbrShadowBakeParams, 1), // shadow cache bake: x: light sphere radius, y: penumbra radius
