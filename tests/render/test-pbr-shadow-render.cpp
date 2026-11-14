@@ -252,9 +252,12 @@ static void MakeShadowLightsStatic(PinTable* const table)
          static_cast<Light*>(part)->m_d.m_shadows = ShadowMode::PBR_STATIC_SHADOWS;
 }
 
-// Plays the shadow table with static shadowed lights and captures frame 240, with the static shadow cache on or off (or with no
-// shadowed light at all, the unshadowed reference of the same frame). Returns the number of cache bakes submitted by then
-static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, const bool cacheOn, const string& shot, const bool noShadows = false)
+// Plays the shadow table with static shadowed lights and captures frame 240, with the static shadow cache on or off. noShadowLight
+// turns the shadows of that light off ("*": every light), for the unshadowed reference of the same frame. offUntilOn: that light
+// is off at load and turned on at frame 300 (the capture then waits for frame 480). Returns the number of cache bakes submitted by
+// the capture, and in bakesBeforeOn those submitted before the light was turned on
+static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, const bool cacheOn, const string& shot, const string& noShadowLight = ""s,
+   const string& offUntilOn = ""s, uint64_t* bakesBeforeOn = nullptr)
 {
    g_settingsService.GetAppSettings().SetPlayer_GfxBackend("Direct3D11"s, false);
    g_settingsService.GetAppSettings().SetPlayer_DepthPrepass(2, false);
@@ -262,13 +265,22 @@ static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, con
    struct CaptureState
    {
       std::filesystem::path path;
-      bool requested = false, done = false;
-      uint64_t bakes = 0;
-   } state { GetAssetPath() / shot };
+      string offUntilOn;
+      bool requested = false, done = false, turnedOn = false;
+      uint64_t bakes = 0, bakesBeforeOn = 0;
+   } state { GetAssetPath() / shot, offUntilOn };
    msgpi_msg_callback onPrepareFrame = [](const unsigned int msgId, void* context, void* msgData)
    {
       CaptureState* state = reinterpret_cast<CaptureState*>(context);
-      if (state->requested || g_pplayer->m_overall_frames < 240)
+      if (!state->offUntilOn.empty() && !state->turnedOn && g_pplayer->m_overall_frames >= 300)
+      {
+         state->turnedOn = true;
+         state->bakesBeforeOn = g_pplayer->m_renderer->m_pbrShadowCacheBakes;
+         for (IEditable* const part : g_pplayer->m_ptable->GetParts())
+            if (part->GetItemType() == eItemLight && part->GetName() == state->offUntilOn)
+               static_cast<Light*>(part)->setInPlayState(1.f);
+      }
+      if (state->requested || g_pplayer->m_overall_frames < (state->offUntilOn.empty() ? 240u : 480u))
          return;
       // The static parts are prerendered again after shadow work (pages, bakes): capture the accumulated image, not a partial one
       if (g_pplayer->m_renderer->IsTemporalAccumulationInProgress() && g_pplayer->m_overall_frames < 512)
@@ -288,10 +300,18 @@ static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, con
    TestFileFeedback feedback;
    REQUIRE(SUCCEEDED(table->LoadGameFromFilename(tableFile, feedback)));
    MakeShadowLightsStatic(table);
-   if (noShadows)
-      for (IEditable* const part : table->GetParts())
-         if (part->GetItemType() == eItemLight)
-            static_cast<Light*>(part)->m_d.m_shadows = ShadowMode::NONE;
+   for (IEditable* const part : table->GetParts())
+      if (part->GetItemType() == eItemLight)
+      {
+         Light* const light = static_cast<Light*>(part);
+         if (noShadowLight == "*"s || light->GetName() == noShadowLight)
+            light->m_d.m_shadows = ShadowMode::NONE;
+         if (light->GetName() == offUntilOn)
+         {
+            light->m_d.m_state = 0.f;
+            light->m_d.m_fadeSpeedUp = light->m_d.m_fadeSpeedDown = 1000.f;
+         }
+      }
    LoadProgress loadProgress;
    auto player = std::make_unique<Player>(table, Player::PlayMode::Play, loadProgress);
    const unsigned int onPrepareFrameMsgId = player->m_pluginManager.GetMsgAPI().GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
@@ -302,6 +322,10 @@ static uint64_t CaptureStaticShadows(const std::filesystem::path& tableFile, con
    player = nullptr;
    table->Release();
    CHECK(state.done);
+   if (!offUntilOn.empty())
+      CHECK(state.turnedOn);
+   if (bakesBeforeOn)
+      *bakesBeforeOn = state.bakesBeforeOn;
    return state.bakes;
 }
 
@@ -381,14 +405,48 @@ TEST_CASE("PBR static shadow cache bakes the live shadow [render]")
    ResetVPX();
    const uint64_t bakesOff = CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-off-Test.webp"s);
    ResetVPX();
-   CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-none-Test.webp"s, true);
+   CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-none-Test.webp"s, "*"s);
    ResetVPX();
    CHECK(bakesOn >= 1);
    CHECK(bakesOff == 0);
    const ShadowCaptureCompare r = CompareShadowCaptures("pbr-shadow-cache-on-Test.webp"s, "pbr-shadow-cache-off-Test.webp"s, "pbr-shadow-cache-none-Test.webp"s);
    MESSAGE("static shadow cache: " << bakesOn << " bake(s), cache on vs off mean abs " << r.meanDif << ", max " << r.maxDif << " levels, " << r.farPct
                                    << "% of pixels > 24 apart; " << r.shadowPx << " shadowed pixels, darkening on/off " << r.darkOn / max(r.darkOff, 1.));
-   CHECK(r.meanDif <= 0.5);
+   // The ortho (room key) bakes cover the whole table: their missing per pixel kernel rotation shows as noise over every penumbra
+   CHECK(r.meanDif <= 1.0);
+   CHECK(r.farPct <= 0.1);
+   CHECK(r.shadowPx >= 1000);
+   CHECK(r.darkOn >= 0.8 * r.darkOff);
+   CHECK(r.darkOn <= 1.2 * r.darkOff);
+#endif
+
+   ResetVPX();
+}
+
+// A room key (an ortho light, above the glass) that is off at load gets its map rendered and, once complete, baked while it rests;
+// turned on, the playfield reads that bake. Its shadow must be there: as dark with the cache as with the live filter, on the pixels
+// it shadows (those darker than in the same frame with that light's shadows off)
+TEST_CASE("PBR static shadow cache bakes a room key that is off until its map is complete [render]")
+{
+   ResetVPX();
+   const std::filesystem::path tableFile = CreatePBRShadowTable();
+
+#if defined(ENABLE_BGFX)
+   const string key = "pbr_shadow_light_0"s;
+   uint64_t bakesWhileOff = 0;
+   const uint64_t bakesOn = CaptureStaticShadows(tableFile, true, "pbr-shadow-cache-key-on-Test.webp"s, ""s, key, &bakesWhileOff);
+   ResetVPX();
+   const uint64_t bakesOff = CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-key-off-Test.webp"s, ""s, key);
+   ResetVPX();
+   CaptureStaticShadows(tableFile, false, "pbr-shadow-cache-key-none-Test.webp"s, key, key);
+   ResetVPX();
+   CHECK(bakesWhileOff >= 1);
+   CHECK(bakesOff == 0);
+   const ShadowCaptureCompare r = CompareShadowCaptures("pbr-shadow-cache-key-on-Test.webp"s, "pbr-shadow-cache-key-off-Test.webp"s, "pbr-shadow-cache-key-none-Test.webp"s);
+   MESSAGE("room key off until warm: " << bakesWhileOff << " bake(s) before it is turned on, " << bakesOn << " by the capture; cache on vs off mean abs " << r.meanDif
+                                       << ", max " << r.maxDif << " levels, " << r.farPct << "% of pixels > 24 apart; " << r.shadowPx
+                                       << " pixels it shadows, darkening on/off " << r.darkOn / max(r.darkOff, 1.));
+   CHECK(r.meanDif <= 1.0);
    CHECK(r.farPct <= 0.1);
    CHECK(r.shadowPx >= 1000);
    CHECK(r.darkOn >= 0.8 * r.darkOff);

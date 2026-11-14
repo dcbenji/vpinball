@@ -1107,8 +1107,8 @@ void Primitive::Render(const unsigned int renderMask)
       Shader::PBRTextureSet pbrMaps = isPBR
          ? m_renderer->GetPBRTextureSet(m_d, m_d.m_vPosition, -1.f, isReflectionPass, mat->m_bOpacityActive, renderMask, mat->m_bOpacityActive ? refractions : nullptr)
          : Shader::PBRTextureSet();
-      // The playfield reads the baked static shadows of the lights that have one (Renderer::UpdatePBRShadowCache)
-      pbrMaps.shadowCache = m_useAsPlayfield && m_renderer->IsPBRShadowCacheOn();
+      // The playfield surface(s) read the baked static shadows of the lights that have one (Renderer::UpdatePBRShadowCache)
+      pbrMaps.shadowCache = m_renderer->IsPBRShadowCacheReceiver(this);
       m_renderer->m_renderDevice->m_basicShader->SetTechniqueMaterial(img ? ShaderTechnique::basic_with_texture : ShaderTechnique::basic_without_texture, *mat,
          img ? pinAlphaTest >= 0.f && !img->IsOpaque() : false, nMap, reflections, refractions, isPBR ? &pbrMaps : nullptr);
       bool is_reflection_only_pass = false;

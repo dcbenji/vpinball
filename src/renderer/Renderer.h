@@ -418,9 +418,11 @@ public:
    Shader::PBRTextureSet GetPBRTextureSet(const BaseProperty& partData, const Vertex3Ds& center, const float radius, const bool inShaderSpecular, const bool transparent,
       const unsigned int renderMask, RenderTarget* const refrProbe = nullptr);
 #if defined(ENABLE_BGFX)
-   bool IsPBRShadowCacheOn() const { return m_shadowCacheOn; } // the playfield draw reads the static shadow cache (UpdatePBRShadowCache)
+   bool IsPBRShadowCacheOn() const { return m_shadowCacheOn; } // the receivers' draws read the static shadow cache (UpdatePBRShadowCache)
+   bool IsPBRShadowCacheReceiver(const class Primitive* p) const { return m_shadowCacheOn && std::find(m_shadowCacheReceivers.begin(), m_shadowCacheReceivers.end(), p) != m_shadowCacheReceivers.end(); }
 #else
    bool IsPBRShadowCacheOn() const { return false; }
+   bool IsPBRShadowCacheReceiver(const class Primitive*) const { return false; }
 #endif
 #ifdef VPX_TEST_BUILD
    uint64_t m_pbrFrameBuilds = 0; // frames whose scene level PBR work ran (PreparePBRFrame): one per frame, whatever the number of views
@@ -502,6 +504,7 @@ private:
    };
    static constexpr int SHADOW_CACHE_LAYER_SIZE = 2048; // cache layer edge (texels, RGBA8: 16 MB per layer)
    std::vector<ShadowCacheEntry> m_shadowCache;
+   std::vector<class Primitive*> m_shadowCacheReceivers; // the playfield surface(s) the cache is baked over and read by
    bgfx::TextureHandle m_shadowCacheTex = BGFX_INVALID_HANDLE; // RGBA8 texture array (a 1x1 placeholder while off)
    std::shared_ptr<Sampler> m_shadowCacheSampler;
    int m_shadowCacheLayers = 0; // layer count of m_shadowCacheTex (0 = placeholder)

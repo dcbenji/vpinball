@@ -1793,6 +1793,14 @@ void Renderer::UpdateVirtualShadowMaps()
    m_vsmLastTableDirty = tableDirty;
    if (contentDirty)
       m_vsmRebuildSerial++;
+   // The per slot shadow params (light row) are set again by the lights processed below. A parked light (unlit, warm map, see
+   // below) keeps the ones its pages were rendered with: the static shadow cache can bake its map while it rests, and an ortho
+   // bake projects through them (identity params would bake it all lit, and the bake lasts until the light or the casters change)
+   Matrix3D prevVP[VSM::MAX_LIGHTS];
+   vec4 prevParams[VSM::MAX_LIGHTS], prevBox[VSM::MAX_LIGHTS];
+   std::copy(std::begin(m_vsmShadowVP), std::end(m_vsmShadowVP), prevVP);
+   std::copy(std::begin(m_vsmParams), std::end(m_vsmParams), prevParams);
+   std::copy(std::begin(m_vsmBox), std::end(m_vsmBox), prevBox);
    for (Matrix3D& vp : m_vsmShadowVP)
       vp.SetIdentity();
    for (vec4& v : m_vsmParams)
@@ -1972,6 +1980,9 @@ void Renderer::UpdateVirtualShadowMaps()
          if (holds && (warm || m_vsmPool.FreeCount() < warmFreePages))
          {
             indexUsed[held] = true; // parked: index and pages kept, nothing rendered or touched (evictable under pressure)
+            m_vsmShadowVP[held] = prevVP[held]; // and its params (see above)
+            m_vsmParams[held] = prevParams[held];
+            m_vsmBox[held] = prevBox[held];
             continue;
          }
          if (!holds)
@@ -2400,22 +2411,49 @@ void Renderer::UpdatePBRShadowCache()
       return;
    }
 
-   // The receiver: the playfield mesh
-   Primitive* receiver = nullptr;
-   for (IEditable* const part : m_table->GetParts())
-      if (part->GetItemType() == eItemPrimitive && static_cast<Primitive*>(part)->IsPlayfield())
+   // The receivers: the playfield surface. The playfield mesh when it is drawn; packs that hide it and draw the board with other
+   // primitives (Ripley's Redux: the playfield art primitive) get those: visible static primitives lying flat on the playfield
+   // covering at least half of the table (VSM::IsShadowCacheReceiver). Never cached before on such packs: the playfield mesh was
+   // the only receiver, and a hidden one never baked. A receiver is in playfield space and shown in the table's player mode (the
+   // mode the shadow pages use, PreparePBRFrame): a VR room floor or a cabinet part is not the board
+   m_shadowCacheReceivers.clear();
+   // The tiles cover the table (not the receivers' union: a receiver that a script shows or hides leaves the pack and its bakes
+   // alone; texels a newly shown receiver reads without a bake run the live filter)
+   const float tableRect[4] = { m_table->m_left, m_table->m_top, m_table->m_right, m_table->m_bottom };
+   {
+      for (IEditable* const part : m_table->GetParts())
       {
-         receiver = static_cast<Primitive*>(part);
-         break;
+         if (part->GetItemType() != eItemPrimitive)
+            continue;
+         Primitive* const p = static_cast<Primitive*>(part);
+         Vertex3Ds lo, hi;
+         if (!p->m_d.m_visible || p->IsGroupRendered() || !p->GetShadowCacheBounds(lo, hi))
+            continue;
+         const PartGroup* const group = p->GetPartGroup();
+         const bool playfieldSpace = group == nullptr || group->GetReferenceSpace() == PartGroupData::SpaceReference::SR_PLAYFIELD;
+         const bool shownInMode = group == nullptr || (group->GetPlayerModeVisibilityMask() & m_shadowView->m_visibilityMask) != 0; // as RenderItem
+         // (the playfield mesh may be a dynamic primitive, as on Police Force: it was always a receiver)
+         if (VSM::IsShadowCacheReceiver(p->IsPlayfield(), p->m_d.m_staticRendering, playfieldSpace, shownInMode, tableRect, lo, hi))
+            m_shadowCacheReceivers.push_back(p);
       }
-   Vertex3Ds bMin, bMax;
-   if (receiver == nullptr || !receiver->GetShadowCacheBounds(bMin, bMax))
+      static size_t loggedReceivers = ~size_t(0);
+      if (loggedReceivers != m_shadowCacheReceivers.size())
+      {
+         loggedReceivers = m_shadowCacheReceivers.size();
+         string names;
+         for (const Primitive* p : m_shadowCacheReceivers)
+            names += ' ' + p->GetName();
+         PLOGI << "PBR shadow cache receivers:" << (names.empty() ? " none"s : names);
+      }
+   }
+   if (m_shadowCacheReceivers.empty())
    {
       publish();
       return;
    }
 
-   // Cached lights: static tier cube lights (below the glass top: above it they take the ortho layout), range square on the playfield
+   // Cached lights: static tier lights, cube (below the glass top) over their range square on the table, ortho (room keys, above
+   // the glass top) over the whole table
    struct Candidate
    {
       const Light* light;
@@ -2428,11 +2466,10 @@ void Renderer::UpdatePBRShadowCache()
          continue;
       const Light* const l = static_cast<const Light*>(part);
       if (l->m_d.m_type != LightType::PBR || !l->m_d.m_visible || l->m_desktopBackdrop
-         || (l->m_d.m_shadows != ShadowMode::PBR_STATIC_SHADOWS && l->m_d.m_shadows != ShadowMode::PBR_STATIC_N_BALL_SHADOWS)
-         || l->GetCurrentHeight() > m_table->m_glassTopHeight)
+         || (l->m_d.m_shadows != ShadowMode::PBR_STATIC_SHADOWS && l->m_d.m_shadows != ShadowMode::PBR_STATIC_N_BALL_SHADOWS))
          continue;
-      const float range = PBRLightRange(l);
-      Candidate c { l, { max(l->m_d.m_vCenter.x - range, bMin.x), max(l->m_d.m_vCenter.y - range, bMin.y), min(l->m_d.m_vCenter.x + range, bMax.x), min(l->m_d.m_vCenter.y + range, bMax.y) } };
+      const float range = l->GetCurrentHeight() > m_table->m_glassTopHeight ? FLT_MAX : PBRLightRange(l); // ortho: the whole table
+      Candidate c { l, { max(l->m_d.m_vCenter.x - range, tableRect[0]), max(l->m_d.m_vCenter.y - range, tableRect[1]), min(l->m_d.m_vCenter.x + range, tableRect[2]), min(l->m_d.m_vCenter.y + range, tableRect[3]) } };
       if (c.rect[2] > c.rect[0] && c.rect[3] > c.rect[1])
          candidates.push_back(c);
    }
@@ -2501,7 +2538,7 @@ void Renderer::UpdatePBRShadowCache()
          m_shadowCacheLayers = layersUsed;
       }
       m_shadowCacheCleared.assign(m_shadowCacheLayers, 0); // a repack moves tiles: every layer is cleared before its next bake
-      PLOGI << "PBR shadow cache: " << packed << " of " << candidates.size() << " static cube lights in " << layersUsed << " layer(s) of " << L << "x" << L << " RGBA8 ("
+      PLOGI << "PBR shadow cache: " << packed << " of " << candidates.size() << " static lights in " << layersUsed << " layer(s) of " << L << "x" << L << " RGBA8 ("
             << layersUsed * L * L * 4 / (1024 * 1024) << " MB), " << vpt << " VPU per texel";
    }
 
@@ -2518,24 +2555,25 @@ void Renderer::UpdatePBRShadowCache()
             || e.sphereRadius != PBRLightSphereRadius(l) || e.mode != (int)l->m_d.m_shadows || e.serial != m_vsmRebuildSerial))
          e.baked = false;
       const int slot = l->m_pbrShadowSlot;
-      const bool hasMap = slot >= 0 && slot < m_vsmMaxLights && l->m_pbrShadowLayout == VSM::LAYOUT_CUBE;
+      const bool hasMap = slot >= 0 && slot < m_vsmMaxLights && (l->m_pbrShadowLayout == VSM::LAYOUT_CUBE || l->m_pbrShadowLayout == VSM::LAYOUT_ORTHO);
       if (e.baked && hasMap && e.validFrame <= m_vsmFrame)
          table[slot] = vec4(e.map.x, e.map.y, e.map.z, (float)(e.layer + 1));
-      if (e.baked || toBake != nullptr || !hasMap || l->m_pbrShadowBakedSlot != slot || l->m_pbrShadowBakedSerial != m_vsmRebuildSerial || l->m_pbrShadowBakedPos.x != pos.x
+      // An ortho bake reads the light's params from its light row: set this frame, by the regular path or kept while parked
+      if (e.baked || toBake != nullptr || !hasMap || (l->m_pbrShadowLayout == VSM::LAYOUT_ORTHO && m_vsmParams[slot].y <= 0.f) || l->m_pbrShadowBakedSlot != slot || l->m_pbrShadowBakedSerial != m_vsmRebuildSerial || l->m_pbrShadowBakedPos.x != pos.x
          || l->m_pbrShadowBakedPos.y != pos.y || l->m_pbrShadowBakedPos.z != pos.z || l->m_pbrShadowBakedFalloff != l->m_d.m_falloff || l->m_pbrShadowBakedMode != (int)l->m_d.m_shadows)
          continue;
       // Complete map: every page the casters need is resident, rendered and published in the page table, and none of them was rendered
       // in this frame: the bake reads pages of earlier frames only, so no same frame ordering between the page passes and the bake can
       // end up in a bake (a wrong live frame lasts one frame, a wrong bake until the light or the casters change)
       const VSM::LightMap& map = m_vsmLights[slot];
-      bool warm = map.layout == VSM::LAYOUT_CUBE && map.EntryCount() > 0 && m_vsmSlotPageFrame[slot] != m_vsmFrame;
+      bool warm = map.layout == l->m_pbrShadowLayout && map.EntryCount() > 0 && m_vsmSlotPageFrame[slot] != m_vsmFrame;
       for (int vp = 0; vp < map.EntryCount() && warm; vp++)
          warm = !map.needed[vp] || (map.phys[vp] != 0 && !map.dirty[vp] && m_vsmPageTableData[(map.ptBase + vp) * 4] == (float)map.phys[vp]);
       if (warm)
          toBake = &e;
    }
 
-   if (toBake != nullptr && receiver != nullptr)
+   if (toBake != nullptr)
    {
       const uint64_t t0 = usec();
       ShadowCacheEntry& e = *toBake;
@@ -2567,17 +2605,20 @@ void Renderer::UpdatePBRShadowCache()
          const float range = PBRLightRange(l), penumbra = (float)PBRPenumbraHalfUnits(l) * 0.5f, sphereRadius = PBRLightSphereRadius(l);
          const VSM::LightMap& map = m_vsmLights[slot];
          shader->SetVector(ShaderUniform::pbrShadowBakeLight, pos.x, pos.y, pos.z, range);
-         // Same penumbra as the live path (pbr_direct_light's flasher penumbra, Shader.h), so cached and live shadows match
-         const float bakePenumbra = (PBR_FLASH_SHADOW_PENUMBRA >= 0.f && range >= PBR_FLASH_SHADOW_RANGE) ? PBR_FLASH_SHADOW_PENUMBRA : penumbra;
-         shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, bakePenumbra, 0.f, 0.f);
+         // Same penumbra as the live path (pbr_direct_light's flasher penumbra, Shader.h, cube lights only), so cached and live shadows match
+         const bool cube = l->m_pbrShadowLayout == VSM::LAYOUT_CUBE;
+         const float bakePenumbra = (cube && PBR_FLASH_SHADOW_PENUMBRA >= 0.f && range >= PBR_FLASH_SHADOW_RANGE) ? PBR_FLASH_SHADOW_PENUMBRA : penumbra;
+         shader->SetVector(ShaderUniform::pbrShadowBakeParams, sphereRadius, bakePenumbra, (float)slot, (float)l->m_pbrShadowLayout);
          shader->SetVector(ShaderUniform::pbrShadowBakeMap, e.map.x, e.map.y, e.map.z, 0.f);
          shader->SetVector(ShaderUniform::pbrShadowBakeRect, (float)e.x0 / (float)L, (float)e.y0 / (float)L, (float)(e.x0 + e.w) / (float)L, (float)(e.y0 + e.h) / (float)L);
-         // The light's cube map params (UpdateVirtualShadowMaps leaves a parked light's empty)
+         // The light's cube map params (UpdateVirtualShadowMaps leaves a parked light's empty); an ortho light reads its light row (slot)
          shader->SetVector(ShaderUniform::pbrShadowBakeVSM, (float)map.ptBase, (float)VSM::CUBE_FACE_GRID, (float)VSM::CUBE_FACE_GRID, max(l->m_d.m_falloff, 60.f));
-         // Same view as the playfield draw (its vertex normal goes through the view transforms to the world, as in the live path)
+         // Same view as the receivers' draws (their vertex normals go through the view transforms to the world, as in the live path)
          const PartGroupData::SpaceReference prevSpaceRef = m_activeView->m_mvpSpaceReference;
-         SetSpaceReference(receiver->GetPartGroup() ? receiver->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD, false);
-         const bool drawn = receiver->DrawShadowCacheMesh();
+         SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false); // every receiver is in playfield space
+         bool drawn = false;
+         for (Primitive* const receiver : m_shadowCacheReceivers)
+            drawn |= receiver->DrawShadowCacheMesh();
          SetSpaceReference(prevSpaceRef, false);
          if (drawn)
          {

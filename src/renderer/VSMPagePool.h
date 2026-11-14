@@ -162,6 +162,24 @@ private:
 // scaled by the script's IntensityScale
 inline float SlotImportance(float intensity, float range) { return std::max(intensity, 0.f) * std::max(range, 1.f); }
 
+// Static shadow cache receivers (Renderer::UpdatePBRShadowCache): the board surface, in table xy (table = left, top, right,
+// bottom). Only a part drawn in playfield space and shown in the player mode counts: a VR room floor or a cabinet part is not on
+// the board. The playfield mesh always counts; another static primitive when its bounds, clipped to the table, lie flat at z 0
+// (within 2 VPU) and cover at least half of the table
+inline bool IsShadowCacheReceiver(bool playfieldMesh, bool staticRendering, bool playfieldSpace, bool shownInMode, const float table[4], Vertex3Ds lo, Vertex3Ds hi)
+{
+   if (!playfieldSpace || !shownInMode)
+      return false;
+   if (playfieldMesh)
+      return true;
+   lo.x = std::max(lo.x, table[0]);
+   lo.y = std::max(lo.y, table[1]);
+   hi.x = std::min(hi.x, table[2]);
+   hi.y = std::min(hi.y, table[3]);
+   return staticRendering && lo.z > -2.f && hi.z < 2.f && hi.x > lo.x && hi.y > lo.y
+      && (hi.x - lo.x) * (hi.y - lo.y) >= 0.5f * (table[2] - table[0]) * (table[3] - table[1]);
+}
+
 // The slot set: member[i] = 1 for the 'cap' most important of these lights (importance, then index order: the caller's part order).
 // The renderer never offers a member's slot to PickSlot (see below), and sizes the pool for the members.
 std::vector<uint8_t> SlotSetMembers(const std::vector<float>& importance, int cap);

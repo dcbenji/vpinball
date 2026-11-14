@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache, page culling
+// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache, page culling, shadow cache receivers
 
 #include "core/stdafx.h"
 #include "../vpx-test.h"
@@ -511,4 +511,34 @@ TEST_CASE("VSM 64 slots fit the light record and the page table")
    volatile float half = 0.5f; // the old decode, on a case it got wrong (code 128, mode 1)
    const int odd = 1 | (1 << 4) | (VSM::LAYOUT_CUBE << 12) | (128 << 16);
    CHECK(((int)floorf((float)odd + half) & 15) == 2);
+}
+
+// The static shadow cache bakes over and is read by the board surface only: playfield space, shown in the player mode, flat on the
+// table and covering at least half of it (the playfield mesh always)
+TEST_CASE("VSM static shadow cache receivers: the board only")
+{
+   const float table[4] = { 0.f, 0.f, 952.f, 2116.f };
+   const Vertex3Ds boardLo(0.f, 0.f, -0.5f), boardHi(952.f, 2116.f, 0.5f);
+   // The board (Ripley's Redux: the playfield art primitive), static and flat over the table
+   CHECK(VSM::IsShadowCacheReceiver(false, true, true, true, table, boardLo, boardHi));
+   // A VR room floor: flat at z 0 and much larger than the table, in a Room part group (room space), shown in VR only
+   const Vertex3Ds floorLo(-10000.f, -10000.f, 0.f), floorHi(10000.f, 10000.f, 0.f);
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, false, true, table, floorLo, floorHi)); // room space, VR mode
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, false, false, table, floorLo, floorHi)); // room space, desktop mode
+   // Even in playfield space, the mode's visibility mask hides it on desktop
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, true, false, table, floorLo, floorHi));
+   // A playfield space floor shown in the mode lies over the whole table once clipped: it qualifies as a board, its bounds no
+   // longer matter (the tiles cover the table rect, Renderer::UpdatePBRShadowCache)
+   CHECK(VSM::IsShadowCacheReceiver(false, true, true, true, table, floorLo, floorHi));
+   // The half-table test applies to the clipped bounds: a huge primitive barely overlapping the table is not the board
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, true, true, table, Vertex3Ds(-10000.f, 1900.f, 0.f), Vertex3Ds(10000.f, 10000.f, 0.f)));
+   // Cabinet space parts are not on the board
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, false, true, table, boardLo, boardHi));
+   // Not flat, not static, under half of the table
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, true, true, table, boardLo, Vertex3Ds(952.f, 2116.f, 30.f)));
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, false, true, true, table, boardLo, boardHi));
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(false, true, true, true, table, boardLo, Vertex3Ds(952.f, 1000.f, 0.5f)));
+   // The playfield mesh counts static or not, but not outside playfield space or hidden in the mode
+   CHECK(VSM::IsShadowCacheReceiver(true, false, true, true, table, boardLo, boardHi));
+   CHECK_FALSE(VSM::IsShadowCacheReceiver(true, false, true, false, table, boardLo, boardHi));
 }
