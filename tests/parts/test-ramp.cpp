@@ -443,10 +443,21 @@ TEST_CASE("Ramp sections")
       CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) <= 0.5f);
       CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) >= -5.f);
 
-      // The front edge lies on the playfield even when the ramp starts above it
+      // Start height: a foot at most 5 VPU up starts the flap on the playfield (the lip case); a higher foot (upper playfield, raised
+      // surface) starts it at the foot height, with the 5 VPU cap measured from there
       ramp->m_d.m_heightbottom = 3.f;
       CHECK(GetRows(ramp).height[0] == doctest::Approx(0.f));
+      ramp->m_d.m_heightbottom = 50.f;
+      ramp->m_d.m_heighttop = 150.f;
+      {
+         const Rows raised = GetRows(ramp);
+         CHECK(raised.height[0] == doctest::Approx(50.f));
+         for (int i = 0; i < raised.n; i++)
+            CHECK(raised.height[i] >= 45.f - 1e-3f);
+         CHECK(ramp->GetSectionStatus()[0].m_sink <= 5.f + 1e-3f);
+      }
       ramp->m_d.m_heightbottom = 0.f;
+      ramp->m_d.m_heighttop = 100.f;
 
       // A large bow is capped: front edge at most ~6 deg downhill, at most 5 VPU below the playfield
       ramp->m_d.m_sections.back().m_flapBow = 40.f;

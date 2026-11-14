@@ -113,9 +113,11 @@ void BlueprintPane::RenderContextMenu()
             editor.m_player->m_physics->Update(owner);
          };
          ImGui::Separator();
-         if (ImGui::MenuItem("Make Ramp Entry Interface", nullptr, false, curve->GetPointIndex(clickedPoint) == 0 && ramp->CanAddEntryInterface()))
+         // Sections are made on the startup table only: not during play (as in the Sections panel)
+         const bool inPlay = editor.m_table->m_liveBaseTable != nullptr;
+         if (ImGui::MenuItem("Make Ramp Entry Interface", nullptr, false, !inPlay && curve->GetPointIndex(clickedPoint) == 0 && ramp->CanAddEntryInterface()))
             sectionOp([ramp]() { ramp->AddEntryInterface(); });
-         if (ImGui::MenuItem("Make Hairpin Section", nullptr, false, consecutive && ramp->CanAddHairpin(first, last)))
+         if (ImGui::MenuItem("Make Hairpin Section", nullptr, false, !inPlay && consecutive && ramp->CanAddHairpin(first, last)))
             sectionOp([ramp, first, last]() { ramp->AddHairpin(first, last); });
       }
       ImGui::EndDisabled();
