@@ -9,6 +9,20 @@
 namespace VPX::EditorUI
 {
 
+// The ramp outline without consecutive repeated points (a sectioned ramp repeats points on purpose: the coarser side of a hairpin, the
+// flap's foot row). The blueprint's polygon fill triangulation does not accept them.
+static vector<Vertex2D> OutlineWithoutRepeats(const Vertex2D* points, const int count)
+{
+   vector<Vertex2D> out;
+   out.reserve(count);
+   for (int i = 0; i < count; i++)
+      if (out.empty() || (points[i] - out.back()).LengthSquared() > 1e-6f)
+         out.push_back(points[i]);
+   while (out.size() > 1 && (out.front() - out.back()).LengthSquared() <= 1e-6f)
+      out.pop_back();
+   return out;
+}
+
 RampUIPart::RampUIPart(Ramp* ramp)
    : EditableUIPart(ramp, { &Data::m_visible })
 {
@@ -40,7 +54,8 @@ void RampUIPart::RenderBlueprint(const BlueprintRenderContext& ctx)
 
       int cvertex;
       const Vertex2D* const rgvLocal = m_part->GetRampVertex(cvertex, nullptr, nullptr, nullptr, nullptr, HIT_SHAPE_DETAIL_LEVEL, false);
-      ctx.Polygon(rgvLocal, cvertex * 2);
+      const vector<Vertex2D> outline = OutlineWithoutRepeats(rgvLocal, cvertex * 2);
+      ctx.Polygon(outline.data(), (int)outline.size());
 
       delete[] rgvLocal;
    }
@@ -56,7 +71,8 @@ void RampUIPart::RenderBlueprint(const BlueprintRenderContext& ctx)
       Vertex2D* middlePoints;
       int cvertex;
       const Vertex2D* const rgvLocal = m_part->GetRampVertex(cvertex, nullptr, &pfCross, nullptr, &middlePoints, HIT_SHAPE_DETAIL_LEVEL, false);
-      ctx.Polygon(rgvLocal, cvertex * 2);
+      const vector<Vertex2D> outline = OutlineWithoutRepeats(rgvLocal, cvertex * 2);
+      ctx.Polygon(outline.data(), (int)outline.size());
 
       if (m_part->IsHabitrail())
       {
