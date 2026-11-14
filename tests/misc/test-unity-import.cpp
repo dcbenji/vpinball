@@ -10,6 +10,9 @@
 #include "utils/UnityPrefabImporter.h"
 #include "utils/UnityYaml.h"
 
+#ifdef __STANDALONE__
+#define _WINDOWS_
+#endif
 #include <FreeImage.h>
 #include <fstream>
 #include "ufbx/ufbx.h"
