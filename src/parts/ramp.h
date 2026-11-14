@@ -55,7 +55,7 @@ struct RampSectionStatus
    float m_bow = 0.f; // flap: bow used after the caps
    float m_flapUp = 0.f; // flap: landing distance used
    float m_entryAngle = 0.f; // flap: slope of its front edge (degrees, negative = downhill)
-   float m_sink = 0.f; // flap: deepest point below the ramp foot (VPU)
+   float m_sink = 0.f; // flap: deepest point below the playfield (VPU)
    string m_message;
 };
 

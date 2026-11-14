@@ -443,7 +443,12 @@ TEST_CASE("Ramp sections")
       CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) <= 0.5f);
       CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) >= -5.f);
 
-      // A large bow is capped: front edge at most ~6 deg downhill, at most 5 VPU below the foot
+      // The front edge lies on the playfield even when the ramp starts above it
+      ramp->m_d.m_heightbottom = 3.f;
+      CHECK(GetRows(ramp).height[0] == doctest::Approx(0.f));
+      ramp->m_d.m_heightbottom = 0.f;
+
+      // A large bow is capped: front edge at most ~6 deg downhill, at most 5 VPU below the playfield
       ramp->m_d.m_sections.back().m_flapBow = 40.f;
       ramp->m_d.m_sections.back().m_flapBowPos = 0.1f;
       r = GetRows(ramp);
