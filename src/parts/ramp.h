@@ -31,9 +31,9 @@ struct RampSection
    int m_last = 0;
 
    // Entry flap
-   float m_flapAhead = 60.f; // how far ahead of the ramp foot it starts on the playfield (VPU, >= 0)
-   float m_flapUp = 60.f; // how far up the ramp it lands (VPU along the path)
-   float m_flapBow = 0.f; // how far the flap dips below the straight line between its two ends (VPU, >= 0)
+   float m_flapAhead = 24.f; // how far ahead of the ramp foot it starts on the playfield (VPU, >= 0)
+   float m_flapUp = 32.f; // how far up the ramp it lands (VPU along the path)
+   float m_flapBow = 1.5f; // how far the flap dips below the straight line between its two ends (VPU, >= 0), never below the playfield
    float m_flapBowPos = 0.5f; // where its low point sits, 0 = front edge .. 1 = landing (clamped to 0.1 .. 0.9)
 
    // Hairpin
@@ -55,7 +55,7 @@ struct RampSectionStatus
    float m_bow = 0.f; // flap: bow used after the caps
    float m_flapUp = 0.f; // flap: landing distance used
    float m_entryAngle = 0.f; // flap: slope of its front edge (degrees, negative = downhill)
-   float m_sink = 0.f; // flap: deepest point below the playfield (VPU)
+   float m_sink = 0.f; // flap: deepest point below its start surface (VPU, 0 since the flap never goes below it)
    string m_message;
 };
 

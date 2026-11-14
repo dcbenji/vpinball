@@ -403,7 +403,7 @@ TEST_CASE("Ramp sections")
       RampSection& flap = ramp->m_d.m_sections.back();
       flap.m_flapAhead = 60.f;
       flap.m_flapUp = 80.f;
-      flap.m_flapBow = 6.f;
+      flap.m_flapBow = 4.f;
       flap.m_flapBowPos = 0.5f;
       Rows r = GetRows(ramp);
       REQUIRE(r.wall.size() == (size_t)r.n);
@@ -417,15 +417,13 @@ TEST_CASE("Ramp sections")
       REQUIRE(st.size() == 1);
       CHECK(st[0].m_applied);
       CHECK(st[0].m_flapUp == doctest::Approx(80.f));
-      CHECK(st[0].m_bow == doctest::Approx(6.f));
+      CHECK(st[0].m_bow == doctest::Approx(4.f));
       for (int i = 0; i < r.n; i++)
          if (r.right[i].y < 1500.f - 80.f - 0.01f)
             CHECK(r.height[i] == doctest::Approx((1500.f - r.right[i].y) / 4.f).epsilon(1e-3));
-      // Bow below the straight line between the flap ends, low point near the middle; never more than 5 below the foot
-      float zMin = 0.f;
+      // Bow below the straight line between the flap ends, never below the playfield
       for (int i = 0; i < r.n; i++)
-         zMin = min(zMin, r.height[i]);
-      CHECK(zMin >= -5.f - 1e-3f);
+         CHECK(r.height[i] >= -1e-3f);
 
       // Parts placed on the ramp follow the flap (it fills the corner at the foot), and the plain ramp past the landing
       const RampSection flapCopy = flap;
@@ -441,11 +439,11 @@ TEST_CASE("Ramp sections")
       CHECK(footRow > plainFoot + 1.f);
       CHECK(ramp->GetSurfaceHeight(500.f, 1500.f) == doctest::Approx(footRow).epsilon(1e-3));
       CHECK(ramp->GetSurfaceHeight(500.f, 1300.f) == doctest::Approx(plainUp).epsilon(1e-3));
-      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) <= 0.5f);
-      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) >= -5.f);
+      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) <= 1.5f); // near the playfield, rising gently
+      CHECK(ramp->GetSurfaceHeight(500.f, 1540.f) >= -1e-3f);
 
       // Start height: a foot at most 5 VPU up starts the flap on the playfield (the lip case); a higher foot (upper playfield, raised
-      // surface) starts it at the foot height, with the 5 VPU cap measured from there
+      // surface) starts it at the foot height, and the flap never goes below that start
       ramp->m_d.m_heightbottom = 3.f;
       CHECK(GetRows(ramp).height[0] == doctest::Approx(0.f));
       ramp->m_d.m_heightbottom = 50.f;
@@ -454,24 +452,55 @@ TEST_CASE("Ramp sections")
          const Rows raised = GetRows(ramp);
          CHECK(raised.height[0] == doctest::Approx(50.f));
          for (int i = 0; i < raised.n; i++)
-            CHECK(raised.height[i] >= 45.f - 1e-3f);
-         CHECK(ramp->GetSectionStatus()[0].m_sink <= 5.f + 1e-3f);
+            CHECK(raised.height[i] >= 50.f - 1e-3f);
+         CHECK(ramp->GetSectionStatus()[0].m_sink <= 1e-3f);
       }
       ramp->m_d.m_heightbottom = 0.f;
       ramp->m_d.m_heighttop = 100.f;
 
-      // A large bow is capped: front edge at most ~6 deg downhill, at most 5 VPU below the playfield
+      // A large bow is limited by the playfield: a level start, never below it, and the panel says so
       ramp->m_d.m_sections.back().m_flapBow = 40.f;
       ramp->m_d.m_sections.back().m_flapBowPos = 0.1f;
       r = GetRows(ramp);
       const RampSectionStatus capped = ramp->GetSectionStatus()[0];
       CHECK(capped.m_bow < 40.f);
-      CHECK(capped.m_entryAngle >= -6.f - 0.01f);
-      CHECK(capped.m_sink <= 5.f + 1e-3f);
+      CHECK(capped.m_bow > 0.f);
+      CHECK(capped.m_entryAngle >= -0.01f);
+      CHECK(capped.m_message.find("playfield") != string::npos);
       for (int i = 0; i < r.n; i++)
-         CHECK(r.height[i] >= -5.f - 1e-3f);
+         CHECK(r.height[i] >= -1e-3f);
       const float slope0 = (r.height[1] - r.height[0]) / (r.right[0] - r.right[1]).Length();
-      CHECK(slope0 >= -tanf(ANGTORAD(6.f)) - 0.01f);
+      CHECK(slope0 >= -1e-3f);
+
+      // Any bow and bow position, a foot on the playfield (zero clearance below it), a couple of VPU up (Ben's case) and raised:
+      // no row below the start surface, and a bowed flap still rises (concave up)
+      for (const float foot : { 0.f, 2.f, 50.f })
+         for (const float bowSetting : { 0.f, 0.5f, 1.5f, 5.f, 20.f, 40.f })
+            for (const float pos : { 0.f, 0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 1.f })
+            {
+               ramp->m_d.m_heightbottom = foot;
+               ramp->m_d.m_heighttop = foot + 100.f;
+               ramp->m_d.m_sections.back().m_flapBow = bowSetting;
+               ramp->m_d.m_sections.back().m_flapBowPos = pos;
+               const float start = (foot <= 5.f) ? 0.f : foot;
+               const Rows rr = GetRows(ramp);
+               CAPTURE(foot);
+               CAPTURE(bowSetting);
+               CAPTURE(pos);
+               CHECK(rr.height[0] == doctest::Approx(start));
+               for (int i = 0; i < rr.n; i++)
+                  CHECK(rr.height[i] >= start - 1e-3f);
+               CHECK(ramp->GetSectionStatus()[0].m_applied);
+            }
+      ramp->m_d.m_heightbottom = 0.f;
+      ramp->m_d.m_heighttop = 100.f;
+
+      // Defaults suit a foot a couple of VPU up: a short flap with a small bow
+      ramp->m_d.m_sections.clear();
+      REQUIRE(ramp->AddEntryInterface());
+      CHECK(ramp->m_d.m_sections.back().m_flapAhead <= 40.f);
+      CHECK(ramp->m_d.m_sections.back().m_flapUp <= 60.f);
+      CHECK(ramp->m_d.m_sections.back().m_flapBow == doctest::Approx(1.5f));
    }
 
    SUBCASE("hairpin: concentric walls with their own face counts, no fold, legs apart, ranges follow inserts and deletes")

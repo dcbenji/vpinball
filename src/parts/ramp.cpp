@@ -945,15 +945,21 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
       const float cs = (z2 - z0) / L;
       const float f = clamp(s.m_flapBowPos, 0.1f, 0.9f);
       float bow = max(0.f, s.m_flapBow);
-      // Caps: the front edge never starts more than about 6 degrees downhill, and the flap never sinks more than 5 VPU below the playfield
+      // Caps: the front edge never starts more than about 6 degrees downhill, and the flap never goes below its start surface (the
+      // playfield, or the raised foot): it covers the step onto the ramp, it does not dip into the playfield (Ben, 2026-11-14). With no
+      // room to dip, the bow is capped to a gentle concave-up rise (cs * f * L / 2: a level start).
+      const float requestedBow = bow;
       bow = min(bow, max(0.f, (cs + tanf(ANGTORAD(6.f))) * f * L * 0.5f));
-      for (int j = 1; j < 128; j++)
+      const float bowBefore = bow;
+      for (int j = 1; j <= 256; j++)
       {
-         const float u = (float)j / 128.f;
+         const float u = (float)j / 256.f;
          const float g = FlapBowShape(u, f);
          if (g > 1e-4f)
-            bow = min(bow, max(0.f, (cs * u * L + 5.f) / g));
+            bow = min(bow, max(0.f, cs * u * L / g));
       }
+      bow = min(bow, max(0.f, cs * f * L * 0.5f)); // the limit at the front edge (u -> 0)
+      const bool limitedByPlayfield = bow + 1e-3f < bowBefore;
       const int faces = (bow > 0.01f) ? 8 : 1;
       vector<float> xs;
       for (int j = 0; j <= faces; j++)
@@ -980,7 +986,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
       for (const float x : xs)
       {
          const float d = x - a; // distance along the ramp from its foot (negative ahead of it)
-         const float h = z0 + cs * x - bow * FlapBowShape(x / L, f);
+         const float h = max(z0, z0 + cs * x - bow * FlapBowShape(x / L, f)); // never below the start surface
          zMin = min(zMin, h);
          const float ratio = 1.f - d / max(total, 1e-6f);
          if (d <= 1e-3f)
@@ -1011,8 +1017,8 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
          st.m_flapUp = b;
          st.m_entryAngle = RADTOANG(atanf(cs - 2.f * bow / (f * L)));
          st.m_sink = z0 - zMin;
-         if (bow + 0.01f < s.m_flapBow)
-            st.m_message = "Bow capped (front edge at most 6 deg downhill, at most 5 VPU below its start)";
+         if (bow + 0.01f < requestedBow)
+            st.m_message = limitedByPlayfield ? "Bow limited so the flap stays on the playfield (it may not dip below its start)" : "Bow limited so the front edge starts at most 6 deg downhill";
          else if (b + 0.01f < s.m_flapUp)
             st.m_message = "Landing limited to the straight run before a hairpin / 90% of the ramp";
       }
@@ -1048,8 +1054,11 @@ bool Ramp::AddEntryInterface()
    s.m_kind = RampSection::EntryFlap;
    s.m_first = s.m_last = 0;
    const float w = m_d.m_widthbottom;
-   s.m_flapAhead = clamp(w * 0.75f, 20.f, 120.f);
-   s.m_flapUp = clamp(w * 0.75f, 20.f, 120.f);
+   // Defaults for the usual case, a ramp foot a couple of VPU above the playfield: a short flap with a small bow
+   s.m_flapAhead = clamp(w * 0.3f, 10.f, 40.f);
+   s.m_flapUp = clamp(w * 0.4f, 15.f, 60.f);
+   s.m_flapBow = 1.5f;
+   s.m_flapBowPos = 0.5f;
    m_d.m_sections.push_back(s);
    return true;
 }
