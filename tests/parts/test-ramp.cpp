@@ -507,6 +507,42 @@ TEST_CASE("Ramp sections")
       CHECK(ramp->m_d.m_sections.empty());
    }
 
+   SUBCASE("hairpin: a coarse outside wall is refined until the floor does not fold over the inside wall")
+   {
+      // Width 50, radius 150, one 90 deg corner, 1 outside face / 9 inside: the single outside chord would pass 123.7 from the
+      // centre, inside the 125 inside wall
+      Ramp* const ramp = MakeSectionTestRamp(table, "RampSec5", { { 500.f, 1500.f }, { 500.f, 1000.f }, { 1000.f, 1000.f } });
+      ramp->m_d.m_widthbottom = ramp->m_d.m_widthtop = 50.f;
+      REQUIRE(ramp->AddHairpin(1, 1));
+      RampSection& hp = ramp->m_d.m_sections.back();
+      hp.m_radius = 150.f;
+      hp.m_outerFaces = 1;
+      hp.m_innerFaces = 9;
+      const vector<RampSectionStatus> st = ramp->GetSectionStatus();
+      REQUIRE(st[0].m_applied);
+      CHECK(st[0].m_outerFaces > 1);
+      CHECK_FALSE(st[0].m_message.empty());
+      const Rows r = GetRows(ramp);
+      bool folded = false;
+      for (int i = 0; i < r.n - 1; i++)
+      {
+         // the turn is clockwise or anticlockwise: every non degenerate floor triangle must have the same orientation
+         const Vertex2D tri[4][3] = { { r.left[i], r.right[i], r.left[i + 1] }, { r.left[i + 1], r.right[i], r.right[i + 1] },
+            { r.left[i], r.right[i], r.right[i + 1] }, { r.left[i], r.right[i + 1], r.left[i + 1] } };
+         for (const auto& t : tri)
+         {
+            const float area = (t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[1].y - t[0].y) * (t[2].x - t[0].x);
+            const float ref = (r.right[0].x - r.left[0].x) * (r.left[1].y - r.left[0].y) - (r.right[0].y - r.left[0].y) * (r.left[1].x - r.left[0].x);
+            if (fabsf(area) > 1e-2f && area * ref < 0.f)
+               folded = true;
+         }
+      }
+      CHECK_FALSE(folded);
+      // Before the fix: 1 outside face over the corner gives an inverted floor quad
+      hp.m_outerFaces = 40;
+      CHECK(ramp->GetSectionStatus()[0].m_outerFaces == 40);
+   }
+
    SUBCASE("collision comes from the drawn rows: every hit triangle vertex is a row point at floor or wall top height")
    {
       Ramp* const ramp = MakeSectionTestRamp(table, "RampSec4", { { 500.f, 1500.f }, { 500.f, 1000.f }, { 700.f, 1000.f }, { 700.f, 1500.f } });
