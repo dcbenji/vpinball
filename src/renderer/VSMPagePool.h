@@ -2,6 +2,10 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 #include "math/vector.h"
 #include "math/matrix.h"
 
@@ -90,6 +94,38 @@ private:
    std::vector<uint8_t> m_protected; // layer -> marked needed this frame (no eviction)
    uint64_t m_stamp = 0;
 };
+
+// Shadow slot policy. More shadow-capable lights than slots (PBRShadowMaxLights) must not cascade: a lit light without a slot
+// takes a free slot, else the slot of the least important *parked* (unlit) light that is less important than itself, else, at
+// most once per SLOT_LIT_SWAP_US over the whole table, the slot of the least important *lit* light when it is at least
+// SLOT_LIT_SWAP_RATIO times less important, else it stays slot-starved (unshadowed) this frame. Free lit-to-lit taking used
+// to cascade (the loser took the next one's slot, down the part order, each re-rendering its whole map: Ripley's Redux
+// 2026-11-13, 42 lights for 32 slots); the ratio and the rate limit keep the swap one-way and one at a time, so the important
+// lights end up shadowed whichever lit first (GI at power-up before the first flasher fire).
+// Importance is the light's authored intensity x range (stable: not its current fade level, nor the script's IntensityScale,
+// which Flupper-style flasher scripts drive to 0 between fires), so which lights lose their
+// shadows under the cap is chosen, not arrival order: the slots end up with the most important shadow-capable lights, lit or
+// parked, and stay there. A parked light keeps its slot however long it rests (a flasher between shows keeps its warm map and
+// bake; an expiry handed resting flashers' slots to GI lights, so every show knocked a GI shadow out for the expiry time and
+// flashers firing together went unshadowed). A light that stays dark for good keeps its slot too: hide it to free it.
+// The renderer passes the authored intensity (Light m_d.m_intensity), never one scaled by the script's IntensityScale
+inline float SlotImportance(float intensity, float range) { return std::max(intensity, 0.f) * std::max(range, 1.f); }
+
+// The slot set: member[i] = 1 for the 'cap' most important of these lights (importance, then index order: the caller's part order).
+// The renderer never offers a member's slot to PickSlot (see below).
+std::vector<uint8_t> SlotSetMembers(const std::vector<float>& importance, int cap);
+
+constexpr float SLOT_LIT_SWAP_RATIO = 2.f;
+constexpr uint64_t SLOT_LIT_SWAP_US = 1000000; // one lit-to-lit swap per second at most
+
+// slotFree[i]: no light holds slot i; parkedImportance[i]: importance of the parked (unlit) light holding slot i, < 0 when the
+// slot is held by a lit light or already assigned this frame; litImportance[i] (nullptr = no lit swap this frame): importance
+// of the lit light holding slot i not yet confirmed this frame, else < 0. Returns the slot for a lit light of the given
+// importance (free slots first, lowest index), or -1.
+// takerInSet: the taker belongs to the slot set (the caller's PBRShadowMaxLights most important lights, whose holders it never
+// offers): it may take a lit holder's slot without the 2x ratio (every offered holder is outside the set, ranked below it), else a
+// set member within 2x of a lit holder outside the set would starve for good.
+int PickSlot(int slotCount, const uint8_t* slotFree, const float* parkedImportance, float importance, const float* litImportance = nullptr, bool takerInSet = false);
 
 // Marks the virtual pages overlapped by a caster AABB for an ortho light. boundsMin/boundsMax are
 // world space; the box (l, r, b, t) is the fitted ortho extent in light view space as returned by

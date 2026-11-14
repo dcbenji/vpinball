@@ -90,6 +90,7 @@ set(VPX_TEST_SOURCES
    tests/render/test-normalmap-render.cpp
    tests/render/test-pbr-shadow-render.cpp
    tests/render/test-renderframe.cpp
+   tests/render/test-vsm-pagepool.cpp
    tests/render/test-vr-spaces.cpp
    tests/render/test-window.cpp
    tests/ui/test-arealayout.cpp

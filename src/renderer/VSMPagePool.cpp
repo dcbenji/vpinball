@@ -75,6 +75,35 @@ void PagePool::Free(int layer)
    m_free.push_back(layer);
 }
 
+std::vector<uint8_t> SlotSetMembers(const std::vector<float>& importance, int cap)
+{
+   std::vector<int> order(importance.size());
+   for (size_t i = 0; i < order.size(); i++)
+      order[i] = (int)i;
+   std::stable_sort(order.begin(), order.end(), [&importance](int a, int b) { return importance[a] > importance[b]; });
+   std::vector<uint8_t> member(importance.size(), 0);
+   for (int i = 0; i < cap && i < (int)order.size(); i++)
+      member[order[i]] = 1;
+   return member;
+}
+
+int PickSlot(int slotCount, const uint8_t* slotFree, const float* parkedImportance, float importance, const float* litImportance, const bool takerInSet)
+{
+   for (int i = 0; i < slotCount; i++)
+      if (slotFree[i])
+         return i;
+   int best = -1;
+   for (int i = 0; i < slotCount; i++)
+      if (parkedImportance[i] >= 0.f && parkedImportance[i] < importance && (best < 0 || parkedImportance[i] < parkedImportance[best]))
+         best = i;
+   if (best >= 0 || litImportance == nullptr)
+      return best;
+   for (int i = 0; i < slotCount; i++)
+      if (litImportance[i] >= 0.f && (takerInSet || litImportance[i] * SLOT_LIT_SWAP_RATIO <= importance) && (best < 0 || litImportance[i] < litImportance[best]))
+         best = i;
+   return best;
+}
+
 void MarkOrthoPages(const Matrix3D& lightView, float l, float r, float b, float t, const Vertex3Ds& boundsMin, const Vertex3Ds& boundsMax, int gridW, int gridH, int dilate, uint8_t* needed)
 {
    float px0 = FLT_MAX, px1 = -FLT_MAX, py0 = FLT_MAX, py1 = -FLT_MAX;

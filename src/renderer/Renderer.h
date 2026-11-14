@@ -466,6 +466,8 @@ private:
    int m_vsmPoolPages = 1024; // physical pool size in pages (Player_PBRShadowPoolPages)
    int m_vsmVirtRes = 8192; // ortho virtual map edge in texels (Player_PBRShadowMapSize)
    int m_vsmMaxLights = VSM::MAX_LIGHTS; // shadowed-light cap (Player_PBRShadowMaxLights)
+   uint64_t m_vsmLastLitSwap = 0; // usec of the last lit-to-lit slot swap (VSM::PickSlot rate limit)
+   bool m_vsmCapWarned = false; // logged once: more shadowed lights than slots
    float m_pbrDimLightCutoff = 0.f; // PBR dim light cutoff (Player_PBRDimLightCutoff), 0 = off
    bool m_pbrShadowFast = true; // shadow filter early-out + importance gate (Player_PBRShadowFastFilter)
    SaveDirtyState m_vsmLastTableDirty = SaveDirtyState::Clean; // table dirty state sampled per VSM frame

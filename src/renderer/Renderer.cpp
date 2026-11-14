@@ -1784,7 +1784,12 @@ void Renderer::UpdateVirtualShadowMaps()
       = [](const Light* l) { return l->m_d.m_type == LightType::PBR && l->m_d.m_visible && !l->m_desktopBackdrop && l->m_d.m_shadows >= ShadowMode::PBR_STATIC_SHADOWS; };
    vector<Light*> lights;
    Light* reservedBy[VSM::MAX_LIGHTS] = {};
+   // Authored intensity x range: never the script's IntensityScale (Flupper-style flasher scripts drive it to 0 between fires) nor
+   // the current state, so a resting flasher keeps its rank
+   const auto importance = [](const Light* l) { return VSM::SlotImportance(l->m_d.m_intensity, l->m_d.m_falloff); };
+   size_t litCount = 0;
    for (int pass = 0; pass < 3; pass++) // lit, parked, then the others (released)
+   {
       for (IEditable* const part : m_table->GetParts())
          if (part->GetItemType() == eItemLight)
          {
@@ -1796,6 +1801,17 @@ void Renderer::UpdateVirtualShadowMaps()
             if (kind < 2 && l->m_pbrShadowSlot >= 0 && l->m_pbrShadowSlot < m_vsmMaxLights && !reservedBy[l->m_pbrShadowSlot])
                reservedBy[l->m_pbrShadowSlot] = l;
          }
+      if (pass == 0)
+         litCount = lights.size();
+      else if (pass == 1 && (int)lights.size() > m_vsmMaxLights && !m_vsmCapWarned)
+      {
+         m_vsmCapWarned = true;
+         PLOGW << lights.size() << " lights with shadows exceed PBRShadowMaxLights (" << m_vsmMaxLights
+               << "): the least important ones (intensity x range) are unshadowed while the others are lit";
+      }
+   }
+   // Lit lights claim slots by importance (part order breaks ties), so which ones go unshadowed under the cap is stable
+   std::stable_sort(lights.begin(), lights.begin() + litCount, [&importance](const Light* a, const Light* b) { return importance(a) > importance(b); });
    const auto releaseSlot = [this, &reservedBy](Light* l)
    {
       // Frees the map only when the index is this light's (a stale index of a light that lost it keeps the new owner's pages)
@@ -1811,6 +1827,26 @@ void Renderer::UpdateVirtualShadowMaps()
       l->m_pbrShadowBakedSlot = -1;
    };
    constexpr int warmFreePages = 64; // pool headroom kept for the lit lights before a parked light is warmed
+   const uint64_t now = usec();
+   // The slot set: the PBRShadowMaxLights most important shadow-capable lights (importance, then part order), lit or parked. A
+   // holder in it is never taken (VSM::PickSlot sees -1): a resting flasher keeps its slot, and two flashers do not trade slots
+   // while a GI light outside the set still holds one (only the rate-limited lit swap moves those)
+   vector<const Light*> slotSet;
+   {
+      vector<const Light*> capable;
+      vector<float> imp;
+      for (IEditable* const part : m_table->GetParts())
+         if (part->GetItemType() == eItemLight && shadowCapable(static_cast<Light*>(part)))
+         {
+            capable.push_back(static_cast<const Light*>(part));
+            imp.push_back(importance(capable.back()));
+         }
+      const vector<uint8_t> member = VSM::SlotSetMembers(imp, m_vsmMaxLights);
+      for (size_t i = 0; i < capable.size(); i++)
+         if (member[i])
+            slotSet.push_back(capable[i]);
+   }
+   const auto inSlotSet = [&slotSet](const Light* l) { return std::find(slotSet.begin(), slotSet.end(), l) != slotSet.end(); };
 
    for (Light* const light : lights)
    {
@@ -1847,28 +1883,35 @@ void Renderer::UpdateVirtualShadowMaps()
          // else: warm up through the regular path below (its jobs queue after the lit lights')
       }
 
-      // Stable index assignment: keep the light's current index, else take the first free one (one no parked light
-      // holds; a lit light takes a parked light's index when nothing else is free)
+      // Stable index assignment: keep the light's current index, else take a free one (one no parked light holds); a lit
+      // light takes the index of a less important parked light when nothing is free, never a lit light's (VSM::PickSlot)
       int index = held;
       if (!holds)
       {
          index = -1;
-         for (int i = 0; i < m_vsmMaxLights && index < 0; i++)
-            if (!indexUsed[i] && !reservedBy[i])
-               index = i;
-         for (int i = 0; lit && i < m_vsmMaxLights && index < 0; i++)
-            if (!indexUsed[i])
-            {
-               index = i;
-               if (reservedBy[i] && reservedBy[i] != light)
-               {
-                  releaseSlot(reservedBy[i]);
-                  reservedBy[i] = nullptr;
-               }
-            }
+         uint8_t slotFree[VSM::MAX_LIGHTS];
+         float parkedImportance[VSM::MAX_LIGHTS], litImportance[VSM::MAX_LIGHTS];
+         const bool litSwap = lit && now - m_vsmLastLitSwap >= VSM::SLOT_LIT_SWAP_US;
+         for (int i = 0; i < m_vsmMaxLights; i++)
+         {
+            slotFree[i] = !indexUsed[i] && !reservedBy[i];
+            const bool other = lit && !indexUsed[i] && reservedBy[i] && reservedBy[i] != light && !inSlotSet(reservedBy[i]);
+            parkedImportance[i] = (other && reservedBy[i]->m_currentIntensity <= 0.f) ? importance(reservedBy[i]) : -1.f;
+            litImportance[i] = (other && reservedBy[i]->m_currentIntensity > 0.f) ? importance(reservedBy[i]) : -1.f;
+         }
+         index = VSM::PickSlot(m_vsmMaxLights, slotFree, parkedImportance, lit ? importance(light) : -1.f, litSwap ? litImportance : nullptr, inSlotSet(light));
+         if (index >= 0 && reservedBy[index] && reservedBy[index] != light)
+         {
+            if (reservedBy[index]->m_currentIntensity > 0.f)
+               m_vsmLastLitSwap = now;
+            releaseSlot(reservedBy[index]);
+            reservedBy[index] = nullptr;
+         }
          if (index < 0)
          {
             light->m_pbrShadowBakedSlot = -1; // index-starved light: shadow=1 through the missing map
+            if (held >= 0 && !(held < m_vsmMaxLights && reservedBy[held] == light))
+               light->m_pbrShadowSlot = -1; // not its index anymore: keep the light record from pointing at another light's map
             continue;
          }
          reservedBy[index] = light;
