@@ -434,6 +434,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(REEN), "reflection_enabled" },
          { FID(RFCT), "friction" },
          { FID(RSCT), "scatter" },
+         { FID(RSEC), "sections" },
          { FID(RVIS), "visible" },
          { FID(THRS), "threshold" },
          { FID(TYPE), "type" },
@@ -725,6 +726,20 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(LANR), "named_layer" },
       });
 
+      m[JSONSerializer::kRampSectionNode] = MakeMap({
+         { FID(STYP), "kind" },
+         { FID(SVER), "version" },
+         { FID(SAN0), "first_point" },
+         { FID(SAN1), "last_point" },
+         { FID(FAHD), "flap_ahead" },
+         { FID(FLUP), "flap_up" },
+         { FID(FBOW), "flap_bow" },
+         { FID(FBPS), "flap_bow_position" },
+         { FID(HRAD), "hairpin_radius" },
+         { FID(HOUT), "hairpin_outer_faces" },
+         { FID(HINN), "hairpin_inner_faces" },
+      });
+
       m[JSONSerializer::kPinBinaryNode] = MakeMap({
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(SIZE), "size" }, { FID(DATA), "data" }, // Pack-relative path of the binary file holding the data
       });
@@ -873,6 +888,7 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    case FID(DPNT): return kDragPointNode;
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
+   case FID(RSEC): return (parentKind == eItemRamp) ? kRampSectionNode : parentKind;
    case FID(JPEG): return kPinBinaryNode;
    default: return parentKind;
    }

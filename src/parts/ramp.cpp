@@ -184,9 +184,53 @@ void Ramp::AssignHeightToControlPoint(const RenderVertex3D &v, const float heigh
  *  ppfCross     - size cvertex, true if i-th vertex corresponds to a control point
  *  ppratio      - how far along the ramp length the i-th vertex is, 1=start=bottom, 0=end=top (??)
  */
-Vertex2D *Ramp::GetRampVertex(
-   int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy, const bool inc_width) const
+Vertex2D *Ramp::GetRampVertex(int &pcvertex, float **const ppheight, bool **const ppfCross, float **const ppratio, Vertex2D **const pMiddlePoints, const float _accuracy,
+   const bool inc_width, bool **const ppWall) const
 {
+   if (ppWall)
+      *ppWall = nullptr;
+   if (HasActiveSections())
+   {
+      SectionRows rows;
+      if (BuildSectionedRows(rows, nullptr))
+      {
+         const int n = (int)rows.middle.size();
+         pcvertex = n;
+         Vertex2D *const rgv = new Vertex2D[n * 2];
+         for (int i = 0; i < n; i++)
+         {
+            rgv[i] = rows.right[i];
+            rgv[n * 2 - i - 1] = rows.left[i];
+         }
+         if (ppheight)
+         {
+            *ppheight = new float[n];
+            std::copy(rows.height.begin(), rows.height.end(), *ppheight);
+         }
+         if (ppfCross)
+         {
+            *ppfCross = new bool[n];
+            std::copy(rows.cross.begin(), rows.cross.end(), *ppfCross);
+         }
+         if (ppratio)
+         {
+            *ppratio = new float[n];
+            std::copy(rows.ratio.begin(), rows.ratio.end(), *ppratio);
+         }
+         if (pMiddlePoints)
+         {
+            *pMiddlePoints = new Vertex2D[n];
+            std::copy(rows.middle.begin(), rows.middle.end(), *pMiddlePoints);
+         }
+         if (ppWall)
+         {
+            *ppWall = new bool[n];
+            std::copy(rows.wall.begin(), rows.wall.end(), *ppWall);
+         }
+         return rgv;
+      }
+   }
+
    vector<RenderVertex3D> vvertex;
    GetCentralCurve(vvertex, _accuracy);
    // vvertex are the 2D vertices forming the central curve of the ramp as seen from above
@@ -346,6 +390,623 @@ Vertex2D *Ramp::GetRampVertex(
    return rgvLocal;
 }
 
+#pragma region Sections
+
+namespace
+{
+   float Cross2(const Vertex2D &a, const Vertex2D &b) { return a.x * b.y - a.y * b.x; }
+
+   float PointSegmentDistance(const Vertex2D &p, const Vertex2D &a, const Vertex2D &b)
+   {
+      const Vertex2D ab = b - a;
+      const float len2 = ab.LengthSquared();
+      const float t = (len2 > 1e-12f) ? clamp((p - a).Dot(ab) / len2, 0.f, 1.f) : 0.f;
+      return (p - (a + ab * t)).Length();
+   }
+
+   // Shortest distance between two 2D segments
+   float SegmentDistance(const Vertex2D &a0, const Vertex2D &a1, const Vertex2D &b0, const Vertex2D &b1)
+   {
+      const float d1 = Cross2(a1 - a0, b0 - a0), d2 = Cross2(a1 - a0, b1 - a0), d3 = Cross2(b1 - b0, a0 - b0), d4 = Cross2(b1 - b0, a1 - b0);
+      if (((d1 > 0.f) != (d2 > 0.f)) && ((d3 > 0.f) != (d4 > 0.f)))
+         return 0.f; // crossing
+      return min(min(PointSegmentDistance(a0, b0, b1), PointSegmentDistance(a1, b0, b1)), min(PointSegmentDistance(b0, a0, a1), PointSegmentDistance(b1, a0, a1)));
+   }
+
+   // Splits total faces over corners in proportion to their turn, at least one each (largest remainder)
+   vector<int> SplitFaces(int total, const vector<float> &weights)
+   {
+      const int n = (int)weights.size();
+      vector<int> out(n, 1);
+      total = max(total, n);
+      float sum = 0.f;
+      for (const float w : weights)
+         sum += w;
+      if (sum <= 0.f)
+         return out;
+      vector<std::pair<float, int>> rem;
+      int used = 0;
+      for (int i = 0; i < n; i++)
+      {
+         const float exact = (float)total * weights[i] / sum;
+         out[i] = max(1, (int)exact);
+         used += out[i];
+         rem.emplace_back(exact - (float)(int)exact, i);
+      }
+      std::ranges::sort(rem, [](const auto &l, const auto &r) { return l.first > r.first; });
+      for (size_t i = 0; used < total && i < rem.size(); i++, used++)
+         out[rem[i].second]++;
+      return out;
+   }
+
+   // Flap bow shape: 0 at both ends, 1 at the low point f (fraction of the flap length), flat tangent there
+   float FlapBowShape(const float u, const float f)
+   {
+      if (u <= f)
+      {
+         const float v = 1.f - u / f;
+         return 1.f - v * v;
+      }
+      const float v = (u - f) / (1.f - f);
+      return 1.f - v * v;
+   }
+}
+
+// The sectioned ramp geometry: the plain ramp's rows (same mitred normals, length based width and height) over a path in which
+// every hairpin corner is replaced by an arc, then each side of an arc is resampled to its own face count, and the start of the ramp
+// is replaced by the entry flap's rows. Render, physics and the editor outline all use these rows (GetRampVertex), sampled at the
+// physics detail level whatever the caller asks, so what is drawn is what collides.
+bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *status) const
+{
+   const vector<RampSection> &sections = m_d.m_sections;
+   if (status)
+      status->assign(sections.size(), RampSectionStatus());
+   const auto report = [status](size_t i, const string &msg)
+   {
+      if (status)
+         (*status)[i].m_message = msg;
+   };
+
+   vector<RenderVertex3D> vv;
+   GetCentralCurve(vv, HIT_SHAPE_DETAIL_LEVEL);
+   const int npts = (int)m_curve.GetPoints().size();
+   if (vv.size() < 2)
+   {
+      for (size_t i = 0; i < sections.size(); i++)
+         report(i, "The ramp path has fewer than 2 points"s);
+      return false;
+   }
+
+   // Curve vertex of each control point (open curve: the last one is the final vertex)
+   vector<int> cpVert;
+   for (int i = 0; i < (int)vv.size() - 1; i++)
+      if (vv[i].controlPoint)
+         cpVert.push_back(i);
+   cpVert.push_back((int)vv.size() - 1);
+   const bool mapped = (int)cpVert.size() == npts;
+   const auto cpPos = [&vv, &cpVert](int k) { return Vertex2D(vv[cpVert[k]].x, vv[cpVert[k]].y); };
+
+   const float wMax = max(m_d.m_widthbottom, m_d.m_widthtop);
+   const float minRadius = wMax * 0.5f + 1.f;
+
+   // ---- Hairpins: plan each one (arcs fitted into the corners of its range)
+   struct Corner
+   {
+      Vertex2D t1, t2, c;
+      float a0, sweep;
+      int outer, inner;
+   };
+   struct Plan
+   {
+      size_t section;
+      int first, last;
+      float radius;
+      vector<Corner> corners;
+   };
+   vector<Plan> plans;
+   {
+      vector<size_t> order;
+      for (size_t i = 0; i < sections.size(); i++)
+         if (sections[i].m_kind == RampSection::Hairpin)
+            order.push_back(i);
+      std::ranges::stable_sort(order, [&sections](size_t l, size_t r) { return sections[l].m_first < sections[r].m_first; });
+      int prevLast = -2;
+      for (const size_t si : order)
+      {
+         const RampSection &s = sections[si];
+         if (status)
+            (*status)[si].m_minRadius = minRadius;
+         if (!mapped)
+         {
+            report(si, "Two ramp points coincide: separate them"s);
+            continue;
+         }
+         if (s.m_first < 1 || s.m_last > npts - 2 || s.m_first > s.m_last)
+         {
+            report(si, "A hairpin needs interior points of the path (not its ends)"s);
+            continue;
+         }
+         if (s.m_first <= prevLast + 1)
+         {
+            report(si, "Touches another hairpin: leave a point between them"s);
+            continue;
+         }
+         if (s.m_radius < minRadius)
+         {
+            report(si, "Radius is under half the ramp width + 1: the inside would fold"s);
+            continue;
+         }
+         Plan plan { si, s.m_first, s.m_last, s.m_radius, {} };
+         vector<float> turns, tans;
+         vector<Vertex2D> d1s, d2s;
+         string fail;
+         float totalTurn = 0.f;
+         for (int k = s.m_first; k <= s.m_last && fail.empty(); k++)
+         {
+            Vertex2D d1 = cpPos(k) - cpPos(k - 1), d2 = cpPos(k + 1) - cpPos(k);
+            const float len1 = d1.Length(), len2 = d2.Length();
+            if (len1 < 0.01f || len2 < 0.01f)
+            {
+               fail = "Point " + std::to_string(k) + " sits on its neighbour";
+               break;
+            }
+            d1 = d1 * (1.f / len1);
+            d2 = d2 * (1.f / len2);
+            const float turn = atan2f(Cross2(d1, d2), d1.Dot(d2));
+            if (fabsf(turn) < ANGTORAD(1.f))
+               fail = "The path does not turn at point " + std::to_string(k);
+            else if (fabsf(turn) > ANGTORAD(178.f))
+               fail = "The path doubles back at point " + std::to_string(k) + ": spread the turn over two points";
+            else
+            {
+               const float room = min(len1 * ((k - 1 >= s.m_first) ? 0.5f : 1.f), len2 * ((k + 1 <= s.m_last) ? 0.5f : 1.f));
+               const float tn = tanf(fabsf(turn) * 0.5f);
+               plan.radius = min(plan.radius, room / tn);
+               turns.push_back(turn);
+               tans.push_back(tn);
+               d1s.push_back(d1);
+               d2s.push_back(d2);
+               totalTurn += turn;
+            }
+         }
+         if (!fail.empty())
+         {
+            report(si, fail);
+            continue;
+         }
+         if (status)
+            (*status)[si].m_radius = plan.radius;
+         if (plan.radius < minRadius)
+         {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "Only %.0f VPU of radius fits between the neighbouring points (%.0f needed): move them further away", plan.radius, minRadius);
+            report(si, buf);
+            continue;
+         }
+         vector<float> weights;
+         for (const float t : turns)
+            weights.push_back(fabsf(t));
+         const vector<int> outer = SplitFaces(clamp(s.m_outerFaces, 1, 256), weights), inner = SplitFaces(clamp(s.m_innerFaces, 1, 256), weights);
+         for (size_t c = 0; c < turns.size(); c++)
+         {
+            const Vertex2D p = cpPos(s.m_first + (int)c);
+            const float setback = plan.radius * tans[c];
+            Corner corner;
+            corner.t1 = p - d1s[c] * setback;
+            corner.t2 = p + d2s[c] * setback;
+            const Vertex2D left(-d1s[c].y, d1s[c].x);
+            corner.c = corner.t1 + left * (turns[c] > 0.f ? plan.radius : -plan.radius);
+            corner.a0 = atan2f(corner.t1.y - corner.c.y, corner.t1.x - corner.c.x);
+            corner.sweep = turns[c];
+            corner.outer = outer[c];
+            corner.inner = inner[c];
+            plan.corners.push_back(corner);
+         }
+         // The two legs of a turn-back must stay a ramp width apart (centre lines), so their walls do not overlap
+         if (fabsf(totalTurn) > ANGTORAD(150.f))
+         {
+            const float dist = SegmentDistance(cpPos(s.m_first - 1), plan.corners.front().t1, plan.corners.back().t2, cpPos(s.m_last + 1));
+            if (status)
+               (*status)[si].m_legGap = dist - wMax;
+            if (dist < wMax)
+            {
+               char buf[256];
+               snprintf(buf, sizeof(buf), "The two legs are %.0f VPU apart, under the ramp width (%.0f): move them apart", dist, wMax);
+               report(si, buf);
+               continue;
+            }
+         }
+         prevLast = s.m_last;
+         plans.push_back(std::move(plan));
+      }
+   }
+
+   // ---- Path: the curve with the stretch of every planned hairpin replaced by straight legs and its arcs
+   struct PathVertex
+   {
+      Vertex3Ds p;
+      bool cp;
+      int arc; // index into arcs, -1 for none
+      int step; // 0 .. arc steps
+   };
+   struct Arc
+   {
+      Vertex2D c;
+      float radius, a0, sweep;
+      int steps, outer, inner;
+      size_t section;
+   };
+   vector<PathVertex> path;
+   vector<Arc> arcs;
+   {
+      int v = 0;
+      const auto push = [&path](const PathVertex &pv)
+      {
+         if (!path.empty() && fabsf(path.back().p.x - pv.p.x) < 1e-4f && fabsf(path.back().p.y - pv.p.y) < 1e-4f)
+            return; // coincident: keep the first (identical position)
+         path.push_back(pv);
+      };
+      for (const Plan &plan : plans)
+      {
+         const int vA = cpVert[plan.first - 1], vB = cpVert[plan.last + 1];
+         for (; v <= vA; v++)
+            push({ vv[v], vv[v].controlPoint, -1, 0 });
+         const size_t start = path.size();
+         for (const Corner &corner : plan.corners)
+         {
+            const int steps = max(corner.outer, corner.inner);
+            const int arcIndex = (int)arcs.size();
+            arcs.push_back({ corner.c, plan.radius, corner.a0, corner.sweep, steps, corner.outer, corner.inner, plan.section });
+            for (int j = 0; j <= steps; j++)
+            {
+               const float a = corner.a0 + corner.sweep * (float)j / (float)steps;
+               push({ Vertex3Ds(corner.c.x + plan.radius * cosf(a), corner.c.y + plan.radius * sinf(a), 0.f), false, arcIndex, j });
+            }
+         }
+         // Height offsets (point z) interpolate by length between the two ends of the replaced stretch
+         const Vertex2D a(vv[vA].x, vv[vA].y), b(vv[vB].x, vv[vB].y);
+         float total = 0.f;
+         Vertex2D prev = a;
+         for (size_t i = start; i < path.size(); i++)
+         {
+            total += (Vertex2D(path[i].p.x, path[i].p.y) - prev).Length();
+            prev = Vertex2D(path[i].p.x, path[i].p.y);
+         }
+         total += (b - prev).Length();
+         float acc = 0.f;
+         prev = a;
+         for (size_t i = start; i < path.size(); i++)
+         {
+            acc += (Vertex2D(path[i].p.x, path[i].p.y) - prev).Length();
+            prev = Vertex2D(path[i].p.x, path[i].p.y);
+            path[i].p.z = vv[vA].z + (vv[vB].z - vv[vA].z) * ((total > 0.f) ? acc / total : 0.f);
+         }
+         v = vB;
+         if (status)
+            (*status)[plan.section].m_applied = true;
+      }
+      for (; v < (int)vv.size(); v++)
+         push({ vv[v], vv[v].controlPoint, -1, 0 });
+   }
+   const int cvertex = (int)path.size();
+   if (cvertex < 2)
+      return false;
+
+   // ---- Rows over the path, computed as GetRampVertex does for a plain flat ramp
+   rows = SectionRows();
+   rows.right.resize(cvertex);
+   rows.left.resize(cvertex);
+   rows.middle.resize(cvertex);
+   rows.height.resize(cvertex);
+   rows.ratio.resize(cvertex);
+   rows.cross.resize(cvertex);
+   rows.wall.assign(cvertex, true);
+   vector<float> widths(cvertex), lengths(cvertex);
+   float totallength = 0.f;
+   for (int i = 0; i < cvertex - 1; i++)
+      totallength += (Vertex2D(path[i].p.x, path[i].p.y) - Vertex2D(path[i + 1].p.x, path[i + 1].p.y)).Length();
+   float currentlength = 0.f;
+   for (int i = 0; i < cvertex; i++)
+   {
+      const Vertex3Ds &vprev = path[(i > 0) ? i - 1 : i].p;
+      const Vertex3Ds &vnext = path[(i < (cvertex - 1)) ? i + 1 : i].p;
+      const Vertex3Ds &vmiddle = path[i].p;
+      Vertex2D vnormal;
+      {
+         Vertex2D v1normal(vprev.y - vmiddle.y, vmiddle.x - vprev.x);
+         Vertex2D v2normal(vmiddle.y - vnext.y, vnext.x - vmiddle.x);
+         if (i == (cvertex - 1))
+         {
+            v1normal.Normalize();
+            vnormal = v1normal;
+         }
+         else if (i == 0)
+         {
+            v2normal.Normalize();
+            vnormal = v2normal;
+         }
+         else
+         {
+            v1normal.Normalize();
+            v2normal.Normalize();
+            if (fabsf(v1normal.x - v2normal.x) < 0.0001f && fabsf(v1normal.y - v2normal.y) < 0.0001f)
+               vnormal = v1normal;
+            else
+            {
+               const float A = vprev.y - vmiddle.y;
+               const float B = vmiddle.x - vprev.x;
+               const float C = A * (v1normal.x - vprev.x) + B * (v1normal.y - vprev.y);
+               const float D = vnext.y - vmiddle.y;
+               const float E = vmiddle.x - vnext.x;
+               const float F = D * (v2normal.x - vnext.x) + E * (v2normal.y - vnext.y);
+               const float det = A * E - B * D;
+               const float inv_det = (det != 0.0f) ? 1.0f / det : 0.0f;
+               vnormal.x = vmiddle.x - (B * F - E * C) * inv_det;
+               vnormal.y = vmiddle.y - (C * D - A * F) * inv_det;
+            }
+         }
+      }
+      currentlength += (Vertex2D(vprev.x, vprev.y) - Vertex2D(vmiddle.x, vmiddle.y)).Length();
+      lengths[i] = currentlength;
+      const float percentage = (totallength != 0.f) ? currentlength / totallength : 0.f;
+      widths[i] = percentage * (m_d.m_widthtop - m_d.m_widthbottom) + m_d.m_widthbottom;
+      rows.height[i] = vmiddle.z + percentage * (m_d.m_heighttop - m_d.m_heightbottom) + m_d.m_heightbottom;
+      if (path[i].cp)
+      {
+         RenderVertex3D rv;
+         rv.set(vmiddle);
+         AssignHeightToControlPoint(rv, rows.height[i]);
+      }
+      rows.ratio[i] = 1.0f - percentage;
+      rows.cross[i] = path[i].cp;
+      rows.middle[i] = Vertex2D(vmiddle.x, vmiddle.y);
+      rows.right[i] = rows.middle[i] + (widths[i] * 0.5f) * vnormal;
+      rows.left[i] = rows.middle[i] - (widths[i] * 0.5f) * vnormal;
+   }
+
+   // ---- Hairpin arcs: exact concentric walls, each side resampled to its own face count (steps of the coarser side repeat a point)
+   {
+      vector<float> arcWidthSum(arcs.size(), 0.f);
+      vector<int> arcWidthCount(arcs.size(), 0);
+      for (int i = 0; i < cvertex; i++)
+         if (path[i].arc >= 0)
+         {
+            arcWidthSum[path[i].arc] += widths[i];
+            arcWidthCount[path[i].arc]++;
+         }
+      for (int i = 0; i < cvertex; i++)
+      {
+         if (path[i].arc < 0)
+            continue;
+         const Arc &arc = arcs[path[i].arc];
+         const float w = arcWidthSum[path[i].arc] / (float)max(1, arcWidthCount[path[i].arc]); // one width per arc keeps both walls concentric
+         const bool rightIsOuter = (rows.right[i] - rows.middle[i]).Dot(rows.middle[i] - arc.c) > 0.f;
+         const auto sidePoint = [&arc, w, &path, i](int count, bool outer)
+         {
+            const int k = (int)lroundf((float)path[i].step * (float)count / (float)arc.steps);
+            const float a = arc.a0 + arc.sweep * (float)k / (float)count;
+            const float r = arc.radius + (outer ? 0.5f * w : -0.5f * w);
+            return Vertex2D(arc.c.x + r * cosf(a), arc.c.y + r * sinf(a));
+         };
+         rows.right[i] = sidePoint(rightIsOuter ? arc.outer : arc.inner, rightIsOuter);
+         rows.left[i] = sidePoint(rightIsOuter ? arc.inner : arc.outer, !rightIsOuter);
+      }
+   }
+
+   // ---- Entry flap: replaces the rows from the ramp foot up to its landing point, plus rows ahead of the foot (no walls there)
+   bool flapDone = false;
+   for (size_t si = 0; si < sections.size(); si++)
+   {
+      const RampSection &s = sections[si];
+      if (s.m_kind != RampSection::EntryFlap)
+         continue;
+      if (flapDone)
+      {
+         report(si, "Only one entry interface per ramp"s);
+         continue;
+      }
+      if (s.m_first != 0)
+      {
+         report(si, "An entry interface starts at the ramp's first point"s);
+         continue;
+      }
+      const int n = (int)rows.middle.size();
+      vector<float> sv(n);
+      sv[0] = 0.f;
+      for (int i = 1; i < n; i++)
+         sv[i] = sv[i - 1] + (rows.middle[i] - rows.middle[i - 1]).Length();
+      const float total = sv[n - 1];
+      float bMax = total * 0.9f;
+      for (int i = 0; i < n; i++)
+         if (path[i].arc >= 0)
+         {
+            bMax = min(bMax, sv[i]); // never into a hairpin
+            break;
+         }
+      const float a = max(0.f, s.m_flapAhead);
+      const float b = clamp(s.m_flapUp, 0.f, bMax);
+      if (b < 1.f)
+      {
+         report(si, "The flap must land at least 1 VPU up the ramp"s);
+         continue;
+      }
+      const auto at = [&sv, n](float d, int &seg, float &t)
+      {
+         seg = 0;
+         while (seg < n - 2 && sv[seg + 1] < d)
+            seg++;
+         const float len = sv[seg + 1] - sv[seg];
+         t = (len > 1e-6f) ? clamp((d - sv[seg]) / len, 0.f, 1.f) : 0.f;
+      };
+      int seg;
+      float t;
+      at(b, seg, t);
+      const float z0 = rows.height[0];
+      const float z2 = rows.height[seg] + (rows.height[seg + 1] - rows.height[seg]) * t;
+      const float L = a + b;
+      const float cs = (z2 - z0) / L;
+      const float f = clamp(s.m_flapBowPos, 0.1f, 0.9f);
+      float bow = max(0.f, s.m_flapBow);
+      // Caps: the front edge never starts more than about 6 degrees downhill, and the flap never sinks more than 5 VPU below the foot
+      bow = min(bow, max(0.f, (cs + tanf(ANGTORAD(6.f))) * f * L * 0.5f));
+      for (int j = 1; j < 128; j++)
+      {
+         const float u = (float)j / 128.f;
+         const float g = FlapBowShape(u, f);
+         if (g > 1e-4f)
+            bow = min(bow, max(0.f, (cs * u * L + 5.f) / g));
+      }
+      const int faces = (bow > 0.01f) ? 8 : 1;
+      vector<float> xs;
+      for (int j = 0; j <= faces; j++)
+         xs.push_back(L * (float)j / (float)faces);
+      if (a > 0.f && std::ranges::none_of(xs, [a](float x) { return fabsf(x - a) < 1e-3f; }))
+      {
+         xs.push_back(a);
+         std::ranges::sort(xs);
+      }
+      Vertex2D dir0 = rows.middle[1] - rows.middle[0];
+      dir0.NormalizeSafe();
+      SectionRows out;
+      const auto add = [&out](const Vertex2D &r, const Vertex2D &l, const Vertex2D &m, float h, float ratio, bool cross, bool wall)
+      {
+         out.right.push_back(r);
+         out.left.push_back(l);
+         out.middle.push_back(m);
+         out.height.push_back(h);
+         out.ratio.push_back(ratio);
+         out.cross.push_back(cross);
+         out.wall.push_back(wall);
+      };
+      float zMin = z0;
+      for (const float x : xs)
+      {
+         const float d = x - a; // distance along the ramp from its foot (negative ahead of it)
+         const float h = z0 + cs * x - bow * FlapBowShape(x / L, f);
+         zMin = min(zMin, h);
+         const float ratio = 1.f - d / max(total, 1e-6f);
+         if (d <= 1e-3f)
+         {
+            const Vertex2D off = dir0 * min(d, 0.f);
+            const bool foot = d > -1e-3f;
+            if (foot && a > 0.f)
+               add(rows.right[0] + off, rows.left[0] + off, rows.middle[0] + off, h, ratio, true, false); // walls start at the foot
+            add(rows.right[0] + off, rows.left[0] + off, rows.middle[0] + off, h, ratio, foot, foot);
+         }
+         else
+         {
+            at(d, seg, t);
+            add(rows.right[seg] + (rows.right[seg + 1] - rows.right[seg]) * t, rows.left[seg] + (rows.left[seg + 1] - rows.left[seg]) * t,
+               rows.middle[seg] + (rows.middle[seg + 1] - rows.middle[seg]) * t, h, ratio, false, true);
+         }
+      }
+      for (int i = 0; i < n; i++)
+         if (sv[i] > b + 1e-3f)
+            add(rows.right[i], rows.left[i], rows.middle[i], rows.height[i], rows.ratio[i], rows.cross[i], rows.wall[i]);
+      rows = std::move(out);
+      flapDone = true;
+      if (status)
+      {
+         RampSectionStatus &st = (*status)[si];
+         st.m_applied = true;
+         st.m_bow = bow;
+         st.m_flapUp = b;
+         st.m_entryAngle = RADTOANG(atanf(cs - 2.f * bow / (f * L)));
+         st.m_sink = z0 - zMin;
+         if (bow + 0.01f < s.m_flapBow)
+            st.m_message = "Bow capped (front edge at most 6 deg downhill, at most 5 VPU below the foot)";
+         else if (b + 0.01f < s.m_flapUp)
+            st.m_message = "Landing limited to the straight run before a hairpin / 90% of the ramp";
+      }
+   }
+   return rows.middle.size() >= 2;
+}
+
+vector<RampSectionStatus> Ramp::GetSectionStatus() const
+{
+   vector<RampSectionStatus> status;
+   if (m_d.m_type != RampTypeFlat)
+   {
+      status.assign(m_d.m_sections.size(), RampSectionStatus());
+      for (RampSectionStatus &st : status)
+         st.m_message = "Sections apply to flat ramps only";
+      return status;
+   }
+   SectionRows rows;
+   BuildSectionedRows(rows, &status);
+   return status;
+}
+
+bool Ramp::CanAddEntryInterface() const
+{
+   return m_d.m_type == RampTypeFlat && std::ranges::none_of(m_d.m_sections, [](const RampSection &s) { return s.m_kind == RampSection::EntryFlap; });
+}
+
+bool Ramp::AddEntryInterface()
+{
+   if (!CanAddEntryInterface())
+      return false;
+   RampSection s;
+   s.m_kind = RampSection::EntryFlap;
+   s.m_first = s.m_last = 0;
+   const float w = m_d.m_widthbottom;
+   s.m_flapAhead = clamp(w * 0.75f, 20.f, 120.f);
+   s.m_flapUp = clamp(w * 0.75f, 20.f, 120.f);
+   m_d.m_sections.push_back(s);
+   return true;
+}
+
+bool Ramp::CanAddHairpin(int first, int last) const
+{
+   const int npts = (int)m_curve.GetPoints().size();
+   if (m_d.m_type != RampTypeFlat || first < 1 || last > npts - 2 || first > last)
+      return false;
+   return std::ranges::none_of(m_d.m_sections,
+      [first, last](const RampSection &s) { return s.m_kind == RampSection::Hairpin && s.m_first <= last + 1 && s.m_last >= first - 1; });
+}
+
+bool Ramp::AddHairpin(int first, int last)
+{
+   if (!CanAddHairpin(first, last))
+      return false;
+   RampSection s;
+   s.m_kind = RampSection::Hairpin;
+   s.m_first = first;
+   s.m_last = last;
+   const float wMax = max(m_d.m_widthbottom, m_d.m_widthtop);
+   s.m_radius = max(wMax * 0.5f + 1.f, wMax * 0.75f);
+   s.m_outerFaces = 12;
+   s.m_innerFaces = 9;
+   m_d.m_sections.push_back(s);
+   return true;
+}
+
+void Ramp::ShiftSectionAnchors(int index, int delta)
+{
+   for (RampSection &s : m_d.m_sections)
+   {
+      if (s.m_kind == RampSection::EntryFlap)
+         continue; // always at the start of the ramp
+      if (delta > 0)
+      {
+         if (s.m_first >= index)
+            s.m_first++;
+         if (s.m_last >= index)
+            s.m_last++;
+      }
+      else
+      {
+         if (s.m_first > index)
+            s.m_first--;
+         if (s.m_last >= index)
+            s.m_last--;
+      }
+   }
+   std::erase_if(m_d.m_sections, [](const RampSection &s) { return s.m_last < s.m_first; });
+}
+
+#pragma endregion
+
 // Ported at: VisualPinball.Engine/VPT/Ramp/Ramp.cs
 
 float Ramp::GetSurfaceHeight(float x, float y) const
@@ -442,7 +1103,12 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    float *rgheight1;
    int cvertex;
-   const Vertex2D *const rgvLocal = GetRampVertex(cvertex, &rgheight1, nullptr, nullptr, nullptr, HIT_SHAPE_DETAIL_LEVEL, true);
+   bool *rgwall; // only for a sectioned ramp: a wall segment exists between two consecutive rows that both have one
+   const Vertex2D *const rgvLocal = GetRampVertex(cvertex, &rgheight1, nullptr, nullptr, nullptr, HIT_SHAPE_DETAIL_LEVEL, true, &rgwall);
+   m_physicsSectioned = rgwall != nullptr;
+   // Sectioned ramps: no wall where a row has none, and no wall on a zero length segment (a hairpin side with fewer faces repeats its points)
+   const auto hasWall = [rgwall, rgvLocal](int r0, int r1, int o0, int o1)
+   { return rgwall == nullptr || (rgwall[r0] && rgwall[r1] && (rgvLocal[o0] - rgvLocal[o1]).LengthSquared() > 1e-6f); };
 
    // Add line segments for right ramp wall.
    if (wallheightright > 0.f)
@@ -451,11 +1117,21 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       {
          Vertex3Ds prevNormal(0.f, 0.f, 0.f); // zero: no previous quad, the first start edge is exposed
          for (int i = 0; i < (cvertex - 1); i++)
-            prevNormal = AddWallQuad(physics, rgvLocal[i], rgheight1[i], rgvLocal[i + 1], rgheight1[i + 1], wallheightright, prevNormal, i == 0, i == (cvertex - 2), isUI);
+         {
+            if (!hasWall(i, i + 1, i, i + 1))
+            {
+               prevNormal = Vertex3Ds(0.f, 0.f, 0.f);
+               continue;
+            }
+            const bool lastQuad = (i == (cvertex - 2)) || !hasWall(i + 1, i + 2, i + 1, i + 2);
+            prevNormal = AddWallQuad(physics, rgvLocal[i], rgheight1[i], rgvLocal[i + 1], rgheight1[i + 1], wallheightright, prevNormal, i == 0, lastQuad, isUI);
+         }
       }
       else
          for (int i = 0; i < (cvertex - 1); i++)
          {
+            if (!hasWall(i, i + 1, i, i + 1))
+               continue;
             const Vertex2D &pv2 = rgvLocal[i];
             const Vertex2D &pv3 = rgvLocal[i + 1];
 
@@ -477,12 +1153,22 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       {
          Vertex3Ds prevNormal(0.f, 0.f, 0.f);
          for (int i = 0; i < (cvertex - 1); i++)
+         {
+            if (!hasWall(cvertex - i - 1, cvertex - i - 2, cvertex + i, cvertex + i + 1))
+            {
+               prevNormal = Vertex3Ds(0.f, 0.f, 0.f);
+               continue;
+            }
+            const bool lastQuad = (i == (cvertex - 2)) || !hasWall(cvertex - i - 2, cvertex - i - 3, cvertex + i + 1, cvertex + i + 2);
             prevNormal = AddWallQuad(physics, rgvLocal[cvertex + i], rgheight1[cvertex - i - 1], rgvLocal[cvertex + i + 1], rgheight1[cvertex - i - 2], wallheightleft, prevNormal, i == 0,
-               i == (cvertex - 2), isUI);
+               lastQuad, isUI);
+         }
       }
       else
          for (int i = 0; i < (cvertex - 1); i++)
          {
+            if (!hasWall(cvertex - i - 1, cvertex - i - 2, cvertex + i, cvertex + i + 1))
+               continue;
             const Vertex2D &pv2 = rgvLocal[cvertex + i];
             const Vertex2D &pv3 = rgvLocal[cvertex + i + 1];
 
@@ -530,7 +1216,8 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             if (ph3dpoly->IsDegenerate()) // degenerate triangles happen if width is 0 at some point
             {
                delete ph3dpoly;
-               ph3dpolyOld = nullptr;
+               if (!m_physicsSectioned) // a sectioned ramp's degenerate triangles are on purpose (repeated hairpin points): the floor stays continuous
+                  ph3dpolyOld = nullptr;
             }
             else
             {
@@ -553,7 +1240,8 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
             if (ph3dpoly->IsDegenerate())
             {
                delete ph3dpoly;
-               ph3dpolyOld = nullptr;
+               if (!m_physicsSectioned)
+                  ph3dpolyOld = nullptr;
             }
             else
             {
@@ -619,6 +1307,8 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
    delete[] rgheight1;
    delete[] rgvLocal;
+   delete[] rgwall;
+   m_physicsSectioned = false;
 }
 
 void Ramp::PhysicRelease(PhysicsEngine* physics, const bool isUI)
@@ -643,6 +1333,8 @@ void Ramp::CheckJoint(PhysicsEngine *physics, const HitTriangle *const ph3d1, co
 
 void Ramp::AddJoint(PhysicsEngine* physics, const Vertex3Ds& v1, const Vertex3Ds& v2, const bool isUI)
 {
+   if (m_physicsSectioned && (v1 - v2).LengthSquared() < 1e-6f)
+      return; // repeated point of a sectioned ramp
    SetupHitObject(physics, new HitLine3D(this, v1, v2), isUI);
 }
 
@@ -1292,12 +1984,36 @@ void Ramp::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteBool(FID(OVPH), m_d.m_overwritePhysics);
    SaveSharedEditableFields(writer);
    m_curve.SavePoints(writer);
+   // Sections: one skippable record each, written only when present, so a ramp without sections saves the same bytes as before
+   for (const RampSection &section : m_d.m_sections)
+   {
+      writer.BeginObject(FID(RSEC), true, true);
+      writer.WriteInt(FID(STYP), section.m_kind);
+      writer.WriteInt(FID(SVER), RampSection::kVersion);
+      writer.WriteInt(FID(SAN0), section.m_first);
+      writer.WriteInt(FID(SAN1), section.m_last);
+      if (section.m_kind == RampSection::EntryFlap)
+      {
+         writer.WriteFloat(FID(FAHD), section.m_flapAhead);
+         writer.WriteFloat(FID(FLUP), section.m_flapUp);
+         writer.WriteFloat(FID(FBOW), section.m_flapBow);
+         writer.WriteFloat(FID(FBPS), section.m_flapBowPos);
+      }
+      else if (section.m_kind == RampSection::Hairpin)
+      {
+         writer.WriteFloat(FID(HRAD), section.m_radius);
+         writer.WriteInt(FID(HOUT), section.m_outerFaces);
+         writer.WriteInt(FID(HINN), section.m_innerFaces);
+      }
+      writer.EndObject();
+   }
    writer.EndObject();
 }
 
 void Ramp::Load(IObjectReader& reader)
 {
    SetDefaults(false);
+   m_d.m_sections.clear();
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
       {
@@ -1336,6 +2052,37 @@ void Ramp::Load(IObjectReader& reader)
          case FID(OVPH): m_d.m_overwritePhysics = reader.AsBool(); break;
          case FID(PNTS): break; // Empty tag placed before drag point data (unused)
          case FID(DPNT): m_curve.LoadPointToken(reader); break;
+         case FID(RSEC):
+         {
+            RampSection section;
+            int version = 0;
+            reader.AsObject(
+               [&section, &version](int sectionTag, IObjectReader &sectionReader)
+               {
+                  switch (sectionTag)
+                  {
+                  case FID(STYP): section.m_kind = sectionReader.AsInt(); break;
+                  case FID(SVER): version = sectionReader.AsInt(); break;
+                  case FID(SAN0): section.m_first = sectionReader.AsInt(); break;
+                  case FID(SAN1): section.m_last = sectionReader.AsInt(); break;
+                  case FID(FAHD): section.m_flapAhead = max(0.f, sectionReader.AsFloat()); break;
+                  case FID(FLUP): section.m_flapUp = max(0.f, sectionReader.AsFloat()); break;
+                  case FID(FBOW): section.m_flapBow = max(0.f, sectionReader.AsFloat()); break;
+                  case FID(FBPS): section.m_flapBowPos = clamp(sectionReader.AsFloat(), 0.f, 1.f); break;
+                  case FID(HRAD): section.m_radius = max(0.f, sectionReader.AsFloat()); break;
+                  case FID(HOUT): section.m_outerFaces = clamp(sectionReader.AsInt(), 1, 256); break;
+                  case FID(HINN): section.m_innerFaces = clamp(sectionReader.AsInt(), 1, 256); break;
+                  }
+                  return true;
+               },
+               true);
+            // An unknown kind or a newer version of a kind is dropped: the ramp keeps its plain geometry over that stretch
+            if ((section.m_kind == RampSection::EntryFlap || section.m_kind == RampSection::Hairpin) && version >= 1 && version <= RampSection::kVersion)
+               m_d.m_sections.push_back(section);
+            else
+               PLOGW << "Ramp " << m_name << ": unsupported section (kind " << section.m_kind << ", version " << version << ") ignored";
+            break;
+         }
          default: LoadSharedEditableField(tag, reader); break;
          }
          return true;
@@ -1374,14 +2121,28 @@ void Ramp::AddPoint(const Vertex2D &v, const bool smooth)
    m_curve.OnPointsModified();
 }
 
+// FlipPointX/Y reverse the point order: hairpin ranges follow their points
+static void ReverseSectionAnchors(vector<RampSection> &sections, const int npts)
+{
+   for (RampSection &s : sections)
+      if (s.m_kind != RampSection::EntryFlap)
+      {
+         const int first = npts - 1 - s.m_last;
+         s.m_last = npts - 1 - s.m_first;
+         s.m_first = first;
+      }
+}
+
 void Ramp::FlipY(const Vertex2D& pvCenter)
 {
    m_curve.FlipPointY(pvCenter);
+   ReverseSectionAnchors(m_d.m_sections, (int)m_curve.GetPoints().size());
 }
 
 void Ramp::FlipX(const Vertex2D& pvCenter)
 {
    m_curve.FlipPointX(pvCenter);
+   ReverseSectionAnchors(m_d.m_sections, (int)m_curve.GetPoints().size());
 }
 
 void Ramp::Rotate(const float ang, const Vertex2D &center, const bool useElementCenter) { m_curve.RotatePoints(ang, useElementCenter ? GetCenter() : center); }
@@ -2008,7 +2769,8 @@ void Ramp::GenerateRampMesh(Vertex3D_NoTex2 **meshBuf)
    const Texture * const pin = m_ptable->GetImage(m_d.m_szImage);
    float *rgheight;
    float *rgratio = nullptr;
-   const Vertex2D * const rgvLocal = GetRampVertex(m_rampVertex, &rgheight, nullptr, (m_d.m_imagealignment == ImageModeWorld) ? nullptr : &rgratio, nullptr, -1, true);
+   bool *rgwall; // sectioned ramp: rows without walls get a zero height wall (they only meet walled rows on a zero length segment)
+   const Vertex2D * const rgvLocal = GetRampVertex(m_rampVertex, &rgheight, nullptr, (m_d.m_imagealignment == ImageModeWorld) ? nullptr : &rgratio, nullptr, -1, true, &rgwall);
 
    if (m_rampVertex == 0)
    {
@@ -2019,6 +2781,7 @@ void Ramp::GenerateRampMesh(Vertex3D_NoTex2 **meshBuf)
       delete[] rgvLocal;
       delete[] rgheight;
       delete[] rgratio;
+      delete[] rgwall;
       return;
    }
 
@@ -2125,7 +2888,7 @@ void Ramp::GenerateRampMesh(Vertex3D_NoTex2 **meshBuf)
 
          rgv3D[1].x = rgvLocal[i].x;
          rgv3D[1].y = rgvLocal[i].y;
-         rgv3D[1].z = rgheight[i] + m_d.m_rightwallheightvisible;
+         rgv3D[1].z = rgheight[i] + ((rgwall == nullptr || rgwall[i]) ? m_d.m_rightwallheightvisible : 0.f);
 
          if (pin && m_d.m_imageWalls)
          {
@@ -2164,7 +2927,7 @@ void Ramp::GenerateRampMesh(Vertex3D_NoTex2 **meshBuf)
 
          rgv3D[1].x = rgv3D[0].x;
          rgv3D[1].y = rgv3D[0].y;
-         rgv3D[1].z = rgheight[i] + m_d.m_leftwallheightvisible;
+         rgv3D[1].z = rgheight[i] + ((rgwall == nullptr || rgwall[i]) ? m_d.m_leftwallheightvisible : 0.f);
 
          if (pin && m_d.m_imageWalls)
          {
@@ -2199,6 +2962,7 @@ void Ramp::GenerateRampMesh(Vertex3D_NoTex2 **meshBuf)
    delete[] rgvLocal;
    delete[] rgheight;
    delete[] rgratio;
+   delete[] rgwall;
 }
 
 void Ramp::GenerateVertexBuffer()

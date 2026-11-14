@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 
 #include "core/ieditable.h"
@@ -178,7 +179,12 @@ public:
    {
       const auto it = std::ranges::find_if(m_dragpoints, [point](const std::unique_ptr<DragPoint> &p) { return p.get() == point; });
       if (it != m_dragpoints.end())
+      {
+         const int index = static_cast<int>(it - m_dragpoints.begin());
          m_dragpoints.erase(it);
+         if (m_onIndexShift)
+            m_onIndexShift(index, -1);
+      }
       OnPointsModified();
    }
 
@@ -191,8 +197,13 @@ public:
    void InsertPoint(size_t pos, std::unique_ptr<DragPoint> pdp)
    {
       m_dragpoints.insert(m_dragpoints.begin() + pos, std::move(pdp));
+      if (m_onIndexShift)
+         m_onIndexShift(static_cast<int>(pos), +1);
       OnPointsModified();
    }
+
+   // Optional owner callback for data anchored on point indices (index, +1 after an insert at index, -1 after a delete at index)
+   void SetIndexShiftListener(std::function<void(int, int)> listener) { m_onIndexShift = std::move(listener); }
 
    int GetPointIndex(const DragPoint *point) const
    {
@@ -207,6 +218,7 @@ public:
 private:
    IEditable *const m_owner;
    const int m_minPoints;
+   std::function<void(int, int)> m_onIndexShift;
 
    vector<std::unique_ptr<DragPoint>> m_dragpoints;
 
