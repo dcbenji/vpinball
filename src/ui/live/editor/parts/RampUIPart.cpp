@@ -123,6 +123,7 @@ void RampUIPart::UpdatePropertyPane(PropertyPane& props)
    props.EditableHeader("Ramp"s, m_part);
 
    UpdateCurveSection(props);
+   UpdateSectionsSection(props);
 
    if (props.BeginSection("Visuals"s))
    {
@@ -245,6 +246,126 @@ void RampUIPart::UpdatePropertyPane(PropertyPane& props)
    }
 
    props.TimerSection(m_part);
+}
+
+// Section i of the ramp when it is of the given kind (index based: co-edited ramps without the same section are left alone)
+static RampSection* SectionAt(Ramp* ramp, size_t i, int kind) { return (i < ramp->m_d.m_sections.size() && ramp->m_d.m_sections[i].m_kind == kind) ? &ramp->m_d.m_sections[i] : nullptr; }
+static const RampSection* SectionAt(const Ramp* ramp, size_t i, int kind)
+{
+   return (i < ramp->m_d.m_sections.size() && ramp->m_d.m_sections[i].m_kind == kind) ? &ramp->m_d.m_sections[i] : nullptr;
+}
+
+void RampUIPart::UpdateSectionsSection(PropertyPane& props)
+{
+   if (!props.BeginSection("Sections"s))
+      return;
+   const Ramp* const ramp = props.GetEditedPart(m_part);
+   if (ramp->m_d.m_type != RampTypeFlat)
+   {
+      ImGui::TextWrapped("Sections (entry interface, hairpin) apply to flat ramps.");
+      props.EndSection();
+      return;
+   }
+
+   // Creation: the start edge of the ramp as an interface; the selected interior point(s) as a hairpin
+   ImGui::BeginDisabled(!ramp->CanAddEntryInterface());
+   props.Button<Ramp>(
+      m_part, "Make Entry Interface"s, [](Ramp* r) { r->AddEntryInterface(); },
+      "Mark the ramp's start edge (its first point) as an interface: a shallow flap leads from the playfield onto the ramp");
+   ImGui::EndDisabled();
+   int first = INT_MAX, last = -1;
+   bool consecutive = false;
+   if (GetPointEditContext() != nullptr && !GetPointEditContext()->IsCenterEditMode() && !GetPointEditContext()->GetSelectedPoints().empty())
+   {
+      for (const DragPoint* point : GetPointEditContext()->GetSelectedPoints())
+      {
+         const int index = ramp->m_curve.GetPointIndex(point) >= 0 ? ramp->m_curve.GetPointIndex(point) : m_part->m_curve.GetPointIndex(point);
+         first = min(first, index);
+         last = max(last, index);
+      }
+      consecutive = first >= 0 && (last - first + 1) == (int)GetPointEditContext()->GetSelectedPoints().size();
+   }
+   ImGui::BeginDisabled(!consecutive || !ramp->CanAddHairpin(first, last));
+   props.Button<Ramp>(
+      m_part, "Make Hairpin Section"s, [first, last](Ramp* r) { r->AddHairpin(first, last); },
+      "Turn the selected interior point(s) of the path into a hairpin: each corner becomes an arc of one radius, with separate face counts for the outside and inside walls (point edit mode: select the corner point, or the consecutive corner points of a U-turn)");
+   ImGui::EndDisabled();
+
+   const vector<RampSectionStatus> status = ramp->GetSectionStatus();
+   for (size_t i = 0; i < ramp->m_d.m_sections.size(); i++)
+   {
+      const RampSection& section = ramp->m_d.m_sections[i];
+      const RampSectionStatus& st = status[i];
+      ImGui::PushID((int)i);
+      if (section.m_kind == RampSection::EntryFlap)
+      {
+         props.Separator("Entry Interface"s);
+         props.SliderFloat<Ramp>(
+            m_part, "Starts Ahead (VPU)"s, 0.f, 200.f, "%.0f", //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapAhead : 0.f; }, //
+            [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapAhead = max(0.f, v); },
+            "How far ahead of the ramp foot the flap starts on the playfield");
+         props.SliderFloat<Ramp>(
+            m_part, "Lands Up Ramp (VPU)"s, 1.f, 300.f, "%.0f", //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapUp : 0.f; }, //
+            [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapUp = max(1.f, v); },
+            "How far up the ramp (along its path) the flap meets the ramp floor; the flap replaces the ramp floor below that");
+         props.SliderFloat<Ramp>(
+            m_part, "Bow (VPU)"s, 0.f, 40.f, "%.1f", //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBow : 0.f; }, //
+            [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBow = max(0.f, v); },
+            "How far the flap dips below the straight line between its two ends (0 = flat flap). Capped so the front edge starts at most about 6 deg downhill and the flap goes at most 5 VPU below the foot");
+         props.SliderFloat<Ramp>(
+            m_part, "Bow Position"s, 0.f, 1.f, "%.2f", //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBowPos : 0.5f; }, //
+            [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBowPos = clamp(v, 0.f, 1.f); },
+            "Where along the flap its low point sits: 0 = at the front edge on the playfield, 1 = at the landing point (used range 0.1 to 0.9)");
+         if (st.m_applied)
+            ImGui::TextWrapped("Front edge %.1f deg %s, bow %.1f VPU, %.1f VPU below the foot at most", fabsf(st.m_entryAngle), st.m_entryAngle < 0.f ? "downhill" : "uphill", st.m_bow, st.m_sink);
+      }
+      else if (section.m_kind == RampSection::Hairpin)
+      {
+         props.Separator(section.m_first == section.m_last ? "Hairpin at Point " + std::to_string(section.m_first) : "Hairpin, Points " + std::to_string(section.m_first) + " to " + std::to_string(section.m_last));
+         const float minRadius = max(ramp->m_d.m_widthbottom, ramp->m_d.m_widthtop) * 0.5f + 1.f;
+         props.SliderFloat<Ramp>(
+            m_part, "Radius (VPU)"s, minRadius, max(minRadius * 4.f, 300.f), "%.0f", //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::Hairpin); return s ? s->m_radius : 0.f; }, //
+            [i, minRadius](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::Hairpin)) s->m_radius = max(minRadius, v); },
+            "Radius of the turn at the path centre. Its minimum, half the ramp width + 1, keeps the inside wall from folding");
+         props.SliderInt<Ramp>(
+            m_part, "Outside Faces"s, 1, 48, //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::Hairpin); return s ? s->m_outerFaces : 0; }, //
+            [i](Ramp* r, int v) { if (RampSection* s = SectionAt(r, i, RampSection::Hairpin)) s->m_outerFaces = clamp(v, 1, 256); },
+            "Number of faces of the outside wall over the whole turn");
+         props.SliderInt<Ramp>(
+            m_part, "Inside Faces"s, 1, 48, //
+            [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::Hairpin); return s ? s->m_innerFaces : 0; }, //
+            [i](Ramp* r, int v) { if (RampSection* s = SectionAt(r, i, RampSection::Hairpin)) s->m_innerFaces = clamp(v, 1, 256); },
+            "Number of faces of the inside wall over the whole turn (the inside is shorter: it usually takes fewer)");
+         if (st.m_applied)
+         {
+            if (st.m_radius + 0.5f < section.m_radius)
+               ImGui::TextWrapped("Radius limited to %.0f VPU by the neighbouring points", st.m_radius);
+            else
+               ImGui::TextWrapped("Inside wall radius %.0f VPU", st.m_radius - (st.m_minRadius - 1.f));
+         }
+      }
+      if (!st.m_message.empty())
+      {
+         ImGui::PushStyleColor(ImGuiCol_Text, st.m_applied ? ImVec4(0.9f, 0.75f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.35f, 1.f));
+         ImGui::TextWrapped("%s%s", st.m_applied ? "" : "Not applied: ", st.m_message.c_str());
+         ImGui::PopStyleColor();
+      }
+      props.Button<Ramp>(
+         m_part, "Remove Section"s,
+         [i, kind = section.m_kind](Ramp* r)
+         {
+            if (SectionAt(r, i, kind))
+               r->m_d.m_sections.erase(r->m_d.m_sections.begin() + i);
+         });
+      ImGui::PopID();
+   }
+   props.EndSection();
 }
 
 void RampUIPart::UpdatePointZField(PropertyPane& props, DragPoint* point)
