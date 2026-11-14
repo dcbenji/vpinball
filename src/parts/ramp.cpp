@@ -937,7 +937,9 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
       int seg;
       float t;
       at(b, seg, t);
-      const float z0 = 0.f; // the front edge lies on the playfield, whatever the ramp's bottom height: the flap is the interface from it
+      // Start height (interim rule, a question for Ben): a ramp whose foot is at most 5 VPU up starts from the playfield (the flap removes
+      // that lip); a higher foot stands on something else (an upper playfield, a raised surface), so the flap starts at the foot height
+      const float z0 = (rows.height[0] <= 5.f) ? 0.f : rows.height[0];
       const float z2 = rows.height[seg] + (rows.height[seg + 1] - rows.height[seg]) * t;
       const float L = a + b;
       const float cs = (z2 - z0) / L;
@@ -1010,7 +1012,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
          st.m_entryAngle = RADTOANG(atanf(cs - 2.f * bow / (f * L)));
          st.m_sink = z0 - zMin;
          if (bow + 0.01f < s.m_flapBow)
-            st.m_message = "Bow capped (front edge at most 6 deg downhill, at most 5 VPU below the playfield)";
+            st.m_message = "Bow capped (front edge at most 6 deg downhill, at most 5 VPU below its start)";
          else if (b + 0.01f < s.m_flapUp)
             st.m_message = "Landing limited to the straight run before a hairpin / 90% of the ramp";
       }
