@@ -620,6 +620,32 @@ static void CheckSameTableContent(const PinTable *table, const PinTable *reloade
 }
 
 
+// Golden file: a small table with a flat ramp (smooth and sharp points, point heights, tapered, different wall heights) and a wire ramp,
+// saved by master 4529d3ea4 (VPinballX -Convert from a pack). Loading it and saving it again must give master's bytes back: this checks
+// that ramp changes do not touch the saved data of ramps that do not use them. The same test passes on the master build itself.
+TEST_CASE("Ramp table saved by master re-saves to the same bytes")
+{
+   std::error_code ec;
+   const std::filesystem::path golden = GetAssetPath() / "ramp-master-4529d3ea4.vpx";
+   const std::filesystem::path out = GetTmpDir() / "ramp-master-resave.vpx";
+   std::filesystem::remove(out, ec);
+
+   CComObject<PinTable> *table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(golden, feedback)));
+   int ramps = 0;
+   for (const IEditable *part : table->GetParts())
+      ramps += (part->GetItemType() == eItemRamp) ? 1 : 0;
+   CHECK(ramps == 2);
+   table->m_filename = out;
+   CHECK(SUCCEEDED(table->Save(feedback)));
+   table->Release();
+
+   CompareStorageFiles(golden, out, { "TableInfo/TableSaveDate", "TableInfo/TableSaveRev" });
+}
+
 TEST_CASE("Table save adds the .vpx extension")
 {
    std::error_code ec;
