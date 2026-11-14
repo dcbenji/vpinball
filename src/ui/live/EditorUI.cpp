@@ -1538,6 +1538,7 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    case LastOperation::Type::Rotate: return "Rotate";
    case LastOperation::Type::Scale: return "Scale";
    case LastOperation::Type::CurveEdit: return "Edit Curve"; // The panel shows the name of the tool
+   case LastOperation::Type::CircleWall: return "Add Round Wall";
    case LastOperation::Type::None: break;
    }
    return "";
@@ -1680,6 +1681,7 @@ void EditorUI::ApplyLastOperation()
       break;
    }
    case LastOperation::Type::CurveEdit: CurveEditOp::Reapply(*this); return;
+   case LastOperation::Type::CircleWall: CircleWallOp::Reapply(*this); return;
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
@@ -1782,6 +1784,7 @@ bool EditorUI::RenderAdjustParameters()
       break;
    }
    case LastOperation::Type::CurveEdit: changed |= m_lastOp.tool->RenderParameters(*m_lastOp.pointPart, row); break;
+   case LastOperation::Type::CircleWall: changed |= CircleWallOp::RenderParameters(row); break;
    case LastOperation::Type::None: break;
    }
    ImGui::PopItemWidth();
@@ -2259,7 +2262,11 @@ void EditorUI::EnsureAddPartButtons()
       { eItemLightSeq, "Light Seq", false }, //
    };
    for (const auto &def : addParts)
+   {
       m_addPartButtons.push_back({ def.type, def.name, PartTypeIcon(def.type), {}, def.newGroup });
+      if (def.type == eItemSurface) // Add Part > Round Wall, in the passive colliders group
+         m_addPartButtons.push_back({ eItemSurface, "Round Wall", PartTypeIcon(eItemSurface), [this]() { CircleWallOp::Arm(*this); } });
+   }
    // Add-ons that are not part types: picking them runs their action instead of arming add part mode
    m_addPartButtons.push_back({ eItemInvalid, "Reference Image", PartTypeIcon(eItemInvalid), [this]() { m_referenceImageOp.OpenAddDialog(); }, true });
 }
@@ -2290,6 +2297,7 @@ void EditorUI::RenderAddPartPicker()
       ImGui::PushID(button.name);
       if (ImGui::Selectable("##part", false, 0, ImVec2(rowWidth, rowHeight)))
       {
+         CircleWallOp::Disarm();
          if (button.action)
             button.action();
          else
@@ -2347,6 +2355,8 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
       m_lastOp.base = Vertex3Ds(0.f, 0.f, placed._43);
       m_lastOp.offset = Vertex3Ds(placed._41, placed._42, 0.f);
    }
+   if (type == eItemSurface)
+      CircleWallOp::OnCreated(*this, pie, pos); // Add Part > Round Wall
 }
 
 PartGroup *EditorUI::CreatePartGroup(PartGroup *parent)
