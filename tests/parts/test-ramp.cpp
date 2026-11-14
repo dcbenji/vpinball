@@ -495,6 +495,23 @@ TEST_CASE("Ramp sections")
       ramp->m_d.m_heightbottom = 0.f;
       ramp->m_d.m_heighttop = 100.f;
 
+      // A landing below the start would leave a step (the flap may not go below its start): refused, the plain foot is kept.
+      // Descending ramp from a raised foot, and a foot below the playfield still under it at the landing
+      for (const auto& [bottom, top] : { std::pair { 50.f, 0.f }, std::pair { -3.f, 0.f } })
+      {
+         ramp->m_d.m_heightbottom = bottom;
+         ramp->m_d.m_heighttop = top;
+         const RampSectionStatus refused = ramp->GetSectionStatus()[0];
+         CAPTURE(bottom);
+         CHECK_FALSE(refused.m_applied);
+         CHECK_FALSE(refused.m_message.empty());
+         const Rows rr = GetRows(ramp);
+         CHECK(rr.height[0] == doctest::Approx(bottom));
+         CHECK(rr.right[0].y == doctest::Approx(1500.f));
+      }
+      ramp->m_d.m_heightbottom = 0.f;
+      ramp->m_d.m_heighttop = 100.f;
+
       // Defaults suit a foot a couple of VPU up: a short flap with a small bow
       ramp->m_d.m_sections.clear();
       REQUIRE(ramp->AddEntryInterface());

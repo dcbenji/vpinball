@@ -359,7 +359,7 @@ void RampUIPart::UpdateSectionsSection(PropertyPane& props)
             m_part, "Bow Position"s, 0.f, 1.f, "%.2f", //
             [i](const Ramp* r) { const RampSection* s = SectionAt(r, i, RampSection::EntryFlap); return s ? s->m_flapBowPos : 0.5f; }, //
             [i](Ramp* r, float v) { if (RampSection* s = SectionAt(r, i, RampSection::EntryFlap)) s->m_flapBowPos = clamp(v, 0.f, 1.f); },
-            "Where along the flap its low point sits: 0 = at the front edge on the playfield, 1 = at the landing point. Values under 0.1 act as 0.1 and values over 0.9 as 0.9 (the curve needs room on both sides of its low point)");
+            "Where along the flap its deepest dip below the straight line between its ends sits: 0 = at the front edge, 1 = at the landing point. Only 0.1 to 0.9 is used: lower values act as 0.1, higher ones as 0.9 (the curve needs room on both sides of the dip)");
          if (st.m_applied)
             ImGui::TextWrapped("Front edge %.1f deg %s, bow %.1f VPU", fabsf(st.m_entryAngle), st.m_entryAngle < 0.f ? "downhill" : "uphill", st.m_bow);
       }
