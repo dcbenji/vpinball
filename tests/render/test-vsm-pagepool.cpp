@@ -1,6 +1,6 @@
 // license:GPLv3+
 
-// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache
+// Headless tests of the VSM bookkeeping (renderer/VSMPagePool): shadow slot policy, per caster coverage cache, page culling
 
 #include "core/stdafx.h"
 #include "../vpx-test.h"
@@ -347,4 +347,81 @@ TEST_CASE("VSM coverage cache")
    cov.Mark(casters, true, needed.data(), dirty.data());
    CHECK(needed == refNeeded);
    CHECK(dirty == refDirty);
+}
+
+// Per page caster culling is only safe if a caster that rasterizes into a page (projected with the page's view and zoomed
+// projection, as the page render does) always has that page in its undilated coverage. Checked with point casters.
+TEST_CASE("VSM page culling matches the page projections")
+{
+   std::mt19937 rng(23);
+   std::uniform_real_distribution<float> d(-400.f, 400.f);
+   const float zNear = 2.f, zFar = 500.f;
+   const Vertex3Ds lightPos(500.f, 1000.f, 60.f);
+   VSM::Coverage cov;
+   int light = 0;
+   std::vector<VSM::Caster> casters(1);
+   int insideCube = 0;
+   for (int n = 0; n < 4000; n++)
+   {
+      const Vertex3Ds p(lightPos.x + d(rng), lightPos.y + d(rng), lightPos.z + d(rng) * 0.3f);
+      casters[0].boundsMin = p - Vertex3Ds(0.01f, 0.01f, 0.01f);
+      casters[0].boundsMax = p + Vertex3Ds(0.01f, 0.01f, 0.01f);
+      casters[0].version++;
+      cov.UpdateCube(&light, lightPos, zNear, 1, casters);
+      for (int face = 0; face < 6; face++)
+      {
+         const Matrix3D view = Matrix3D::MatrixLookAtRH(lightPos, lightPos + VSM::CUBE_FACE_FWD[face], VSM::CUBE_FACE_UP[face]);
+         const Vertex3Ds v = view.MultiplyVectorNoPerspective(p);
+         if (-v.z <= zNear * 1.01f)
+            continue; // behind the face's near plane
+         for (int py = 0; py < VSM::CUBE_FACE_GRID; py++)
+            for (int px = 0; px < VSM::CUBE_FACE_GRID; px++)
+            {
+               const Matrix3D vp = view * Matrix3D::MatrixPerspectiveFovRH(90.f, 1.f, zNear, zFar) * VSM::PageZoomMatrix(px, py, VSM::CUBE_FACE_GRID, VSM::CUBE_FACE_GRID);
+               const Vertex3Ds ndc = vp * p;
+               if (fabsf(ndc.x) < 0.98f && fabsf(ndc.y) < 0.98f)
+               {
+                  insideCube++;
+                  const int vpage = face * VSM::CUBE_FACE_GRID * VSM::CUBE_FACE_GRID + py * VSM::CUBE_FACE_GRID + px;
+                  CHECK(cov.InPage(0, vpage));
+               }
+            }
+      }
+   }
+   CHECK(insideCube > 3000); // nearly every point lands in some page
+
+   // Ortho (light above the glass): view * fitted ortho box * page zoom
+   const Vertex3Ds keyPos(500.f, 1000.f, 2400.f);
+   const Matrix3D view = Matrix3D::MatrixLookAtRH(keyPos, Vertex3Ds(500.f, 1000.f, 0.f), Vertex3Ds(0.f, -1.f, 0.f));
+   const float l = -700.f, r = 700.f, b = -1300.f, t = 1300.f;
+   constexpr int gw = 9, gh = 16;
+   const Matrix3D proj = Matrix3D::MatrixOrthoOffCenterRH(l, r, b, t, -100.f, -3000.f);
+   int insideOrtho = 0;
+   for (int n = 0; n < 2000; n++)
+   {
+      const Vertex3Ds p(500.f + d(rng) * 1.7f, 1000.f + d(rng) * 3.f, fabsf(d(rng)) * 0.5f);
+      casters[0].boundsMin = p - Vertex3Ds(0.01f, 0.01f, 0.01f);
+      casters[0].boundsMax = p + Vertex3Ds(0.01f, 0.01f, 0.01f);
+      casters[0].version++;
+      cov.UpdateOrtho(&light, keyPos, view, l, r, b, t, gw, gh, 2, 1, casters);
+      for (int py = 0; py < gh; py++)
+         for (int px = 0; px < gw; px++)
+         {
+            const Vertex3Ds ndc = (view * proj * VSM::PageZoomMatrix(px, py, gw, gh)) * p;
+            if (fabsf(ndc.x) < 0.98f && fabsf(ndc.y) < 0.98f)
+            {
+               insideOrtho++;
+               CHECK(cov.InPage(0, py * gw + px));
+            }
+         }
+   }
+   CHECK(insideOrtho > 1000);
+
+   // A caster without bounds is drawn into every page
+   casters[0].boundsMin = casters[0].boundsMax = Vertex3Ds(0.f, 0.f, 0.f);
+   casters[0].noBounds = true;
+   casters[0].version++;
+   cov.UpdateCube(&light, lightPos, zNear, 1, casters);
+   for (int vpage = 0; vpage < 24; vpage++)
+      CHECK(cov.InPage(0, vpage));
 }

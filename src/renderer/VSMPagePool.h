@@ -30,6 +30,20 @@ constexpr int PAGETABLE_W = 512; // tex_vsm_pagetables texture width in texels (
 constexpr int LAYOUT_ORTHO = 0; // ortho virtual map: gridW x gridH pages over the fitted light-space box
 constexpr int LAYOUT_CUBE = 2; // cube virtual map: 6 faces of CUBE_FACE_GRID^2 pages (layout ids kept for fs_pbr)
 
+// Clip-space transform zooming a whole-map projection into a single page: page (px, py) of a gridW x gridH virtual map becomes
+// the full NDC box. Composed on the right of the light's projection (pageVP = view * proj * PageZoomMatrix), so page depth is
+// the map's depth unchanged. Page (0, 0) is the top left (+y NDC) one, as the coverage marking and fs_pbr index them.
+inline Matrix3D PageZoomMatrix(const int px, const int py, const int gridW, const int gridH)
+{
+   Matrix3D zoom;
+   zoom.SetIdentity();
+   zoom._11 = (float)gridW;
+   zoom._22 = (float)gridH;
+   zoom._41 = (float)(gridW - 1 - 2 * px);
+   zoom._42 = (float)(1 - gridH + 2 * py);
+   return zoom;
+}
+
 // Forward/up axes of the 6 cube faces, matching the rasterization lookAt calls and the
 // pbr_shadow_cube_lookup face order in fs_pbr (+X, -X, +Y, -Y, +Z, -Z)
 extern const Vertex3Ds CUBE_FACE_FWD[6];
@@ -158,7 +172,7 @@ struct Caster
    void* part = nullptr;
    bool isStatic = false;
    bool active = true; // false: never drawn in the shadow pass (invisible wall): marks no page
-   bool noBounds = false; // the part gave no bounds (collapsed to the origin): drawn into every page
+   bool noBounds = false; // not culled per page (no bounds, or bounds that may not hold what it draws): drawn into every page
    Vertex3Ds boundsMin, boundsMax;
    unsigned int version = 0;
 };

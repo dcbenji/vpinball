@@ -939,9 +939,11 @@ void Primitive::Render(const unsigned int renderMask)
             return;
          if (translucent)
             m_renderer->BindTranslucentShadowCaster(mat, m_ptable->GetImage(m_d.m_szImage), m_d.m_alpha / 100.f);
-         m_renderer->UpdateBasicShaderMatrix(RecalculateMatrices());
-         m_renderer->m_renderDevice->DrawMesh(
-            m_renderer->m_renderDevice->m_basicShader, false, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, (uint32_t)m_mesh.NumIndices());
+         // A group head's mesh buffer holds the whole group, already in world space (members skip): identity and every index,
+         // as the main pass draws it (it was drawn under the head's matrix with the head's own index count: a misplaced ghost)
+         m_renderer->UpdateBasicShaderMatrix(m_groupdRendering ? Matrix3D::MatrixIdentity() : RecalculateMatrices());
+         m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0,
+            m_groupdRendering ? (uint32_t)m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
       }
       return;
    }

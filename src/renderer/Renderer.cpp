@@ -1510,20 +1510,6 @@ void Renderer::CreateVSMPagePoolTargets()
    }
 }
 
-// Clip-space transform zooming a whole-map projection into a single page: page (px, py) of a
-// gridW x gridH virtual map becomes the full NDC box. Composed on the right of the light's
-// projection (pageVP = view * proj * PageZoom), so page depth is the map's depth unchanged.
-static Matrix3D PageZoomMatrix(const int px, const int py, const int gridW, const int gridH)
-{
-   Matrix3D zoom;
-   zoom.SetIdentity();
-   zoom._11 = (float)gridW;
-   zoom._22 = (float)gridH;
-   zoom._41 = (float)(gridW - 1 - 2 * px);
-   zoom._42 = (float)(1 - gridH + 2 * py);
-   return zoom;
-}
-
 // World-space AABB of a shadow caster part: precise bounding vertices for static casters, a
 // conservative box built from the part's public data (center + size fields) for dynamic ones.
 Vertex3Ds Renderer::GetShadowCasterBoundsMin(IEditable* const part, Vertex3Ds& boundsMax) const
@@ -1535,7 +1521,7 @@ Vertex3Ds Renderer::GetShadowCasterBoundsMin(IEditable* const part, Vertex3Ds& b
    case eItemPrimitive:
    {
       // The 8 corners of the mesh's local box under the draw matrix: Primitive::GetBoundingVertices transforms only the min and
-      // max corners, which under a rotation is not a bound of the mesh
+      // max corners, which under a rotation is not a bound of the mesh (the per page caster culling needs a true bound)
       Primitive* const p = static_cast<Primitive*>(part);
       if (p->m_d.m_visible && p->m_mesh.NumVertices() > 0)
       {
@@ -1634,6 +1620,30 @@ Vertex3Ds Renderer::GetShadowCasterBoundsMin(IEditable* const part, Vertex3Ds& b
       boundsMin = boundsMax = Vertex3Ds(0.f, 0.f, 0.f);
    }
    return boundsMin;
+}
+
+// Per page caster culling trusts a caster's bounds to hold everything its shadow pass draws. Only playfield space primitives (the
+// 8 corners of the mesh box under the draw matrix) and walls (table rectangle x bottom..top) give such bounds. Not the others:
+// - parts in a Cabinet, Cabinet feet or Room part group are drawn under the playfield-to-cabinet matrix (a ~1,500 VPU z shift)
+//   that their bounds ignore;
+// - ramps and rubbers have loose bounds (no ramp walls, rubber thickness or rotation);
+// - flipper, bumper, gate, spinner, trigger, plunger and target boxes start at z 0 and ignore the surface they stand on (a gate
+//   on a ramp falls outside its box);
+// - a primitive group head draws the whole group (its members draw nothing);
+// - a vertex animated primitive draws its current animation frame, its bounds are the rest pose's.
+// These are drawn into every page their light allocates (a handful of draws: the static primitives are the bulk). Their bounds
+// still choose which pages get allocated, as before per page culling.
+static bool IsPageCullableShadowCaster(const IEditable* const part)
+{
+   const ItemTypeEnum type = part->GetItemType();
+   if (type != eItemPrimitive && type != eItemSurface)
+      return false;
+   if (type == eItemPrimitive && static_cast<const Primitive*>(part)->IsGroupRendered())
+      return false; // a group head draws the whole group: its own bounds do not hold it
+   if (type == eItemPrimitive && !static_cast<const Primitive*>(part)->m_mesh.m_animationFrames.empty())
+      return false; // vertex animated: drawn at its current frame, its bounds are the rest pose's
+   const PartGroup* const group = part->GetPartGroup();
+   return (group ? group->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD) == PartGroupData::SpaceReference::SR_PLAYFIELD;
 }
 
 // Mirrors each caster part's SHADOW_MAP branch gating: true when the part draws under
@@ -1769,7 +1779,8 @@ void Renderer::UpdateVirtualShadowMaps()
             c.part = part;
             c.isStatic = IsStaticShadowCaster(part);
             c.boundsMin = GetShadowCasterBoundsMin(part, c.boundsMax);
-            c.noBounds = c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f;
+            c.noBounds = (c.boundsMin.x == 0.f && c.boundsMin.y == 0.f && c.boundsMin.z == 0.f && c.boundsMax.x == 0.f && c.boundsMax.y == 0.f && c.boundsMax.z == 0.f)
+               || !IsPageCullableShadowCaster(part);
             m_vsmCasters.push_back(c);
             break;
          }
@@ -1793,7 +1804,7 @@ void Renderer::UpdateVirtualShadowMaps()
          {
             c.boundsMin = bMin;
             c.boundsMax = bMax;
-            c.noBounds = bMin.x == 0.f && bMin.y == 0.f && bMin.z == 0.f && bMax.x == 0.f && bMax.y == 0.f && bMax.z == 0.f;
+            c.noBounds = (bMin.x == 0.f && bMin.y == 0.f && bMin.z == 0.f && bMax.x == 0.f && bMax.y == 0.f && bMax.z == 0.f) || !IsPageCullableShadowCaster(part);
             c.version++;
          }
       }
@@ -2131,13 +2142,13 @@ void Renderer::UpdateVirtualShadowMaps()
             const float zNear = 2.f; // must match PBR_SHADOW_NEAR_ZN in fs_pbr.sc
             const float zFar = std::max(light->m_d.m_falloff, 60.f);
             job.view = Matrix3D::MatrixLookAtRH(lPos, lPos + VSM::CUBE_FACE_FWD[face], VSM::CUBE_FACE_UP[face]);
-            job.proj = Matrix3D::MatrixPerspectiveFovRH(90.f, 1.f, zNear, zFar) * PageZoomMatrix(px, py, map.gridW, map.gridH);
+            job.proj = Matrix3D::MatrixPerspectiveFovRH(90.f, 1.f, zNear, zFar) * VSM::PageZoomMatrix(px, py, map.gridW, map.gridH);
          }
          else
          {
             const int px = vp % map.gridW, py = vp / map.gridW;
             job.view = lightView;
-            job.proj = lightProj * PageZoomMatrix(px, py, map.gridW, map.gridH);
+            job.proj = lightProj * VSM::PageZoomMatrix(px, py, map.gridW, map.gridH);
          }
          jobs.push_back(job);
       }
@@ -2185,9 +2196,12 @@ void Renderer::UpdateVirtualShadowMaps()
          shadowView->m_mvp.SetProj(eye, job.proj);
       }
       shadowView->SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true); // the page's view (a cabinet part of the last page left it on the cabinet's)
-      for (const VSM::Caster& caster : casters)
-         if (caster.active)
-            RenderItem(static_cast<IEditable*>(caster.part), true);
+      // Per page caster culling: only the casters whose bounds project into this page (a cube page sees a 45 deg wedge: drawing
+      // every caster made a 24 page map rebuild ~5,000 draws on Ripley's Redux)
+      const VSM::Coverage& cov = m_vsmCoverage[job.index];
+      for (size_t i = 0; i < casters.size(); i++)
+         if (casters[i].active && cov.InPage(i, job.vpage))
+            RenderItem(static_cast<IEditable*>(casters[i].part), true);
       // Translucent casters (PBR plastics with a transmission, clear parts) do not block: they tint and attenuate the light
       // through the page's transmittance layer, max blended (strongest absorbance, nearest caster), depth tested against
       // the opaque casters. Linear depth is normalized over the light's depth range (ortho: near..far, cube: 0..far).
@@ -2203,13 +2217,13 @@ void Renderer::UpdateVirtualShadowMaps()
          m_renderDevice->SetRenderState(RenderState::SRCBLEND, RenderState::ONE);
          m_renderDevice->SetRenderState(RenderState::DESTBLEND, RenderState::ONE);
          m_render_mask |= SHADOW_TRANS;
-         for (const VSM::Caster& caster : casters)
-            switch (caster.active ? static_cast<IEditable*>(caster.part)->GetItemType() : eItemInvalid)
+         for (size_t i = 0; i < casters.size(); i++)
+            switch (casters[i].active && cov.InPage(i, job.vpage) ? static_cast<IEditable*>(casters[i].part)->GetItemType() : eItemInvalid)
             {
             case eItemPrimitive:
             case eItemRamp:
             case eItemRubber:
-            case eItemSurface: RenderItem(static_cast<IEditable*>(caster.part), true); break;
+            case eItemSurface: RenderItem(static_cast<IEditable*>(casters[i].part), true); break;
             default: break;
             }
       }

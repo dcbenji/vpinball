@@ -266,6 +266,7 @@ public:
       const std::filesystem::path &filename, const MeshUnits units, const bool importAbsolutePosition, const bool centerMesh, const bool importMaterial, const bool importAnimation, const bool doForsyth);
 
    bool IsPlayfield() const { return StrCompareNoCase(m_name, "playfield_mesh"s); }
+   bool IsGroupRendered() const { return m_groupdRendering; } // head of a static render group: its mesh buffer holds the whole group, in world space
 
    float GetAlpha() const { return m_d.m_alpha; }
    void SetAlpha(const float value) { m_d.m_alpha = max(value, 0.f); }
