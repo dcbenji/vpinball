@@ -564,6 +564,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
          Plan plan { si, s.m_first, s.m_last, s.m_radius, {} };
          vector<float> turns, tans;
          vector<Vertex2D> d1s, d2s;
+         vector<int> corners; // the points of the range that turn (a point under 1 deg inside a longer range is a straight run)
          string fail;
          float totalTurn = 0.f;
          for (int k = s.m_first; k <= s.m_last && fail.empty(); k++)
@@ -579,7 +580,10 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
             d2 = d2 * (1.f / len2);
             const float turn = atan2f(Cross2(d1, d2), d1.Dot(d2));
             if (fabsf(turn) < ANGTORAD(1.f))
-               fail = "The path does not turn at point " + std::to_string(k);
+            {
+               if (s.m_first == s.m_last)
+                  fail = "The path does not turn at point " + std::to_string(k);
+            }
             else if (fabsf(turn) > ANGTORAD(178.f))
                fail = "The path doubles back at point " + std::to_string(k) + ": spread the turn over two points";
             else
@@ -591,9 +595,12 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
                tans.push_back(tn);
                d1s.push_back(d1);
                d2s.push_back(d2);
+               corners.push_back(k);
                totalTurn += turn;
             }
          }
+         if (fail.empty() && corners.empty())
+            fail = "The path does not turn over these points";
          if (!fail.empty())
          {
             report(si, fail);
@@ -634,7 +641,7 @@ bool Ramp::BuildSectionedRows(SectionRows &rows, vector<RampSectionStatus> *stat
             report(si, "Outside faces raised to " + std::to_string(outerTotal) + " so the floor does not fold over the inside wall");
          for (size_t c = 0; c < turns.size(); c++)
          {
-            const Vertex2D p = cpPos(s.m_first + (int)c);
+            const Vertex2D p = cpPos(corners[c]);
             const float setback = plan.radius * tans[c];
             Corner corner;
             corner.t1 = p - d1s[c] * setback;
