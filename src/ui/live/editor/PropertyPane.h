@@ -60,6 +60,8 @@ public:
    // Multi-edit support: the other parts of a uniform-type selection, co-edited with the pane's one.
    // When set, fields show a mixed ("-") state for diverging values and edits apply to every part.
    void SetCoEditedParts(const vector<IEditable*>& parts) { m_coEdited = parts; }
+   // While set, fields show no copy-to-live/startup button (the other version has no matching data to copy into)
+   void SetSyncSuppressed(bool suppressed) { m_syncSuppressed = suppressed; }
    bool IsMultiEdit() const { return !m_coEdited.empty(); }
    int GetEditCount() const { return static_cast<int>(m_coEdited.size()) + 1; }
 
@@ -227,6 +229,7 @@ private:
 
    Unit m_lengthUnit = Unit::None;
    bool m_showStartup = false;
+   bool m_syncSuppressed = false;
    PinTable* const m_table;
    vector<IEditable*> m_coEdited; // Other parts of a uniform-type selection, co-edited with the pane's object
    bool m_lockScope = false; // The pane of a locked part is disabled (open scope, closed by EndEditScope)
@@ -304,7 +307,7 @@ void PropertyPane::EndSyncField(const SyncField<T>& sync, const vector<CoTarget<
    if (ImGui::IsItemDeactivated() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
       m_editCancelled = true;
    const bool hasOthers = (sync.other != nullptr) || std::ranges::any_of(targets, [](const CoTarget<T>& target) { return target.other != nullptr; });
-   if (!hasOthers)
+   if (!hasOthers || m_syncSuppressed)
       return;
    ImGui::SetCursorScreenPos(m_syncPos);
    const bool synced = (sync.other == nullptr || displayValue == getter(sync.other))
