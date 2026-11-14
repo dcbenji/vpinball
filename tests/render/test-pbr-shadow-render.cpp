@@ -397,3 +397,99 @@ TEST_CASE("PBR static shadow cache bakes the live shadow [render]")
 
    ResetVPX();
 }
+
+#if defined(ENABLE_BGFX)
+// Plays the shadow table (static shadowed lights, so the static shadow cache bakes) with the primary view plus extraViews editor views
+// on the playfield window. Counts over 200 frames how many times the scene level PBR work (shadow map pages, static shadow cache, light
+// list) ran, and how many cache bakes were submitted by then
+static void CountPBRFrameBuilds(const std::filesystem::path& tableFile, const int extraViews, uint64_t& frames, uint64_t& builds, uint64_t& viewPasses, uint64_t& bakes)
+{
+   struct CountState
+   {
+      uint64_t frame0 = 0, builds0 = 0, passes0 = 0, frames = 0, builds = 0, passes = 0, bakes = 0;
+      bool started = false, done = false;
+   } state;
+   msgpi_msg_callback onPrepareFrame = [](const unsigned int msgId, void* context, void* msgData)
+   {
+      CountState* state = reinterpret_cast<CountState*>(context);
+      if (state->done || g_pplayer->m_overall_frames < 30)
+         return;
+      if (!state->started)
+      {
+         state->started = true;
+         state->frame0 = g_pplayer->m_overall_frames;
+         state->builds0 = g_pplayer->m_renderer->m_pbrFrameBuilds;
+         state->passes0 = g_pplayer->m_renderer->m_pbrViewPasses;
+         return;
+      }
+      if (g_pplayer->m_overall_frames - state->frame0 < 200)
+         return;
+      state->frames = g_pplayer->m_overall_frames - state->frame0;
+      state->builds = g_pplayer->m_renderer->m_pbrFrameBuilds - state->builds0;
+      state->passes = g_pplayer->m_renderer->m_pbrViewPasses - state->passes0;
+      state->bakes = g_pplayer->m_renderer->m_pbrShadowCacheBakes;
+      state->done = true;
+      g_pplayer->SetCloseState(Player::CS_STOP_PLAY);
+   };
+
+   CComObject<PinTable>* table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(tableFile, feedback)));
+   MakeShadowLightsStatic(table);
+   LoadProgress loadProgress;
+   auto player = std::make_unique<Player>(table, Player::PlayMode::Play, loadProgress);
+   for (int i = 0; i < extraViews; i++)
+   {
+      RenderView* const view = player->m_renderer->CreateEditorView();
+      view->m_outputWnd = player->m_playfieldWnd;
+      view->SetOutputArea(vec4(0.5f, 0.5f * (float)i, 1.f, 0.5f * (float)(i + 1)));
+   }
+   const unsigned int onPrepareFrameMsgId = player->m_pluginManager.GetMsgAPI().GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
+   player->m_pluginManager.GetMsgAPI().SubscribeMsg(player->m_pluginAPI.GetVPXEndPointId(), onPrepareFrameMsgId, onPrepareFrame, &state);
+   player->GameLoop();
+   player->m_pluginManager.GetMsgAPI().UnsubscribeMsg(onPrepareFrameMsgId, onPrepareFrame, &state);
+   player->m_pluginManager.GetMsgAPI().ReleaseMsgID(onPrepareFrameMsgId);
+   player = nullptr;
+   table->Release();
+   REQUIRE(state.done);
+   frames = state.frames;
+   builds = state.builds;
+   viewPasses = state.passes;
+   bakes = state.bakes;
+}
+#endif
+
+// The shadow pages, the static shadow cache and the light list are scene level: a frame with editor panes (or the VR mirror) builds
+// them once, for all its views, not once per view, and the cache bakes each light once whatever the number of views
+TEST_CASE("PBR shadows and light list built once per frame with two views [render]")
+{
+   ResetVPX();
+   const std::filesystem::path tableFile = CreatePBRShadowTable();
+
+#if defined(ENABLE_BGFX)
+   uint64_t singleViewBakes = 0;
+   for (int extraViews = 0; extraViews <= 2; extraViews++)
+   {
+      INFO("views: " << extraViews + 1);
+      g_settingsService.GetAppSettings().SetPlayer_GfxBackend("Direct3D11"s, false);
+      g_settingsService.GetAppSettings().SetPlayer_DepthPrepass(2, false);
+      uint64_t frames = 0, builds = 0, viewPasses = 0, bakes = 0;
+      CountPBRFrameBuilds(tableFile, extraViews, frames, builds, viewPasses, bakes);
+      MESSAGE("views " << extraViews + 1 << ": " << builds << " PBR frame builds in " << frames << " frames, " << viewPasses << " views with PBR passes, " << bakes << " shadow cache bake(s)");
+      CHECK(frames >= 200);
+      CHECK(builds == frames);
+      // Every view recorded PBR passes in every frame: the extra views reused the frame's build, they did not skip PBR
+      CHECK(viewPasses == frames * (uint64_t)(extraViews + 1));
+      CHECK(bakes >= 1);
+      if (extraViews == 0)
+         singleViewBakes = bakes;
+      else
+         CHECK(bakes == singleViewBakes);
+      ResetVPX();
+   }
+#endif
+
+   ResetVPX();
+}

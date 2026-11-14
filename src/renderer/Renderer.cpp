@@ -522,6 +522,9 @@ Renderer::~Renderer()
    m_envSampler = nullptr;
    m_aoDitherSampler = nullptr;
    // Views own render targets: they must be released while the render device is still alive
+#if defined(ENABLE_BGFX)
+   m_shadowView = nullptr;
+#endif
    m_vrMirrorView = nullptr;
    m_primaryView = nullptr;
    m_extraViews.clear();
@@ -1653,6 +1656,38 @@ void Renderer::BindTranslucentShadowCaster(const Material* const mat, Texture* c
 }
 
 #if defined(ENABLE_BGFX)
+// Scene level PBR work of a frame: the shadow map pages, the static shadow cache and the Forward+ light list do not depend on the view.
+// Every view that records PBR passes calls this (RenderView::PreparePBRPasses); it runs for the first one of the frame only, so a
+// frame with the VR mirror or editor panes marks, renders and uploads them once, and the other views' scene passes depend on the same
+// pages (AddPBRShadowDependencies).
+void Renderer::PreparePBRFrame()
+{
+   if (m_pbrFramePrepared)
+      return;
+   m_pbrFramePrepared = true;
+#ifdef VPX_TEST_BUILD
+   m_pbrFrameBuilds++;
+#endif
+
+   // The shadow pages record through a view of their own: the view that triggered the build keeps its camera, and the casters see
+   // the player mode visibility of the primary view (as RenderView::Render sets it: the VR mode, else its own view mode override or
+   // the table's view mode) whichever view that is, with the default shade mode (no wireframe pages), no nudge and no VR pose.
+   // There is one set of shadow maps per frame: a view that shows another player mode (an editor preview pane with a view mode
+   // override, the VR mirror) gets the primary's shadows, with the casters of that mode
+   if (m_shadowView == nullptr)
+      m_shadowView = std::make_unique<RenderView>(this, RenderView::Kind::Shadow);
+   const ViewSetupID viewMode = m_primaryView->m_viewModeOverride != BG_INVALID ? m_primaryView->m_viewModeOverride : m_table->GetViewMode();
+   m_shadowView->m_visibilityMask = g_pplayer->m_vrDevice ? (m_vrApplyColorKey ? PartGroupData::PlayerModeVisibilityMask::PMVM_MIXED_REALITY : PartGroupData::PlayerModeVisibilityMask::PMVM_VIRTUAL_REALITY)
+      : viewMode == BG_FULLSCREEN ? PartGroupData::PlayerModeVisibilityMask::PMVM_CABINET
+      : viewMode == BG_FSS        ? PartGroupData::PlayerModeVisibilityMask::PMVM_FSS
+      : viewMode == BG_DESKTOP    ? PartGroupData::PlayerModeVisibilityMask::PMVM_DESKTOP
+                                  : 0xFFFF;
+
+   UpdateVirtualShadowMaps();
+   UpdatePBRShadowCache();
+   BuildPBRLightList();
+}
+
 // Marks caster coverage per shadowed light, allocates physical pages for covered virtual pages
 // (LRU-evicting cold pages under pressure), then renders each dirty page into its pool layer with
 // the caster whitelist under a page-zoomed projection. Static-tier lights re-mark but their pages
@@ -1672,7 +1707,6 @@ void Renderer::UpdateVirtualShadowMaps()
    if ((int)m_vsmLights.size() != VSM::MAX_LIGHTS)
       m_vsmLights.assign(VSM::MAX_LIGHTS, VSM::LightMap {});
 
-   RenderView* const view = m_activeView;
    const Vertex3Ds tableCenter((m_table->m_left + m_table->m_right) * 0.5f, (m_table->m_top + m_table->m_bottom) * 0.5f, 0.f);
    // Content invalidation samples the dirty state once per frame: undo bookkeeping began-and-discarded
    // within the same frame (e.g. on selection) must not reset the maps, real edits persist and still do
@@ -1728,9 +1762,6 @@ void Renderer::UpdateVirtualShadowMaps()
 
    // Emits one depth-only caster pass: whitelisted caster parts drawn under the given view-projection
    const unsigned int prevMask = m_render_mask;
-   const PartGroupData::SpaceReference prevSpaceRef = view->m_mvpSpaceReference;
-   const Matrix3D savedView[2] = { view->m_playfieldView[0], view->m_playfieldView[1] };
-   const Matrix3D savedProj[2] = { view->m_mvp.GetProj(0), view->m_mvp.GetProj(view->m_mvp.m_nEyes - 1) };
    struct PageJob
    {
       int vpage, layer;
@@ -2054,7 +2085,11 @@ void Renderer::UpdateVirtualShadowMaps()
       }
    }
 
-   // Render dirty pages, bounded by the per-frame budget (deferred pages stay dirty for next frame)
+   // Render dirty pages, bounded by the per-frame budget (deferred pages stay dirty for next frame), through the private shadow view
+   // (PreparePBRFrame): the view that triggered the build is left as it was. Page RTs take the primary view's surface type
+   RenderView* const triggerView = m_activeView;
+   RenderView* const shadowView = m_shadowView.get();
+   const SurfaceType pageRTType = m_primaryView->GetBackBufferTexture() ? m_primaryView->GetBackBufferTexture()->m_type : SurfaceType::RT_DEFAULT;
    int rendered = 0;
    for (PageJob& job : jobs)
    {
@@ -2072,7 +2107,7 @@ void Renderer::UpdateVirtualShadowMaps()
          break;
       }
       // depthTex left invalid: RenderTarget would own+destroy it, but the pool texture is shared/persistent
-      RenderTarget* const pageRT = new RenderTarget(m_renderDevice, GetBackBufferTexture()->m_type, fbh, BGFX_INVALID_HANDLE, bgfx::TextureFormat::Count, BGFX_INVALID_HANDLE,
+      RenderTarget* const pageRT = new RenderTarget(m_renderDevice, pageRTType, fbh, BGFX_INVALID_HANDLE, bgfx::TextureFormat::Count, BGFX_INVALID_HANDLE,
          bgfx::TextureFormat::D32F, "VSMPage"s + std::to_string(job.layer), VSM::PAGE_DIM, VSM::PAGE_DIM, colorFormat::RGBA8);
       m_renderDevice->AddEndOfFrameCmd([pageRT]() { delete pageRT; });
       m_renderDevice->SetRenderTarget("VSM Page "s + std::to_string(job.layer), pageRT, false);
@@ -2084,13 +2119,14 @@ void Renderer::UpdateVirtualShadowMaps()
       m_renderDevice->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
       m_renderDevice->SetRenderState(RenderState::COLORWRITEENABLE, RenderState::RGBMASK_NONE);
       m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::unshaded_without_texture);
-      for (unsigned int eye = 0; eye < view->m_mvp.m_nEyes; eye++)
-      {
-         view->m_playfieldView[eye] = job.view;
-         view->m_mvp.SetView(eye, job.view);
-         view->m_mvp.SetProj(eye, job.proj);
-      }
       m_render_mask = SHADOW_MAP | (job.dynamicTier ? 0u : static_cast<unsigned int>(STATIC_ONLY));
+      m_activeView = shadowView;
+      for (unsigned int eye = 0; eye < shadowView->m_mvp.m_nEyes; eye++)
+      {
+         shadowView->m_playfieldView[eye] = job.view;
+         shadowView->m_mvp.SetProj(eye, job.proj);
+      }
+      shadowView->SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true); // the page's view (a cabinet part of the last page left it on the cabinet's)
       for (const Caster& caster : casters)
          RenderItem(caster.part, true);
       // Translucent casters (PBR plastics with a transmission, clear parts) do not block: they tint and attenuate the light
@@ -2129,18 +2165,14 @@ void Renderer::UpdateVirtualShadowMaps()
       m_vsmTouchedRTs.push_back(pageRT);
    }
 
-   if (!jobs.empty() || !m_vsmTouchedRTs.empty())
-   {
-      // Restore the camera matrices (the parts' RenderItem calls re-applied the space reference during the passes)
-      for (unsigned int eye = 0; eye < view->m_mvp.m_nEyes; eye++)
-      {
-         view->m_playfieldView[eye] = savedView[eye];
-         view->m_mvp.SetProj(eye, savedProj[eye]);
-      }
-      view->m_mvp = view->m_initialMVP;
-      view->SetSpaceReference(prevSpaceRef, true);
-   }
    m_render_mask = prevMask;
+   if (m_activeView != triggerView)
+   {
+      // The shader matrices are the last page's: the triggering view's again
+      m_activeView = triggerView;
+      triggerView->UpdateBasicShaderMatrix();
+      triggerView->UpdateBallShaderMatrix();
+   }
 
    // Upload the page table once per frame when allocation changed (begin-of-frame on the render thread)
    if (m_vsmPageTableDirty)
@@ -2818,6 +2850,13 @@ void Renderer::RemoveView(RenderView* view)
 void Renderer::Render3DScene()
 {
    m_activeView = m_primaryView.get();
+
+#if defined(ENABLE_BGFX)
+   // The scene level PBR work runs once in the frame, for the first view that records PBR passes (PreparePBRFrame). The page RTs of
+   // the last frame are deleted at its end (the shadow cache bake target among them): a frame without shadow work must not depend on them
+   m_pbrFramePrepared = false;
+   m_vsmTouchedRTs.clear();
+#endif
 
    // Reinitialize parts that have been modified
    SetupShaders();

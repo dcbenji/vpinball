@@ -744,7 +744,7 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
       return;
 
 #if defined(ENABLE_XR)
-   if (r->m_stereo3D == STEREO_VR && !IsMirror())
+   if (r->m_stereo3D == STEREO_VR && !IsMirror() && m_kind != Kind::Shadow)
       g_pplayer->m_vrDevice->UpdateVRPosition(spaceReference, m_mvp);
    else
 #endif
@@ -766,8 +766,10 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
       }
    }
 
-   // Apply nudge to cabinet parts (as we don't nudge the room) but only when not using static prepass (which uses a simple screen shifting)
-   if (spaceReference != PartGroupData::SpaceReference::SR_ROOM && !IsUsingStaticPrepass() && r->m_visualNudgeStrength > 0.f)
+   // Apply nudge to cabinet parts (as we don't nudge the room) but only when not using static prepass (which uses a simple screen shifting).
+   // Never in shadow map pages: the nudge moves the camera, not the parts (receivers keep their world positions in fs_pbr), and a page
+   // rendered mid-nudge would keep its shifted casters after it
+   if (spaceReference != PartGroupData::SpaceReference::SR_ROOM && m_kind != Kind::Shadow && !IsUsingStaticPrepass() && r->m_visualNudgeStrength > 0.f)
    {
       if (const auto nudge = g_pplayer->m_pininput.m_nudgeHandler->GetCabinetOffset(); nudge.x != 0.f || nudge.y != 0.f)
       {
@@ -1117,11 +1119,12 @@ void RenderView::PreparePBRPasses()
    if (!rd->m_pbrActive)
       return;
 
-   // Forward+ light list: light states animate per frame so the cluster grid is rebuilt and uploaded each frame
+   // Shadow map pages, static shadow cache and Forward+ light list: scene level, built once per frame by the first view that gets here
 #ifdef ENABLE_BGFX
-   r->UpdateVirtualShadowMaps();
-   r->UpdatePBRShadowCache();
-   r->BuildPBRLightList();
+#ifdef VPX_TEST_BUILD
+   r->m_pbrViewPasses++;
+#endif
+   r->PreparePBRFrame();
 #endif
 
    // PBR parts write their specular resolve inputs to 2 sideband attachments of the scene framebuffer. Clearing them

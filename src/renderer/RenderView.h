@@ -32,7 +32,8 @@ public:
    {
       Player, // Main output view (playfield window, or VR headset)
       VRMirror, // Desktop display scene rendering while playing in VR
-      Editor // Offscreen editor viewport
+      Editor, // Offscreen editor viewport
+      Shadow // Renderer owned view the PBR shadow map pages are recorded with (never registered, no render targets, no nudge or VR pose)
    };
 
    RenderView(Renderer* renderer, Kind kind);
@@ -136,7 +137,11 @@ public:
 
    RenderTarget* m_pOffscreenBackBufferTexture1 = nullptr;
    RenderTarget* m_pOffscreenBackBufferTexture2 = nullptr;
-   RenderTarget* GetBackBufferTexture() const { return m_pOffscreenBackBufferTexture1; } // Main render target, with MSAA resolved if any, also may have stereo output (2 viewports)
+   RenderTarget* GetBackBufferTexture() const
+   {
+      assert(m_kind != Kind::Shadow); // the shadow view has no render targets
+      return m_pOffscreenBackBufferTexture1;
+   } // Main render target, with MSAA resolved if any, also may have stereo output (2 viewports)
    RenderTarget* GetPreviousBackBufferTexture() const { return m_pOffscreenBackBufferTexture2; } // Same as back buffer but for previous frame
    void SwapBackBufferRenderTargets();
    Matrix3D m_prevFrameViewProj[2]; // View x projection the previous frame's back buffer was rendered with (used to reproject it, e.g. as ball reflection probe)

@@ -422,12 +422,21 @@ public:
 #else
    bool IsPBRShadowCacheOn() const { return false; }
 #endif
+#ifdef VPX_TEST_BUILD
+   uint64_t m_pbrFrameBuilds = 0; // frames whose scene level PBR work ran (PreparePBRFrame): one per frame, whatever the number of views
+   uint64_t m_pbrViewPasses = 0; // views that recorded PBR passes (RenderView::PreparePBRPasses), read by the tests
+#endif
 
 private:
    void SetSpaceReference(PartGroupData::SpaceReference spaceReference, bool force) { m_activeView->SetSpaceReference(spaceReference, force); }
    bool IsBloomEnabled() const;
    void AddPBRShadowDependencies(); // Order this frame's shadow page passes before the (just created) scene pass (no-op without BGFX)
 #if defined(ENABLE_BGFX)
+   // Scene level PBR work of the frame, shared by every view: shadow map pages, static shadow cache and light list. Called by each
+   // view that records PBR passes (RenderView::PreparePBRPasses), runs for the first one only (Render3DScene resets the guard)
+   void PreparePBRFrame();
+   bool m_pbrFramePrepared = false;
+   std::unique_ptr<RenderView> m_shadowView; // private view the shadow map pages are recorded with (Kind::Shadow, never registered)
    void BuildPBRLightList(); // Rebuild the Forward+ clustered light list (CPU world-space XY grid, per frame)
    void UpdateVirtualShadowMaps(); // Paged virtual shadow maps: mark coverage, allocate pages, render dirty pages
    void CreateVSMPagePoolTargets(); // Lazily create the physical page pool texture array and its per-layer render targets
