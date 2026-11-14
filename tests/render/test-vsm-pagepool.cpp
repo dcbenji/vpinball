@@ -478,6 +478,8 @@ TEST_CASE("VSM light row: layout, ortho projection, upload only on change")
    CHECK(VSM::PackLightRow(row, vp.data(), params.data(), box.data(), cache.data()));
    CHECK(texel(VSM::MAX_LIGHTS - 1, 4).w == 5.f);
    CHECK(VSM::PAGETABLE_ROWS == VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W);
+   static_assert(VSM::MAX_LIGHTS <= 64, "Renderer::m_vsmPageTableDirtySlots is a 64 bit slot mask");
+   static_assert(VSM::PAGETABLE_STRIDE % VSM::PAGETABLE_W == 0, "a slot's page table entries are whole rows (partial uploads)");
 }
 
 // 64 shadow slots: the slot index + 1 is packed in 8 bits of the light record (fs_pbr: (shadowInfo >> 4) & 255) and the page

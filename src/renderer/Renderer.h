@@ -455,7 +455,7 @@ private:
    bgfx::TextureHandle m_vsmPageTableTex = BGFX_INVALID_HANDLE; // CPU-generated page table (physical layer+1 per virtual page)
    std::shared_ptr<Sampler> m_vsmPageTableSampler;
    std::vector<float> m_vsmPageTableData; // CPU mirror of the page-table texture
-   bool m_vsmPageTableDirty = false; // upload the page-table texture at frame submit
+   uint64_t m_vsmPageTableDirtySlots = 0; // slots whose page-table rows to upload at frame submit (bit = slot)
    std::vector<VSM::LightMap> m_vsmLights; // per-shadowIndex virtual maps
    Matrix3D m_vsmShadowVP[VSM::MAX_LIGHTS]; // ortho light view-projection per shadowed light
    vec4 m_vsmParams[VSM::MAX_LIGHTS]; // x: page-table texel base, y: pages across (face grid for cube), z: pages down, w: ortho depth range

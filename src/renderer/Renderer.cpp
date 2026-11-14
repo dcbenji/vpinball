@@ -1473,7 +1473,7 @@ void Renderer::CreateVSMPagePoolTargets()
             std::fill(map.dirty.begin(), map.dirty.end(), uint8_t(1));
          }
          std::fill(m_vsmPageTableData.begin(), m_vsmPageTableData.end(), 0.f);
-         m_vsmPageTableDirty = true;
+         m_vsmPageTableDirtySlots = ~0ull;
          PLOGI << "VSM page pool: " << m_vsmPoolTexLayers << " -> " << m_vsmPoolPages << " pages (" << m_vsmPoolPages * 192 / 1024 << " MB)";
       }
       m_vsmPoolTex = bgfx::createTexture2D(VSM::PAGE_DIM, VSM::PAGE_DIM, false, static_cast<uint16_t>(m_vsmPoolPages), bgfx::TextureFormat::D32F, BGFX_TEXTURE_RT);
@@ -1526,7 +1526,7 @@ void Renderer::CreateVSMPagePoolTargets()
          VSM::PAGETABLE_W, ptH + 1, true);
       m_vsmPageTableData.assign(VSM::PAGETABLE_W * ptH * 4, 0.f);
       m_vsmLightRow.clear();
-      m_vsmPageTableDirty = true;
+      m_vsmPageTableDirtySlots = ~0ull;
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_vsm_pagetables, m_vsmPageTableSampler);
    }
 }
@@ -2025,6 +2025,8 @@ void Renderer::UpdateVirtualShadowMaps()
       VSM::LightMap& map = m_vsmLights[index];
       map.ptBase = index * VSM::PAGETABLE_STRIDE;
 
+      bool mapReset = false; // a fresh map (new owner of the slot, light moved, ...): its page-table rows are rewritten below
+
       // Ortho (scene) layout requires the light above the glass top; near lights take the cube layout
       Matrix3D lightView;
       Matrix3D lightProj;
@@ -2081,6 +2083,7 @@ void Renderer::UpdateVirtualShadowMaps()
                   m_vsmPool.Free(phys - 1);
             map.Reset(VSM::LAYOUT_ORTHO, gridW, gridH);
             map.ptBase = index * VSM::PAGETABLE_STRIDE;
+            mapReset = true;
             light->m_pbrShadowBakedPos = lPos;
             light->m_pbrShadowBakedFalloff = light->m_d.m_falloff;
             light->m_pbrShadowBakedSlot = index;
@@ -2115,6 +2118,7 @@ void Renderer::UpdateVirtualShadowMaps()
                   m_vsmPool.Free(phys - 1);
             map.Reset(VSM::LAYOUT_CUBE, VSM::CUBE_FACE_GRID, VSM::CUBE_FACE_GRID);
             map.ptBase = index * VSM::PAGETABLE_STRIDE;
+            mapReset = true;
             light->m_pbrShadowBakedPos = lPos;
             light->m_pbrShadowBakedFalloff = light->m_d.m_falloff;
             light->m_pbrShadowBakedSlot = index;
@@ -2131,7 +2135,9 @@ void Renderer::UpdateVirtualShadowMaps()
       }
 
       // Alloc/free against the marked coverage, then enqueue the dirty pages
-      bool ptChanged = false;
+      // A fresh map rewrites its slot's rows even with no page needed: else a new owner without casters in range would read the
+      // previous owner's entries (layers since freed, maybe another light's now: a ghost shadow)
+      bool ptChanged = mapReset;
       for (int vp = 0; vp < map.EntryCount(); vp++)
       {
          if (map.needed[vp] && map.phys[vp] == 0)
@@ -2147,7 +2153,7 @@ void Renderer::UpdateVirtualShadowMaps()
                if (evictTexel[0] != 0.f)
                {
                   evictTexel[0] = 0.f;
-                  m_vsmPageTableDirty = true;
+                  m_vsmPageTableDirtySlots |= 1ull << evictLight;
                }
             }
             if (layer >= 0)
@@ -2171,7 +2177,7 @@ void Renderer::UpdateVirtualShadowMaps()
          float* const base = m_vsmPageTableData.data() + map.ptBase * 4;
          for (int vp = 0; vp < map.EntryCount(); vp++)
             base[vp * 4] = (map.dirty[vp] & 2) ? 0.f : (float)map.phys[vp];
-         m_vsmPageTableDirty = true;
+         m_vsmPageTableDirtySlots |= 1ull << index;
       }
       for (int vp = 0; vp < map.EntryCount(); vp++)
       {
@@ -2280,7 +2286,7 @@ void Renderer::UpdateVirtualShadowMaps()
       {
          // Fresh page now rendered: publish it in the page table
          m_vsmPageTableData[(job.map->ptBase + job.vpage) * 4] = (float)(job.layer + 1);
-         m_vsmPageTableDirty = true;
+         m_vsmPageTableDirtySlots |= 1ull << job.index;
       }
       job.map->dirty[job.vpage] = 0;
       m_vsmSlotPageFrame[job.index] = m_vsmFrame;
@@ -2296,14 +2302,27 @@ void Renderer::UpdateVirtualShadowMaps()
       triggerView->UpdateBallShaderMatrix();
    }
 
-   // Upload the page table once per frame when allocation changed (begin-of-frame on the render thread)
-   if (m_vsmPageTableDirty && !m_vsmPageTableData.empty())
+   // Upload the page table once per frame when allocation changed (begin-of-frame on the render thread). Only the rows of the slots
+   // whose page table changed (8 rows, 64 KB per slot: the whole table is 4 MB), one upload per run of consecutive dirty slots
+   if (m_vsmPageTableDirtySlots != 0 && !m_vsmPageTableData.empty())
    {
-      m_vsmPageTableDirty = false;
-      const bgfx::TextureHandle tex = m_vsmPageTableTex;
-      const int ptH = VSM::MAX_LIGHTS * VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W;
-      m_renderDevice->AddBeginOfFrameCmd([rd = m_renderDevice, tex, data = m_vsmPageTableData, ptH]()
-         { bgfx::updateTexture2D(tex, 0, 0, 0, 0, VSM::PAGETABLE_W, ptH, bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
+      constexpr int rowsPerSlot = VSM::PAGETABLE_STRIDE / VSM::PAGETABLE_W;
+      for (int first = 0; first < VSM::MAX_LIGHTS;)
+      {
+         if (((m_vsmPageTableDirtySlots >> first) & 1ull) == 0)
+         {
+            first++;
+            continue;
+         }
+         int end = first;
+         while (end < VSM::MAX_LIGHTS && ((m_vsmPageTableDirtySlots >> end) & 1ull) != 0)
+            end++;
+         const auto from = m_vsmPageTableData.begin() + first * VSM::PAGETABLE_STRIDE * 4, to = m_vsmPageTableData.begin() + end * VSM::PAGETABLE_STRIDE * 4;
+         m_renderDevice->AddBeginOfFrameCmd([tex = m_vsmPageTableTex, data = vector<float>(from, to), y = first * rowsPerSlot, h = (end - first) * rowsPerSlot]()
+            { bgfx::updateTexture2D(tex, 0, 0, 0, static_cast<uint16_t>(y), VSM::PAGETABLE_W, static_cast<uint16_t>(h), bgfx::copy(data.data(), static_cast<uint32_t>(data.size() * sizeof(float)))); });
+         first = end;
+      }
+      m_vsmPageTableDirtySlots = 0;
    }
 
    // Shadow filter options (fs_pbr pbr_shadow_tap_mode / pbr_shadow_gate), plain floats: pbrShadowParams.w = tap mode, pbrDimParams.y = gate.
