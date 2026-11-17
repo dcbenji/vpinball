@@ -62,6 +62,8 @@ LiveUI::LiveUI(RenderDevice *const rd)
 
    // UI fonts
    m_baseFont = io.Fonts->AddFontFromMemoryCompressedTTF(droidsans_compressed_data, droidsans_compressed_size, 13.0f * m_uiScale);
+   m_monoFont = io.Fonts->AddFontFromMemoryCompressedTTF(
+      jetbrainsmono_compressed_data, jetbrainsmono_compressed_size, static_cast<float>(g_settingsService.GetAppSettings().GetEditor_ScriptEditorFontSize()) * m_uiScale);
    // Lucide line icons for the live editor (24 px grid glyphs, drawn a bit larger than the text and centered on it)
    ImFontConfig lucide_config;
    lucide_config.MergeMode = true;
