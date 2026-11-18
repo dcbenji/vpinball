@@ -82,7 +82,7 @@ void main()
     gl_Position = mul(mRotViewProj, vec4(wpos_rel, 1.0));
     #ifdef MOTION
         v_clipPos = gl_Position;
-        const vec3 prevPos = mul(orientationPrev, pos).xyz;
+        const vec3 prevPos = mul(orientationPrev, vec4(a_position, 1.0)).xyz; // object space position (pos was already moved to world space above)
         v_prevClipPos = mul(mRotViewProjPrev, vec4(prevPos - cCameraPosWorldPrev, 1.0));
     #endif
 }
