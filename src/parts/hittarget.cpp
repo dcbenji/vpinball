@@ -643,7 +643,7 @@ void HitTarget::Render(const unsigned int renderMask)
    body.edgeTriCount = m_numIndices;
    body.edgeTriIndices16 = true;
    body.edgeVertices = m_vertices;
-   body.prevTransform = m_prevMatTrafoValid ? &m_prevMatTrafo : nullptr;
+   body.prevTransform = m_prevMatTrafo.Get(g_pplayer->m_overall_frames);
 
    // PBR shadow map pass: draw only the caster geometry with the light's view-projection (no material setup)
    if (renderMask & Renderer::SHADOW_MAP)
@@ -669,8 +669,7 @@ void HitTarget::Render(const unsigned int renderMask)
    m_renderer->RenderMesh(renderMask, body, material);
    if (!isUIPass)
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::fDisableLighting_top_below, 0.f, 0.f, 0.f, 0.f);
-   m_prevMatTrafo = targetMatrix;
-   m_prevMatTrafoValid = true;
+   m_prevMatTrafo.Set(targetMatrix);
 }
 
 #pragma endregion

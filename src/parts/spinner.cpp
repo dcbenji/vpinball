@@ -378,7 +378,7 @@ void Spinner::Render(const unsigned int renderMask)
    plate.edgeTriCount = spinnerPlateNumFaces;
    plate.edgeTriIndices16 = true;
    plate.edgeVertices = spinnerPlate;
-   plate.prevTransform = m_prevMatTrafoValid ? &m_prevMatTrafo : nullptr;
+   plate.prevTransform = m_prevMatTrafo.Get(g_pplayer->m_overall_frames);
 
    const bool plateVisible = m_phitspinner ? m_phitspinner->m_spinnerMover.m_visible : m_d.m_visible;
 
@@ -427,8 +427,7 @@ void Spinner::Render(const unsigned int renderMask)
    if (plateVisible && !isStaticOnly)
    {
       m_renderer->RenderMesh(renderMask, plate, plateMaterial);
-      m_prevMatTrafo = vertMatrix;
-      m_prevMatTrafoValid = true;
+      m_prevMatTrafo.Set(vertMatrix);
    }
 }
 

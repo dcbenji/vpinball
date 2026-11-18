@@ -462,9 +462,9 @@ void Ball::Render(const unsigned int renderMask)
       posr.z -= m_hitBall.m_d.m_radius;
    const Matrix3D fullTrafo = rot * scale * Matrix3D::MatrixTranslate(posr);
    m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientation, &fullTrafo);
-   m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientationPrev, m_prevOrientationValid ? &m_prevOrientation : &fullTrafo);
-   m_prevOrientation = fullTrafo;
-   m_prevOrientationValid = true;
+   const Matrix3D* const prevTrafo = m_prevOrientation.Get(g_pplayer->m_overall_frames);
+   m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientationPrev, prevTrafo ? prevTrafo : &fullTrafo);
+   m_prevOrientation.Set(fullTrafo);
 
    m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
    bool sphericalMapping;

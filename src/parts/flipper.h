@@ -181,8 +181,7 @@ private:
 
    HitFlipper *m_phitflipper = nullptr;
    float m_lastAngle = 0.f;
-   Matrix3D m_prevMatTrafo; // Previous frame transform, for the depth prepass motion vectors
-   bool m_prevMatTrafoValid = false;
+   FrameHistory<Matrix3D> m_prevMatTrafo; // Previous frame transform, for the depth prepass motion vectors
 
    uint64_t m_lastRotateTime = 0;
 

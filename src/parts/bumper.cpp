@@ -350,7 +350,7 @@ void Bumper::Render(const unsigned int renderMask)
       ring.indexCount = bumperRingNumIndices;
       ring.sortCenter.Set(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + ringAnimOffset);
       ring.transform = &ringMatrix;
-      ring.prevTransform = m_prevRingMatTrafoValid ? &m_prevRingMatTrafo : nullptr;
+      ring.prevTransform = m_prevRingMatTrafo.Get(g_pplayer->m_overall_frames);
       ring.uiEdgeMesh = &m_ringEdgeBuffer;
       ring.edgeMode = UIEdgeMode::TriWire;
       ring.edgeTriIndices = bumperRingIndices;
@@ -379,8 +379,7 @@ void Bumper::Render(const unsigned int renderMask)
             = m_renderer->GetPBRTextureSet(m_d, Vertex3Ds(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight), m_d.m_radius, isReflectionPass, ringMaterial.m_bOpacityActive, renderMask);
       }
       m_renderer->RenderMesh(renderMask, ring, material);
-      m_prevRingMatTrafo = ringMatrix;
-      m_prevRingMatTrafoValid = true;
+      m_prevRingMatTrafo.Set(ringMatrix);
    }
 
    if (m_d.m_skirtVisible && !isStaticOnly)
@@ -393,7 +392,7 @@ void Bumper::Render(const unsigned int renderMask)
       socket.indexCount = bumperSocketNumIndices;
       socket.sortCenter.Set(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + 5.0f);
       socket.transform = &socketMatrix;
-      socket.prevTransform = m_prevSocketMatTrafoValid ? &m_prevSocketMatTrafo : nullptr;
+      socket.prevTransform = m_prevSocketMatTrafo.Get(g_pplayer->m_overall_frames);
       socket.uiEdgeMesh = &m_socketEdgeBuffer;
       socket.edgeMode = UIEdgeMode::TriWire;
       socket.edgeTriIndices = bumperSocketIndices;
@@ -413,8 +412,7 @@ void Bumper::Render(const unsigned int renderMask)
          material.pbrMaps = m_renderer->GetPBRTextureSet(m_d, Vertex3Ds(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight), m_d.m_radius, isReflectionPass, mat->m_bOpacityActive, renderMask);
       }
       m_renderer->RenderMesh(renderMask, socket, material);
-      m_prevSocketMatTrafo = socketMatrix;
-      m_prevSocketMatTrafoValid = true;
+      m_prevSocketMatTrafo.Set(socketMatrix);
    }
 }
 

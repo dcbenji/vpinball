@@ -992,9 +992,8 @@ void Primitive::Render(const unsigned int renderMask)
    }
 
    // set transform
-   m_renderer->UpdateBasicShaderMatrix(m_fullMatrix, m_prevFullMatrixValid ? &m_prevFullMatrix : nullptr);
-   m_prevFullMatrix = m_fullMatrix;
-   m_prevFullMatrixValid = true;
+   m_renderer->UpdateBasicShaderMatrix(m_fullMatrix, m_prevFullMatrix.Get(g_pplayer->m_overall_frames));
+   m_prevFullMatrix.Set(m_fullMatrix);
 
    if (isUIPass)
    {

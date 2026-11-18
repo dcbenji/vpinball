@@ -825,14 +825,14 @@ void Plunger::Render(const unsigned int renderMask)
    // single object matrix cannot represent, so we only model the dominant stroke translation.
    // Residual error is limited to the spring part, bounded by the squash amplitude.
    Matrix3D matPrev = Matrix3D::MatrixIdentity();
-   if (m_prevFramePosValid && pa.m_frameEnd != pa.m_frameStart)
+   const float* const prevPos = m_prevFramePos.Get(g_pplayer->m_overall_frames);
+   if (prevPos && pa.m_frameEnd != pa.m_frameStart)
    {
-      const float strokeDy = m_d.m_stroke * (pa.m_pos - m_prevFramePos) / (pa.m_frameEnd - pa.m_frameStart);
+      const float strokeDy = m_d.m_stroke * (pa.m_pos - *prevPos) / (pa.m_frameEnd - pa.m_frameStart);
       matPrev = Matrix3D::MatrixTranslate(0.f, strokeDy, 0.f);
       body.prevTransform = &matPrev;
    }
-   m_prevFramePos = pa.m_pos;
-   m_prevFramePosValid = true;
+   m_prevFramePos.Set(pa.m_pos);
 
    // PBR shadow map pass: draw only the caster geometry with the light's view-projection (no material setup)
    if (renderMask & Renderer::SHADOW_MAP)

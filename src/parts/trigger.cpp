@@ -375,7 +375,7 @@ void Trigger::Render(const unsigned int renderMask)
    body.edgeTriCount = meshData.indices.size();
    body.edgeTriIndices16 = true;
    body.edgeVertices = m_triggerVertices->data();
-   body.prevTransform = m_prevMatTrafoValid ? &m_prevMatTrafo : nullptr;
+   body.prevTransform = m_prevMatTrafo.Get(g_pplayer->m_overall_frames);
 
    // PBR shadow map pass: draw only the caster geometry with the light's view-projection (no material setup)
    if (renderMask & Renderer::SHADOW_MAP)
@@ -396,9 +396,8 @@ void Trigger::Render(const unsigned int renderMask)
          m_d, m_boundingSphereCenter, m_d.m_radius, isReflectionPass, material.material->m_bOpacityActive, renderMask);
    }
    m_renderer->RenderMesh(renderMask, body, material);
-   m_prevMatTrafo = translate;
-   m_prevMatTrafo = translate;
-   m_prevMatTrafoValid = true;
+   m_prevMatTrafo.Set(translate);
+   m_prevMatTrafo.Set(translate);
 }
 
 #pragma endregion

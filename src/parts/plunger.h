@@ -191,8 +191,7 @@ private:
    float m_boundingSphereRadius = -1.f;
 
    // Previous frame mover position, for the depth prepass motion vectors approximation
-   float m_prevFramePos = 0.f;
-   bool m_prevFramePosValid = false;
+   FrameHistory<float> m_prevFramePos;
 
    // IPlunger
 public:

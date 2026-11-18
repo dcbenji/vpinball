@@ -622,14 +622,14 @@ void Flipper::Render(const unsigned int renderMask)
    base.indexCount = flipperBaseNumIndices;
    base.sortCenter = m_boundingSphereCenter;
    base.transform = &matTrafo;
-   base.prevTransform = m_prevMatTrafoValid ? &m_prevMatTrafo : nullptr;
+   base.prevTransform = m_prevMatTrafo.Get(g_pplayer->m_overall_frames);
    base.uiEdgeMesh = &m_meshEdgeBuffer;
    base.edgeMode = UIEdgeMode::Outline;
    base.edgeTriIndices = flipperBaseIndices;
    base.edgeTriCount = flipperBaseNumIndices;
    base.edgeTriIndices16 = true;
    base.edgeVertices = flipperBaseMesh;
-   m_prevMatTrafo = matTrafo;
+   m_prevMatTrafo.Set(matTrafo);
 
    // PBR shadow map pass: draw only the caster geometry with the light's view-projection
    if (renderMask & Renderer::SHADOW_MAP)
@@ -645,7 +645,6 @@ void Flipper::Render(const unsigned int renderMask)
       m_renderer->UpdateBasicShaderMatrix();
       return;
    }
-   m_prevMatTrafoValid = true;
 
    RenderMeshDesc rubber = base;
    rubber.startIndex = flipperBaseNumIndices;

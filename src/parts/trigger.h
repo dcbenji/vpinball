@@ -148,8 +148,7 @@ private:
    bool m_doAnimation = false;
    bool m_moveDown = false;
 
-   Matrix3D m_prevMatTrafo; // Previous frame transform, for the depth prepass motion vectors
-   bool m_prevMatTrafoValid = false;
+   FrameHistory<Matrix3D> m_prevMatTrafo; // Previous frame transform, for the depth prepass motion vectors
 
    // ITrigger
 public:

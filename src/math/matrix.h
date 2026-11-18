@@ -903,3 +903,24 @@ public:
 #pragma endregion VectorOperations
 
 };
+
+// Previous rendered frame value of a part's transform, for the depth prepass motion vectors. A part can be recorded several
+// times per frame (reflection / refraction probes, then the main view): the history only rolls on the first record of a new
+// frame, so every record of a frame sees the previous frame's value (not the one recorded a moment before in the same frame).
+template <class T> struct FrameHistory
+{
+   T prev {}, last {};
+   unsigned int frame = ~0u;
+   bool valid = false;
+   const T* Get(const unsigned int frameIndex) // previous frame value, nullptr until there is one
+   {
+      if (frameIndex != frame)
+      {
+         if (frame != ~0u) { prev = last; valid = true; }
+         frame = frameIndex;
+      }
+      return valid ? &prev : nullptr;
+   }
+   void Set(const T& v) { last = v; }
+};
+
