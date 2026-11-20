@@ -273,6 +273,8 @@ enum class ShaderTechnique : unsigned int
    SHADER_TECHNIQUE(FAAA),
    SHADER_TECHNIQUE(CAS),
    SHADER_TECHNIQUE(BilateralSharp_CAS),
+   SHADER_TECHNIQUE(FSR_EASU), // AMD FidelityFX Super Resolution 1 upscale (mono only)
+   SHADER_TECHNIQUE(FSR_RCAS), // AMD FidelityFX Super Resolution 1 sharpening (mono only)
 #ifndef __OPENGLES__
    SHADER_TECHNIQUE(SMAA_ColorEdgeDetection),
    SHADER_TECHNIQUE(SMAA_BlendWeightCalculation),

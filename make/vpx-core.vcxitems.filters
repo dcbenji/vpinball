@@ -3604,6 +3604,24 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_cas.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_easu.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_rcas.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fsr_common.sh">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/ffx_a.h">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/ffx_fsr1.h">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/LICENSE-FidelityFX-FSR.txt">
+      <Filter>shaders\bgfx</Filter>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_copy.sc">
       <Filter>shaders\bgfx</Filter>
     </None>

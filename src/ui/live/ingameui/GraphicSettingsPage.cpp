@@ -300,6 +300,18 @@ void GraphicSettingsPage::BuildPage()
       [this]() { return m_player->m_renderer->m_sharpen; }, //
       [this](int, int v) { m_player->m_renderer->m_sharpen = v; }));
 
+#ifdef ENABLE_BGFX
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayer_Upscaler, //
+      [this]() { return m_player->m_renderer->m_upscaler; }, //
+      [this](int, int v) { m_player->m_renderer->m_upscaler = v; }));
+
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayer_UpscalerSharpness, 1.f, "%4.2f"s, //
+      [this]() { return m_player->m_renderer->m_upscalerSharpness; }, //
+      [this](float, float v) { m_player->m_renderer->m_upscalerSharpness = v; }));
+#endif
+
    //////////////////////////////////////////////////////////////////////////////////////////////////
 
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Miscellaneous features"s));

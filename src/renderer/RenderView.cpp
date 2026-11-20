@@ -102,6 +102,8 @@ void RenderView::ReleaseTargets()
    m_pPostProcessRenderTarget2 = nullptr;
    delete m_pPostProcessRenderTarget3;
    m_pPostProcessRenderTarget3 = nullptr;
+   delete m_pFSRRenderTarget;
+   m_pFSRRenderTarget = nullptr;
    delete m_pReflectionBufferTexture;
    m_pReflectionBufferTexture = nullptr;
    delete m_pReflectionHalfBufferTexture;
@@ -2249,7 +2251,7 @@ RenderTarget* RenderView::ApplySharpening(RenderTarget* renderedRT, RenderTarget
 {
    Renderer* const r = m_renderer;
    RenderDevice* const rd = r->m_renderDevice;
-   if (!r->m_sharpen)
+   if (!r->m_sharpen || IsFSRUpscale()) // FSR 1 brings its own sharpening (RCAS) at display resolution
       return renderedRT;
 
    rd->ResetRenderState();
@@ -2274,6 +2276,17 @@ RenderTarget* RenderView::ApplySharpening(RenderTarget* renderedRT, RenderTarget
    return outputRT;
 }
 
+bool RenderView::IsFSRUpscale() const
+{
+   // Mono only, full output area only (the RCAS pass addresses the output by its pixel position); stereo, VR and editor
+   // panes keep the bilinear upscale
+#ifdef ENABLE_BGFX
+   return m_renderer->m_upscaler == 1 && m_renderer->m_stereo3D == STEREO_OFF && IsFullOutputArea() && GetBackBufferTexture()->GetWidth() < m_renderWidth;
+#else
+   return false;
+#endif
+}
+
 RenderTarget* RenderView::ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* outputBackBuffer)
 {
    Renderer* const r = m_renderer;
@@ -2282,13 +2295,40 @@ RenderTarget* RenderView::ApplyUpscaling(RenderTarget* renderedRT, RenderTarget*
    if (GetBackBufferTexture()->GetWidth() >= m_renderWidth)
       return renderedRT;
 
-   // TODO add AMD FidelityFX Super Resolution (FSR) support
-
    rd->ResetRenderState();
    rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
    rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
    rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
    rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
+
+   if (IsFSRUpscale() && outputBackBuffer)
+   {
+      // AMD FidelityFX Super Resolution 1: EASU (edge adaptive upscale) to a display sized buffer, then RCAS sharpening
+      // into the output. Both run on the tonemapped, post AA'd (perceptual) render, as FSR 1 requires.
+      const int ow = outputBackBuffer->GetWidth(), oh = outputBackBuffer->GetHeight();
+      const colorFormat fmt = GetPostProcessRenderTarget1()->GetColorFormat();
+      if (m_pFSRRenderTarget && (m_pFSRRenderTarget->GetWidth() != ow || m_pFSRRenderTarget->GetHeight() != oh || m_pFSRRenderTarget->GetColorFormat() != fmt))
+      {
+         RenderTarget* const old = m_pFSRRenderTarget;
+         rd->AddEndOfFrameCmd([old]() { delete old; });
+         m_pFSRRenderTarget = nullptr;
+      }
+      if (m_pFSRRenderTarget == nullptr)
+         m_pFSRRenderTarget = new RenderTarget(rd, SurfaceType::RT_DEFAULT, "FSR"s, ow, oh, fmt, false, 1, "Fatal Error: unable to create FSR upscale buffer!");
+      rd->SetRenderTarget("FSR EASU"s, m_pFSRRenderTarget, false);
+      rd->AddRenderTargetDependency(renderedRT);
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_fb_unfiltered, renderedRT->GetColorSampler());
+      rd->m_FBShader->SetTechnique(ShaderTechnique::FSR_EASU);
+      rd->m_FBShader->SetVector(ShaderUniform::w_h_height, (float)renderedRT->GetWidth(), (float)renderedRT->GetHeight(), (float)ow, (float)oh);
+      rd->DrawFullscreenTexturedQuad(rd->m_FBShader);
+      rd->SetRenderTarget("FSR RCAS"s, outputBackBuffer, false);
+      rd->AddRenderTargetDependency(m_pFSRRenderTarget);
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_fb_unfiltered, m_pFSRRenderTarget->GetColorSampler());
+      rd->m_FBShader->SetTechnique(ShaderTechnique::FSR_RCAS);
+      rd->m_FBShader->SetVector(ShaderUniform::w_h_height, r->m_upscalerSharpness, 0.f, (float)ow, (float)oh);
+      rd->DrawFullscreenTexturedQuad(rd->m_FBShader);
+      return outputBackBuffer;
+   }
 
    assert(renderedRT != outputBackBuffer); // At this point, renderedRT may be PP1, PP2 or backbuffer
    RenderTarget* outputRT = outputBackBuffer ? outputBackBuffer : GetPostProcessRenderTarget(renderedRT);

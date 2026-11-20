@@ -246,6 +246,7 @@ private:
    RenderTarget* ApplyBallMotionBlur(RenderTarget* beforeTonemapRT, RenderTarget* afterTonemapRT);
    RenderTarget* ApplyPostProcessedAntialiasing(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
    RenderTarget* ApplySharpening(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
+   bool IsFSRUpscale() const; // FSR 1 replaces the bilinear upscale (and the sharpening) for this frame
    RenderTarget* ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
 
    Renderer* const m_renderer;
@@ -299,6 +300,7 @@ private:
    RenderTarget* m_pPostProcessRenderTarget1 = nullptr;
    RenderTarget* m_pPostProcessRenderTarget2 = nullptr;
    RenderTarget* m_pPostProcessRenderTarget3 = nullptr;
+   RenderTarget* m_pFSRRenderTarget = nullptr; // FSR 1 EASU output at display size (lazily created)
 
    RenderTarget* m_pReflectionBufferTexture = nullptr;
    RenderTarget* m_pReflectionHalfBufferTexture = nullptr;

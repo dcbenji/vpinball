@@ -55,6 +55,9 @@ set(SHADER_DEPS
    "${SRC_DIR}/ball_shadows.sh"
    "${SRC_DIR}/SMAA.sh"
    "${SRC_DIR}/SMAA.hlsl"
+   "${SRC_DIR}/fsr_common.sh"
+   "${SRC_DIR}/ffx_a.h"
+   "${SRC_DIR}/ffx_fsr1.h"
    "${SHADERC}"
    "${CMAKE_CURRENT_LIST_FILE}")
 # Shader bodies included by .sc files (fs_display.sc includes the CRT shaders)
@@ -340,6 +343,8 @@ function(group_antialiasing)
       endforeach()
    endforeach()
    # TODO add stereo support to SMAA
+   process_shader(antialiasing "fs_pp_fsr_easu.sc" "fs_pp_fsr_easu_" "fragment")
+   process_shader(antialiasing "fs_pp_fsr_rcas.sc" "fs_pp_fsr_rcas_" "fragment")
    process_shader(antialiasing "vs_pp_smaa_BlendingWeightCalculation.sc" "vs_pp_smaa_blendweightcalculation_" "vertex")
    process_shader(antialiasing "vs_pp_smaa_EdgeDetection.sc" "vs_pp_smaa_edgedetection_" "vertex")
    process_shader(antialiasing "vs_pp_smaa_NeighborhoodBlending.sc" "vs_pp_smaa_neighborhoodblending_" "vertex")

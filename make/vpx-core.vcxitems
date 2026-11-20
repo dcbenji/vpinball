@@ -1381,6 +1381,24 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_cas.sc">
       <FileType>Document</FileType>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_easu.sc">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_rcas.sc">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fsr_common.sh">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/ffx_a.h">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/ffx_fsr1.h">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/LICENSE-FidelityFX-FSR.txt">
+      <FileType>Document</FileType>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_copy.sc">
       <FileType>Document</FileType>
     </None>

@@ -370,6 +370,8 @@ public:
    bool m_motionBlurOff = false;
    int m_FXAA; // =FXAASettings
    int m_sharpen; // 0=off, 1=CAS, 2=bilateral CAS
+   int m_upscaler; // 0=bilinear, 1=FSR 1 (only used when rendering below the display resolution)
+   float m_upscalerSharpness; // FSR 1 RCAS attenuation in stops (0 = sharpest)
    bool HasAdditiveScreenSpaceReflection() const { return m_ss_refl; }
    void EnableAdditiveScreenSpaceReflection(bool ssr) { m_ss_refl = ssr; }
 
