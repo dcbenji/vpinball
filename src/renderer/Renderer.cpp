@@ -504,6 +504,11 @@ Renderer::~Renderer()
    m_ballEnvSampler = nullptr;
    m_envSampler = nullptr;
    m_aoDitherSampler = nullptr;
+   for (int i = 0; i < 2; i++)
+   {
+      delete m_pLeanMotionRT[i];
+      delete m_pLeanHistoryRT[i];
+   }
    // Views own render targets: they must be released while the render device is still alive
    m_vrMirrorView = nullptr;
    m_primaryView = nullptr;
@@ -2236,7 +2241,7 @@ Shader::PBRTextureSet Renderer::GetPBRTextureSet(const BaseProperty& partData, c
    pbrMaps.ormMap = m_table->GetImage(partData.m_szORMMap);
    pbrMaps.emissionMap = m_table->GetImage(partData.m_szEmissionMap);
    // Without the depth prepass the specular resolve pass cannot run: opaque parts degrade to in-shader specular
-   pbrMaps.inShaderSpecular = inShaderSpecular || !IsUsingDepthPrepass();
+   pbrMaps.inShaderSpecular = inShaderSpecular || !IsUsingDeferredPBRSpecular();
    pbrMaps.transparent = transparent;
 
    m_renderDevice->m_basicShader->SetTextureNull(ShaderUniform::tex_pbr_probe0);
@@ -3400,8 +3405,25 @@ bool Renderer::IsMotionVectorPrepass() const
    // time being. Being needed by AO, this also activates the shaded prepass normals even when the prepass
    // setting does not force them.
 #if defined(ENABLE_BGFX)
-   return GetAOMode() == 2 && !IsUsingStaticPrepass();
+   return (GetAOMode() == 2 || IsTemporalUpscale()) && !IsUsingStaticPrepass(); // the temporal upscaler also consumes them
 #else
    return false;
 #endif
+}
+
+bool Renderer::IsLeanUpscale() const
+{
+   // Mono only like FSR 1 (stereo / VR keep the bilinear upscale); primary view only (not the editor panes nor the VR desktop scene)
+#if defined(ENABLE_BGFX)
+   const RenderView* const view = m_activeView;
+   return m_upscaler == 6 && m_stereo3D == STEREO_OFF && view == m_primaryView.get() && view->m_pOffscreenBackBufferTexture1 != nullptr
+      && view->m_pOffscreenBackBufferTexture1->GetWidth() < view->m_renderWidth;
+#else
+   return false;
+#endif
+}
+
+bool Renderer::UseBallTranslationOnlyMotion() const
+{
+   return m_leanBallTranslationOnly && IsLeanUpscale();
 }

@@ -8,6 +8,7 @@
 #include "math/math.h"
 #include "math/matrix.h"
 #include "parts/ball.h"
+#include "parts/flipper.h"
 #include "parts/pintable.h"
 #include "physics/cabinet/NudgeHandler.h"
 #include "renderer/RenderCommand.h"
@@ -439,6 +440,8 @@ void RenderView::EnsureLayout()
    for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       m_isStaticPrepassDirty |= !(m_mvp.GetView(eye) == m_initialMVP.GetView(eye)) || !(m_mvp.GetProj(eye) == m_initialMVP.GetProj(eye));
    m_initialMVP = m_mvp;
+   if (this == r->GetPrimaryView())
+      r->m_temporalReset = true; // Any view setup change counts as a camera cut for the temporal upscaler (camera tweaking in the editor accumulates nothing)
 }
 
 void RenderView::ApplyViewJitter(const float xpixoff, const float ypixoff)
@@ -853,10 +856,14 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
 
    // Record the camera transform under which this frame's scene is rendered for this space reference, to feed
    // the depth prepass motion vectors (skipped for passes which do not contribute to the scene prepass, e.g.
-   // the reflected passes whose reflected view would break the recorded camera history)
-   if (m_renderer->IsMotionVectorPrepass() && (m_renderer->m_render_mask & (Renderer::REFLECTION_PASS | Renderer::SHADOW_MAP)) == 0)
+   // the reflected passes whose reflected view would break the recorded camera history). The first record of
+   // a space in a render is kept: the space's view/projection pair is fixed for the render (SetupSpaceViews),
+   // but a temporal upscaler's sub pixel jitter is removed after the scene (see Render), and the unjittered
+   // camera of the passes that follow must not replace the jittered one the motion vectors were drawn with
+   const int refIndex = clamp(static_cast<int>(spaceReference), 0, 3);
+   if (m_renderer->IsMotionVectorPrepass() && (m_renderer->m_render_mask & (Renderer::REFLECTION_PASS | Renderer::SHADOW_MAP)) == 0
+      && (m_curFrameCamViewProjMask & (1u << refIndex)) == 0)
    {
-      const int refIndex = clamp(static_cast<int>(spaceReference), 0, 3);
       for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
       {
          m_curFrameCamViewProj[refIndex][eye] = m_mvp.GetRotViewProj(eye);
@@ -927,10 +934,18 @@ bool RenderView::IsUsingDepthPrepass() const
 {
 #if defined(ENABLE_BGFX)
    // The VR desktop mirror scene shares this renderer but its own render targets: keep it on the legacy path
-   return m_renderer->m_depthPrepassMode != 0 && !IsMirror();
+   // The temporal upscaler consumes the depth & motion vectors of the prepass: it forces it on for the primary view
+   return (m_renderer->m_depthPrepassMode != 0 || (this == m_renderer->GetPrimaryView() && m_renderer->IsTemporalUpscale())) && !IsMirror();
 #else
    return false; // The depth prepass shaders are only implemented for the BGFX backend
 #endif
+}
+
+bool RenderView::IsUsingDeferredPBRSpecular() const
+{
+   // The deferred PBR specular (prepass march + resolve) follows the depth prepass setting only: a prepass forced on for a
+   // temporal upscaler's depth and motion vectors keeps the in-shader specular, so the image (and the cost) does not change
+   return m_renderer->m_depthPrepassMode != 0 && IsUsingDepthPrepass();
 }
 
 bool RenderView::IsTemporalAccumulationInProgress() const
@@ -1611,7 +1626,7 @@ RenderTarget* RenderView::ApplyPBRSpecularResolve(RenderTarget* renderedRT)
    // perceptual roughness recorded in its color attachment, gated by its opaque PBR flag so that only PBR
    // materials receive the contribution) then a full res bilateral upsample blended against the planar
    // probe radiance recorded in the sideband attachments (scene + W * lerp(L_probe, L_ssr, a')).
-   if (!rd->m_pbrActive || !IsUsingDepthPrepass())
+   if (!rd->m_pbrActive || !IsUsingDeferredPBRSpecular())
       return renderedRT;
    if (renderedRT->GetPBRSidebandSampler(1) == nullptr)
       return renderedRT;
@@ -2276,6 +2291,126 @@ RenderTarget* RenderView::ApplySharpening(RenderTarget* renderedRT, RenderTarget
    return outputRT;
 }
 
+RenderTarget* RenderView::ApplyLeanUpscale(RenderTarget* renderedRT)
+{
+   // VPX temporal upscaler (src/shaders/bgfx/fs_pp_lean_*.sc): pass 1 at render size (dilated motion, disocclusion), pass 2 at display
+   // size (reproject, clip, accumulate) whose history target is the output. Inputs: the jittered linear HDR render and the depth
+   // prepass (depth, motion vectors in zw)
+   Renderer* const r = m_renderer;
+   RenderDevice* const rd = r->m_renderDevice;
+   const int rw = renderedRT->GetWidth(), rh = renderedRT->GetHeight();
+   int ow, oh;
+   GetOutputAreaSize(ow, oh);
+   const auto fit = [r, rd](RenderTarget*& rt, int w, int h, const string& name)
+   {
+      if (rt && (rt->GetWidth() != w || rt->GetHeight() != h))
+      {
+         RenderTarget* const old = rt;
+         rd->AddEndOfFrameCmd([old]() { delete old; });
+         rt = nullptr;
+      }
+      if (rt == nullptr)
+      {
+         rt = new RenderTarget(rd, SurfaceType::RT_DEFAULT, name, w, h, colorFormat::RGBA16F, false, 1, "Fatal Error: unable to create the temporal upscaler buffers!");
+         r->m_temporalReset = true;
+      }
+   };
+   for (int i = 0; i < 2; i++)
+   {
+      fit(r->m_pLeanMotionRT[i], rw, rh, "Lean TAA Motion"s);
+      fit(r->m_pLeanHistoryRT[i], ow, oh, "Lean TAA"s);
+   }
+   const int cur = r->m_leanParity, prev = 1 - r->m_leanParity;
+   r->m_leanParity = prev;
+   const float reset = r->m_temporalReset ? 1.f : 0.f;
+   r->m_temporalReset = false;
+   RenderTarget* const prepassRT = GetDepthPrepassRenderTarget();
+   rd->ResetRenderState();
+   rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+   rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+   rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+   rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
+
+   // 1. Motion. Frame time ratio for the disocclusion test: motion vectors span one frame, which lasts longer or shorter than the
+   // last one under uneven pacing (a steady mover would otherwise be flagged every other frame and never accumulate)
+   const uint64_t now = usec();
+   const float dt = r->m_leanLastTime != 0 ? (float)((double)(now - r->m_leanLastTime) * 1e-6) : 0.f;
+   const float dtRatio = (r->m_leanFrameTimeScale && dt > 0.f && r->m_leanLastDt > 0.f) ? clamp(dt / r->m_leanLastDt, 0.25f, 4.f) : 1.f;
+   r->m_leanLastTime = now;
+   r->m_leanLastDt = dt;
+   vec4 p1[4] = { vec4((float)rw, (float)rh, (r->m_leanPrevJitter[0] - r->m_leanJitter[0]) / (float)rw, (r->m_leanPrevJitter[1] - r->m_leanJitter[1]) / (float)rh),
+      vec4(reset, dtRatio, r->m_leanActivity ? 1.f : 0.f, 0.f), vec4(r->m_leanDisoccSpeedTol, 0.f, 0.f, 0.f), vec4(0.f, 0.f, 0.f, 0.f) };
+   // Last frame's depth prepass: the scene targets ping pong and each keeps its own prepass target, so it is the other slot (same size)
+   RenderTarget* prevPrepassRT = nullptr;
+   if (r->m_leanDepthDisocc)
+      for (int i = 0; i < 2; i++)
+         if (m_depthPrepassRT[i] && m_depthPrepassRT[i] != prepassRT && m_depthPrepassSceneRT[i] == GetPreviousBackBufferTexture()
+            && m_depthPrepassRT[i]->GetWidth() == prepassRT->GetWidth() && m_depthPrepassRT[i]->GetHeight() == prepassRT->GetHeight())
+            prevPrepassRT = m_depthPrepassRT[i];
+   p1[1].w = prevPrepassRT ? r->m_leanDepthEps : 0.f;
+   rd->SetRenderTarget("Lean TAA Motion"s, r->m_pLeanMotionRT[cur], false);
+   rd->AddRenderTargetDependency(prepassRT, true);
+   rd->AddRenderTargetDependency(r->m_pLeanMotionRT[prev]);
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_fb_unfiltered, prepassRT->GetDepthSampler());
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_normals, prepassRT->GetColorSampler());
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_ao_dither, r->m_pLeanMotionRT[prev]->GetColorSampler());
+   if (prevPrepassRT)
+   {
+      rd->AddRenderTargetDependency(prevPrepassRT, true);
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_depth, prevPrepassRT->GetDepthSampler());
+   }
+   rd->m_FBShader->SetFloat4v(ShaderUniform::leanTaa, p1, 4);
+   rd->m_FBShader->SetTechnique(ShaderTechnique::Lean_Analysis);
+   rd->DrawFullscreenTexturedQuad(rd->m_FBShader);
+
+   // 2. Resolve into this frame's history
+   const vec4 p2[4] = { vec4((float)rw, (float)rh, r->m_leanJitter[0], r->m_leanJitter[1]), vec4((float)ow, (float)oh, reset, r->m_leanClipDecay), r->m_leanParams,
+      vec4(r->m_leanKernelShrink, r->m_leanActivity ? 1.f : 0.f, r->m_leanStillKernelOnly ? 1.f : 0.f, r->m_leanEdgeDirected) };
+   rd->SetRenderTarget("Lean TAA"s, r->m_pLeanHistoryRT[cur], false);
+   rd->AddRenderTargetDependency(renderedRT);
+   rd->AddRenderTargetDependency(r->m_pLeanMotionRT[cur]);
+   rd->AddRenderTargetDependency(r->m_pLeanHistoryRT[prev]);
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_fb_unfiltered, renderedRT->GetColorSampler());
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_bloom, r->m_pLeanHistoryRT[prev]->GetColorSampler());
+   rd->m_FBShader->SetTexture(ShaderUniform::tex_normals, r->m_pLeanMotionRT[cur]->GetColorSampler());
+   rd->m_FBShader->SetFloat4v(ShaderUniform::leanTaa, p2, 4);
+   rd->m_FBShader->SetTechnique(ShaderTechnique::Lean_Resolve);
+   rd->DrawFullscreenTexturedQuad(rd->m_FBShader);
+   // Moving pixels again, with the edge directed current frame estimate (still pixels are discarded at once and keep the result above).
+   // The pass is only drawn when a ball or a flipper moves (the fast movers): its launch alone costs ~0.09 ms at 4K on a 4070
+   bool movers = false;
+   for (const Ball* ball : g_pplayer->m_vball)
+      movers |= ball->m_d.m_visible && ball->GetVelocity().LengthSquared() > 1e-4f;
+   int flipperIndex = 0;
+   for (IEditable* const part : g_pplayer->m_ptable->GetParts())
+      if (part->GetItemType() == eItemFlipper)
+      {
+         float angle = 0.f;
+         static_cast<Flipper*>(part)->get_CurrentAngle(&angle);
+         if (flipperIndex >= (int)r->m_leanFlipperAngles.size())
+            r->m_leanFlipperAngles.push_back(angle);
+         movers |= fabsf(angle - r->m_leanFlipperAngles[flipperIndex]) > 1e-3f;
+         r->m_leanFlipperAngles[flipperIndex++] = angle;
+      }
+   r->m_leanMoverFrames = movers ? 4 : max(r->m_leanMoverFrames - 1, 0); // a few frames more for the trail the activity channel keeps
+   if (r->m_leanEdgeDirected > 0.f && r->m_leanMoverFrames > 0)
+   {
+      rd->SetRenderTarget("Lean TAA Movers"s, r->m_pLeanHistoryRT[cur], true, true);
+      rd->AddRenderTargetDependency(renderedRT);
+      rd->AddRenderTargetDependency(r->m_pLeanMotionRT[cur]);
+      rd->AddRenderTargetDependency(r->m_pLeanHistoryRT[prev]);
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_fb_unfiltered, renderedRT->GetColorSampler());
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_bloom, r->m_pLeanHistoryRT[prev]->GetColorSampler());
+      rd->m_FBShader->SetTexture(ShaderUniform::tex_normals, r->m_pLeanMotionRT[cur]->GetColorSampler());
+      rd->m_FBShader->SetFloat4v(ShaderUniform::leanTaa, p2, 4);
+      rd->m_FBShader->SetTechnique(ShaderTechnique::Lean_Resolve_EASU);
+      rd->DrawFullscreenTexturedQuad(rd->m_FBShader);
+   }
+   // The embedded ancillary windows are then composited into this history target; their regions are cleared in the render
+   // each frame so the clip rejects that history (only a 2 pixel border is touched). A separate output costs a display sized copy
+   return r->m_pLeanHistoryRT[cur];
+}
+
 bool RenderView::IsFSRUpscale() const
 {
    // Mono only, full output area only (the RCAS pass addresses the output by its pixel position); stereo, VR and editor
@@ -2575,6 +2710,22 @@ void RenderView::Render()
    // Keep previous render as a reflection probe for ball reflection and for hires motion blur
    SwapBackBufferRenderTargets();
 
+   // Temporal upscaler (primary view): the static prerender is disabled while it runs (it caches an unjittered image; this also keeps the
+   // screen space nudge and the ball motion blur off, which assume a fixed projection), and the projection gets a new sub-pixel jitter
+   // every frame (removed after the scene is recorded, before the UI). Reflection / refraction probes keep it: they are sampled in
+   // screen space, pixel aligned with the scene
+   bool temporal = false;
+   if (this == r->GetPrimaryView())
+   {
+      temporal = r->IsTemporalUpscale();
+      if (temporal != r->m_temporalActive)
+      {
+         r->m_temporalActive = temporal;
+         SetStaticPrepassDisabled(temporal);
+         r->m_temporalReset = true;
+      }
+   }
+
    // Mirror and offscreen views may restrict rendering to a single layer of the (stereo typed) render targets
    rd->m_singleLayerRendering = m_outputLayer;
 
@@ -2593,6 +2744,29 @@ void RenderView::Render()
             m_prevFrameCamViewProj[i][eye] = m_curFrameCamViewProj[i][eye];
             m_prevFrameCamPos[i][eye] = m_curFrameCamPos[i][eye];
          }
+
+#if defined(ENABLE_BGFX)
+   // The jitter goes on top of the space views just defined (SetupSpaceViews resets it), before any camera is recorded for the motion vectors
+   if (temporal)
+   {
+      const int rw = GetBackBufferTexture()->GetWidth(), rh = GetBackBufferTexture()->GetHeight();
+      int ow, oh;
+      GetOutputAreaSize(ow, oh);
+      // Halton(2,3) in render pixels, 8 x (display / render)^2 phases
+      const auto halton = [](int i, const int b) { float f = 1.f, h = 0.f; for (; i > 0; i /= b) { f /= (float)b; h += f * (float)(i % b); } return h; };
+      const float ratio = (float)ow / (float)rw;
+      const int phases = max(1, (int)(8.f * ratio * ratio));
+      r->m_leanJitterIndex = (r->m_leanJitterIndex + 1) % phases;
+      r->m_leanPrevJitter[0] = r->m_leanJitter[0];
+      r->m_leanPrevJitter[1] = r->m_leanJitter[1];
+      const float jx = r->m_leanJitter[0] = halton(r->m_leanJitterIndex + 1, 2) - 0.5f;
+      const float jy = r->m_leanJitter[1] = halton(r->m_leanJitterIndex + 1, 3) - 0.5f;
+      // Render pixels (+y down the texture rows) to clip space: texture rows go down the clip y axis, except on bottom left origin backends (OpenGL)
+      r->m_temporalViewJitter[0] = 2.f * jx / static_cast<float>(rw) * static_cast<float>(GetDisplayWidth());
+      r->m_temporalViewJitter[1] = (bgfx::getCaps()->originBottomLeft ? 2.f : -2.f) * jy / static_cast<float>(rh) * static_cast<float>(GetDisplayHeight());
+      ApplyViewJitter(r->m_temporalViewJitter[0], r->m_temporalViewJitter[1]);
+   }
+#endif
 
    SetSpaceReference(PartGroupData::SpaceReference::Playfield, true);
 
@@ -2664,6 +2838,9 @@ void RenderView::Render()
 
    RenderDynamics();
 
+   if (temporal)
+      ApplyViewJitter(-r->m_temporalViewJitter[0], -r->m_temporalViewJitter[1]); // The LiveUI and everything after the scene are unjittered
+
    // Render live UI 3D content (editors overlays, selection, ...)
    if (m_renderOverlay3D)
       g_pplayer->m_liveUI->Render3D();
@@ -2698,6 +2875,10 @@ void RenderView::Render()
    if (r->GetAOMode() == 2 && !rd->m_pbrAOEnabled) // Only process for dynamic AO
       UpdateAmbientOcclusion(GetBackBufferTexture(), g_pplayer->m_overall_frames % 2048, IsUsingDepthPrepass());
 
+   // The temporal upscaler upscales the linear HDR render (it is the antialiasing): the chain below (bloom, embedded displays, tonemapping) then runs at display size
+   if (temporal)
+      renderedRT = ApplyLeanUpscale(renderedRT);
+
    // Compute bloom (to be applied later, with tonemapping)
    UpdateBloom(renderedRT);
 
@@ -2710,9 +2891,9 @@ void RenderView::Render()
    r->RenderAncillaryWindow(VPXWindowId::VPXWINDOW_ScoreView, g_pplayer->m_scoreViewOutput, renderedRT, g_pplayer->m_ancillaryWndRenderers[VPXWindowId::VPXWINDOW_ScoreView]);
    r->RenderAncillaryWindow(VPXWindowId::VPXWINDOW_Topper, g_pplayer->m_topperOutput, renderedRT, g_pplayer->m_ancillaryWndRenderers[VPXWindowId::VPXWINDOW_Topper]);
 
-   const bool hasAntialiasPass = m_applyPostFX && r->m_FXAA != Disabled;
-   const bool hasSharpenPass = m_applyPostFX && r->m_sharpen != 0;
-   const bool hasUpscalerPass = m_applyPostFX && GetBackBufferTexture()->GetWidth() < m_renderWidth; // A downsampled render will be upscaled after postprocessing
+   const bool hasAntialiasPass = m_applyPostFX && r->m_FXAA != Disabled && !temporal;
+   const bool hasSharpenPass = m_applyPostFX && r->m_sharpen != 0 && (!temporal || r->m_leanKeepSharpen);
+   const bool hasUpscalerPass = m_applyPostFX && GetBackBufferTexture()->GetWidth() < m_renderWidth && !temporal; // A downsampled render will be upscaled after postprocessing
 // Stereo depends on the render device capabilities and if all the needed buffers and shaders are available
 #ifdef ENABLE_XR
    const bool hasStereoPass
@@ -2730,14 +2911,19 @@ void RenderView::Render()
       // Raytraced ball motion blur (BGFX only)
       renderedRT = ApplyBallMotionBlur(renderedRT, tonemapRT);
 
-      // Perform post processed anti aliasing
-      renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass) ? nullptr : GetOutput());
+      if (temporal && hasSharpenPass)
+         renderedRT = ApplySharpening(renderedRT, hasStereoPass ? nullptr : GetOutput());
+      if (!temporal) // The temporal upscaler already antialiased and upscaled
+      {
+         // Perform post processed anti aliasing
+         renderedRT = ApplyPostProcessedAntialiasing(renderedRT, (hasSharpenPass || hasStereoPass || hasUpscalerPass) ? nullptr : GetOutput());
 
-      // Performs sharpening
-      renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass) ? nullptr : GetOutput());
+         // Performs sharpening
+         renderedRT = ApplySharpening(renderedRT, (hasStereoPass || hasUpscalerPass) ? nullptr : GetOutput());
 
-      // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
-      renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : GetOutput());
+         // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
+         renderedRT = ApplyUpscaling(renderedRT, hasStereoPass ? nullptr : GetOutput());
+      }
    }
    else
       renderedRT = tonemapRT; // Without postprocess, the tonemapped render is the final output

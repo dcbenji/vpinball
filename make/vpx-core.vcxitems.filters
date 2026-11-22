@@ -3610,6 +3610,12 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_rcas.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_lean_analysis.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_lean_resolve.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fsr_common.sh">
       <Filter>shaders\bgfx</Filter>
     </None>

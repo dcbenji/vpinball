@@ -275,6 +275,9 @@ enum class ShaderTechnique : unsigned int
    SHADER_TECHNIQUE(BilateralSharp_CAS),
    SHADER_TECHNIQUE(FSR_EASU), // AMD FidelityFX Super Resolution 1 upscale (mono only)
    SHADER_TECHNIQUE(FSR_RCAS), // AMD FidelityFX Super Resolution 1 sharpening (mono only)
+   SHADER_TECHNIQUE(Lean_Analysis), // VPX temporal upscaler: dilated motion + disocclusion at render size (mono only)
+   SHADER_TECHNIQUE(Lean_Resolve), // VPX temporal upscaler: reproject, clip and accumulate at display size (mono only)
+   SHADER_TECHNIQUE(Lean_Resolve_EASU), // VPX temporal upscaler: the same on moving pixels only, with an edge directed current frame estimate
 #ifndef __OPENGLES__
    SHADER_TECHNIQUE(SMAA_ColorEdgeDetection),
    SHADER_TECHNIQUE(SMAA_BlendWeightCalculation),
@@ -342,6 +345,7 @@ enum class ShaderUniform : unsigned int
    SHADER_UNIFORM(ShaderUniformType::Float4x4, orientationPrev, 1), // BGFX only, previous frame ball orientation (depth prepass motion vectors)
    SHADER_UNIFORM(ShaderUniformType::Float4, lightCenter_doShadow, 1), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4v, balls, 8), // Basic & Flasher (for ball shadows)
+   SHADER_UNIFORM(ShaderUniformType::Float4v, leanTaa, 4), // Post process (VPX temporal upscaler)
    SHADER_UNIFORM(ShaderUniformType::Float4, staticColor_Alpha, 1), // Basic & Flasher
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)
 

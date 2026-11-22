@@ -187,8 +187,8 @@ PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different
 PropEnum(Player, Sharpen, "Post processed sharpening"s, "Select between different sharpening techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s, "CAS"s,
    "Bilateral CAS"s);
 PropEnum(Player, Upscaler, "Upscaler"s,
-   "Filter used to upscale the render to the display when rendering below the display resolution (Full Scene Anti Aliasing below 100%).\nFSR 1: AMD FidelityFX Super Resolution 1 (edge adaptive upscale with its own sharpening, which replaces the post processed sharpening while upscaling)"s,
-   int, 0, "Bilinear"s, "FSR 1"s);
+   "Filter used to upscale the render to the display when rendering below the display resolution (Full Scene Anti Aliasing below 100%).\nFSR 1: AMD FidelityFX Super Resolution 1 (edge adaptive upscale with its own sharpening, which replaces the post processed sharpening while upscaling)\nPinSharp: VPX's own temporal upscaler (jittered render, depth and motion vectors from the depth prepass; replaces post processed antialiasing and sharpening, disables the static prerender)"s,
+   int, 0, "Bilinear"s, "FSR 1"s, "(reserved)"s, "(reserved)"s, "(reserved)"s, "(reserved)"s, "PinSharp"s);
 PropFloat(Player, UpscalerSharpness, "Upscaler Sharpness"s, "FSR 1 sharpening attenuation in stops: 0 is the sharpest, 2 the softest"s, 0.f, 2.f, 0.2f);
 
 // Ball rendering

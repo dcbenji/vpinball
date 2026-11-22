@@ -267,6 +267,10 @@ public:
    int GetSelectedAOMode() const { return m_disableAO ? 0 : (m_dynamicAO ? 2 : 1); } // User selected AO mode
    void SetAOMode(int mode); // 0=Disabled, 1=Static, 2=Dynamic
    bool IsMotionVectorPrepass() const; // True when the shaded depth prepass also generates camera motion vectors
+   bool IsUsingDeferredPBRSpecular() const { return m_activeView->IsUsingDeferredPBRSpecular(); } // PBR specular resolved from the depth prepass
+   bool IsLeanUpscale() const; // VPX temporal upscaler (Upscaler = 6) on the active view this frame (primary view only, BGFX, mono, rendering below the display resolution)
+   bool IsTemporalUpscale() const { return IsLeanUpscale(); } // jittered render + depth / motion prepass + display size post chain
+   bool UseBallTranslationOnlyMotion() const; // ball motion vectors without the spin (VPX temporal upscaler refinements)
 
    bool UseAnisoFiltering() const;
    void SetAnisoFiltering(bool enable);
@@ -370,7 +374,7 @@ public:
    bool m_motionBlurOff = false;
    int m_FXAA; // =FXAASettings
    int m_sharpen; // 0=off, 1=CAS, 2=bilateral CAS
-   int m_upscaler; // 0=bilinear, 1=FSR 1 (only used when rendering below the display resolution)
+   int m_upscaler; // 0=bilinear, 1=FSR 1, 6=VPX temporal (2 to 5 reserved; only used when rendering below the display resolution)
    float m_upscalerSharpness; // FSR 1 RCAS attenuation in stops (0 = sharpest)
    bool HasAdditiveScreenSpaceReflection() const { return m_ss_refl; }
    void EnableAdditiveScreenSpaceReflection(bool ssr) { m_ss_refl = ssr; }
@@ -526,6 +530,35 @@ private:
    // Owned through the unique_ptr members; m_renderViews is the non-owning render order registry.
    std::unique_ptr<RenderView> m_primaryView;
    std::unique_ptr<RenderView> m_vrMirrorView;
+
+   // Temporal upscaler state, used by the primary view only (see RenderView::Render and RenderView::ApplyLeanUpscale)
+   bool m_temporalActive = false; // A temporal upscaler was active on the last frame (it holds a static prerender disable of the primary view)
+   bool m_temporalReset = true; // Discard the temporal history (view setup change, upscaler turned on, history targets created)
+   float m_temporalViewJitter[2] = { 0.f, 0.f }; // Jitter applied to the primary view's projection this frame (ApplyViewJitter units)
+   // VPX temporal upscaler: Halton(2,3) jitter in render pixels, ping pong motion (render size) and history (display size)
+   int m_leanJitterIndex = 0;
+   float m_leanJitter[2] = { 0.f, 0.f }, m_leanPrevJitter[2] = { 0.f, 0.f };
+   RenderTarget* m_pLeanMotionRT[2] = { nullptr, nullptr };
+   RenderTarget* m_pLeanHistoryRT[2] = { nullptr, nullptr };
+   int m_leanParity = 0;
+   float m_leanClipDecay = 0.f; // weight loss exponent of clipped history (0 = off)
+   // Moving-content rules
+   float m_leanDisoccSpeedTol = 0.5f; // disocclusion tolerance as a fraction of the pixel's own motion (0 = fixed 0.5 render px)
+   bool m_leanStillKernelOnly = false; // the kernel narrows on still pixels only
+   float m_leanEdgeDirected = 1.f; // strength of the edge directed (FSR 1 EASU) current frame estimate on moving pixels, second pass (0 = off)
+   vector<float> m_leanFlipperAngles; // last frame's flipper angles (mover detection for the edge directed pass)
+   int m_leanMoverFrames = 0;
+   bool m_leanDepthDisocc = true; // a pixel where something nearer stood last frame (last frame's depth prepass) drops its history (at a 2e-5 step it fired on static slopes: 1e-3)
+   float m_leanDepthEps = 1e-3f; // relative depth step that counts
+   // Refinements over the first version (members, so each one can be switched off to compare)
+   float m_leanKernelShrink = 8.f; // history weight at which the current frame kernel is one output pixel wide (0 = one render pixel always)
+   bool m_leanActivity = true; // pixels something moved over recently (pass 1 activity) get the moving-pixel rules
+   bool m_leanFrameTimeScale = true; // the disocclusion test scales last frame's motion by the frame time ratio
+   bool m_leanBallTranslationOnly = true; // the ball's motion vectors follow its position, not its spin
+   bool m_leanKeepSharpen = false; // the post processed sharpening after the VPX temporal upscaler (off: it is skipped)
+   uint64_t m_leanLastTime = 0;
+   float m_leanLastDt = 0.f;
+   vec4 m_leanParams = vec4(2.5f, 1.0f, 32.f, 4.f); // variance box scale still / moving, history weight cap still / moving
    std::vector<std::unique_ptr<RenderView>> m_extraViews;
    std::vector<RenderView*> m_renderViews;
    std::vector<std::unique_ptr<RenderView>> m_deadViews; // Released views kept alive until the next frame's record starts

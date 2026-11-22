@@ -469,7 +469,17 @@ void Ball::Render(const unsigned int renderMask)
    const Matrix3D fullTrafo = rot * scale * Matrix3D::MatrixTranslate(posr);
    m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientation, &fullTrafo);
    const Matrix3D *const prevTrafo = m_prevOrientation.Update(fullTrafo, g_pplayer->m_overall_frames);
-   m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientationPrev, prevTrafo ? prevTrafo : &fullTrafo);
+   // VPX temporal upscaler refinements: the previous transform keeps this frame's rotation (translation only). A chrome ball shows mostly
+   // its reflection, which follows the ball's position but not the spin of its surface: history fetched along the spin is clipped away (fuzz)
+   Matrix3D prevMotion = prevTrafo ? *prevTrafo : fullTrafo;
+   if (prevTrafo && m_renderer->UseBallTranslationOnlyMotion())
+   {
+      prevMotion = fullTrafo;
+      prevMotion.m[3][0] = prevTrafo->m[3][0];
+      prevMotion.m[3][1] = prevTrafo->m[3][1];
+      prevMotion.m[3][2] = prevTrafo->m[3][2];
+   }
+   m_renderer->m_renderDevice->m_ballShader->SetMatrix(ShaderUniform::orientationPrev, &prevMotion);
 
    m_renderer->m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
    bool sphericalMapping;
@@ -532,24 +542,28 @@ void Ball::Render(const unsigned int renderMask)
    // The command is executed on the render thread, while the game thread is performing continuous physics. therefore the ball object
    // may be modified while the update command is executed.
    // Note that this code must be kept in sync with the ball motion blur code
+   // Not with a temporal upscaler: the depth prepass (depth + motion vectors) keeps the record time position, so a later colour position
+   // makes the upscaler see a ball whose colour does not match its depth and motion (smear / blur around the ball). The
+   // command still runs then, at the record time position, since it lays out the impostor quad
+   const bool latePosition = !m_renderer->IsTemporalUpscale();
    ShaderState *ss = m_renderer->m_renderDevice->GetCurrentPass()->m_commands.back()->GetShaderState();
    Vertex3D_NoTex2 *const quadVerts = static_cast<Vertex3D_NoTex2 *>(m_renderer->m_renderDevice->GetCurrentPass()->m_commands.back()->GetQuadVertices());
    AddRef(); // The ball may be destroyed by the script, so we need to hold a ref on it until the end of frame command below releases it
    m_renderer->m_renderDevice->AddBeginOfFrameCmd(
-      [this, rotScale = rot * scale, ss, quadVerts, worldViewInverse, worldViewProj, nEyes, rd = m_renderer->m_renderDevice, scheduleTimestamp = usec()]()
+      [this, rotScale = rot * scale, ss, quadVerts, worldViewInverse, worldViewProj, nEyes, rd = m_renderer->m_renderDevice, scheduleTimestamp = usec(), latePosition, posr]()
       {
          // Adjust ball position to latest physics position
-         vec3 posl = m_hitBall.m_d.m_pos;
+         vec3 posl = latePosition ? m_hitBall.m_d.m_pos : posr;
          // If playing also apply velocity extrapolation to account for:
          // - the time elapsed since last physic,
          // - the time between now and when it will be presented,
          // - the time the display will need to actually show it (1ms is just a magic number here)
-         if (g_pplayer->IsPlaying())
+         if (latePosition && g_pplayer->IsPlaying())
          {
             const float delay = (float)(static_cast<double>(usec() - g_pplayer->m_timeUpdateTimeStamp) / 1000000.) + rd->GetPredictedDisplayDelay() + 0.001f;
             posl += delay * m_hitBall.m_d.m_vel;
          }
-         if (m_hitBall.m_d.m_lockedInKicker)
+         if (latePosition && m_hitBall.m_d.m_lockedInKicker)
             posl.z -= m_hitBall.m_d.m_radius;
          const Matrix3D m3D_fulll = rotScale * Matrix3D::MatrixTranslate(posl);
          ss->SetMatrix(ShaderUniform::orientation, &m3D_fulll.m[0][0]);

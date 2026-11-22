@@ -254,6 +254,9 @@ Shader::TechniqueDef Shader::shaderTechniqueNames[static_cast<unsigned int>(Shad
    SHADER_TECHNIQUE(BilateralSharp_CAS),
    SHADER_TECHNIQUE(FSR_EASU),
    SHADER_TECHNIQUE(FSR_RCAS),
+   SHADER_TECHNIQUE(Lean_Analysis),
+   SHADER_TECHNIQUE(Lean_Resolve),
+   SHADER_TECHNIQUE(Lean_Resolve_EASU),
 #ifndef __OPENGLES__
    SHADER_TECHNIQUE(SMAA_ColorEdgeDetection),
    SHADER_TECHNIQUE(SMAA_BlendWeightCalculation),
@@ -333,6 +336,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4x4, orientationPrev, 1), // BGFX only, previous frame ball orientation (depth prepass motion vectors)
    SHADER_UNIFORM(ShaderUniformType::Float4, lightCenter_doShadow, 1), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4v, balls, 8), // Basic & Flasher (for ball shadows)
+   SHADER_UNIFORM(ShaderUniformType::Float4v, leanTaa, 4), // Post process (VPX temporal upscaler)
    SHADER_UNIFORM(ShaderUniformType::Float4, staticColor_Alpha, 1), // Basic & Flasher
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)
 
@@ -1660,7 +1664,7 @@ void Shader::Load()
       // Anti-Aliasing as post-processes
       BGFX_EMBEDDED_SHADER_ST(fs_pp_nfaa), BGFX_EMBEDDED_SHADER_ST(fs_pp_dlaa_edge), BGFX_EMBEDDED_SHADER_ST(fs_pp_dlaa), BGFX_EMBEDDED_SHADER_ST(fs_pp_fxaa1),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_fxaa2), BGFX_EMBEDDED_SHADER_ST(fs_pp_fxaa3), BGFX_EMBEDDED_SHADER_ST(fs_pp_faaa), BGFX_EMBEDDED_SHADER_ST(fs_pp_cas),
-      BGFX_EMBEDDED_SHADER_ST(fs_pp_bilateral_cas), BGFX_EMBEDDED_SHADER(fs_pp_fsr_easu), BGFX_EMBEDDED_SHADER(fs_pp_fsr_rcas), BGFX_EMBEDDED_SHADER(vs_pp_smaa_edgedetection), BGFX_EMBEDDED_SHADER(fs_pp_smaa_edgedetection),
+      BGFX_EMBEDDED_SHADER_ST(fs_pp_bilateral_cas), BGFX_EMBEDDED_SHADER(fs_pp_fsr_easu), BGFX_EMBEDDED_SHADER(fs_pp_fsr_rcas), BGFX_EMBEDDED_SHADER(fs_pp_lean_analysis), BGFX_EMBEDDED_SHADER(fs_pp_lean_resolve), BGFX_EMBEDDED_SHADER(fs_pp_lean_resolve_easu), BGFX_EMBEDDED_SHADER(vs_pp_smaa_edgedetection), BGFX_EMBEDDED_SHADER(fs_pp_smaa_edgedetection),
       BGFX_EMBEDDED_SHADER(vs_pp_smaa_blendweightcalculation), BGFX_EMBEDDED_SHADER(fs_pp_smaa_blendweightcalculation), BGFX_EMBEDDED_SHADER(vs_pp_smaa_neighborhoodblending),
       BGFX_EMBEDDED_SHADER(fs_pp_smaa_neighborhoodblending),
       // Blur shaders
@@ -1892,6 +1896,10 @@ void Shader::Load()
       // FSR 1 upscaler, mono only (stereo falls back to the bilinear upscale)
       loadProgram(embeddedShaders, ShaderTechnique::FSR_EASU, "vs_postprocess", "fs_pp_fsr_easu");
       loadProgram(embeddedShaders, ShaderTechnique::FSR_RCAS, "vs_postprocess", "fs_pp_fsr_rcas");
+      // VPX temporal upscaler, mono only
+      loadProgram(embeddedShaders, ShaderTechnique::Lean_Analysis, "vs_postprocess", "fs_pp_lean_analysis");
+      loadProgram(embeddedShaders, ShaderTechnique::Lean_Resolve, "vs_postprocess", "fs_pp_lean_resolve");
+      loadProgram(embeddedShaders, ShaderTechnique::Lean_Resolve_EASU, "vs_postprocess", "fs_pp_lean_resolve_easu");
       // FIXME add stereo support to SMAA
       loadProgram(embeddedShaders, ShaderTechnique::SMAA_ColorEdgeDetection, "vs_pp_smaa_edgedetection", "fs_pp_smaa_edgedetection");
       loadProgram(embeddedShaders, ShaderTechnique::SMAA_BlendWeightCalculation, "vs_pp_smaa_blendweightcalculation", "fs_pp_smaa_blendweightcalculation");

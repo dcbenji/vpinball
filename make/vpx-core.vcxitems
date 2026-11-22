@@ -1387,6 +1387,12 @@
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_fsr_rcas.sc">
       <FileType>Document</FileType>
     </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_lean_analysis.sc">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_lean_resolve.sc">
+      <FileType>Document</FileType>
+    </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fsr_common.sh">
       <FileType>Document</FileType>
     </None>

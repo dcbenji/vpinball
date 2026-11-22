@@ -186,6 +186,7 @@ public:
    // Static part prerendering (temporal accumulation)
    bool IsUsingStaticPrepass() const;
    bool IsUsingDepthPrepass() const;
+   bool IsUsingDeferredPBRSpecular() const; // The deferred PBR specular (prepass march + resolve) runs: it follows the depth prepass setting only
    bool IsTemporalAccumulationInProgress() const; // True while the static parts prerender is still accumulating samples (this view or any render probe)
    void MarkPrepassDirty() { m_isStaticPrepassDirty = true; } // The accumulated static part prerender is stale: re-accumulate it on the next render
    void ResetStaticPrepass()
@@ -247,6 +248,7 @@ private:
    RenderTarget* ApplyPostProcessedAntialiasing(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
    RenderTarget* ApplySharpening(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
    bool IsFSRUpscale() const; // FSR 1 replaces the bilinear upscale (and the sharpening) for this frame
+   RenderTarget* ApplyLeanUpscale(RenderTarget* renderedRT); // VPX temporal upscale of the linear HDR render to a display sized HDR target
    RenderTarget* ApplyUpscaling(RenderTarget* renderedRT, RenderTarget* outputBackBuffer);
 
    Renderer* const m_renderer;
