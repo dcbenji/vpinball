@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -154,6 +155,9 @@ public:
    RenderTarget* GetPreviousBackBufferTexture() const { return m_pOffscreenBackBufferTexture2; } // Same as back buffer but for previous frame
    void SwapBackBufferRenderTargets();
    void ResizeRenderTargets(); // Follows the output size (resizable window, panel resize)
+   void RecreateSceneTargets(int renderWidthAA, int renderHeightAA); // Scene sized render targets at a new size (output resize, dynamic render scale)
+   void SwitchScaleTargets(int renderWidthAA, int renderHeightAA); // Dynamic render scale: park the scene sized targets, take (or create) the set of that size
+   void ReleaseScaleTargetSets(); // Delete the parked sets (end of frame)
 
    RenderTarget* GetAORenderTarget(int idx);
    void SwapAORenderTargets();
@@ -323,6 +327,18 @@ private:
    int m_disableStaticPrepass = 0;
    RenderTarget* m_staticPrepassRT = nullptr;
    int m_staticPrepassAccumCount = 0; // Number of samples accumulated so far in the static parts prerender
+
+   // Scene sized target sets of other render scales, parked by SwitchScaleTargets (at most 2 besides the active one, least recently used out)
+   struct ScaleTargetSet
+   {
+      int w = 0, h = 0;
+      uint64_t lastUse = 0;
+      RenderTarget *bb1 = nullptr, *bb2 = nullptr, *msaa = nullptr, *pp1 = nullptr, *pp2 = nullptr, *pp3 = nullptr, *refl = nullptr, *reflHalf = nullptr, *pbrResolve = nullptr,
+                   *pbrSsrHistory = nullptr, *mblur = nullptr, *ao1 = nullptr, *ao2 = nullptr, *staticPrepass = nullptr;
+      RenderTarget *prepass[2] = { nullptr, nullptr }, *prepassScene[2] = { nullptr, nullptr };
+      vector<std::array<RenderTarget*, 3>> probes;
+   };
+   vector<ScaleTargetSet> m_scaleSets;
    unsigned int m_statsDrawnStaticTriangles = 0;
 
    // Per reference space view/projection pairs defined once for the current render (indexed by

@@ -389,6 +389,10 @@ void Renderer::ApplyTableSettings()
    m_upscaler = m_table->GetSettings().GetPlayer_Upscaler();
    m_upscalerSharpness = m_table->GetSettings().GetPlayer_UpscalerSharpness();
    m_leanSharpen = m_table->GetSettings().GetPlayer_UpscalerTemporalSharpen();
+   m_dynScale = m_table->GetSettings().GetPlayer_UpscalerDynamicScale();
+   m_dynMin = m_table->GetSettings().GetPlayer_UpscalerDynamicMin();
+   m_dynBudget = m_table->GetSettings().GetPlayer_UpscalerDynamicBudget();
+   m_dynMax = m_dynCur = m_table->GetSettings().GetPlayer_AAFactor();
    m_ss_refl = m_table->GetSettings().GetPlayer_SSRefl();
    m_bloomOff = m_table->GetSettings().GetPlayer_ForceBloomOff();
    m_motionBlurOff = m_table->GetSettings().GetPlayer_ForceMotionBlurOff();
@@ -3428,3 +3432,102 @@ bool Renderer::UseBallTranslationOnlyMotion() const
 {
    return m_leanBallTranslationOnly && IsLeanUpscale();
 }
+
+void Renderer::UpdateDynamicScale()
+{
+#if defined(ENABLE_BGFX)
+   RenderView* const view = m_primaryView.get();
+   if (!m_dynScale || m_upscaler != 6 || m_stereo3D != STEREO_OFF || m_dynMax <= m_dynMin || view == nullptr || view->GetBackBufferTexture() == nullptr)
+      return;
+   // Load signal: the GPU time of the last measured frame (1-2 frames old) where it is plausible (Vulkan, D3D), else the frame
+   // interval measured here (Metal: bgfx's whole-frame GPU time spans the overlapped frames in flight and reads ~2x the interval).
+   // Smoothed. Cost follows the rendered pixels: at scale s' a frame costs about work x (s' / s)^2 (an upper bound)
+   const uint64_t now = usec();
+   const float interval = m_dynLastTime != 0 ? static_cast<float>(static_cast<double>(now - m_dynLastTime) * 1e-3) : 0.f;
+   m_dynLastTime = now;
+   const float gpu = static_cast<float>(m_renderDevice->m_lastGPUFrameLength) * 1e-3f;
+   if (gpu <= 0.f || interval <= 0.f || interval > 250.f) // nothing measured yet, or a stall (loading, a target recreation)
+      return;
+   m_dynRatio += 0.05f * (gpu / interval - m_dynRatio);
+   // Metal: never (under vsync its GPU time can also read near the interval while the real load is far lower: measured on a MacBook Air)
+   const bool gpuOk = m_dynRatio < 1.3f && bgfx::getRendererType() != bgfx::RendererType::Metal;
+   const float work = gpuOk ? gpu : interval;
+   m_dynGpu = m_dynGpu <= 0.f ? work : m_dynGpu + 0.15f * (work - m_dynGpu);
+   const float period = 1000.f / max(static_cast<float>(m_renderDevice->m_outputWnd[0]->GetRefreshRate()), 30.f);
+   // With the GPU time: 90 % of the refresh period. With the interval: a missed refresh (under vsync the interval never shows headroom)
+   const float budget = m_dynBudget > 0.f ? m_dynBudget : (gpuOk ? 0.9f : 1.5f) * period; // interval: a refresh really missed (presents jitter up to ~1.3 periods)
+   constexpr float step = 1.f / 24.f;
+   float target = m_dynCur;
+   m_dynSinceUp++;
+   if (m_dynCooldown > 0)
+   {
+      m_dynCooldown--;
+      return;
+   }
+   // Down fast: 3 frames over budget (or the smoothed load over it) -> the scale that would fit 90 % of the budget, at least one step.
+   // Up: 2 s where even the next step up is predicted under 80 % of the budget; or, when the interval is the signal (it cannot show
+   // headroom under vsync), a probe after m_dynProbe frames without a frame over budget. A probe followed by a step down within
+   // 2 s doubles the wait for the next one (up to 30 s); a probe that holds resets it to 5 s
+   const bool over = work > budget || m_dynGpu > budget;
+   // Leaky count of frames over budget (~1 s memory): an alternating fast / slow pattern adds up too (3 consecutive never came)
+   m_dynOver = m_dynOver * 0.95f + (over ? 1.f : 0.f);
+   m_dynSinceOver = over ? 0 : m_dynSinceOver + 1;
+   const float up = min(m_dynCur + step, m_dynMax);
+   m_dynUnder = (m_dynGpu * (up / m_dynCur) * (up / m_dynCur) < 0.8f * budget) ? m_dynUnder + 1 : 0;
+   if (m_dynSinceUp == 120)
+      m_dynProbe = 3600;
+   if (m_dynDownBlock > 0)
+      m_dynDownBlock = m_dynGpu > 1.25f * m_dynBlockWork ? 0 : m_dynDownBlock - 1;
+   if (m_dynSinceOver >= 300) // 5 s within budget: the run of steps down is over
+      m_dynRunStart = 0.f;
+   if (m_dynOver >= 2.5f && m_dynDownBlock == 0)
+   {
+      target = min(m_dynCur - step, m_dynCur * sqrtf(0.9f * budget / max(m_dynGpu, work)));
+      if (m_dynSinceUp < 120)
+         m_dynProbe = min(2 * m_dynProbe, 18000);
+      // Lock-in guard (interval signal only): 40 % fewer pixels since the run started and the interval did not drop by 15 %: the
+      // load is not the rendered pixels (a display held at half rate, a CPU bound frame). Back to the run's start, no step down for 60 s
+      // Only where the interval sits near two refresh periods (a half rate lock): with presents not held to vsync (a MacBook Air) the
+      // interval follows the load, and a load that grew during the run (play after attract) fooled the comparison
+      if (!gpuOk && fabsf(m_dynGpu / period - 2.f) < 0.25f)
+      {
+         if (m_dynRunStart == 0.f)
+         {
+            m_dynRunStart = m_dynCur;
+            m_dynRunWork = m_dynGpu;
+         }
+         else if ((m_dynCur / m_dynRunStart) * (m_dynCur / m_dynRunStart) < 0.6f && m_dynGpu > 0.85f * m_dynRunWork)
+         {
+            PLOGI << "Dynamic render scale: " << m_dynRunStart << " -> " << m_dynCur << " did not lower the frame interval (" << m_dynRunWork << " -> "
+                  << m_dynGpu << " ms): not GPU bound (half rate lock-in or CPU), back to " << m_dynRunStart;
+            target = m_dynRunStart;
+            m_dynRunStart = 0.f;
+            m_dynDownBlock = 3600;
+            m_dynBlockWork = m_dynRunWork;
+         }
+      }
+   }
+   // The prediction needs a real load signal: a GPU time, or an interval below the refresh period (presents not held to vsync, a
+   // MacBook Air at full screen: 12 ms frames at 60 Hz). Under vsync the interval reads one period whatever the load: probes only
+   else if (m_dynCur < m_dynMax && (((gpuOk || m_dynGpu < 0.9f * period) && m_dynUnder >= 120) || (!gpuOk && m_dynSinceOver >= m_dynProbe)))
+      target = up;
+   if (fabsf(target - m_dynCur) < 1e-4f) // no decision (rounding the current scale would move an off-grid minimum or maximum)
+      return;
+   target = clamp(roundf(target / step) * step, m_dynMin, m_dynMax);
+   if (fabsf(target - m_dynCur) < 1e-4f)
+      return;
+   const bool down = target < m_dynCur;
+   m_dynGpu *= (target / m_dynCur) * (target / m_dynCur);
+   m_dynCur = target;
+   m_dynOver = 0.f;
+   m_dynUnder = m_dynSinceOver = 0;
+   if (!down)
+      m_dynSinceUp = 0;
+   m_dynCooldown = down ? 30 : 90;
+   m_dynLastTime = 0; // the recreation stalls this frame: the next interval is not a load sample
+   const int w = max(1, static_cast<int>(static_cast<float>(view->m_renderWidth) * m_dynCur)), h = max(1, static_cast<int>(static_cast<float>(view->m_renderHeight) * m_dynCur));
+   PLOGI << "Dynamic render scale " << m_dynCur << " (" << w << 'x' << h << "), " << (gpuOk ? "GPU " : "frame ") << work << " ms, budget " << budget << " ms";
+   view->SwitchScaleTargets(w, h);
+#endif
+}
+

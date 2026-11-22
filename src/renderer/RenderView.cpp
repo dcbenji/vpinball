@@ -79,6 +79,15 @@ void RenderView::SetupTargets(const int width, const int height, const SurfaceTy
 
 void RenderView::ReleaseTargets()
 {
+   for (ScaleTargetSet& s : m_scaleSets)
+   {
+      for (RenderTarget* rt : { s.bb1, s.bb2, s.msaa, s.pp1, s.pp2, s.pp3, s.refl, s.reflHalf, s.pbrResolve, s.pbrSsrHistory, s.mblur, s.ao1, s.ao2, s.staticPrepass, s.prepass[0], s.prepass[1] })
+         delete rt;
+      for (auto& p : s.probes)
+         for (RenderTarget* rt : p)
+            delete rt;
+   }
+   m_scaleSets.clear();
    delete m_staticPrepassRT;
    m_staticPrepassRT = nullptr;
    delete m_depthPrepassRT[0];
@@ -208,6 +217,17 @@ void RenderView::ResizeRenderTargets()
    const int renderHeightAA = max(1, static_cast<int>(static_cast<float>(m_renderHeight) * m_aaFactor));
    PLOGI << "View " << (IsMirror() ? "VR desktop display" : "playfield") << " resized to " << outWidth << 'x' << outHeight << ", rendering at " << renderWidthAA << 'x' << renderHeightAA;
 
+   ReleaseScaleTargetSets();
+   RecreateSceneTargets(renderWidthAA, renderHeightAA);
+   // The new targets may change the output aspect the camera layout derives from (views with an
+   // externally driven camera keep it: EnsureLayout skips them, the pane re-pushes it each frame)
+   InvalidateLayout();
+}
+
+void RenderView::RecreateSceneTargets(const int renderWidthAA, const int renderHeightAA)
+{
+   Renderer* const r = m_renderer;
+   RenderDevice* const rd = r->m_renderDevice;
    // Frames already submitted may still reference the previous targets: release them at the end of the frame being prepared
    vector<RenderTarget*> released { m_pOffscreenBackBufferTexture1, m_pOffscreenBackBufferTexture2, m_pOffscreenMSAABackBufferTexture, m_pBloomBufferTexture, m_pBloomTmpBufferTexture,
       m_pPostProcessRenderTarget1, m_pPostProcessRenderTarget2, m_pPostProcessRenderTarget3, m_pReflectionBufferTexture, m_pReflectionHalfBufferTexture, m_pPBRResolveBufferTexture,
@@ -259,9 +279,140 @@ void RenderView::ResizeRenderTargets()
    rd->m_ballShader->SetVector(
       ShaderUniform::w_h_disableLighting, 1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), 1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(), 0.f, 0.f);
    r->DisableBallLighting(r->m_table->GetSettings().GetPlayer_DisableLightingForBalls());
-   // The new targets may change the output aspect the camera layout derives from (views with an
-   // externally driven camera keep it: EnsureLayout skips them, the pane re-pushes it each frame)
-   InvalidateLayout();
+}
+
+void RenderView::ReleaseScaleTargetSets()
+{
+   vector<RenderTarget*> released;
+   for (ScaleTargetSet& s : m_scaleSets)
+   {
+      for (RenderTarget* rt : { s.bb1, s.bb2, s.msaa, s.pp1, s.pp2, s.pp3, s.refl, s.reflHalf, s.pbrResolve, s.pbrSsrHistory, s.mblur, s.ao1, s.ao2, s.staticPrepass, s.prepass[0], s.prepass[1] })
+         if (rt)
+            released.push_back(rt);
+      for (auto& p : s.probes)
+         for (RenderTarget* rt : p)
+            if (rt)
+               released.push_back(rt);
+   }
+   m_scaleSets.clear();
+   if (!released.empty())
+      m_renderer->m_renderDevice->AddEndOfFrameCmd(
+         [released]()
+         {
+            for (RenderTarget* rt : released)
+               delete rt;
+         });
+}
+
+void RenderView::SwitchScaleTargets(const int w, const int h)
+{
+   // A scale change used to recreate every scene sized target (back buffers + PBR sideband, depth prepass, probes, post process, AO...):
+   // measured as 2-3 missed refreshes per change on a MacBook Air. The set of the previous size is parked instead, and a parked set of the
+   // new size is taken back as is (its contents are one frame stale: the history and the probes refresh it)
+   Renderer* const r = m_renderer;
+   RenderDevice* const rd = r->m_renderDevice;
+   const RenderTarget* const previous = GetBackBufferTexture();
+   const SurfaceType rtType = previous->m_type;
+   const colorFormat renderFormat = previous->GetColorFormat();
+   const int msaaSamples = previous->GetMSAASamples();
+   const bool hasMSAA = m_pOffscreenMSAABackBufferTexture != nullptr;
+   const int msaaTargetSamples = hasMSAA ? m_pOffscreenMSAABackBufferTexture->GetMSAASamples() : 1;
+
+   ScaleTargetSet cur;
+   cur.w = previous->GetWidth();
+   cur.h = previous->GetHeight();
+   cur.lastUse = g_pplayer->m_overall_frames;
+   std::swap(cur.bb1, m_pOffscreenBackBufferTexture1);
+   std::swap(cur.bb2, m_pOffscreenBackBufferTexture2);
+   std::swap(cur.msaa, m_pOffscreenMSAABackBufferTexture);
+   std::swap(cur.pp1, m_pPostProcessRenderTarget1);
+   std::swap(cur.pp2, m_pPostProcessRenderTarget2);
+   std::swap(cur.pp3, m_pPostProcessRenderTarget3);
+   std::swap(cur.refl, m_pReflectionBufferTexture);
+   std::swap(cur.reflHalf, m_pReflectionHalfBufferTexture);
+   std::swap(cur.pbrResolve, m_pPBRResolveBufferTexture);
+   std::swap(cur.pbrSsrHistory, m_pPBRSsrHistoryTexture);
+   std::swap(cur.mblur, m_pMotionBlurBufferTexture);
+   std::swap(cur.ao1, m_pAORenderTarget1);
+   std::swap(cur.ao2, m_pAORenderTarget2);
+   std::swap(cur.staticPrepass, m_staticPrepassRT);
+   for (int i = 0; i < 2; i++)
+   {
+      std::swap(cur.prepass[i], m_depthPrepassRT[i]);
+      std::swap(cur.prepassScene[i], m_depthPrepassSceneRT[i]);
+   }
+   for (RenderProbe* probe : r->m_table->m_vrenderprobe)
+   {
+      std::array<RenderTarget*, 3> p = { nullptr, nullptr, nullptr };
+      probe->ExchangeTargets(this, p[0], p[1], p[2]);
+      cur.probes.push_back(p);
+   }
+
+   const auto it = std::find_if(m_scaleSets.begin(), m_scaleSets.end(), [w, h](const ScaleTargetSet& s) { return s.w == w && s.h == h; });
+   const bool reused = it != m_scaleSets.end();
+   if (reused)
+   {
+      ScaleTargetSet& s = *it;
+      m_pOffscreenBackBufferTexture1 = s.bb1;
+      m_pOffscreenBackBufferTexture2 = s.bb2;
+      m_pOffscreenMSAABackBufferTexture = s.msaa;
+      m_pPostProcessRenderTarget1 = s.pp1;
+      m_pPostProcessRenderTarget2 = s.pp2;
+      m_pPostProcessRenderTarget3 = s.pp3;
+      m_pReflectionBufferTexture = s.refl;
+      m_pReflectionHalfBufferTexture = s.reflHalf;
+      m_pPBRResolveBufferTexture = s.pbrResolve;
+      m_pPBRSsrHistoryTexture = s.pbrSsrHistory;
+      m_pMotionBlurBufferTexture = s.mblur;
+      m_pAORenderTarget1 = s.ao1;
+      m_pAORenderTarget2 = s.ao2;
+      m_staticPrepassRT = s.staticPrepass;
+      for (int i = 0; i < 2; i++)
+      {
+         m_depthPrepassRT[i] = s.prepass[i];
+         m_depthPrepassSceneRT[i] = s.prepassScene[i];
+      }
+      for (size_t i = 0; i < r->m_table->m_vrenderprobe.size() && i < s.probes.size(); i++)
+         r->m_table->m_vrenderprobe[i]->ExchangeTargets(this, s.probes[i][0], s.probes[i][1], s.probes[i][2]);
+      m_scaleSets.erase(it);
+   }
+   else
+   {
+      // First visit of this size: the back buffers now, the rest lazily as before
+      if (hasMSAA)
+         m_pOffscreenMSAABackBufferTexture = new RenderTarget(rd, rtType, "MSAABackBuffer"s, w, h, renderFormat, true, msaaTargetSamples, "Fatal Error: unable to create MSAA render buffer!");
+      m_pOffscreenBackBufferTexture1 = new RenderTarget(rd, rtType, "BackBuffer1"s, w, h, renderFormat, true, msaaSamples, "Fatal Error: unable to create offscreen back buffer");
+      m_pOffscreenBackBufferTexture2 = m_pOffscreenBackBufferTexture1->Duplicate("BackBuffer2"s, false);
+      if (rd->m_pbrActive)
+      {
+         m_pOffscreenBackBufferTexture1->CreatePBRSideband();
+         m_pOffscreenBackBufferTexture2->CreatePBRSideband();
+      }
+   }
+   m_scaleSets.push_back(std::move(cur));
+   // Keep at most 2 parked sets: the least recently used one goes (deleted at the end of the frame)
+   while (m_scaleSets.size() > 2)
+   {
+      const auto oldest = std::min_element(m_scaleSets.begin(), m_scaleSets.end(), [](const ScaleTargetSet& a, const ScaleTargetSet& b) { return a.lastUse < b.lastUse; });
+      vector<ScaleTargetSet> one;
+      one.push_back(std::move(*oldest));
+      m_scaleSets.erase(oldest);
+      std::swap(one, m_scaleSets);
+      ReleaseScaleTargetSets();
+      std::swap(one, m_scaleSets);
+   }
+   m_isStaticPrepassDirty = true;
+   rd->m_basicShader->SetVector(
+      ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
+   rd->m_ballShader->SetVector(
+      ShaderUniform::w_h_disableLighting, 1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), 1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(), 0.f, 0.f);
+   r->DisableBallLighting(r->m_table->GetSettings().GetPlayer_DisableLightingForBalls());
+   // Memory of the parked sets (logged once per change): main targets at ~88 bytes per render pixel (2 back buffers with depth and PBR
+   // sideband, 2 depth prepass targets), probes and the PBR resolve / reflection scratch targets not counted
+   double mb = 0.0;
+   for (const ScaleTargetSet& s : m_scaleSets)
+      mb += (double)s.w * (double)s.h * 88.0 / (1024.0 * 1024.0);
+   PLOGI << "Dynamic render scale target sets: " << (reused ? "reused" : "new") << ", " << m_scaleSets.size() << " parked (~" << (int)mb << " MB + probes)";
 }
 
 void RenderView::SwapBackBufferRenderTargets()
@@ -2305,7 +2456,7 @@ RenderTarget* RenderView::ApplyLeanUpscale(RenderTarget* renderedRT)
    const int rw = renderedRT->GetWidth(), rh = renderedRT->GetHeight();
    int ow, oh;
    GetOutputAreaSize(ow, oh);
-   const auto fit = [r, rd](RenderTarget*& rt, int w, int h, const string& name)
+   const auto fit = [r, rd](RenderTarget*& rt, int w, int h, const string& name, bool resetOnCreate)
    {
       if (rt && (rt->GetWidth() != w || rt->GetHeight() != h))
       {
@@ -2316,13 +2467,19 @@ RenderTarget* RenderView::ApplyLeanUpscale(RenderTarget* renderedRT)
       if (rt == nullptr)
       {
          rt = new RenderTarget(rd, SurfaceType::RT_DEFAULT, name, w, h, colorFormat::RGBA16F, false, 1, "Fatal Error: unable to create the temporal upscaler buffers!");
-         r->m_temporalReset = true;
+         r->m_temporalReset |= resetOnCreate;
+         if (!resetOnCreate)
+         {
+            // A render size change keeps the history: start the new motion target from no motion (one frame of disocclusion on movers only)
+            rd->SetRenderTarget("Lean TAA Motion Clear"s, rt, false);
+            rd->Clear(clearType::TARGET, 0x00000000);
+         }
       }
    };
    for (int i = 0; i < 2; i++)
    {
-      fit(r->m_pLeanMotionRT[i], rw, rh, "Lean TAA Motion"s);
-      fit(r->m_pLeanHistoryRT[i], ow, oh, "Lean TAA"s);
+      fit(r->m_pLeanMotionRT[i], rw, rh, "Lean TAA Motion"s, false);
+      fit(r->m_pLeanHistoryRT[i], ow, oh, "Lean TAA"s, true);
    }
    const int cur = r->m_leanParity, prev = 1 - r->m_leanParity;
    r->m_leanParity = prev;
@@ -2710,6 +2867,8 @@ void RenderView::Render()
    }
 
    ResizeRenderTargets();
+   if (this == r->GetPrimaryView())
+      r->UpdateDynamicScale();
 
    // Keep previous render as a reflection probe for ball reflection and for hires motion blur
    SwapBackBufferRenderTargets();

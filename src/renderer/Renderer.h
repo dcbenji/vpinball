@@ -560,6 +560,19 @@ private:
    uint64_t m_leanLastTime = 0;
    float m_leanLastDt = 0.f;
    float m_leanSharpen = 0.f; // UpscalerTemporalSharpen: contrast adaptive sharpening inside the tonemap pass after the VPX temporal upscaler
+   // Dynamic render scale (UpscalerDynamicScale, VPX temporal upscaler only): the scale moves on a 1/24 grid between the minimum
+   // and the AAFactor setting; the primary view's scene sized target sets are switched on a change (RenderView::SwitchScaleTargets) (the display sized history is kept: no reset)
+   void UpdateDynamicScale(); // VPX temporal upscaler: pick this frame's render scale from the GPU frame time (primary view, see RenderView::Render)
+   bool m_dynScale = false;
+   float m_dynMin = 0.4f, m_dynMax = 1.f, m_dynCur = 1.f, m_dynBudget = 0.f, m_dynGpu = 0.f;
+   float m_dynOver = 0.f;
+   int m_dynUnder = 0, m_dynCooldown = 0;
+   int m_dynSinceOver = 0, m_dynSinceUp = 100000, m_dynProbe = 3600;
+   float m_dynRatio = 1.f;
+   float m_dynRunStart = 0.f, m_dynRunWork = 0.f; // a run of steps down: the scale it started from and the smoothed load then (0 = none)
+   int m_dynDownBlock = 0; // frames before steps down are allowed again (after a run that did not lower the load)
+   float m_dynBlockWork = 0.f; // the frame interval the guard judged: a load 25 % above it ends the block
+   uint64_t m_dynLastTime = 0;
    vec4 m_leanParams = vec4(2.5f, 1.0f, 32.f, 4.f); // variance box scale still / moving, history weight cap still / moving
    std::vector<std::unique_ptr<RenderView>> m_extraViews;
    std::vector<RenderView*> m_renderViews;

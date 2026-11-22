@@ -140,6 +140,15 @@ void RenderProbe::ReleaseRenderTargets(RenderView* view)
    m_viewState.erase(it);
 }
 
+void RenderProbe::ExchangeTargets(RenderView* view, RenderTarget*& prerender, RenderTarget*& dynamic, RenderTarget*& blur)
+{
+   ViewState& vs = State(view);
+   std::swap(vs.prerenderRT, prerender);
+   std::swap(vs.dynamicRT, dynamic);
+   std::swap(vs.blurRT, blur);
+   vs.staticAccumCount = 0;
+}
+
 RenderTarget* RenderProbe::Render(const unsigned int renderMask)
 {
    assert(m_renderer != nullptr);

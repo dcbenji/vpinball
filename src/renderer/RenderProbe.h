@@ -70,6 +70,7 @@ public:
    bool IsStaticAccumulationPending() const; // True while this probe still has samples to accumulate for its static parts prerender (for the active view)
    void MarkDirtyStatics(RenderView* view); // Mark the view's prerendered static parts as dirty, they are lazily accumulated again over the next frames
    void ReleaseRenderTargets(RenderView* view); // Release the render targets sized after the given view's render (on resize), recreated on next use
+   void ExchangeTargets(RenderView* view, RenderTarget*& prerender, RenderTarget*& dynamic, RenderTarget*& blur); // Swaps the view's render sized targets with caller held ones (dynamic render scale cache); restarts the static accumulation
    RenderTarget* Render(const unsigned int renderMask); // Lazily update render probe and returns it
    void RenderRelease();
 
