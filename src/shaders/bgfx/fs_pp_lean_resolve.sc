@@ -40,6 +40,14 @@ vec3 InvTonemap(vec3 c) { return c * (1.0 / max(1.0 - max(c.r, max(c.g, c.b)), 1
 vec3 ToYCoCg(vec3 c) { return vec3(dot(c, vec3(0.25, 0.5, 0.25)), dot(c, vec3(0.5, 0.0, -0.5)), dot(c, vec3(-0.25, 0.5, -0.25))); }
 vec3 FromYCoCg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
 
+// isnan() / isinf() have no translation in the WGSL path (as in fs_pp_ssr.sc): there the exponent bits are tested instead
+#if BGFX_SHADER_LANGUAGE_WGSL
+#define LEAN_EXP_ALL_ONES(x) ((floatBitsToUint(x) & 0x7F800000u) == 0x7F800000u)
+#define LeanNotFinite(v) (LEAN_EXP_ALL_ONES((v).r) || LEAN_EXP_ALL_ONES((v).g) || LEAN_EXP_ALL_ONES((v).b) || LEAN_EXP_ALL_ONES((v).a))
+#else
+#define LeanNotFinite(v) (any(isnan(v)) || any(isinf(v)))
+#endif
+
 #ifdef EASU
 // FSR 1 EASU on the reversibly tonemapped render (texel fetches, gather emulated as in fs_pp_fsr_easu.sc). Only in the EASU variant:
 // a second pass that discards every still pixel, so the main resolve keeps its lean register budget (EASU in it cost every pixel)
@@ -101,7 +109,7 @@ void main()
 	{
 		h = History(prevUv, ds);
 		// A non finite history (an Inf / NaN that reached the render once) would stay forever: treated as no history
-		if (!(any(isnan(h)) || any(isinf(h))))
+		if (!LeanNotFinite(h))
 			W = min(max(h.a, 0.0), mix(leanTaa[2].z, leanTaa[2].w, speed)) * (1.0 - a.z);
 	}
 
