@@ -49,6 +49,7 @@ SAMPLER2DSTEREO(tex_probe_depth, 7); // refractions depth probe
 uniform vec4 objectSpaceNormalMap; // float extended to vec4 for BGFX FIXME float uniforms are not supported: group or declare as vec4
 
 uniform vec4 u_basic_shade_mode;
+uniform vec4 texLodBias; // x: LOD bias of the colour maps under a temporal upscaler (log2 render / display size), 0 otherwise
 #define doMetal             (u_basic_shade_mode.x != 0.0)
 #define doNormalMapping     (u_basic_shade_mode.y != 0.0)
 #define doRefractions       (u_basic_shade_mode.z != 0.0)
@@ -196,7 +197,7 @@ vec3 compute_refraction(const vec3 pos, const vec3 screenCoord, const vec3 N, co
          if (noMipMaps)
             pixel = texNoLod(tex_base_color, v_texcoord0);
          else
-            pixel = texture2D(tex_base_color, v_texcoord0);
+            pixel = texture2DBias(tex_base_color, v_texcoord0, texLodBias.x);
          #ifdef AT
             if (pixel.a <= alphaTestValue.x)
                discard; //stop the pixel shader if alpha test should reject pixel

@@ -555,6 +555,7 @@ private:
    bool m_leanActivity = true; // pixels something moved over recently (pass 1 activity) get the moving-pixel rules
    bool m_leanFrameTimeScale = true; // the disocclusion test scales last frame's motion by the frame time ratio
    bool m_leanBallTranslationOnly = true; // the ball's motion vectors follow its position, not its spin
+   bool m_temporalMipBias = true; // colour maps get a LOD bias of log2(render / display width) under the temporal upscaler
    bool m_leanKeepSharpen = false; // the post processed sharpening after the VPX temporal upscaler (off: it is skipped)
    uint64_t m_leanLastTime = 0;
    float m_leanLastDt = 0.f;

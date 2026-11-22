@@ -76,6 +76,7 @@ SAMPLER2DSTEREO(tex_probe_depth, 7); // its depth: a refracted sample nearer tha
 #endif
 
 uniform vec4 u_basic_shade_mode;
+uniform vec4 texLodBias; // x: LOD bias of the colour maps under a temporal upscaler (log2 render / display size), 0 otherwise
 #define doNormalMapping     (u_basic_shade_mode.y != 0.0)
 #define noMipMaps           (u_basic_shade_mode.w != 0.0)
 
@@ -672,7 +673,7 @@ void main() {
       if (noMipMaps)
          pixel = texNoLod(tex_base_color, v_texcoord0);
       else
-         pixel = texture2D(tex_base_color, v_texcoord0);
+         pixel = texture2DBias(tex_base_color, v_texcoord0, texLodBias.x);
       #ifdef AT
          if (pixel.a <= alphaTestValue.x)
             discard; //stop the pixel shader if alpha test should reject pixel
@@ -850,7 +851,7 @@ void main() {
       if (noMipMaps)
          emission *= texNoLod(tex_pbr_emission, v_texcoord0).rgb;
       else
-         emission *= texture2D(tex_pbr_emission, v_texcoord0).rgb;
+         emission *= texture2DBias(tex_pbr_emission, v_texcoord0, texLodBias.x).rgb;
    }
    color += emission;
 

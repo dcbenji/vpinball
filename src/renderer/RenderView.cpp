@@ -2766,6 +2766,16 @@ void RenderView::Render()
       r->m_temporalViewJitter[1] = (bgfx::getCaps()->originBottomLeft ? 2.f : -2.f) * jy / static_cast<float>(rh) * static_cast<float>(GetDisplayHeight());
       ApplyViewJitter(r->m_temporalViewJitter[0], r->m_temporalViewJitter[1]);
    }
+   // Under a temporal upscaler the colour maps are sampled for the display grid, not the render grid: a render pixel gathers
+   // jittered detail of several display pixels over the frames, which a mip chosen for the render size has already blurred away
+   // (log2(render / display) as HDRP and the vendors' temporal upscaler integration guides; normal and roughness maps keep theirs:
+   // specular shimmer)
+   {
+      int ow, oh;
+      GetOutputAreaSize(ow, oh);
+      rd->m_basicShader->SetVector(ShaderUniform::texLodBias,
+         (temporal && r->m_temporalMipBias && ow > 0) ? log2f((float)GetBackBufferTexture()->GetWidth() / (float)ow) : 0.f, 0.f, 0.f, 0.f);
+   }
 #endif
 
    SetSpaceReference(PartGroupData::SpaceReference::Playfield, true);
