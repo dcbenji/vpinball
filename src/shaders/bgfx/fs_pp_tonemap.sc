@@ -21,6 +21,8 @@ uniform vec4 do_dither; // converted to vec4 for BGFX
 uniform vec4 do_bloom; // converted to vec4 for BGFX
 
 uniform vec4 bloom_dither_colorgrade;
+uniform vec4 leanSharpen; // x: sharpening strength after the VPX temporal upscaler (0 = off), yz: texel size of the source
+
 #define do_bloom       (bloom_dither_colorgrade.x == 1.)
 #define do_dither      (bloom_dither_colorgrade.y == 1.)
 #define do_color_grade (bloom_dither_colorgrade.z == 1.)
@@ -436,11 +438,40 @@ vec3 FBColorGrade(vec3 color)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main fragment shader
 
+#ifndef STEREO // mono only, as the VPX temporal upscaler
+// Contrast adaptive sharpening (after AMD FidelityFX CAS, MIT licence, as the FSR 1 RCAS already in this tree: a negative
+// cross lobe whose weight drops where the local range is wide or near the top, so strong edges get no stair steps and bright
+// lamp edges no halo). Run on reversibly tonemapped values c / (1 + max(c)), so the HDR range does not break the limits.
+vec3 LeanTm(vec3 c) { return c * (1.0 / (1.0 + max(c.r, max(c.g, c.b)))); }
+vec3 LeanSharpen(vec3 e, vec2 uv)
+{
+	const vec3 b = LeanTm(texStereoNoLod(tex_fb, uv - vec2(0.0, leanSharpen.z)).rgb);
+	const vec3 d = LeanTm(texStereoNoLod(tex_fb, uv - vec2(leanSharpen.y, 0.0)).rgb);
+	const vec3 f = LeanTm(texStereoNoLod(tex_fb, uv + vec2(leanSharpen.y, 0.0)).rgb);
+	const vec3 h = LeanTm(texStereoNoLod(tex_fb, uv + vec2(0.0, leanSharpen.z)).rgb);
+	const vec3 c = LeanTm(e);
+	const vec3 mn = min(c, min(min(b, d), min(f, h)));
+	const vec3 mx = max(c, max(max(b, d), max(f, h)));
+	// Amount: how far the range sits from 0 and 1, relative to its top (CAS); 0 on a full range edge or a highlight
+	const vec3 amp = sqrt(saturate(min(mn, vec3(1.0, 1.0, 1.0) - mx) / max(mx, vec3(1e-4, 1e-4, 1e-4))));
+	// Low history pixels (moving, freshly uncovered) are not sharpened: their edges come from the half resolution render (the history
+	// weight is the upscaler output's alpha: full sharpening from a weight of 8)
+	const float hist = saturate(texStereoNoLod(tex_fb, uv).a * (1.0 / 8.0));
+	const vec3 w = amp * (-hist / mix(8.0, 5.0, saturate(leanSharpen.x)));
+	const vec3 s = saturate((c + w * (b + d + f + h)) / (1.0 + 4.0 * w));
+	return s * (1.0 / max(1.0 - max(s.r, max(s.g, s.b)), 1e-4)); // back to linear HDR
+}
+#endif
+
 void main()
 {
    // v_texcoord0 is pixel perfect sampling which here means between the pixels resulting from supersampling (for 2x, it's in the middle of the 2 texels)
 
    vec3 result = texStereoNoLod(tex_fb, v_texcoord0).rgb;
+#ifndef STEREO
+   BRANCH if (leanSharpen.x > 0.0)
+      result = LeanSharpen(max(result, vec3(0.0, 0.0, 0.0)), v_texcoord0);
+#endif
 
    // moving AO before tonemap does not really change the look
    #ifdef AO

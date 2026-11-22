@@ -1712,6 +1712,7 @@ void RenderView::SetupTonemapping(RenderTarget* renderedRT, RenderTarget* tonema
    //const float jitter = (float)((msec() & 2047) / 1000.0);
    const float jitter = (float)(radical_inverse(g_pplayer->m_overall_frames % 2048) / 1000.0); // Deterministic jitter to ensure stable render for regression tests
    const bool useAO = r->GetAOMode() == 2;
+   rd->m_FBShader->SetVector(ShaderUniform::leanSharpen, 0.f, 0.f, 0.f, 0.f);
 
    // switch to output buffer (main output frame buffer, or a temporary one for postprocessing)
    RenderTarget* outputRT = tonemapRT;
@@ -1889,6 +1890,9 @@ RenderTarget* RenderView::ApplyTonemapping(RenderTarget* renderedRT, RenderTarge
    Renderer* const r = m_renderer;
    RenderDevice* const rd = r->m_renderDevice;
    SetupTonemapping(renderedRT, tonemapRT, true);
+   // VPX temporal upscaler: its optional sharpening runs here, on the display sized image the tonemap reads anyway (no pass, no target)
+   if (r->m_leanSharpen > 0.f && r->IsLeanUpscale())
+      rd->m_FBShader->SetVector(ShaderUniform::leanSharpen, r->m_leanSharpen, 1.f / static_cast<float>(renderedRT->GetWidth()), 1.f / static_cast<float>(renderedRT->GetHeight()), 0.f);
    Vertex3D_TexelOnly shiftedVerts[4] = { { 1.0f + m_screenOffset.x, 1.0f + m_screenOffset.y, 0.0f, 1.0f, 0.0f }, { -1.0f + m_screenOffset.x, 1.0f + m_screenOffset.y, 0.0f, 0.0f, 0.0f },
       { 1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, 1.0f, 1.0f }, { -1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, 0.0f, 1.0f } };
    if (tonemapRT == GetOutput() && !IsFullOutputArea())

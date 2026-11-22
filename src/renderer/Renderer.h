@@ -559,6 +559,7 @@ private:
    bool m_leanKeepSharpen = false; // the post processed sharpening after the VPX temporal upscaler (off: it is skipped)
    uint64_t m_leanLastTime = 0;
    float m_leanLastDt = 0.f;
+   float m_leanSharpen = 0.f; // UpscalerTemporalSharpen: contrast adaptive sharpening inside the tonemap pass after the VPX temporal upscaler
    vec4 m_leanParams = vec4(2.5f, 1.0f, 32.f, 4.f); // variance box scale still / moving, history weight cap still / moving
    std::vector<std::unique_ptr<RenderView>> m_extraViews;
    std::vector<RenderView*> m_renderViews;

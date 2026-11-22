@@ -337,6 +337,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, lightCenter_doShadow, 1), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4v, balls, 8), // Basic & Flasher (for ball shadows)
    SHADER_UNIFORM(ShaderUniformType::Float4v, leanTaa, 4), // Post process (VPX temporal upscaler)
+   SHADER_UNIFORM(ShaderUniformType::Float4, leanSharpen, 1), // Tonemap: x sharpen strength after the VPX temporal upscaler (0 = off), yz texel size
    SHADER_UNIFORM(ShaderUniformType::Float4, texLodBias, 1), // Basic: LOD bias of the colour maps (temporal upscaler)
    SHADER_UNIFORM(ShaderUniformType::Float4, staticColor_Alpha, 1), // Basic & Flasher
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)

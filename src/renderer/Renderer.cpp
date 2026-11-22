@@ -388,6 +388,7 @@ void Renderer::ApplyTableSettings()
    m_sharpen = m_table->GetSettings().GetPlayer_Sharpen();
    m_upscaler = m_table->GetSettings().GetPlayer_Upscaler();
    m_upscalerSharpness = m_table->GetSettings().GetPlayer_UpscalerSharpness();
+   m_leanSharpen = m_table->GetSettings().GetPlayer_UpscalerTemporalSharpen();
    m_ss_refl = m_table->GetSettings().GetPlayer_SSRefl();
    m_bloomOff = m_table->GetSettings().GetPlayer_ForceBloomOff();
    m_motionBlurOff = m_table->GetSettings().GetPlayer_ForceMotionBlurOff();
